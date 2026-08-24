@@ -1,0 +1,62 @@
+[package]
+name = "computer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A computer in a box: an X11 desktop in a container, driven from Rust"
+license = "MIT"
+readme = "README.md"
+keywords = ["computer-use", "x11", "desktop", "container", "automation"]
+categories = ["api-bindings", "development-tools"]
+
+[features]
+default = []
+# The `computer` command. Off by default so a library user does not pull in a
+# runtime they already have: `cargo install computer --features cli`.
+cli = ["tokio/macros", "tokio/rt-multi-thread"]
+# The binding to microsandbox 0.6, so a box can run in a microVM rather than a
+# container. Off by default: the vendor crate pulls a hypervisor, an ORM and a
+# database driver behind it, and most builds run containers.
+microsandbox = ["dep:microsandbox"]
+# The HTTP client for E2B, so a box can run in somebody else's cloud rather
+# than on this host. Off by default: the seam and the machine compile without
+# it, and only the shipped client needs a TLS stack behind it.
+e2b = ["dep:reqwest"]
+
+[dependencies]
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+microsandbox = { version = "0.6", optional = true }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+], optional = true }
+thiserror = "2"
+# Logs. A facade, so a caller with no subscriber pays nothing — and a
+# detached task that fails has somewhere to say so.
+tracing = "0.1"
+tokio = { version = "1", features = ["fs", "process", "time", "rt", "net", "io-util"] }
+
+[dev-dependencies]
+# `test-util` for a paused clock: a reaper waits ten seconds between asks,
+# and a test that really waited would be the slowest thing in the suite.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "test-util"] }
+
+[lints.clippy]
+string_slice = "deny"
+
+[[bin]]
+name = "computer"
+path = "src/bin/computer.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "e2b"
+path = "examples/e2b.rs"
+required-features = ["e2b"]
+
+[[example]]
+name = "e2b_takeover"
+path = "examples/e2b_takeover.rs"
+required-features = ["e2b"]
+

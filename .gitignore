@@ -1,0 +1,12 @@
+/target
+Cargo.lock
+*.gif
+*.mp4
+.env
+/docs/
+.claude
+*.png
+
+# The README's animation is part of the README.
+!media/demo.gif
+.DS_Store
