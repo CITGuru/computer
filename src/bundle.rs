@@ -22,6 +22,12 @@ pub const FLUXBOX_INIT: &str = include_str!("../images/desktop/fluxbox.init");
 pub const FLUXBOX_MENU: &str = include_str!("../images/desktop/fluxbox.menu");
 pub const FLUXBOX_APPS: &str = include_str!("../images/desktop/fluxbox.apps");
 pub const EMBED_HTML: &str = include_str!("../images/desktop/embed.html");
+pub const FLUXBOX_STYLE: &str = include_str!("../images/desktop/fluxbox.style");
+pub const WALLPAPER_SH: &str = include_str!("../images/desktop/wallpaper.sh");
+pub const LAUNCH_SH: &str = include_str!("../images/desktop/launch.sh");
+pub const TINT2RC: &str = include_str!("../images/desktop/tint2rc");
+pub const TERMINAL_DESKTOP: &str = include_str!("../images/desktop/terminal.desktop");
+pub const BROWSER_DESKTOP: &str = include_str!("../images/desktop/browser.desktop");
 pub const INPUT_GUARD: &str = include_str!("../images/desktop/input-guard.sh");
 
 pub const WAYLAND_DOCKERFILE: &str = include_str!("../images/wayland/Dockerfile");
@@ -63,6 +69,12 @@ pub static DESKTOP: Bundle = Bundle {
         ("fluxbox.menu", FLUXBOX_MENU),
         ("fluxbox.apps", FLUXBOX_APPS),
         ("embed.html", EMBED_HTML),
+        ("fluxbox.style", FLUXBOX_STYLE),
+        ("wallpaper.sh", WALLPAPER_SH),
+        ("launch.sh", LAUNCH_SH),
+        ("tint2rc", TINT2RC),
+        ("terminal.desktop", TERMINAL_DESKTOP),
+        ("browser.desktop", BROWSER_DESKTOP),
         ("input-guard.sh", INPUT_GUARD),
     ],
 };
@@ -340,11 +352,28 @@ impl Extras {
         Self::with(["ffmpeg"])
     }
 
+    /// A dock along the bottom, so the box reads as a desk rather than a
+    /// framebuffer with a browser on it.
+    ///
+    /// Opt-in, because it is a trade: a dock is roughly sixty pixels of every
+    /// screenshot spent on something that is not the work, and a box driven by
+    /// a program would rather have the pixels. A box a person looks at would
+    /// rather have the desk.
+    ///
+    /// `hsetroot` comes with it and is the load-bearing half. tint2 composites
+    /// its rounded corners against the root pixmap, and finds that pixmap
+    /// through an atom that ImageMagick does not publish — so without it the
+    /// corners come out as dark squares.
+    pub fn dock() -> Self {
+        Self::with(["tint2", "hsetroot"])
+    }
+
     /// Everything optional at once.
     pub fn everything() -> Self {
         let mut packages = Self::wide_fonts().packages;
         packages.extend(Self::audio().packages);
         packages.extend(Self::video().packages);
+        packages.extend(Self::dock().packages);
         Self::with(packages)
     }
 

@@ -232,6 +232,15 @@ impl Builder {
         self
     }
 
+    /// Give the box a dock along the bottom.
+    ///
+    /// Opt-in: a dock costs about sixty pixels of every screenshot, which a
+    /// box driven by a program would rather keep. See [`bundle::Extras::dock`].
+    pub fn dock(self) -> Self {
+        let wanted = bundle::Extras::dock();
+        self.packages(wanted.packages)
+    }
+
     /// Fonts for Chinese, Japanese, Korean and emoji, which the base image
     /// cannot draw. About 100 MB, which is why they are opt-in.
     pub fn wide_fonts(self) -> Self {

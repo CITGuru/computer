@@ -4,6 +4,7 @@
 //! cargo run --example serve
 //! cargo run --example serve -- https://news.ycombinator.com
 //! cargo run --example serve -- --wayland https://news.ycombinator.com
+//! cargo run --example serve -- --dock https://news.ycombinator.com
 //! cargo run --example serve -- --image-dir images/ubuntu https://news.ycombinator.com
 //! ```
 //!
@@ -35,6 +36,9 @@ async fn main() -> computer::Result<()> {
 
     println!("opening a box (the first run builds the image) …");
     let mut builder = Computer::builder().profile(profile).keep_on_drop(true);
+    if args.iter().any(|arg| arg == "--dock") {
+        builder = builder.dock();
+    }
     if let Some(directory) = image_dir {
         builder = builder.image_dir(directory);
     }

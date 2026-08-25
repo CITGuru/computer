@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+# Colours as rgb:, not #rrggbb: a launcher that runs Exec through a shell sees
+# '#' as the start of a comment and truncates the command there.
+Comment=A shell in the box
+Exec=computer-launch xterm xterm -bg rgb:14/14/1a -fg rgb:e8/e8/ea -cr rgb:9f/b0/c2 -bw 0 -fa "DejaVu Sans Mono" -fs 10 -title Terminal
+Icon=/usr/share/computer/terminal.png
+Terminal=false
+Categories=System;TerminalEmulator;

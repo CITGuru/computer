@@ -22,13 +22,13 @@ control_vnc=$((5901 + screen * 2))
 width="${COMPUTER_SCREEN_WIDTH:-1280}"
 height="${COMPUTER_SCREEN_HEIGHT:-800}"
 
-# **A runtime directory per screen, not per box.** A Wayland socket lives in
-# one, and two compositors sharing a directory would each claim `wayland-1`.
+# A runtime directory per screen, not per box: a Wayland socket lives in one,
+# and two compositors sharing a directory would each claim `wayland-1`.
 runtime="/tmp/computer/run-${number}"
-# **The same name on every screen.** A Wayland socket is a file, so its name is
-# only unique inside one directory — and a compositor takes the first free name
-# in the one it is given. The directory is what tells screens apart; a number in
-# the socket name would point every screen after the first at nothing.
+# The same name on every screen. A socket is a file, unique only inside its
+# directory, and a compositor takes the first free name there — so the
+# directory is what tells screens apart. A number in the name would point
+# every screen after the first at nothing.
 wayland_display="wayland-1"
 sockfile="/tmp/computer/screen-${screen}.sway"
 control_token="/tmp/computer/screen-${screen}.control"
@@ -65,13 +65,10 @@ alive() {
   swaymsg -s "$sock" -t get_version >/dev/null 2>&1
 }
 
-# How many browsers are actually on a viewer, rather than whether the server is
-# up.
-#
-# websockify holds a connection to wayvnc only while a websocket client is
-# attached, so an established connection here is a person looking at the
-# screen. Counted from /proc, because `ss` and `netstat` are packages this
-# image would otherwise not need.
+# How many browsers are on a viewer, not whether the server is up: websockify
+# holds its connection to wayvnc only while a client is attached, so an
+# established one is a person looking. From /proc, because `ss` and `netstat`
+# are packages this image would otherwise not need.
 established() {
   local hex
   hex=$(printf "%04X" "$1")
@@ -106,10 +103,9 @@ start() {
 
   await alive || { echo "no compositor in ${runtime}" >&2; exit 1; }
 
-  # The name is what everything else connects to, and sway picks it rather than
-  # taking it from the environment. A compositor that came up under another
-  # name is one every later command reaches nothing through, so it is caught
-  # here instead of as a capture that returns no image.
+  # sway picks the name rather than taking it from the environment, and every
+  # later command connects through it — caught here instead of as a capture
+  # that returns no image.
   await test -S "${runtime}/${wayland_display}" \
     || { echo "the compositor is not on ${wayland_display}" >&2; exit 1; }
 
@@ -117,9 +113,8 @@ start() {
   # screen's, and the singleton lock stops the second launch outright.
   computer-browser --user-data-dir="$profile" >"${logs}-browser.log" 2>&1 &
 
-  # **`-d` is the read-only guarantee, and it is enforced here.** A viewer told
-  # to be read-only by its own page is one that stops being read-only when
-  # somebody opens the page differently.
+  # `-d` is the read-only guarantee: a viewer told to be read-only by its own
+  # page stops being read-only when somebody opens the page differently.
   wayvnc -d 127.0.0.1 "$view_vnc" >"${logs}-vnc.log" 2>&1 &
   websockify --web=/usr/share/novnc "0.0.0.0:${view_port}" "127.0.0.1:${view_vnc}" \
     >"${logs}-novnc.log" 2>&1 &
@@ -142,10 +137,9 @@ stop() {
 }
 
 control() {
-  # The token is what makes a takeover endable by whoever started it and by
-  # nobody else. It is kept here rather than in the caller because a caller
-  # that exits takes its memory with it, and the next one has no way to learn
-  # that somebody is driving.
+  # The token makes a takeover endable by whoever started it and nobody else.
+  # Kept here rather than in the caller: a caller that exits takes its memory
+  # with it, and the next one would have no way to learn somebody is driving.
   token="${3:-}"
   mode="${4:-exclusive}"
   [ -n "$token" ] || { echo "usage: computer-screen control <screen> <token> [shared]" >&2; exit 2; }
@@ -153,9 +147,8 @@ control() {
   alive || { echo "screen ${screen} is not running" >&2; exit 1; }
 
   # Already open, so the server stays and only the token changes hands.
-  # Recorded even here: a second takeover replaces the first, and skipping the
-  # write would leave the older token in the file — where it would let the
-  # replaced holder end the takeover that replaced it.
+  # Recorded even here: skipping the write would leave the replaced holder's
+  # token in the file, letting them end the takeover that replaced them.
   if listening "${control_port}"; then
     record_token
     exit 0

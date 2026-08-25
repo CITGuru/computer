@@ -1,0 +1,54 @@
+# A dock along the bottom.
+#
+# No compositor: `xcompmgr` in Xvfb leaves repaint artifacts — stale window
+# content, ghosts of closed windows — which is a correctness bug where the
+# output is screenshots. tint2 composites against the root pixmap instead,
+# which needs `_XROOTPMAP_ID` set; see `wallpaper.sh`.
+#
+# It does that for the panel and nothing else. A background on the launcher is
+# drawn over bare window, which is black — the slab loses its frost entirely.
+
+# background 1 — the panel, and so the dock itself
+#
+# Small radius on purpose: with no compositor the corners are drawn at one bit,
+# so a large one is a visible staircase. Low alpha for the same kind of reason —
+# the panel tints what is behind it, and a coloured desktop would stain it.
+rounded = 9
+border_width = 1
+background_color = #e6e9ee 30
+border_color = #ffffff 22
+
+# background 2 — a launcher icon at rest
+rounded = 8
+border_width = 0
+background_color = #ffffff 0
+
+# Flush to the bottom, not floated. tint2 hides the panel *window*, so a
+# `panel_margin` lifts the strip left behind too: it ends up above the edge with
+# dead space under it, and a pointer sent to the bottom of the screen lands in
+# the gap. Nothing comes up, and tint2 reports no fault.
+panel_items = L
+panel_monitor = all
+panel_position = bottom center horizontal
+panel_size = 132 62
+panel_margin = 0 0
+panel_padding = 18 9 8
+panel_background_id = 1
+panel_layer = top
+# Floats over windows rather than shrinking them, which is what a dock does.
+strut_policy = none
+
+# A dock always up is sixty pixels of every screenshot spent on something that
+# is not the work. Hidden it costs two, on the edge a pointer can reach.
+autohide = 1
+autohide_show_timeout = 0.15
+autohide_hide_timeout = 0.9
+autohide_height = 2
+
+launcher_padding = 0 0 8
+launcher_background_id = 2
+launcher_icon_size = 44
+launcher_icon_theme = hicolor
+launcher_item_app = /usr/share/applications/computer-terminal.desktop
+launcher_item_app = /usr/share/applications/computer-browser.desktop
+launcher_tooltip = 1

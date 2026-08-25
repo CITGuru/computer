@@ -1,3 +1,4 @@
+session.styleFile: /etc/computer/fluxbox/style
 session.screen0.toolbar.visible: false
 session.screen0.slit.autoHide: true
 session.screen0.defaultDeco: NORMAL

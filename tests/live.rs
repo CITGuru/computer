@@ -279,12 +279,10 @@ async fn devtools(computer: &Computer) -> computer::Result<()> {
 
 /// Which page a coordinate actually addresses.
 ///
-/// **The desktop API points at pixels and the browser thinks in pages, and
-/// nothing joins them.** `open_url` opens a *new* tab and raises it, so every
-/// coordinate worked out from an earlier screenshot now belongs to a page that
-/// is no longer on screen — and the click lands on the new one with nothing in
-/// the next frame to say so. This is the sharp edge; these are the two methods
-/// that let a caller off it.
+/// The desktop API points at pixels, the browser thinks in pages, and nothing
+/// joins them: `open_url` opens a *new* tab and raises it, so coordinates from
+/// an earlier screenshot now belong to a page that is gone — and the click
+/// lands on the new one with nothing in the next frame to say so.
 async fn which_page_the_pixels_belong_to(
     computer: &Computer,
     page: &mut computer::Page,

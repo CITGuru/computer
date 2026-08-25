@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Browser
+Comment=Chromium, in this screen's own profile
+Exec=computer-launch chromium computer-browser %U
+Icon=chromium
+Terminal=false
+Categories=Network;WebBrowser;

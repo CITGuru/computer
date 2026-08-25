@@ -82,17 +82,16 @@ RUN chmod +x /usr/local/bin/computer-desktop \
              /usr/local/bin/computer-browser \
              /usr/local/bin/computer-input
 
-# Eight screens, each a view port and a control port. Two ports rather than
-# one because takeover is a second server, never a mode switch on the first.
 # Which contract this image implements, so a box driven by another profile is
-# refused before it starts rather than reported ninety seconds later as a
-# display that never came up.
+# refused before it starts rather than as a display that never came up.
 LABEL computer.profile="computer-wayland"
 
+# Eight screens, each a view port and a control port — takeover is a second
+# server, never a mode switch on the first.
 EXPOSE 6080 6081 6082 6083 6084 6085 6086 6087 6088 6089 6090 6091 6092 6093 6094 6095
-# Chromium's DevTools, and the bridge in front of it. Chromium binds 9222 to
-# loopback whatever it is told, so 9223 is the one a client out here connects
-# to.
+
+# 9222 inside, and 9223 the bridge in front of it; see `start.sh` for why the
+# bridge exists.
 EXPOSE 9222 9223
 
 USER computer

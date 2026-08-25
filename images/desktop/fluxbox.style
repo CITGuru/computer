@@ -1,0 +1,121 @@
+! A desk that reads as a desk.
+!
+! Low chroma on purpose: every pixel here lands in a screenshot something else
+! has to make sense of, so the work is the only bright thing on screen. One
+! accent, on the focused window, so "which window has the keyboard" is
+! answerable from a frame alone.
+!
+! DejaVu is the one family the base image is guaranteed to have. A style naming
+! a font that is not installed falls back silently, at whatever size it picks.
+
+*.font:                             DejaVu Sans-9
+
+background:                         flat
+background.color:                   #111113
+
+! ---- windows --------------------------------------------------------------
+
+window.title.height:                26
+window.bevelWidth:                  1
+window.borderWidth:                 1
+window.borderColor:                 #2b2b33
+window.justify:                     center
+window.roundCorners:
+
+window.title.focus:                 flat
+window.title.focus.color:           #1c1c23
+window.title.unfocus:               flat
+window.title.unfocus.color:         #141419
+
+window.label.focus:                 flat
+window.label.focus.color:           #1c1c23
+window.label.focus.textColor:       #e8e8ea
+window.label.unfocus:               flat
+window.label.unfocus.color:         #141419
+window.label.unfocus.textColor:     #70707c
+window.label.font:                  DejaVu Sans-9
+
+window.button.focus:                flat
+window.button.focus.color:          #1c1c23
+window.button.focus.picColor:       #9fb0c2
+window.button.unfocus:              flat
+window.button.unfocus.color:        #141419
+window.button.unfocus.picColor:     #4c4c56
+window.button.pressed:              flat
+window.button.pressed.color:        #2d4257
+
+! The one place colour is spent: the grip under the focused window.
+window.handleWidth:                 3
+window.handle.focus:                flat
+window.handle.focus.color:          #1c1c23
+window.handle.unfocus:              flat
+window.handle.unfocus.color:        #141419
+window.grip.focus:                  flat
+window.grip.focus.color:            #3f5f80
+window.grip.unfocus:                flat
+window.grip.unfocus.color:          #21212a
+
+! ---- menus ----------------------------------------------------------------
+
+menu.title.height:                  26
+menu.title:                         flat
+menu.title.color:                   #16161c
+menu.title.textColor:               #9fb0c2
+menu.title.justify:                 left
+menu.title.font:                    DejaVu Sans-9:bold
+
+menu.frame:                         flat
+menu.frame.color:                   #1c1c23
+menu.frame.textColor:               #d9d9de
+menu.frame.disableColor:            #55555e
+menu.frame.justify:                 left
+menu.frame.font:                    DejaVu Sans-9
+
+menu.hilite:                        flat
+menu.hilite.color:                  #2d4257
+menu.hilite.textColor:              #ffffff
+
+menu.bevelWidth:                    5
+menu.borderWidth:                   1
+menu.borderColor:                   #2b2b33
+menu.itemHeight:                    24
+menu.bullet:                        triangle
+menu.bullet.position:               right
+menu.frame.underlineColor:          #3f5f80
+
+! ---- toolbar --------------------------------------------------------------
+!
+! Styled but hidden by `fluxbox.init` — a toolbar is screen area that is not
+! the work. Described here so turning it on gives a desk, not default grey.
+
+toolbar.height:                     28
+toolbar:                            flat
+toolbar.color:                      #16161c
+toolbar.borderWidth:                0
+toolbar.bevelWidth:                 1
+
+toolbar.clock:                      flat
+toolbar.clock.color:                #16161c
+toolbar.clock.textColor:            #9fb0c2
+toolbar.clock.font:                 DejaVu Sans Mono-9
+toolbar.clock.justify:              center
+
+toolbar.workspace:                  flat
+toolbar.workspace.color:            #16161c
+toolbar.workspace.textColor:        #9fb0c2
+
+toolbar.iconbar.focused:            flat
+toolbar.iconbar.focused.color:      #2d4257
+toolbar.iconbar.focused.textColor:  #ffffff
+toolbar.iconbar.unfocused:          flat
+toolbar.iconbar.unfocused.color:    #1c1c23
+toolbar.iconbar.unfocused.textColor:#9a9aa4
+toolbar.iconbar.empty:              flat
+toolbar.iconbar.empty.color:        #16161c
+toolbar.iconbar.borderWidth:        0
+
+! ---- slit -----------------------------------------------------------------
+
+slit:                               flat
+slit.color:                         #16161c
+slit.borderWidth:                   0

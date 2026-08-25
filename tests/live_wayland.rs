@@ -148,15 +148,12 @@ fn column(recorded: &serde_json::Value) -> Option<u32> {
 
 /// Input, checked by what it did rather than by what it returned.
 ///
-/// **An exit code proves nothing here.** Every tool in this path is happy to
-/// succeed and do nothing: `sway`'s own `seat cursor` commands return zero
-/// against a seat with no pointer device, and `wtype` returns zero after
-/// dropping a keystroke or failing to connect at all. A test that reads exit
-/// codes passes against a box whose screen never moves — which is how this
-/// image once shipped with no working pointer.
-///
-/// So the box is asked what happened, through DevTools, which does not share a
-/// path with the input being tested.
+/// Every tool in this path succeeds and does nothing: `sway`'s `seat cursor`
+/// returns zero against a seat with no pointer device, and `wtype` returns zero
+/// after dropping a keystroke. Reading exit codes passes against a box whose
+/// screen never moves, which is how this image once shipped with no working
+/// pointer — so the box is asked what happened through DevTools, which shares
+/// no path with the input being tested.
 async fn input(computer: &Computer) -> computer::Result<()> {
     let devtools = computer
         .browser()

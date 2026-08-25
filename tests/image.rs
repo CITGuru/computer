@@ -13,7 +13,10 @@
 //! So these read the image as text. No Docker, no build, no daemon — the drift
 //! is visible in the files themselves.
 
-use computer::bundle::{BROWSER_SH, DOCKERFILE, FLUXBOX_INIT, INPUT_GUARD, SCREEN_SH, START_SH};
+use computer::bundle::{
+    BROWSER_DESKTOP, BROWSER_SH, DOCKERFILE, FLUXBOX_INIT, FLUXBOX_MENU, FLUXBOX_STYLE,
+    INPUT_GUARD, LAUNCH_SH, SCREEN_SH, START_SH, TERMINAL_DESKTOP, TINT2RC, WALLPAPER_SH,
+};
 use computer::image::{
     BROWSER_COMMAND, DESKTOP_COMMAND, DEVTOOLS_BRIDGE_PORT, DEVTOOLS_PORT, HEIGHT, HEIGHT_ENV,
     MAX_SCREENS, SCREEN_COMMAND, ScreenAction, WIDTH, WIDTH_ENV, support,
@@ -408,10 +411,10 @@ fn the_window_manager_is_configured_rather_than_left_to_its_defaults() {
 
 /// Every file the Dockerfile copies has to be one the bundle carries.
 ///
-/// `materialize` writes the bundle's list into the build context and nothing
-/// else, so a `COPY` of a file that is not on that list is a build that fails
-/// with "not found" — and the fingerprint would not have covered it either, so
-/// editing it would leave a stale image answering to the current name.
+/// `materialize` writes the bundle's list and nothing else, so a `COPY` of a
+/// file that is not on it fails the build with "not found" — and the
+/// fingerprint would not cover that file either, leaving edits to it answering
+/// under a stale tag.
 #[test]
 fn every_file_the_dockerfile_copies_is_one_the_bundle_carries() {
     let carried: Vec<&str> = computer::bundle::DESKTOP
@@ -441,7 +444,7 @@ fn every_file_the_dockerfile_copies_is_one_the_bundle_carries() {
 /// And the window manager has to be given the files, not merely shipped them.
 #[test]
 fn the_window_manager_is_handed_every_configuration_the_image_installs() {
-    for name in ["init", "menu", "apps"] {
+    for name in ["init", "menu", "apps", "style"] {
         assert!(
             DOCKERFILE.contains(&format!("/etc/computer/fluxbox/{name}")),
             "{name} is not installed by the image"
@@ -452,6 +455,169 @@ fn the_window_manager_is_handed_every_configuration_the_image_installs() {
              does nothing at all"
         );
     }
+}
+
+/// A style fluxbox never loads is default grey with extra steps.
+#[test]
+fn the_style_is_named_by_the_configuration_that_loads_it() {
+    assert!(
+        FLUXBOX_INIT.contains("session.styleFile:"),
+        "fluxbox reads its style from the file named here; without the line \
+         it uses its own default and the theme ships unused"
+    );
+    assert!(
+        FLUXBOX_STYLE.contains("DejaVu"),
+        "a style naming a font the image does not install falls back silently"
+    );
+    assert!(
+        DOCKERFILE.contains("fonts-dejavu-core"),
+        "the style asks for DejaVu and the image has to carry it"
+    );
+}
+
+/// The desktop is painted after the window manager, or not at all.
+#[test]
+fn the_wallpaper_is_set_once_the_window_manager_cannot_overwrite_it() {
+    let after_wm = SCREEN_SH
+        .split("fluxbox -rc")
+        .nth(1)
+        .expect("the script starts fluxbox");
+
+    assert!(
+        after_wm.contains("computer-wallpaper"),
+        "fluxbox paints the root window through fbsetbg when it starts, so a \
+         wallpaper set before it is one nobody ever sees"
+    );
+    assert!(
+        WALLPAPER_SH.contains("convert") && WALLPAPER_SH.contains("display -window root"),
+        "the painter uses the ImageMagick the image already carries for \
+         screenshots, rather than a package installed for one call"
+    );
+}
+
+/// The dock is opt-in, and the image has to behave whether or not it is there.
+#[test]
+fn the_dock_is_started_only_where_one_was_installed() {
+    assert!(
+        SCREEN_SH.contains("command -v tint2"),
+        "a box without the extra has no tint2, and a script that starts it \
+         anyway logs a failure on every screen that comes up"
+    );
+    assert!(
+        DOCKERFILE.contains("/etc/computer/tint2rc"),
+        "the configuration is carried by the image even when the package is \
+         not, so installing tint2 is the only thing the extra has to do"
+    );
+    assert!(
+        computer::bundle::Extras::dock()
+            .packages
+            .contains(&"hsetroot".to_string()),
+        "tint2 finds what is behind its rounded corners through _XROOTPMAP_ID, \
+         which only hsetroot publishes — without it they render black"
+    );
+}
+
+/// A launcher pointing at an icon nothing draws is an empty square.
+#[test]
+fn the_terminal_launcher_has_an_icon_the_image_draws() {
+    let icon = TERMINAL_DESKTOP
+        .lines()
+        .find_map(|line| line.strip_prefix("Icon="))
+        .expect("the launcher names an icon");
+
+    assert!(
+        DOCKERFILE.contains(icon),
+        "{icon} is named by the launcher and never drawn by the image"
+    );
+    assert!(
+        TINT2RC.contains("computer-terminal.desktop"),
+        "the dock has to name the launcher the image installs, not xterm's own \
+         — whose icon is the X logo and reads as nothing"
+    );
+}
+
+/// A browser started from the dock has to be the one the crate drives.
+#[test]
+fn every_launcher_starts_the_browser_this_screen_already_owns() {
+    assert!(
+        TINT2RC.contains("computer-browser.desktop"),
+        "chromium's own launcher runs `/usr/bin/chromium` with no profile, so \
+         a browser opened from the dock has different cookies, no DevTools \
+         port, and nothing for `computer-screen stop` to match"
+    );
+    assert!(
+        BROWSER_DESKTOP.contains("computer-browser"),
+        "the launcher has to go through the wrapper, which is what knows the \
+         profile"
+    );
+    assert!(
+        BROWSER_SH.contains("--user-data-dir="),
+        "the wrapper has to supply a profile when it was given none"
+    );
+    assert!(
+        BROWSER_SH.contains("screen-${DISPLAY#:}"),
+        "and it derives the screen the same way the rest of the image does"
+    );
+}
+
+/// A command a launcher runs through a shell cannot carry a bare `#`.
+///
+/// `#rrggbb` is the obvious way to write a colour and the one that breaks: a
+/// launcher handing `Exec` to a shell sees the `#` as a comment and truncates
+/// there. Nothing appears and nothing is said, so it reads as a slow launch.
+#[test]
+fn no_launcher_command_carries_a_bare_hash() {
+    let exec = TERMINAL_DESKTOP
+        .lines()
+        .find_map(|line| line.strip_prefix("Exec="))
+        .expect("the launcher runs something");
+
+    assert!(
+        !exec.contains(" #"),
+        "this truncates at the hash and the terminal never opens: {exec}"
+    );
+
+    for line in FLUXBOX_MENU.lines() {
+        let Some(command) = line.split_once('{').map(|(_, rest)| rest) else {
+            continue;
+        };
+        assert!(
+            !command.contains(" #"),
+            "the menu runs this through a shell too: {command}"
+        );
+    }
+}
+
+/// A dock icon returns to what is open rather than handing back a second copy.
+#[test]
+fn a_launcher_focuses_what_is_already_running() {
+    for (name, entry) in [("terminal", TERMINAL_DESKTOP), ("browser", BROWSER_DESKTOP)] {
+        let exec = entry
+            .lines()
+            .find_map(|line| line.strip_prefix("Exec="))
+            .expect("the launcher runs something");
+
+        assert!(
+            exec.starts_with("computer-launch "),
+            "the {name} launcher starts another copy every time it is clicked: \
+             {exec}"
+        );
+    }
+
+    assert!(
+        LAUNCH_SH.contains("windowactivate"),
+        "the wrapper has to raise what it found, not merely find it"
+    );
+    assert!(
+        LAUNCH_SH.contains("--new"),
+        "and it needs a way to be told to start another anyway, which is what \
+         a new-window action asks for"
+    );
+    assert!(
+        FLUXBOX_MENU.contains("computer-launch --new"),
+        "tint2 gives a launcher no context menu, so the desktop menu is where \
+         a new window can be asked for"
+    );
 }
 
 #[test]
@@ -474,4 +640,80 @@ fn the_claim_is_a_constant_and_not_a_survey() {
     let second = support();
     assert_eq!(first, second);
     assert_eq!(first.max_screens, MAX_SCREENS);
+}
+
+/// A hidden dock is only reachable if the strip it leaves behind is somewhere a
+/// pointer can get to.
+///
+/// `panel_margin = 0 12` floated that strip twelve pixels above the bottom of
+/// the screen, so the gesture — pointer to the edge — landed under it and
+/// nothing came up. tint2 reported no fault: the configuration was fine, and
+/// only its idea of where a pointer goes was wrong.
+#[test]
+fn the_hidden_dock_leaves_its_trigger_on_the_screen_edge() {
+    let value = |key: &str| {
+        TINT2RC
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix(" = "))
+            .unwrap_or_else(|| panic!("tint2rc carries no `{key}`"))
+    };
+
+    assert_eq!(
+        value("autohide"),
+        "1",
+        "the dock is meant to stay out of frame until it is asked for"
+    );
+
+    let bottom = value("panel_margin")
+        .split_whitespace()
+        .nth(1)
+        .expect("panel_margin is `x y`");
+    assert_eq!(
+        bottom, "0",
+        "tint2 hides the panel window, so a bottom margin lifts the trigger \
+         strip off the screen edge and leaves dead space under it — the \
+         pointer reaches the bottom of the screen and nothing comes up"
+    );
+
+    assert_eq!(
+        value("panel_background_id"),
+        "1",
+        "tint2 composites only the panel against the root pixmap, so a slab \
+         put on the launcher is drawn over bare window instead — which is \
+         black, and the frost is gone"
+    );
+}
+
+/// A `pkill` pattern built from an environment assignment matches nothing.
+///
+/// The shell strips `HOME=` before it execs, so it never reaches argv and
+/// `pkill -f "HOME=..."` never finds the window manager it names — exiting
+/// zero, because matching nothing is not an error. A flag like
+/// `--user-data-dir=` carries `=` too and matches perfectly well; a bare
+/// NAME=VALUE is the shape that cannot.
+#[test]
+fn no_teardown_pattern_matches_on_an_environment_assignment() {
+    let is_assignment = |pattern: &str| {
+        pattern
+            .split(|c: char| c.is_whitespace() || c == '"')
+            .any(|word| {
+                word.split_once('=').is_some_and(|(name, _)| {
+                    !name.is_empty()
+                        && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                })
+            })
+    };
+
+    for line in SCREEN_SH.lines().map(str::trim) {
+        let Some(pattern) = line.strip_prefix("pkill ") else {
+            continue;
+        };
+        assert!(
+            !is_assignment(pattern),
+            "`{line}` matches against argv, where a NAME=VALUE assignment never \
+             appears — name the command as it is executed instead"
+        );
+    }
 }

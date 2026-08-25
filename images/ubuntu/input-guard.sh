@@ -2,19 +2,14 @@
 #
 # `xdotool`, refused while a person is driving the screen.
 #
-# This is the part that confines rather than coordinates. The gate inside the
-# SDK is a promise: the owner stops sending input because it agreed to, and
-# anything that reaches past the API — a shell, an `exec`, another program in
-# the box — is not stopped by an agreement it never made. This is on the path
-# instead, so every caller meets it.
+# On the PATH rather than in the SDK, because the in-process gate is a promise
+# and a shell or an `exec` never made it. This is the part that confines.
 #
-# It shadows the real binary at /usr/bin/xdotool. A takeover records its token
-# beside the screen, and a caller that holds the token passes it in
-# COMPUTER_TOKEN; anything else is refused with status 3 while the file exists.
+# Shadows the real binary at /usr/bin/xdotool. A takeover records its token
+# beside the screen; a caller holding it passes COMPUTER_TOKEN, and anything
+# else is refused with status 3 while the file exists.
 #
-# Reads are always allowed. Asking where the pointer is, or how big the screen
-# is, tells a run what a person is doing to it — which is the whole reason the
-# gate withholds input and not observation.
+# Reads stay allowed: withholding input and not observation is the point.
 set -uo pipefail
 
 real=/usr/bin/xdotool
@@ -22,7 +17,6 @@ screen=$(( ${DISPLAY#:} - 1 ))
 token_file="/tmp/computer/screen-${screen}.control"
 
 case "${1:-}" in
-  # Input. Everything that moves a pointer or presses a key.
   mousemove|mousemove_relative|click|mousedown|mouseup|key|keydown|keyup|type|windowactivate|windowfocus)
     if [ -s "$token_file" ]; then
       held=$(cat "$token_file" 2>/dev/null || true)

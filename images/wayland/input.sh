@@ -2,26 +2,21 @@
 #
 # Every input this box accepts, and the only path that carries it.
 #
-# **Wayland has no `xdotool`.** Synthetic input is a compositor privilege and
-# has to arrive as a *device*: the pointer through `computer-pointer` on the
+# Wayland has no `xdotool`: synthetic input is a compositor privilege and has
+# to arrive as a *device* — the pointer through `computer-pointer` on the
 # virtual-pointer protocol, the keyboard through `wtype` on the
-# virtual-keyboard one. Neither needs `/dev/uinput`, so the box keeps the
-# isolation it was started with.
+# virtual-keyboard one. Neither needs `/dev/uinput`.
 #
-# **Not sway's `seat cursor` commands.** They move the seat's own pointer, and
-# a headless backend has no input devices for the seat to own — so sway accepts
-# every one of them, exits zero, and the screen does not move.
+# Not sway's `seat cursor` commands. They move the seat's own pointer, and a
+# headless backend has no devices for the seat to own, so sway accepts every
+# one of them, exits zero, and the screen does not move.
 #
-# **This is also the part that confines rather than coordinates.** The gate
-# inside the SDK is a promise: the owner stops sending input because it agreed
-# to, and a shell, an `exec`, or another program in the box is not stopped by
-# an agreement it never made. This is the only way in, so every caller meets
-# it. A takeover records its token beside the screen, and a caller holding that
-# token passes it in COMPUTER_TOKEN; anything else is refused with status 3.
+# This is also the part that confines: the in-process gate is a promise, and a
+# shell or an `exec` never made it. A takeover records its token beside the
+# screen; a caller holding it passes COMPUTER_TOKEN, anything else gets 3.
 #
-# Reads are not here at all. Where the pointer is and how big the screen is
-# tell a run what a person is doing to the screen, which is the whole reason
-# the gate withholds input and not observation.
+# Reads are not here at all — withholding input and not observation is
+# the point.
 set -uo pipefail
 
 verb="${1:?usage: computer-input move|click|dblclick|drag|scroll|type|key ...}"
@@ -45,17 +40,15 @@ case "$verb" in
   move|click|dblclick|drag|scroll)
     computer-pointer "$verb" "$@"
     ;;
-  # **`-s` before anything else.** `wtype` makes a virtual keyboard, uploads a
-  # keymap and starts typing; the first keystroke goes out before the
-  # compositor has applied the keymap and is dropped, so `KEYBOARD` arrives as
-  # `EYBOARD`. The pause is what the new device needs to become real.
+  # `-s` first: `wtype` makes a virtual keyboard, uploads a keymap and starts
+  # typing, and the first keystroke goes out before the compositor has applied
+  # the keymap — `KEYBOARD` arrives as `EYBOARD`.
   #
   # `--` next, or text starting with a dash is read as a flag and the failure
   # is a refusal the caller cannot diagnose.
   type)
     said=$(wtype -s 120 -- "$@" 2>&1) || true
     ;;
-  # The modifiers and the key are already worked out; this only carries them.
   key)
     said=$(wtype -s 120 "$@" 2>&1) || true
     ;;
@@ -65,9 +58,8 @@ case "$verb" in
     ;;
 esac
 
-# **`wtype` exits zero whatever happens** — a bad flag, no compositor, a
-# keystroke that never left. What it says is the only signal there is, so
-# anything on its output is turned into the failure it already was.
+# `wtype` exits zero whatever happens — a bad flag, no compositor, a keystroke
+# that never left. Its output is the only signal there is.
 if [ -n "${said:-}" ]; then
   echo "$said" >&2
   exit 1
