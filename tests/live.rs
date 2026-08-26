@@ -95,6 +95,7 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     files(computer).await?;
     devtools(computer).await?;
     browser(computer).await?;
+    browser_groups(computer).await?;
     takeover(computer).await?;
     second_screen(computer).await?;
     the_last_screen(computer).await?;
@@ -372,6 +373,105 @@ async fn browser(computer: &Computer) -> computer::Result<()> {
     let id = page.target().id.clone();
     browser.close(&id).await?;
     println!("  the browser drove itself: {} bytes captured", shot.len());
+    Ok(())
+}
+
+async fn browser_groups(computer: &Computer) -> computer::Result<()> {
+    let browser = computer.browser().expect("a published DevTools port");
+    let mut default = browser
+        .open_page("https://example.com", Duration::from_secs(20))
+        .await?;
+    default
+        .evaluate(
+            "document.cookie = 'computer_group=default; path=/'; \
+             localStorage.setItem('computer_group', 'default')",
+        )
+        .await?;
+
+    let one = browser.create_group().await?;
+    let two = browser.create_group().await?;
+    let one_id = one.id().to_string();
+    let two_id = two.id().to_string();
+    let (one_page, two_page) = tokio::join!(
+        one.open_page("https://example.com", Duration::from_secs(20)),
+        two.open_page("https://example.com", Duration::from_secs(20)),
+    );
+    let mut one_page = one_page?;
+    let mut two_page = two_page?;
+
+    one_page
+        .evaluate(
+            "document.cookie = 'computer_group=one; path=/'; \
+             localStorage.setItem('computer_group', 'one')",
+        )
+        .await?;
+    two_page
+        .evaluate(
+            "document.cookie = 'computer_group=two; path=/'; \
+             localStorage.setItem('computer_group', 'two')",
+        )
+        .await?;
+
+    assert_eq!(
+        default
+            .evaluate("localStorage.getItem('computer_group')")
+            .await?,
+        "default"
+    );
+    assert_eq!(
+        one_page
+            .evaluate("localStorage.getItem('computer_group')")
+            .await?,
+        "one"
+    );
+    assert_eq!(
+        two_page
+            .evaluate("localStorage.getItem('computer_group')")
+            .await?,
+        "two"
+    );
+    assert!(
+        one_page
+            .evaluate("document.cookie")
+            .await?
+            .as_str()
+            .unwrap_or_default()
+            .contains("computer_group=one")
+    );
+
+    let one_target = one_page.target().id.clone();
+    let two_target = two_page.target().id.clone();
+    assert!(one.pages().await?.iter().any(|page| page.id == one_target));
+    assert!(two.pages().await?.iter().any(|page| page.id == two_target));
+
+    let groups = browser.groups().await?;
+    assert!(groups.iter().any(|group| group.id() == one_id));
+    assert!(groups.iter().any(|group| group.id() == two_id));
+    let duplicate = groups
+        .into_iter()
+        .find(|group| group.id() == one_id)
+        .expect("a second handle to group one");
+
+    drop(one_page);
+    one.close().await?;
+    duplicate
+        .close()
+        .await
+        .expect("closing the same context twice is idempotent");
+    assert!(
+        !browser
+            .groups()
+            .await?
+            .iter()
+            .any(|group| group.id() == one_id)
+    );
+    assert_eq!(two_page.title().await?, "Example Domain");
+
+    drop(two_page);
+    two.close().await?;
+    let default_target = default.target().id.clone();
+    browser.close(&default_target).await?;
+    println!("  browser groups isolate sessions and clean up their pages");
     Ok(())
 }
 

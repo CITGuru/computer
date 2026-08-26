@@ -11,6 +11,7 @@
 //! prevent.
 
 use computer::{Auth, Computer, WaylandProfile};
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
@@ -252,6 +253,25 @@ async fn the_wayland_image_gates_its_viewer_the_same_way() {
         .launch()
         .await
         .expect("a gated Wayland box");
+
+    let outcome = token_checks(&computer).await;
+    computer.shutdown().await.expect("it goes away");
+    outcome.expect("every step");
+}
+
+/// The Ubuntu image builds the same scripts from a local directory, and its
+/// `screen.sh` is byte-identical to the desktop one. Watched anyway, because
+/// "identical" is a claim about two files rather than about two images.
+#[tokio::test]
+#[ignore = "needs a container runtime, and builds the Ubuntu image"]
+async fn the_ubuntu_image_gates_its_viewer_the_same_way() {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu");
+    let computer = Computer::builder()
+        .image_dir(directory)
+        .auth(Auth::Token)
+        .launch()
+        .await
+        .expect("a gated Ubuntu box");
 
     let outcome = token_checks(&computer).await;
     computer.shutdown().await.expect("it goes away");

@@ -1,9 +1,7 @@
 //! Driving the browser through the DevTools protocol.
 //!
-//! [`Devtools`] lists, opens and closes targets over HTTP. [`Page`] attaches
-//! to one and speaks the protocol to it: navigate to a URL, evaluate script in
-//! the page, capture it, send input. None of it needs a display, and none of
-//! it depends on coordinates from a screenshot.
+//! [`Devtools`] manages default-context targets and isolated [`BrowserGroup`]s.
+//! [`Page`] drives one target without display coordinates.
 //!
 //! The WebSocket client is written here rather than taken as a dependency,
 //! for one connection to loopback, and negotiates no compression extension.
@@ -12,8 +10,9 @@
 use crate::error::{Error, Result};
 use crate::{BrowserEndpoint, Point};
 use serde_json::{Value, json};
-use std::collections::VecDeque;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::collections::{HashSet, VecDeque};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -38,11 +37,6 @@ pub struct Target {
 impl Target {
     fn from_json(value: &Value) -> Option<Self> {
         let ws = value.get("webSocketDebuggerUrl")?.as_str()?;
-        // Keep the path, drop the authority: the browser reports the port it
-        // listens on inside the box, and a client out here reaches a different
-        // one.
-        let path = ws.split_once("://")?.1;
-        let path = path.split_once('/').map(|(_, rest)| rest)?;
 
         Some(Self {
             id: value.get("id")?.as_str()?.to_string(),
@@ -61,7 +55,7 @@ impl Target {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            ws_path: format!("/{path}"),
+            ws_path: websocket_path(ws)?,
         })
     }
 
@@ -71,11 +65,18 @@ impl Target {
     }
 }
 
+fn websocket_path(url: &str) -> Option<String> {
+    let with_authority = url.split_once("://")?.1;
+    let (_, path) = with_authority.split_once('/')?;
+    Some(format!("/{path}"))
+}
+
 /// The browser's DevTools endpoint, as reached from this machine.
 #[derive(Debug, Clone)]
 pub struct Devtools {
     host: String,
     port: u16,
+    browser_path: Arc<OnceLock<String>>,
 }
 
 impl Devtools {
@@ -83,6 +84,7 @@ impl Devtools {
         Self {
             host: host.into(),
             port,
+            browser_path: Arc::new(OnceLock::new()),
         }
     }
 
@@ -148,13 +150,9 @@ impl Devtools {
 
     /// Attach to a target and speak the protocol to it.
     pub async fn attach(&self, target: &Target) -> Result<Page> {
-        let socket = handshake(&self.host, self.port, &target.ws_path).await?;
         Ok(Page {
-            socket,
-            next: 1,
+            connection: Connection::open(&self.host, self.port, &target.ws_path).await?,
             target: target.clone(),
-            events: VecDeque::new(),
-            dropped: 0,
         })
     }
 
@@ -191,6 +189,111 @@ impl Devtools {
         self.attach(&target).await
     }
 
+    /// Create an isolated cookie and storage context.
+    pub async fn create_group(&self) -> Result<BrowserGroup> {
+        let result = self
+            .browser_call("Target.createBrowserContext", json!({}))
+            .await?;
+        let id = required_string(&result, "browserContextId", "Target.createBrowserContext")?;
+        Ok(BrowserGroup {
+            devtools: self.clone(),
+            id,
+        })
+    }
+
+    /// List non-default browser contexts.
+    pub async fn groups(&self) -> Result<Vec<BrowserGroup>> {
+        let result = self
+            .browser_call("Target.getBrowserContexts", json!({}))
+            .await?;
+        Ok(browser_context_ids(&result)?
+            .into_iter()
+            .map(|id| BrowserGroup {
+                devtools: self.clone(),
+                id,
+            })
+            .collect())
+    }
+
+    async fn browser_connection(&self) -> Result<Connection> {
+        let path = self.browser_path().await?;
+        Connection::open(&self.host, self.port, &path).await
+    }
+
+    async fn browser_path(&self) -> Result<String> {
+        if let Some(path) = self.browser_path.get() {
+            return Ok(path.clone());
+        }
+
+        let version = self.version().await?;
+        let url = version
+            .get("webSocketDebuggerUrl")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::denied("the browser reported no WebSocket debugger URL"))?;
+        let discovered = websocket_path(url)
+            .ok_or_else(|| Error::denied("the browser WebSocket debugger URL has no path"))?;
+        let _ = self.browser_path.set(discovered);
+        Ok(self
+            .browser_path
+            .get()
+            .expect("this call or another just set the path")
+            .clone())
+    }
+
+    async fn browser_call(&self, method: &str, params: Value) -> Result<Value> {
+        self.browser_call_within(method, params, TIMEOUT).await
+    }
+
+    async fn browser_call_within(
+        &self,
+        method: &str,
+        params: Value,
+        within: Duration,
+    ) -> Result<Value> {
+        let deadline = Instant::now() + within;
+        let mut connection = tokio::time::timeout(within, self.browser_connection())
+            .await
+            .map_err(|_| Error::Timeout {
+                after: within,
+                detail: format!("{method} could not connect to the browser"),
+            })??;
+        let left = deadline.saturating_duration_since(Instant::now());
+        let result = tokio::time::timeout(left, connection.call_within(method, params, left))
+            .await
+            .map_err(|_| Error::Timeout {
+                after: within,
+                detail: format!("{method} was never answered"),
+            })?;
+        let _ = connection.close().await;
+        result
+    }
+
+    async fn wait_for_target(&self, id: &str, within: Duration) -> Result<Target> {
+        let deadline = Instant::now() + within;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(Error::Timeout {
+                    after: within,
+                    detail: format!("target {id} never appeared"),
+                });
+            }
+            let targets = tokio::time::timeout(left, self.targets())
+                .await
+                .map_err(|_| Error::Timeout {
+                    after: within,
+                    detail: format!("target {id} never appeared"),
+                })??;
+            if let Some(target) = targets.into_iter().find(|target| target.id == id) {
+                return Ok(target);
+            }
+            tokio::time::sleep(
+                Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+            )
+            .await;
+        }
+    }
+
     async fn get(&self, path: &str) -> Result<Value> {
         self.request("GET", path).await
     }
@@ -220,6 +323,144 @@ impl Devtools {
     }
 }
 
+/// An isolated cookie and storage context inside screen 0's Chromium.
+#[derive(Debug)]
+pub struct BrowserGroup {
+    devtools: Devtools,
+    id: String,
+}
+
+impl BrowserGroup {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub async fn targets(&self) -> Result<Vec<Target>> {
+        let result = self
+            .devtools
+            .browser_call("Target.getTargets", json!({}))
+            .await?;
+        let ids = target_ids_in_context(&result, &self.id)?;
+
+        Ok(self
+            .devtools
+            .targets()
+            .await?
+            .into_iter()
+            .filter(|target| ids.contains(target.id.as_str()))
+            .collect())
+    }
+
+    pub async fn pages(&self) -> Result<Vec<Target>> {
+        Ok(self
+            .targets()
+            .await?
+            .into_iter()
+            .filter(Target::is_page)
+            .collect())
+    }
+
+    pub async fn open(&self, url: &str) -> Result<Target> {
+        self.open_within(url, TIMEOUT).await
+    }
+
+    async fn open_within(&self, url: &str, within: Duration) -> Result<Target> {
+        let deadline = Instant::now() + within;
+        let result = self
+            .devtools
+            .browser_call_within(
+                "Target.createTarget",
+                create_target_params(&self.id, url),
+                within,
+            )
+            .await?;
+        let id = required_string(&result, "targetId", "Target.createTarget")?;
+        let left = deadline.saturating_duration_since(Instant::now());
+        self.devtools.wait_for_target(&id, left).await
+    }
+
+    pub async fn open_page(&self, url: &str, within: Duration) -> Result<Page> {
+        tokio::time::timeout(within, async {
+            let target = self.open_within("about:blank", within).await?;
+            let mut page = self.devtools.attach(&target).await?;
+            page.navigate(url).await?;
+            page.wait_for_load(within).await?;
+            Ok(page)
+        })
+        .await
+        .map_err(|_| Error::Timeout {
+            after: within,
+            detail: format!("{url} did not open"),
+        })?
+    }
+
+    /// Dispose the context and its pages. Repeated handles close idempotently.
+    pub async fn close(self) -> Result<()> {
+        let result = self
+            .devtools
+            .browser_call(
+                "Target.disposeBrowserContext",
+                browser_context_params(&self.id),
+            )
+            .await;
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) => match self.devtools.groups().await {
+                Ok(groups) if groups.iter().all(|group| group.id() != self.id.as_str()) => Ok(()),
+                _ => Err(error),
+            },
+        }
+    }
+}
+
+fn create_target_params(context: &str, url: &str) -> Value {
+    json!({
+        "url": url,
+        "browserContextId": context,
+    })
+}
+
+fn browser_context_params(context: &str) -> Value {
+    json!({ "browserContextId": context })
+}
+
+fn browser_context_ids(result: &Value) -> Result<Vec<String>> {
+    result
+        .get("browserContextIds")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::denied("Target.getBrowserContexts returned no browserContextIds"))?
+        .iter()
+        .map(|id| {
+            id.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| Error::denied("a browserContextId is not a string"))
+        })
+        .collect()
+}
+
+fn target_ids_in_context(result: &Value, context: &str) -> Result<HashSet<String>> {
+    Ok(result
+        .get("targetInfos")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::denied("Target.getTargets returned no targetInfos"))?
+        .iter()
+        .filter(|info| info.get("browserContextId").and_then(Value::as_str) == Some(context))
+        .filter_map(|info| {
+            info.get("targetId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+fn required_string(result: &Value, field: &str, method: &str) -> Result<String> {
+    result
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| Error::denied(format!("{method} returned no {field}")))
+}
+
 /// A message the browser sent that nobody asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
@@ -227,33 +468,42 @@ pub struct Event {
     pub params: Value,
 }
 
-/// One attached target.
-pub struct Page {
+struct Connection {
     socket: TcpStream,
     next: u64,
-    target: Target,
-    /// Events that arrived while an answer was being waited for.
     events: VecDeque<Event>,
-    /// How many were dropped because nobody drained them.
     dropped: usize,
+    closed: bool,
 }
 
-impl Page {
-    pub fn target(&self) -> &Target {
-        &self.target
+impl Connection {
+    async fn open(host: &str, port: u16, path: &str) -> Result<Self> {
+        Ok(Self {
+            socket: handshake(host, port, path).await?,
+            next: 1,
+            events: VecDeque::new(),
+            dropped: 0,
+            closed: false,
+        })
     }
 
-    /// Any method in the protocol, and whatever it answers.
-    ///
-    /// Events arriving meanwhile are queued rather than returned.
-    pub async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+    async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.call_within(method, params, TIMEOUT).await
+    }
+
+    async fn call_within(
+        &mut self,
+        method: &str,
+        params: Value,
+        within: Duration,
+    ) -> Result<Value> {
         let id = self.next;
         self.next += 1;
 
         let request = json!({ "id": id, "method": method, "params": params });
         send_text(&mut self.socket, &request.to_string()).await?;
 
-        let deadline = SystemTime::now() + TIMEOUT;
+        let deadline = SystemTime::now() + within;
         loop {
             let frame = read_text(&mut self.socket).await?;
             let message: Value = serde_json::from_str(&frame)
@@ -270,29 +520,22 @@ impl Page {
 
             if SystemTime::now() >= deadline {
                 return Err(Error::Timeout {
-                    after: TIMEOUT,
+                    after: within,
                     detail: format!("{method} was never answered"),
                 });
             }
         }
     }
 
-    /// How many events were dropped because the queue was full.
-    ///
-    /// The oldest go first, so a caller can tell nothing happened from not
-    /// having listened.
-    pub fn dropped_events(&self) -> usize {
-        self.dropped
+    async fn close(&mut self) -> Result<()> {
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        send_close(&mut self.socket).await
     }
 
-    /// Everything the browser reported that nobody asked for, oldest first.
-    pub fn take_events(&mut self) -> Vec<Event> {
-        self.dropped = 0;
-        self.events.drain(..).collect()
-    }
-
-    /// Wait for one event, keeping everything else that arrives meanwhile.
-    pub async fn next_event(&mut self, method: &str, within: Duration) -> Result<Event> {
+    async fn next_event(&mut self, method: &str, within: Duration) -> Result<Event> {
         if let Some(at) = self.events.iter().position(|event| event.method == method) {
             return Ok(self.events.remove(at).expect("just found"));
         }
@@ -333,6 +576,52 @@ impl Page {
             method: method.to_string(),
             params: message.get("params").cloned().unwrap_or(Value::Null),
         });
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if !self.closed {
+            let _ = self.socket.try_write(&close_frame());
+        }
+    }
+}
+
+/// One attached target.
+pub struct Page {
+    connection: Connection,
+    target: Target,
+}
+
+impl Page {
+    pub fn target(&self) -> &Target {
+        &self.target
+    }
+
+    /// Any method in the protocol, and whatever it answers.
+    ///
+    /// Events arriving meanwhile are queued rather than returned.
+    pub async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.connection.call(method, params).await
+    }
+
+    /// How many events were dropped because the queue was full.
+    ///
+    /// The oldest go first, so a caller can tell nothing happened from not
+    /// having listened.
+    pub fn dropped_events(&self) -> usize {
+        self.connection.dropped
+    }
+
+    /// Everything the browser reported that nobody asked for, oldest first.
+    pub fn take_events(&mut self) -> Vec<Event> {
+        self.connection.dropped = 0;
+        self.connection.events.drain(..).collect()
+    }
+
+    /// Wait for one event, keeping everything else that arrives meanwhile.
+    pub async fn next_event(&mut self, method: &str, within: Duration) -> Result<Event> {
+        self.connection.next_event(method, within).await
     }
 
     /// Go to a URL, whatever the address bar happens to show.
@@ -587,6 +876,18 @@ async fn handshake(host: &str, port: u16, path: &str) -> Result<TcpStream> {
     }
 
     Ok(socket)
+}
+
+fn close_frame() -> [u8; 6] {
+    let mask = nonce();
+    [0x88, 0x80, mask[0], mask[1], mask[2], mask[3]]
+}
+
+async fn send_close(socket: &mut TcpStream) -> Result<()> {
+    socket
+        .write_all(&close_frame())
+        .await
+        .map_err(|error| Error::transport(error.to_string(), true))
 }
 
 /// A client frame, which the protocol requires to be masked.
@@ -884,6 +1185,93 @@ mod tests {
             None,
             "there is nothing to attach to"
         );
+    }
+
+    #[test]
+    fn test_the_browser_socket_keeps_its_uuid_and_drops_its_private_port() {
+        assert_eq!(
+            websocket_path("ws://127.0.0.1:9222/devtools/browser/BROWSER-1").as_deref(),
+            Some("/devtools/browser/BROWSER-1")
+        );
+    }
+
+    #[test]
+    fn test_devtools_clones_share_the_discovered_browser_path() {
+        let devtools = Devtools::new("127.0.0.1", 9223);
+        let other = devtools.clone();
+        devtools
+            .browser_path
+            .set("/devtools/browser/BROWSER-1".to_string())
+            .expect("the first path");
+
+        assert_eq!(
+            other.browser_path.get().map(String::as_str),
+            Some("/devtools/browser/BROWSER-1")
+        );
+    }
+
+    #[test]
+    fn test_a_dropped_connection_sends_a_masked_close_frame() {
+        let frame = close_frame();
+        assert_eq!(frame.len(), 6);
+        assert_eq!(frame[0], 0x88, "final close frame");
+        assert_eq!(frame[1], 0x80, "client frames are masked");
+    }
+
+    #[test]
+    fn test_a_group_target_names_its_context_and_url() {
+        assert_eq!(
+            create_target_params("CONTEXT-1", "https://example.com"),
+            json!({
+                "url": "https://example.com",
+                "browserContextId": "CONTEXT-1",
+            })
+        );
+        assert_eq!(
+            browser_context_params("CONTEXT-1"),
+            json!({ "browserContextId": "CONTEXT-1" }),
+            "the disposal command must name only the context it removes"
+        );
+    }
+
+    #[test]
+    fn test_browser_context_ids_are_strings_or_the_answer_is_refused() {
+        assert_eq!(
+            browser_context_ids(&json!({
+                "browserContextIds": ["CONTEXT-1", "CONTEXT-2"]
+            }))
+            .expect("context ids"),
+            vec!["CONTEXT-1", "CONTEXT-2"]
+        );
+        assert!(matches!(
+            browser_context_ids(&json!({ "browserContextIds": [1] })),
+            Err(Error::Denied { .. })
+        ));
+        assert!(matches!(
+            required_string(&json!({}), "targetId", "Target.createTarget"),
+            Err(Error::Denied { .. })
+        ));
+    }
+
+    #[test]
+    fn test_only_targets_from_the_asked_for_context_are_grouped() {
+        let result = json!({
+            "targetInfos": [
+                { "targetId": "DEFAULT" },
+                { "targetId": "ONE", "browserContextId": "CONTEXT-1" },
+                { "targetId": "TWO", "browserContextId": "CONTEXT-2" },
+                { "targetId": "ONE-WORKER", "browserContextId": "CONTEXT-1" }
+            ]
+        });
+
+        assert_eq!(
+            target_ids_in_context(&result, "CONTEXT-1").expect("target ids"),
+            HashSet::from(["ONE".to_string(), "ONE-WORKER".to_string()])
+        );
+        assert!(matches!(
+            target_ids_in_context(&json!({}), "CONTEXT-1"),
+            Err(Error::Denied { .. })
+        ));
     }
 
     #[test]

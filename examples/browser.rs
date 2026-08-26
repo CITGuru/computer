@@ -56,6 +56,20 @@ async fn main() -> computer::Result<()> {
     page.wait_for_load(Duration::from_secs(20)).await?;
     println!("  navigated to {}", page.url().await?);
 
+    page.evaluate("localStorage.setItem('scope', 'default')")
+        .await?;
+    let group = browser.create_group().await?;
+    let mut isolated = group
+        .open_page("https://example.org", Duration::from_secs(20))
+        .await?;
+    println!(
+        "  group {} sees default storage: {}",
+        group.id(),
+        isolated.evaluate("localStorage.getItem('scope')").await?
+    );
+    drop(isolated);
+    group.close().await?;
+
     let id = page.target().id.clone();
     browser.close(&id).await?;
     println!("  closed the tab");

@@ -172,6 +172,28 @@ page.navigate("https://example.org").await?;
 
 `Page::call` sends any protocol method and returns the answer, so you can use parts of the protocol this crate does not wrap. Use `open_page` rather than `open` followed by a wait: a new tab shows `about:blank`, which is already loaded, so a wait returns before your page arrives.
 
+### Isolate browser sessions with groups
+
+A browser group is a Chromium browser context inside screen 0. Groups share the Chromium process but keep cookies, local storage, IndexedDB, and service workers separate:
+
+```rust
+let browser = computer.browser().expect("a published DevTools port");
+let group = browser.create_group().await?;
+
+let mut page = group
+    .open_page("https://example.com", Duration::from_secs(20))
+    .await?;
+
+page.evaluate("localStorage.setItem('agent', 'one')").await?;
+group.close().await?;
+```
+
+This is additive. `Devtools::open_page` still uses the default browser context, each screen still has its own browser profile, and `BrowserGroup::open_page` creates a page in the group. Use `groups()` to list non-default contexts and `pages()` or `targets()` on a group to list what it owns.
+
+Groups do not create screens. Many group pages can run through CDP at the same time, but they belong to screen 0's Chromium and only one can be frontmost on the desktop. Call `bring_to_front()` before using screen coordinates. Cleanup is explicit because dropping a Rust value cannot await Chromium's disposal command.
+
+This API wraps CDP browser contexts, not Chrome's visual tab groups. Visual tab groups are part of the extension-only `chrome.tabGroups` API.
+
 ## Configure a desktop
 
 Use the builder when you need settings other than the defaults:
