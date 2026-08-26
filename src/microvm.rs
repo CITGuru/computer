@@ -127,7 +127,6 @@ pub const DESKTOP_MEMORY_MIB: u64 = 2048;
 /// How long to wait for a guest to find its way out before starting a browser.
 pub const NETWORK_WAIT: Duration = Duration::from_secs(15);
 
-/// A configuration, as the plan for one machine.
 pub fn plan_for(name: &str, config: &Config, ports: Vec<(u16, u16)>) -> Plan {
     Plan {
         name: name.to_string(),

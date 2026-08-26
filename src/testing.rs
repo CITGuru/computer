@@ -144,7 +144,6 @@ impl ScriptedDesktop {
         }
     }
 
-    /// Which screen this one was opened for.
     pub fn screen(&self) -> ScreenId {
         self.screen
     }
@@ -368,8 +367,8 @@ impl Profile for ScriptedProfile {
         BTreeMap::from([("SCRIPTED_SCREEN".to_string(), screen.0.to_string())])
     }
 
-    fn viewer_url(&self, host_port: u16) -> String {
-        format!("http://127.0.0.1:{host_port}/scripted")
+    fn viewer_url(&self, at: &crate::Address, _ticket: Option<&crate::Secret>) -> String {
+        format!("{}://{}/scripted", at.scheme.as_str(), at.authority())
     }
 }
 

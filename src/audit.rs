@@ -1,6 +1,6 @@
 //! Checking that the claims are true.
 //!
-//! [`DesktopSupport`] is written when the descriptor is designed rather than
+//! [`crate::DesktopSupport`] is written when the descriptor is designed rather than
 //! when the capability is built, so a flag can stay true beside a method that
 //! answers `Unsupported`, or an image with no tool behind it. The compiler
 //! cannot catch that: it guarantees the method exists, not that it works.

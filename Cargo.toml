@@ -32,6 +32,10 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ], optional = true }
 thiserror = "2"
+# The CSPRNG. Every credential this crate mints comes from here rather than
+# from the clock, which the takeover token used to use and which a second
+# caller can work out.
+getrandom = "0.3"
 # Logs. A facade, so a caller with no subscriber pays nothing — and a
 # detached task that fails has somewhere to say so.
 tracing = "0.1"

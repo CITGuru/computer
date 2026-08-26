@@ -368,7 +368,6 @@ impl Extras {
         Self::with(["tint2", "hsetroot"])
     }
 
-    /// Everything optional at once.
     pub fn everything() -> Self {
         let mut packages = Self::wide_fonts().packages;
         packages.extend(Self::audio().packages);

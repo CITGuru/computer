@@ -32,6 +32,57 @@ wm_home="/tmp/computer-wm-${number}"
 profile="${HOME:-/home/computer}/.browser-profiles/screen-${number}"
 logs="/tmp/computer/screen-${number}"
 
+# The gate in front of both viewers, as `docs/viewer-auth.md` describes it.
+#
+# `open` is what a box on loopback has always been; the crate refuses to publish
+# an open viewer beyond loopback, so anything reachable arrives here gated.
+viewer_auth="${COMPUTER_VIEWER_AUTH:-open}"
+gate_dir="/tmp/computer/gate"
+
+# The websockify arguments for one door, left in `gate_args`.
+#
+# `token` drops the positional target: websockify reads it from the token file
+# instead, which is also what keeps the secret out of `ps` in here. BasicHTTPAuth
+# has no equivalent and takes its source on the command line.
+build_gate() {
+  local door="$1" target="$2" secret file
+  gate_args=("$target")
+
+  if [ "$viewer_auth" = "open" ]; then return 0; fi
+
+  case "$door" in
+    view) secret="${COMPUTER_VIEW_SECRET:-}" ;;
+    control) secret="${COMPUTER_CONTROL_SECRET:-}" ;;
+  esac
+
+  # An empty secret would start a viewer that accepts everybody while the crate
+  # believes it is gated. Refused rather than defaulted: this is the failure the
+  # whole design exists to prevent.
+  if [ -z "$secret" ]; then
+    echo "viewer auth is ${viewer_auth} but the ${door} secret is unset" >&2
+    return 1
+  fi
+
+  case "$viewer_auth" in
+    token)
+      mkdir -p "$gate_dir"
+      file="${gate_dir}/${door}-${screen}"
+      # The file is the credential, so it is unreadable to anybody else before
+      # websockify is ever pointed at it.
+      (umask 077; printf '%s: %s\n' "$secret" "$target" >"$file")
+      gate_args=(--token-plugin TokenFile --token-source "$file")
+      ;;
+    password)
+      gate_args=(--auth-plugin BasicHTTPAuth
+        --auth-source "computer:${secret}" --web-auth "$target")
+      ;;
+    *)
+      echo "unknown viewer auth: ${viewer_auth}" >&2
+      return 1
+      ;;
+  esac
+}
+
 await() {
   # Bounded, because a display that has not answered in ten seconds is not
   # slow — it is broken, and waiting longer only delays the report.
@@ -126,7 +177,8 @@ start() {
 
   x11vnc -display "$display" -forever -shared -viewonly -nopw \
     -listen 127.0.0.1 -rfbport "$view_vnc" -xkb -ncache 0 >"${logs}-vnc.log" 2>&1 &
-  websockify --web=/usr/share/novnc "0.0.0.0:${view_port}" "127.0.0.1:${view_vnc}" \
+  build_gate view "127.0.0.1:${view_vnc}" || exit 1
+  websockify --web=/usr/share/novnc "0.0.0.0:${view_port}" "${gate_args[@]}" \
     >"${logs}-novnc.log" 2>&1 &
 
   await listening "${view_port}" \
@@ -174,7 +226,8 @@ control() {
   mkdir -p /tmp/computer
   x11vnc -display "$display" -forever -shared -nopw \
     -listen 0.0.0.0 -rfbport "$control_vnc" -xkb -ncache 0 >"${logs}-vnc-control.log" 2>&1 &
-  websockify --web=/usr/share/novnc "0.0.0.0:${control_port}" "127.0.0.1:${control_vnc}" \
+  build_gate control "127.0.0.1:${control_vnc}" || exit 1
+  websockify --web=/usr/share/novnc "0.0.0.0:${control_port}" "${gate_args[@]}" \
     >"${logs}-novnc-control.log" 2>&1 &
 
   await listening "${control_port}" \

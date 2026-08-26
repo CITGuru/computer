@@ -92,6 +92,22 @@ pub struct Config {
     /// Numbers rather than a flag, because which ports exist is the image's
     /// answer and this crate's images do not all use the same ones.
     pub publish: Vec<u16>,
+    /// Which addresses those ports answer on.
+    pub bind: crate::Bind,
+    /// What the viewer asks of whoever connects.
+    pub auth: crate::Auth,
+    /// The two doors' credentials, where the gate is not open.
+    ///
+    /// Minted at launch unless the caller supplied a pair. Never logged: the
+    /// whole of [`crate::Secret`] exists so that a `{:?}` on this struct does
+    /// not put a desktop on somebody's terminal.
+    pub credentials: Option<crate::Credentials>,
+    /// The host to put in a viewer URL, where it is not the one bound.
+    ///
+    /// A box on every interface is reached at whatever name resolves here, and
+    /// nothing in this crate knows that name. Unset uses the bind's own
+    /// address, which is right for loopback and for nothing else.
+    pub advertise: Option<String>,
     pub env: BTreeMap<String, String>,
     pub memory: Option<String>,
     pub cpus: Option<String>,
@@ -130,6 +146,10 @@ impl Default for Config {
             // Filled from the profile at launch: a bare configuration cannot
             // know which ports an image it has not been told about serves.
             publish: Vec::new(),
+            bind: crate::Bind::Loopback,
+            auth: crate::Auth::Open,
+            credentials: None,
+            advertise: None,
             env: BTreeMap::new(),
             memory: None,
             cpus: None,
@@ -174,10 +194,9 @@ pub fn run_args(name: &str, config: &Config) -> Vec<String> {
 
     for port in &config.publish {
         // A free host port rather than the same number: two boxes on one
-        // machine both want 6080. Loopback only, because the screen has no
-        // password on it.
+        // machine both want 6080.
         args.push(arg("--publish"));
-        args.push(format!("127.0.0.1::{port}"));
+        args.push(format!("{}::{port}", config.bind.publish_prefix()));
     }
 
     if let Some(memory) = &config.memory {

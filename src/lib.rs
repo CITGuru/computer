@@ -60,9 +60,12 @@
 //! - The screen has no password on it. Viewer ports are published on loopback
 //!   only, and anyone who reaches a control port can drive the desktop.
 
+mod auth;
 mod desktop;
 mod error;
 mod exec;
+pub mod reach;
+mod secret;
 
 pub mod audit;
 pub mod bundle;
@@ -78,6 +81,7 @@ pub mod servers;
 pub mod testing;
 
 pub use audit::{Audit, audit};
+pub use auth::{AUTH_ENV, Auth, CONTROL_SECRET_ENV, Credentials, VIEW_SECRET_ENV, VIEWER_USER};
 pub use cdp::{Devtools, Page, Target};
 pub use desktop::{
     Browser, BrowserEndpoint, Button, Clipboard, Control, Delta, Desktop, DesktopFactory,
@@ -91,8 +95,10 @@ pub use machine::ScreenHost;
 pub use machine::{DockerMachine, Machine, MachineHost, PortMap};
 pub use microvm::MicroVm;
 pub use profile::{FORCE, ImageSource, PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, SHARED};
+pub use reach::{Address, Bind, Reach, Scheme};
 pub use runtime::{Config, ContainerCli, SystemDocker};
 pub use screens::{ControlGate, DEFAULT_LEASE, ScreenLease, Screens};
+pub use secret::Secret;
 pub use servers::wayland::{WaylandDesktop, WaylandDriver, WaylandProfile};
 pub use servers::x11::{X11Desktop, X11Driver, X11Profile};
 
@@ -263,7 +269,7 @@ impl Builder {
 
     /// Put the box somewhere other than a container.
     ///
-    /// [`MicroVm`](crate::microvm::MicroVm) is one. Anything that can run a
+    /// [`MicroVm`] is one. Anything that can run a
     /// command against a display can be another.
     pub fn machine(mut self, machine: Arc<dyn Machine>) -> Self {
         self.machine = Some(machine);
@@ -369,7 +375,50 @@ impl Builder {
         self
     }
 
+    /// Which addresses the published ports answer on.
+    ///
+    /// Anything but [`Bind::Loopback`] is refused for now: the viewer has no
+    /// gate on it yet, so a routable bind would be an unlocked desktop on the
+    /// network. See `docs/viewer-auth.md`.
+    pub fn publish_on(mut self, bind: Bind) -> Self {
+        self.config.bind = bind;
+        self
+    }
+
+    /// What the viewer asks of whoever connects.
+    ///
+    /// [`Auth::Open`] is the default and is what a box on loopback has always
+    /// been. Anything published beyond loopback needs one of the other two —
+    /// see `docs/viewer-auth.md` for which fits a deployment.
+    pub fn auth(mut self, auth: Auth) -> Self {
+        self.config.auth = auth;
+        self
+    }
+
+    /// Credentials that have to outlive this process.
+    ///
+    /// Unset, a pair is minted at launch and lives as long as the handle. A
+    /// second program attaching to the same box hands out working URLs only if
+    /// it was given the same values.
+    pub fn credentials(mut self, credentials: Credentials) -> Self {
+        self.config.credentials = Some(credentials);
+        self
+    }
+
+    /// The host to put in a viewer URL.
+    ///
+    /// A box published on every interface is reached at a name this crate has
+    /// never been told, so a URL built from the bind would be wrong. Unset
+    /// keeps the loopback address.
+    pub fn advertise(mut self, host: impl Into<String>) -> Self {
+        self.config.advertise = Some(host.into());
+        self
+    }
+
     /// The arguments this would run, without running anything.
+    ///
+    /// Carries no credential: the gate's secrets are minted at launch, and a
+    /// preview that printed them would put a desktop in whatever logged it.
     pub fn preview(&self) -> Result<Vec<String>> {
         Ok(runtime::run_args(
             self.name.as_deref().unwrap_or("computer-preview"),
@@ -444,6 +493,53 @@ impl Builder {
 
         let mut config = self.config()?;
 
+        // Asked of the `Machine` rather than the bind, because a bind is a
+        // container idea: E2B publishes a hostname per port and would walk
+        // past a rule phrased as "loopback or not".
+        let routable = !config.publish.is_empty() && machine.reach(&config).needs_a_secret();
+
+        if routable && !config.auth.is_gated() {
+            return Err(Error::denied(
+                "this box publishes beyond loopback with an open viewer: the \
+                 view and control ports would accept anyone who reaches them, \
+                 and the control port drives the desktop. Choose \
+                 Auth::Password or Auth::Token.",
+            ));
+        }
+
+        // CDP has no authentication and cannot be given one — Chromium binds
+        // its debugging port to loopback whatever it is told, and a forward
+        // cannot add a check to a WebSocket upgrade. Withdrawn rather than
+        // published where the gate cannot follow: reach it through a tunnel,
+        // or from inside the box.
+        if routable && let Some(bridge) = self.profile.ports().devtools_bridge {
+            config.publish.retain(|port| *port != bridge);
+        }
+
+        // Minted here rather than in `config`, so `preview` stays a thing that
+        // can be printed: a secret exists once a box is going to.
+        if config.auth.is_gated() {
+            let credentials = match config.credentials.take() {
+                Some(supplied) => supplied,
+                None => Credentials::generate()?,
+            };
+            // Carried as container environment, where every `screen.sh`
+            // invocation reads it — a screen opened long after launch has to
+            // be reachable with the credential the first one was.
+            config
+                .env
+                .insert(auth::AUTH_ENV.to_string(), config.auth.as_str().to_string());
+            config.env.insert(
+                auth::VIEW_SECRET_ENV.to_string(),
+                credentials.view.expose().to_string(),
+            );
+            config.env.insert(
+                auth::CONTROL_SECRET_ENV.to_string(),
+                credentials.control.expose().to_string(),
+            );
+            config.credentials = Some(credentials);
+        }
+
         if self.ensure_image {
             machine.ensure_image(&config).await?;
         }
@@ -491,15 +587,34 @@ impl Builder {
 
         let driver = self.driver.clone().unwrap_or_else(|| self.profile.driver());
 
-        let mut computer = Computer::assemble(
+        let host = MachineHost::new(
             Arc::clone(&machine),
             Arc::clone(&self.profile),
-            Arc::clone(&driver),
             name.clone(),
-            driven_by(
-                self.profile.support_at(config.width, config.height),
-                driver.as_ref(),
-            ),
+        )
+        .advertised_at(
+            Scheme::Http,
+            config
+                .advertise
+                .clone()
+                .unwrap_or_else(|| config.bind.publish_prefix()),
+        )
+        .gated_by(config.auth, config.credentials.clone());
+
+        let mut support = driven_by(
+            self.profile.support_at(config.width, config.height),
+            driver.as_ref(),
+        );
+        if routable && let Some(browser) = support.browser.as_mut() {
+            // A claim withdrawn rather than one broken, so `audit` skips the
+            // check instead of failing it.
+            browser.cdp = false;
+        }
+
+        let mut computer = Computer::assemble(
+            Arc::new(host),
+            Arc::clone(&driver),
+            support,
             mapped,
             cleanup,
         );
@@ -722,7 +837,13 @@ impl Computer {
         let support = driven_by(profile.support_at(width, height), driver.as_ref());
 
         let mapped = machine.ports(&name).await;
-        let computer = Self::assemble(machine, profile, driver, name, support, mapped, None);
+        let computer = Self::assemble(
+            Arc::new(MachineHost::new(machine, profile, name)),
+            driver,
+            support,
+            mapped,
+            None,
+        );
 
         // A person may already have this screen, and the gate is per
         // process, so the box is asked rather than assumed.
@@ -740,20 +861,20 @@ impl Computer {
         Self::attach_to(Arc::new(DockerMachine::new(cli)), name).await
     }
 
+    /// Built around a [`MachineHost`] rather than its parts, because the host
+    /// is what knows where the box is advertised, and a second one made here
+    /// would answer differently.
     fn assemble(
-        machine: Arc<dyn Machine>,
-        profile: Arc<dyn Profile>,
+        host: Arc<MachineHost>,
         driver: Arc<dyn DesktopFactory>,
-        name: String,
         support: DesktopSupport,
         mapped: PortMap,
         cleanup: Option<Cleanup>,
     ) -> Self {
-        let host = Arc::new(MachineHost::new(
-            Arc::clone(&machine),
-            Arc::clone(&profile),
-            name.clone(),
-        ));
+        let machine = Arc::clone(host.machine());
+        let profile = Arc::clone(host.profile());
+        let name = host.name().to_string();
+
         let primary = Screen::new(
             Arc::clone(&profile),
             driver.as_ref(),
@@ -777,7 +898,6 @@ impl Computer {
         }
     }
 
-    /// Which runtime this box is running on.
     pub fn runtime(&self) -> &str {
         self.machine.runtime()
     }
@@ -808,6 +928,14 @@ impl Computer {
     /// The container's name, which is also how [`Computer::attach`] finds it.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// What this box's viewers ask, and what opens them.
+    ///
+    /// The way to learn the password under [`Auth::Password`], where no URL
+    /// carries it by design. `None` where the gate is open.
+    pub fn credentials(&self) -> Option<&Credentials> {
+        self.host.gate().1
     }
 
     /// What this box can show. A constant for the image it was started from.
@@ -1391,17 +1519,19 @@ impl Screen {
     ///
     /// `None` where no ports were published.
     pub fn viewer_url(&self) -> Option<String> {
-        self.mapped
-            .get(&self.ports.view)
-            .map(|port| self.profile.viewer_url(*port))
+        self.mapped.get(&self.ports.view).map(|port| {
+            self.profile
+                .viewer_url(&self.host.address(*port), self.host.view_ticket())
+        })
     }
 
     /// The input-accepting viewer, which exists only while somebody has been
     /// handed the screen. See [`Screen::hand_over`].
     pub fn control_url(&self) -> Option<String> {
-        self.mapped
-            .get(&self.ports.control)
-            .map(|port| self.profile.viewer_url(*port))
+        self.mapped.get(&self.ports.control).map(|port| {
+            self.profile
+                .viewer_url(&self.host.address(*port), self.host.control_ticket())
+        })
     }
 
     /// Open a URL in this screen's browser.
@@ -1476,8 +1606,12 @@ impl Screen {
 
     async fn open_control(&self, exclusive: bool) -> Result<Takeover> {
         // Minted before the server opens, so the box records who opened it.
-        // Unique, or one takeover's `end` would end another's.
-        let token = format!("takeover-{}-{}-{}", self.id.0, nanos(), tick());
+        //
+        // From the CSPRNG, not the clock: this token is what the input guard
+        // refuses on, so anyone who can work one out can drive a screen during
+        // somebody else's takeover. The screen number stays for the person
+        // reading the file; the entropy is the rest.
+        let token = format!("takeover-{}-{}", self.id.0, Secret::generate()?.expose());
 
         let result = self
             .host

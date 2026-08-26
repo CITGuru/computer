@@ -35,7 +35,6 @@ pub fn new_sandbox(plan: &SandboxPlan) -> Value {
     })
 }
 
-/// A sandbox out of a control-plane answer.
 pub fn sandbox_from(body: &Value) -> Result<Sandbox> {
     let id = body
         .get("sandboxID")

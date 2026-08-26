@@ -407,7 +407,6 @@ impl Page {
             .to_string())
     }
 
-    /// Wait until the document has finished loading.
     pub async fn wait_for_load(&mut self, within: Duration) -> Result<()> {
         let deadline = SystemTime::now() + within;
 

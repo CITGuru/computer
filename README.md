@@ -499,12 +499,12 @@ Driving is the same code. Three things are not:
 | -------- | --------------------------------- | ----------------------------------------- |
 | Ports    | Forwarded to a host port          | Published as `6080-<sandbox>.e2b.app`     |
 | DevTools | Reachable on a published port     | Not reachable; the claim is withdrawn     |
-| Viewer   | Loopback, so the bind is the lock | Public URL, or none at all — see below    |
+| Viewer   | Loopback unless a gate is set     | Public URL, or none at all — see below    |
 | Lifetime | Until removed                     | A deadline, pushed out while work arrives |
 | Image    | A tag this crate builds           | A template E2B builds                     |
 
 
-**The viewer is the thing to read carefully.** Every other runtime publishes on loopback, and that bind is the whole authentication story — `x11vnc` runs with `-nopw`. E2B publishes a sandbox's ports at `6080-<id>.<domain>` itself, so that host answers whether or not this crate prints the URL.
+**The viewer is the thing to read carefully.** Every other runtime publishes on loopback, and a box that never leaves it needs no gate. E2B publishes a sandbox's ports at `6080-<id>.<domain>` itself, so that host answers whether or not this crate prints the URL.
 
 So `public_viewer` decides only whether you are *handed* the URL. Off by default: the viewer ports are left out of the port map and `viewer_url()` returns `None`. The desktop is still driveable from your program.
 
@@ -512,7 +512,7 @@ So `public_viewer` decides only whether you are *handed* the URL. Off by default
 Computer::builder().machine(Arc::new(machine.public_viewer(true)))
 ```
 
-Whether that URL is *gated* is E2B's decision, not this crate's. Every sandbox is created with `secure: true`; where the API answers with a `trafficAccessToken`, its proxy refuses anything without an `e2b-traffic-access-token` header — which this crate sends and a browser cannot. Where it answers without one, nothing is refused and the URL is the only secret there is. `start` logs a warning in that case. Measured on a live sandbox, a viewer URL answered `200` with no token, so do not assume the gate is there — check the warning.
+`public_viewer(true)` hands out an address the internet can reach, so it goes through the same gate as `publish_on(Bind::Any)`: set `auth` or the launch is refused. Do not rely on E2B's own proxy for this. Every sandbox is created with `secure: true`, and where the API answers with a `trafficAccessToken` its proxy refuses anything without an `e2b-traffic-access-token` header — which this crate sends and a browser cannot. Where it answers without one, nothing is refused. Measured on a live sandbox, a viewer URL answered `200` with no token.
 
 DevTools does not travel. An endpoint out here would be `wss` on a public host and this crate's DevTools client speaks plain TCP, so `E2bProfile` drops the bridge port and clears the `cdp` claim. `devtools()` returns `None` and `audit` skips the browser check rather than failing it. Synthetic input, screenshots, the clipboard, the viewer and the takeover are untouched.
 
@@ -604,18 +604,36 @@ cargo run --features e2b --example e2b -- <template-id>
 
 ## Security
 
-Note: The viewer has no password atm. The crate publishes viewer ports on loopback only. Do not expose these ports on a public or shared network. Anyone who can reach a control port can control the desktop.
+The viewer is open by default and published on loopback, which is what a local box has always been. Anyone who can reach a control port can drive the desktop.
 
-`network(false)` blocks network access from the desktop. It does not add authentication to the viewer.
+Publishing beyond loopback needs a gate. `Auth::Password` prompts in the browser and keeps the credential out of every URL, so it lands in no history and no proxy log — but there is no link to hand anybody. `Auth::Token` puts a ticket in the URL, so one link carries everything, and the credential goes wherever the link goes.
 
-A box in a cloud sandbox is the exception, because there is no loopback to hide behind. Its ports are published by the vendor at a public host, so withholding the URL is not the same as closing the port. Read the viewer paragraph under [Run in a cloud sandbox](#run-in-a-cloud-sandbox) before you put anything on one.
+```rust
+let computer = Computer::builder()
+    .auth(Auth::Token)
+    .publish_on(Bind::Any)
+    .advertise("boxes.example.com")
+    .launch()
+    .await?;
+
+let watch = computer.viewer_url();     // carries its ticket
+let pair = computer.credentials();     // the password, under Auth::Password
+```
+
+An open viewer beyond loopback is refused at launch rather than published. The two doors carry separate credentials, so a watch link does not become a control link by changing the port.
+
+DevTools is withdrawn rather than published, because CDP has no authentication and cannot be given one. Reach it through a tunnel, or from inside the box.
+
+`network(false)` blocks network access from the desktop. It does not gate the viewer.
+
+A cloud sandbox goes through the same rule: `public_viewer(true)` is reachable from the internet, so it needs a gate like any other publish.
 
 A control port exists only while somebody has been handed the screen, and it closes again when the takeover ends. While it is open, the box refuses input from everything else, including a shell inside it.
 
 ## Todo
 
 - [ ] Chrome Browser Context Support - ability to manage multiple pages as groups
-- [ ] Viewer Auth - Password Protect Viewer URL
+- [x] Viewer Auth - Password Protect Viewer URL
 - [ ] Full Audio Support
 - [ ] MacOS Desktop Box and Quartz Display Server
 - [ ] Computer Rest API & MCP - Manage instances of computer boxes

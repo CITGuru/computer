@@ -21,6 +21,17 @@ pub const PROFILE_LABEL: &str = "computer.profile";
 /// On the box, so a process attaching later can read it.
 pub const PROFILE_ENV: &str = "COMPUTER_PROFILE";
 
+/// The websocket path a ticketed viewer connects on.
+///
+/// The token rides in the socket path's own query rather than the page's: the
+/// page is static and the credential is read where the socket opens. The inner
+/// `?` and `=` are percent-encoded, because both this crate's `embed.html` and
+/// noVNC's `vnc.html` put the value through `decodeURIComponent` before using
+/// it as a path.
+pub fn viewer_path(ticket: &crate::Secret) -> String {
+    format!("&path=websockify%3Ftoken%3D{}", ticket.expose())
+}
+
 /// The profile a box says it speaks, where this crate ships one by that name.
 ///
 /// `None` for one a caller wrote: see [`crate::Computer::attach_using`].
@@ -197,9 +208,21 @@ pub trait Profile: Send + Sync {
     /// process has nothing else to say what size it came up at.
     fn geometry_from(&self, environment: &BTreeMap<String, String>) -> Option<(u32, u32)>;
 
-    /// Where a person watches a screen, given the host port it was mapped to.
-    fn viewer_url(&self, host_port: u16) -> String {
-        format!("http://127.0.0.1:{host_port}/vnc.html?autoconnect=1&resize=scale")
+    /// Where a person watches a screen.
+    ///
+    /// Given the whole address rather than a port: the host a box is reached at
+    /// is not something this crate can derive once the box is off loopback, so
+    /// it is carried in from whoever does know.
+    fn viewer_url(&self, at: &crate::Address, ticket: Option<&crate::Secret>) -> String {
+        let mut url = format!(
+            "{}://{}/vnc.html?autoconnect=1&resize=scale",
+            at.scheme.as_str(),
+            at.authority()
+        );
+        if let Some(ticket) = ticket {
+            url.push_str(&viewer_path(ticket));
+        }
+        url
     }
 
     /// Start a screen's whole stack.

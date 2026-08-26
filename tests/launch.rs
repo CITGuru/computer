@@ -5,7 +5,7 @@
 //! failed image build, is a box whose failure arrives in the wrong shape.
 
 use computer::testing::{ScriptedCli, ScriptedDriver, ScriptedProfile};
-use computer::{Computer, DisplayServer, Error, ExecResult, HolderId, ScreenId, bundle};
+use computer::{Bind, Computer, DisplayServer, Error, ExecResult, HolderId, ScreenId, bundle};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -888,5 +888,345 @@ async fn a_wayland_screen_refuses_a_cursor_it_never_measured() {
         matches!(computer.cursor().await, Err(Error::Unsupported { .. })),
         "a person moved a pointer this driver did not move, and nothing will \
          say where to"
+    );
+}
+
+/// The takeover token is what the image's input guard refuses on, so anyone who
+/// can work one out can drive a screen somebody else has been handed.
+///
+/// It used to be the process id, the clock and a counter — all three readable
+/// or guessable from another process on the same host.
+#[tokio::test]
+async fn a_takeover_token_cannot_be_worked_out_from_the_clock() {
+    /// The token as the box receives it, out of the `control` command's argv.
+    async fn mint() -> String {
+        let cli = a_working_runtime("");
+        let computer = Computer::builder()
+            .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+            .driver(Arc::new(ScriptedDriver::new()) as Arc<dyn computer::DesktopFactory>)
+            .wait_for_ready(None)
+            .keep_on_drop(true)
+            .launch()
+            .await
+            .expect("a box");
+
+        computer.hand_over().await.expect("the screen");
+
+        cli.calls()
+            .into_iter()
+            .find(|argv| argv.iter().any(|word| word == "control"))
+            .and_then(|argv| {
+                argv.iter()
+                    .find(|word| word.starts_with("takeover-"))
+                    .cloned()
+            })
+            .expect("the control command carries the token")
+    }
+
+    let first = mint().await;
+    let second = mint().await;
+
+    assert_ne!(first, second, "two takeovers must not share a token");
+
+    let entropy = |token: &str| token.rsplit('-').next().unwrap_or_default().to_string();
+    let (one, two) = (entropy(&first), entropy(&second));
+
+    assert_eq!(one.len(), 64, "256 bits, hex encoded: {first}");
+    assert!(
+        one.chars().all(|c| c.is_ascii_hexdigit()),
+        "the random half is hex: {first}"
+    );
+
+    // Two mints inside one process, microseconds apart. A token built from the
+    // clock and a counter agrees on almost every character here; one drawn from
+    // the CSPRNG agrees on about one in sixteen.
+    let shared = one.chars().zip(two.chars()).filter(|(a, b)| a == b).count();
+    assert!(
+        shared < 32,
+        "{shared} of 64 characters match between two mints — this is derived \
+         from something predictable rather than drawn: {first} / {second}"
+    );
+}
+
+/// An open viewer is a desktop anyone who reaches the port can watch, and on
+/// the control port drive. The refusal is what makes the knob safe to have.
+#[tokio::test]
+async fn an_open_viewer_beyond_loopback_is_refused_before_a_box_exists() {
+    for bind in [Bind::Any, Bind::Address("192.168.1.4".parse().unwrap())] {
+        let cli = a_working_runtime("");
+
+        let error = Computer::builder()
+            .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+            .publish_on(bind.clone())
+            .launch()
+            .await
+            .expect_err("an open viewer on the network");
+
+        assert!(matches!(error, Error::Denied { .. }), "{bind:?}");
+        assert_eq!(
+            cli.count(),
+            1,
+            "{bind:?}: the runtime was greeted and then nothing was created — an \
+             open box must not exist even for the moment before it is torn down"
+        );
+    }
+}
+
+/// The other half of the rule, and the reason it is not simply "no publishing":
+/// either gate satisfies it, and the caller picks which by how they hand the
+/// box out.
+#[tokio::test]
+async fn a_gated_viewer_beyond_loopback_is_allowed() {
+    for auth in [computer::Auth::Password, computer::Auth::Token] {
+        let cli = a_working_runtime("");
+
+        Computer::builder()
+            .cli(cli as Arc<dyn computer::ContainerCli>)
+            .publish_on(Bind::Any)
+            .auth(auth)
+            .wait_for_ready(None)
+            .keep_on_drop(true)
+            .launch()
+            .await
+            .unwrap_or_else(|error| panic!("{auth:?} gates the viewer: {error}"));
+    }
+}
+
+/// The refusal reads the reach and not "this is not the default", or a caller
+/// who spelled loopback out would go looking for a secret they do not need.
+#[tokio::test]
+async fn loopback_spelled_out_opens_like_the_default() {
+    let cli = a_working_runtime("");
+
+    Computer::builder()
+        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .publish_on(Bind::Address("127.0.0.1".parse().unwrap()))
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box on loopback");
+}
+
+/// The deployment `docs/viewer-auth.md` argues for: the box on loopback behind
+/// a proxy, and the URL naming the proxy. That name is not derivable from
+/// anything this crate holds, so a URL built from the bind is wrong for every
+/// box that is not reached at 127.0.0.1.
+#[tokio::test]
+async fn the_url_a_person_is_handed_names_the_advertised_host() {
+    let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
+
+    let computer = Computer::builder()
+        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .advertise("boxes.example.com")
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box");
+
+    assert_eq!(
+        computer.viewer_url().as_deref(),
+        Some("http://boxes.example.com:32768/vnc.html?autoconnect=1&resize=scale"),
+        "the port is still the one the runtime mapped; only the name changes"
+    );
+}
+
+/// The shape a link has to have to be worth handing out: everything a person
+/// needs is in the URL, and the two doors do not share a credential.
+#[tokio::test]
+async fn a_token_gate_puts_a_different_ticket_on_each_door() {
+    let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n6081/tcp -> 127.0.0.1:32769\n");
+
+    let computer = Computer::builder()
+        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .auth(computer::Auth::Token)
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box");
+
+    let credentials = computer.credentials().expect("a gated box holds a pair");
+    let viewer = computer.viewer_url().expect("a viewer");
+    let takeover = computer.hand_over().await.expect("the screen");
+    let control = takeover.url().expect("a control URL");
+
+    assert!(
+        viewer.contains(credentials.view.expose()),
+        "the watch link carries what opens the watch door"
+    );
+    assert!(
+        control.contains(credentials.control.expose()),
+        "the control link carries what opens the control door"
+    );
+    assert!(
+        !viewer.contains(credentials.control.expose()),
+        "a watch link that carries the control credential is a control link"
+    );
+}
+
+/// The reason `Auth::Password` exists: the credential reaches the browser
+/// through a prompt, so it lands in no history, no referrer and no proxy log.
+#[tokio::test]
+async fn a_password_gate_puts_nothing_in_the_url() {
+    let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
+
+    let computer = Computer::builder()
+        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .auth(computer::Auth::Password)
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box");
+
+    let credentials = computer.credentials().expect("a gated box holds a pair");
+    let viewer = computer.viewer_url().expect("a viewer");
+
+    assert!(!viewer.contains(credentials.view.expose()), "{viewer}");
+    assert!(!viewer.contains(credentials.control.expose()), "{viewer}");
+    assert_eq!(
+        viewer, "http://127.0.0.1:32768/vnc.html?autoconnect=1&resize=scale",
+        "the URL is the ungated one; the prompt is what differs"
+    );
+}
+
+/// The credential has to be in the box before any screen starts, because a
+/// screen opened an hour later has to answer to the same one.
+#[tokio::test]
+async fn the_gate_reaches_the_box_as_environment() {
+    let cli = a_working_runtime("");
+
+    let computer = Computer::builder()
+        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .auth(computer::Auth::Token)
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box");
+
+    let credentials = computer.credentials().expect("a pair");
+    let run = cli
+        .calls()
+        .into_iter()
+        .find(|argv| argv.iter().any(|word| word == "run"))
+        .expect("the box was created");
+
+    let carries = |wanted: &str| run.iter().any(|word| word == wanted);
+    assert!(carries("COMPUTER_VIEWER_AUTH=token"));
+    assert!(carries(&format!(
+        "COMPUTER_VIEW_SECRET={}",
+        credentials.view.expose()
+    )));
+    assert!(carries(&format!(
+        "COMPUTER_CONTROL_SECRET={}",
+        credentials.control.expose()
+    )));
+}
+
+/// An open box is what every local box has always been, and it must not start
+/// carrying credentials nothing reads.
+#[tokio::test]
+async fn an_open_box_carries_no_credential_at_all() {
+    let cli = a_working_runtime("");
+
+    let computer = Computer::builder()
+        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box");
+
+    assert!(computer.credentials().is_none());
+    assert!(
+        !cli.calls()
+            .concat()
+            .iter()
+            .any(|word| word.contains("COMPUTER_VIEW_SECRET")
+                || word.contains("COMPUTER_VIEWER_AUTH")),
+        "an open gate is the absence of one, not a variable saying so"
+    );
+}
+
+/// `preview` is printed, and a preview that minted a credential would put a
+/// desktop in whatever printed it.
+#[tokio::test]
+async fn a_preview_mints_nothing_it_could_leak() {
+    let previewed = Computer::builder()
+        .auth(computer::Auth::Token)
+        .publish_on(Bind::Any)
+        .preview()
+        .expect("arguments");
+
+    assert!(
+        !previewed
+            .iter()
+            .any(|word| word.contains("COMPUTER_VIEW_SECRET")
+                || word.contains("COMPUTER_CONTROL_SECRET")),
+        "{previewed:?}"
+    );
+}
+
+/// CDP has no authentication and cannot be given one, so it is the one door
+/// the gate cannot cover. Publishing it beyond loopback would hand whoever
+/// reaches it the whole browser.
+#[tokio::test]
+async fn devtools_is_withdrawn_rather_than_published_beyond_loopback() {
+    let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
+
+    let computer = Computer::builder()
+        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .publish_on(Bind::Any)
+        .auth(computer::Auth::Token)
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a gated box");
+
+    let bridge = computer::Profile::ports(&computer::X11Profile)
+        .devtools_bridge
+        .expect("the built-in image bridges devtools");
+
+    let run = cli
+        .calls()
+        .into_iter()
+        .find(|argv| argv.iter().any(|word| word == "run"))
+        .expect("the box was created");
+
+    assert!(
+        !run.iter()
+            .any(|word| word.ends_with(&format!("::{bridge}"))),
+        "the bridge was published: {run:?}"
+    );
+    assert!(computer.devtools().is_none());
+    assert_eq!(
+        computer.support().browser.as_ref().map(|b| b.cdp),
+        Some(false),
+        "a claim withdrawn, so `audit` skips it rather than failing it"
+    );
+}
+
+/// The other half: on loopback the bridge is exactly as useful as it was, and
+/// withdrawing it there would break every local caller for nothing.
+#[tokio::test]
+async fn devtools_survives_on_loopback() {
+    let cli = a_working_runtime("9223/tcp -> 127.0.0.1:32769\n");
+
+    let computer = Computer::builder()
+        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box");
+
+    assert!(computer.devtools().is_some());
+    assert_eq!(
+        computer.support().browser.as_ref().map(|b| b.cdp),
+        Some(true)
     );
 }

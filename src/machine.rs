@@ -110,6 +110,17 @@ pub trait Machine: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Whether what this publishes can be reached beyond this host.
+    ///
+    /// Asked of the `Machine` because it is the only thing that knows: a bind
+    /// address is a container idea, and a sandbox that publishes a hostname per
+    /// port has no host side at all. The default is the safe answer, so an
+    /// implementation that has not thought about it is not treated as though it
+    /// had.
+    fn reach(&self, config: &Config) -> crate::Reach {
+        config.bind.reach()
+    }
+
     /// Whether this runtime can be asked what it holds.
     fn sweepable(&self) -> bool {
         false
@@ -147,6 +158,17 @@ pub struct MachineHost {
     ///
     /// Everything reaches the box through here: a driver call, an exec, a copy.
     active_at: Arc<std::sync::atomic::AtomicU64>,
+    /// The host a person is told to use, and the scheme to reach it with.
+    ///
+    /// Kept beside the box rather than worked out at each call: a URL built
+    /// from the bind is right only for loopback, and by the time a `Screen`
+    /// wants one the configuration that knew better is gone.
+    advertised: (crate::Scheme, String),
+    /// The gate in front of this box's viewers, and what opens it.
+    ///
+    /// Held here because a `Screen` builds URLs and a screen created long
+    /// after launch has to build the same ones as the first.
+    gate: (crate::Auth, Option<crate::Credentials>),
 }
 
 impl MachineHost {
@@ -161,6 +183,60 @@ impl MachineHost {
             name: name.into(),
             timeout: DEFAULT_TIMEOUT,
             active_at: Arc::new(std::sync::atomic::AtomicU64::new(now_nanos())),
+            advertised: (crate::Scheme::Http, "127.0.0.1".to_string()),
+            gate: (crate::Auth::Open, None),
+        }
+    }
+
+    /// What this box's viewers ask of whoever connects.
+    pub fn gated_by(mut self, auth: crate::Auth, credentials: Option<crate::Credentials>) -> Self {
+        self.gate = (auth, credentials);
+        self
+    }
+
+    /// What this box's viewers ask, and what opens them.
+    ///
+    /// The credentials are how a caller tells a person the password under
+    /// [`crate::Auth::Password`], where by design no URL carries it.
+    pub fn gate(&self) -> (crate::Auth, Option<&crate::Credentials>) {
+        (self.gate.0, self.gate.1.as_ref())
+    }
+
+    /// The credential a read-only URL carries, where the gate puts it there.
+    ///
+    /// `None` for an open box and for a browser prompt: a password in a URL is
+    /// the one shape [`crate::Auth::Password`] exists to avoid.
+    pub fn view_ticket(&self) -> Option<&crate::Secret> {
+        self.ticket(|pair| &pair.view)
+    }
+
+    /// The credential a control URL carries. See [`MachineHost::view_ticket`].
+    pub fn control_ticket(&self) -> Option<&crate::Secret> {
+        self.ticket(|pair| &pair.control)
+    }
+
+    fn ticket(
+        &self,
+        door: impl Fn(&crate::Credentials) -> &crate::Secret,
+    ) -> Option<&crate::Secret> {
+        match self.gate.0.is_in_the_url() {
+            true => self.gate.1.as_ref().map(door),
+            false => None,
+        }
+    }
+
+    /// Where the ports this box published are reached from.
+    pub fn advertised_at(mut self, scheme: crate::Scheme, host: impl Into<String>) -> Self {
+        self.advertised = (scheme, host.into());
+        self
+    }
+
+    /// A published port, as a person is told it.
+    pub fn address(&self, port: u16) -> crate::Address {
+        crate::Address {
+            scheme: self.advertised.0,
+            host: self.advertised.1.clone(),
+            port,
         }
     }
 

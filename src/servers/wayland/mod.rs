@@ -1,6 +1,6 @@
 //! Driving a Wayland compositor, wherever it is running.
 //!
-//! The same shape as [`crate::x11`], against a display server that refuses
+//! The same shape as [`crate::servers::x11`], against a display server that refuses
 //! three things X11 allowed.
 //!
 //! Synthetic input is a compositor privilege, so there is no `xdotool`. The

@@ -21,6 +21,7 @@ use computer::image::{
     BROWSER_COMMAND, DESKTOP_COMMAND, DEVTOOLS_BRIDGE_PORT, DEVTOOLS_PORT, HEIGHT, HEIGHT_ENV,
     MAX_SCREENS, SCREEN_COMMAND, ScreenAction, WIDTH, WIDTH_ENV, support,
 };
+use computer::{AUTH_ENV, CONTROL_SECRET_ENV, VIEW_SECRET_ENV, VIEWER_USER};
 use computer::{Profile, ScreenId, X11Profile};
 
 /// Every viewer port the built-in profile serves.
@@ -716,4 +717,84 @@ fn no_teardown_pattern_matches_on_an_environment_assignment() {
              appears — name the command as it is executed instead"
         );
     }
+}
+
+/// The crate writes the gate into the box as environment and the script reads
+/// it back. Neither half means anything without the other, and a rename on one
+/// side leaves a viewer that refuses everybody or, worse, one that does not.
+#[test]
+fn the_script_reads_the_gate_the_crate_writes() {
+    for name in [AUTH_ENV, VIEW_SECRET_ENV, CONTROL_SECRET_ENV] {
+        assert!(SCREEN_SH.contains(name), "{name} is not read by the script");
+    }
+
+    assert!(
+        SCREEN_SH.contains("--token-plugin TokenFile"),
+        "the token gate is what puts a credential in a link"
+    );
+    assert!(
+        SCREEN_SH.contains("--auth-plugin BasicHTTPAuth"),
+        "the password gate is what keeps one out of a link"
+    );
+    assert!(
+        SCREEN_SH.contains("--web-auth"),
+        "without it the noVNC page is served to anyone and only the socket is gated"
+    );
+    assert!(
+        SCREEN_SH.contains(&format!("--auth-source \"{VIEWER_USER}:")),
+        "the user half of the prompt is what a caller tells a person to type"
+    );
+}
+
+/// The two doors must not read one variable. They differ by a port number in a
+/// URL, so one credential across both makes every watch link a control link,
+/// and `input-guard.sh` does not close that — it shadows `xdotool`, and a
+/// person on the control port drives over VNC without going near it.
+#[test]
+fn each_door_carries_its_own_credential() {
+    let gate = SCREEN_SH
+        .split("build_gate() {")
+        .nth(1)
+        .expect("the script builds the gate in one place");
+    let gate = gate.split("\n}").next().unwrap_or(gate);
+
+    assert!(gate.contains(&format!("view) secret=\"${{{VIEW_SECRET_ENV}")));
+    assert!(gate.contains(&format!("control) secret=\"${{{CONTROL_SECRET_ENV}")));
+}
+
+/// A gate that cannot find its secret must refuse. Starting the viewer anyway
+/// would serve an open desktop while the crate reported it locked, which is the
+/// one failure this whole arrangement exists to prevent.
+#[test]
+fn a_gate_with_no_secret_refuses_rather_than_opening() {
+    let gate = SCREEN_SH
+        .split("build_gate() {")
+        .nth(1)
+        .expect("the script builds the gate in one place");
+
+    assert!(gate.contains("if [ -z \"$secret\" ]; then"));
+    assert!(
+        gate.contains("return 1"),
+        "the refusal has to stop the viewer, not warn beside it"
+    );
+}
+
+/// Both viewers go through the gate. One that took its target directly would
+/// serve an ungated desktop on a port the crate believes is locked.
+#[test]
+fn neither_viewer_reaches_websockify_around_the_gate() {
+    for door in ["view", "control"] {
+        assert!(
+            SCREEN_SH.contains(&format!("build_gate {door} ")),
+            "the {door} viewer does not build a gate"
+        );
+    }
+    assert!(
+        !SCREEN_SH.contains("\"0.0.0.0:${view_port}\" \"127.0.0.1:${view_vnc}\""),
+        "the read-only viewer still passes its target around the gate"
+    );
+    assert!(
+        !SCREEN_SH.contains("\"0.0.0.0:${control_port}\" \"127.0.0.1:${control_vnc}\""),
+        "the control viewer still passes its target around the gate"
+    );
 }

@@ -214,6 +214,20 @@ impl Machine for E2bMachine {
         self.api.available().await
     }
 
+    /// A bind address means nothing here: E2B publishes a port as a subdomain
+    /// of its own proxy, so [`Config::bind`] is never consulted and a rule
+    /// phrased as "loopback or not" would miss this machine entirely.
+    ///
+    /// `public_viewer` is the whole of the question, and it lines up with what
+    /// [`crate::Reach`] claims — not that nobody else can connect, but that
+    /// this crate did not hand out the address.
+    fn reach(&self, _config: &Config) -> crate::Reach {
+        match self.public_viewer {
+            true => crate::Reach::Routable,
+            false => crate::Reach::Loopback,
+        }
+    }
+
     /// E2B runs templates, and this crate builds container images.
     ///
     /// Refused with the way across rather than left to fail later as an
@@ -458,6 +472,30 @@ mod tests {
 
         assert_eq!(mapped.get(&6080), Some(&6080));
         assert_eq!(mapped.get(&6081), Some(&6081));
+    }
+
+    /// The gate is one rule over every machine, so `public_viewer(true)` has to
+    /// answer the same as `publish_on(Bind::Any)` rather than be an honour
+    /// system beside it.
+    #[test]
+    fn test_a_public_viewer_is_routable_whatever_the_bind_says() {
+        let config = Config {
+            bind: crate::Bind::Loopback,
+            ..config()
+        };
+
+        assert_eq!(
+            machine(Arc::new(ScriptedE2b::new())).reach(&config),
+            crate::Reach::Loopback
+        );
+        assert_eq!(
+            machine(Arc::new(ScriptedE2b::new()))
+                .public_viewer(true)
+                .reach(&config),
+            crate::Reach::Routable,
+            "loopback is a claim this crate did not hand out the address, and \
+             a public viewer is that address handed out"
+        );
     }
 
     #[tokio::test]

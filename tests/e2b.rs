@@ -8,7 +8,7 @@
 use computer::machine::Machine;
 use computer::sandboxes::e2b::{self, E2bApi, Sandbox, SandboxPlan};
 use computer::testing::ScriptedE2b;
-use computer::{Button, Computer, Config, Delta, Point, ScreenId, X11Profile};
+use computer::{Auth, Button, Computer, Config, Delta, Point, ScreenId, X11Profile};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,11 +25,20 @@ fn bundled(profile: Arc<dyn computer::Profile>) -> Config {
 async fn launched(api: Arc<ScriptedE2b>, public_viewer: bool) -> Computer {
     let (machine, profile) = e2b::pair(Arc::clone(&api) as Arc<dyn E2bApi>, Arc::new(X11Profile));
 
+    // A public viewer is reachable from the internet, so it goes through the
+    // same gate as `publish_on(Bind::Any)` rather than being an honour system
+    // beside it. `Token` because a sandbox URL is handed to a person as a link.
+    let auth = match public_viewer {
+        true => Auth::Token,
+        false => Auth::Open,
+    };
+
     Computer::builder()
         .machine(Arc::new(machine.public_viewer(public_viewer)))
         .profile(profile)
         .image("tmpl-abc")
         .name("box")
+        .auth(auth)
         .launch()
         .await
         .expect("a sandbox")
@@ -75,7 +84,7 @@ async fn a_port_becomes_a_subdomain_rather_than_a_host_port() {
         viewer.starts_with("https://6080-sbx-0."),
         "got {viewer}, which is not the sandbox's own host"
     );
-    assert!(viewer.ends_with("/vnc.html?autoconnect=1&resize=scale"));
+    assert!(viewer.contains("/vnc.html?autoconnect=1&resize=scale"));
 }
 
 #[tokio::test]

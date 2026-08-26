@@ -137,10 +137,19 @@ impl Profile for E2bProfile {
     /// this that early — a screen has no URL until the box it is on was
     /// started — and answering with loopback beats formatting a host out of an
     /// ID nobody has yet.
-    fn viewer_url(&self, port: u16) -> String {
+    fn viewer_url(&self, at: &crate::Address, ticket: Option<&crate::Secret>) -> String {
         match self.reachable.get() {
-            Some(sandbox) => format!("{}/vnc.html?autoconnect=1&resize=scale", sandbox.url(port)),
-            None => self.inner.viewer_url(port),
+            Some(sandbox) => {
+                let mut url = format!(
+                    "{}/vnc.html?autoconnect=1&resize=scale",
+                    sandbox.url(at.port)
+                );
+                if let Some(ticket) = ticket {
+                    url.push_str(&crate::profile::viewer_path(ticket));
+                }
+                url
+            }
+            None => self.inner.viewer_url(at, ticket),
         }
     }
 }
@@ -162,7 +171,7 @@ mod tests {
         reachable.set(Sandbox::new("i7q3"));
 
         assert_eq!(
-            profile.viewer_url(6080),
+            profile.viewer_url(&crate::Address::loopback(6080), None),
             "https://6080-i7q3.e2b.app/vnc.html?autoconnect=1&resize=scale"
         );
     }
@@ -173,7 +182,9 @@ mod tests {
         reachable.set(Sandbox::new("i7q3"));
 
         assert!(
-            profile.viewer_url(6081).starts_with("https://6081-i7q3."),
+            profile
+                .viewer_url(&crate::Address::loopback(6081), None)
+                .starts_with("https://6081-i7q3."),
             "takeover is a second server, so it is a second host"
         );
     }
