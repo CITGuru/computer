@@ -263,11 +263,23 @@ pub enum Actor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TraceEvent {
+    /// Carries the spec whole, so a box can be rebuilt from its record after
+    /// the box itself is gone.
+    ///
+    /// Boxed: a trace holds thousands of entries and every one of them would
+    /// otherwise be sized to hold a spec.
     BoxCreated {
         spec_digest: String,
+        spec: Box<Spec>,
+        placement: Box<Placement>,
         width: u32,
         height: u32,
         screens: u32,
+    },
+    ForkedFrom {
+        source: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        up_to: Option<u64>,
     },
     /// One action, with what it did. The action is carried whole so the run can
     /// be replayed against a fresh box.
@@ -337,4 +349,54 @@ pub struct TraceView {
     pub entries: Vec<TraceEntry>,
     /// Pass back as `after` to continue. `None` where the end was reached.
     pub next: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ForkRequest {
+    #[serde(default)]
+    pub mode: ForkMode,
+    /// Replay up to and including this trace sequence. `None` replays all of
+    /// it.
+    #[serde(default)]
+    pub up_to: Option<u64>,
+    /// Where the copy runs. `None` puts it where the original was.
+    #[serde(default)]
+    pub placement: Option<Placement>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ForkMode {
+    /// Launch from the same spec and do again what was done. Works wherever a
+    /// box runs, and reconstructs rather than copies — see [`ReplayReport`].
+    #[default]
+    Replay,
+    /// Copy the running machine. Needs a substrate that can freeze one.
+    Snapshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForkResult {
+    #[serde(rename = "box")]
+    pub created: BoxView,
+    pub replay: ReplayReport,
+}
+
+/// What the replay managed.
+///
+/// A replay reconstructs, it does not copy. The same actions against a page
+/// that has since changed, or a slower network, or a dialog that appeared this
+/// time, land somewhere else — so this reports what was attempted rather than
+/// promising the two boxes match.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplayReport {
+    pub attempted: usize,
+    pub ok: usize,
+    /// The source trace sequence that failed, if one did. Nothing after it was
+    /// attempted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_at: Option<u64>,
+    /// Whether the replay ran out of time before reaching the end.
+    pub truncated: bool,
 }

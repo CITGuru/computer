@@ -183,3 +183,28 @@ async fn test_a_frame_from_a_trace_that_does_not_exist_is_not_found() {
 
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn test_forking_a_box_nobody_ever_traced_is_not_found() {
+    let (status, body) = send(post("/v1/boxes/box_nope/fork", "{}")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}
+
+#[tokio::test]
+async fn test_a_snapshot_fork_says_why_it_cannot() {
+    let (status, body) = send(post("/v1/boxes/box_nope/fork", r#"{"mode":"snapshot"}"#)).await;
+
+    // Refused ahead of the missing box: the caller needs to hear that no
+    // substrate here can do this at all, not that this one box is absent.
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["code"], "unsupported");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("replay"),
+        "the refusal names what to use instead: {body}"
+    );
+}

@@ -27,19 +27,26 @@ use computer::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 /// Deleting a box is not recoverable, and the caller is usually an agent.
 const CONFIRM_DELETE: &str = "x-computer-confirm-delete";
 /// Trace entries per page.
 const TRACE_PAGE: usize = 500;
+/// The longest a replay is given before it stops and says so. A fork is one
+/// HTTP request, and a box that was driven for an hour cannot take one.
+const REPLAY_BUDGET: Duration = Duration::from_secs(180);
+/// The most of an original pause a replay reproduces. Pacing matters — a page
+/// that had two seconds to load gets them — but an idle hour does not.
+const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
         .route("/v1/boxes", get(list_boxes).post(create_box))
         .route("/v1/boxes/{id}", get(get_box).delete(delete_box))
+        .route("/v1/boxes/{id}/fork", post(fork))
         .route("/v1/boxes/{id}/exec", post(exec))
         .route("/v1/boxes/{id}/trace", get(read_trace))
         .route("/v1/boxes/{id}/trace/frames/{hash}", get(trace_frame))
@@ -69,7 +76,7 @@ async fn create_box(
     ApiJson(body): ApiJson<CreateBox>,
 ) -> ApiResult<Response> {
     let key = header(&headers, IDEMPOTENCY_KEY);
-    if let Some(replayed) = replay(&state.replies, key.as_deref()) {
+    if let Some(replayed) = replay_reply(&state.replies, key.as_deref()) {
         return Ok(replayed);
     }
 
@@ -96,6 +103,8 @@ async fn create_box(
         Actor::Agent,
         TraceEvent::BoxCreated {
             spec_digest: entry.spec_digest.clone(),
+            spec: Box::new(body.spec.clone()),
+            placement: Box::new(body.placement.clone()),
             width: resolved.width,
             height: resolved.height,
             screens: resolved.screens,
@@ -157,7 +166,7 @@ async fn actions(
     ApiJson(batch): ApiJson<ActionBatch>,
 ) -> ApiResult<Response> {
     let key = header(&headers, IDEMPOTENCY_KEY);
-    if let Some(replayed) = replay(&state.replies, key.as_deref()) {
+    if let Some(replayed) = replay_reply(&state.replies, key.as_deref()) {
         return Ok(replayed);
     }
 
@@ -576,6 +585,186 @@ async fn write_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Build a box again from what was done to the first one.
+///
+/// Reads the source's trace rather than the source, so a box that has been
+/// removed can still be forked: its record outlived it and carries the spec.
+async fn fork(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    ApiJson(body): ApiJson<ForkRequest>,
+) -> ApiResult<Response> {
+    let key = header(&headers, IDEMPOTENCY_KEY);
+    if let Some(replayed) = replay_reply(&state.replies, key.as_deref()) {
+        return Ok(replayed);
+    }
+
+    if body.mode == ForkMode::Snapshot {
+        return Err(ApiError::new(
+            StatusCode::NOT_IMPLEMENTED,
+            ErrorCode::Unsupported,
+            "no substrate here can freeze a running desktop: a container \
+             runtime cannot checkpoint an X session, so the copy would come \
+             back to a screen that never resumed. Use replay.",
+        ));
+    }
+
+    let source = state
+        .traces
+        .get(&id)
+        .ok_or_else(|| ApiError::not_found(format!("nothing was ever traced for {id}")))?;
+
+    let history = source.entries(None, usize::MAX);
+    let (spec, placement) = history
+        .iter()
+        .find_map(|entry| match &entry.event {
+            TraceEvent::BoxCreated {
+                spec, placement, ..
+            } => Some((spec.clone(), placement.clone())),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "the trace for {id} does not say what box it was, so there is \
+                 nothing to build again"
+            ))
+        })?;
+
+    let placement = body.placement.clone().map(Box::new).unwrap_or(placement);
+    let new_id = new_id();
+    let (builder, resolved) = spec::plan(&spec, &placement, &new_id)?;
+
+    tracing::info!(from = %id, to = %new_id, "forking a box");
+    let computer = builder.launch().await?;
+
+    let entry = state
+        .registry
+        .insert(
+            new_id.clone(),
+            spec.digest(),
+            resolved.screens,
+            resolved.width,
+            resolved.height,
+            computer,
+        )
+        .await;
+
+    let trace = state.traces.of(&new_id);
+    trace.record(
+        Actor::Agent,
+        TraceEvent::BoxCreated {
+            spec_digest: entry.spec_digest.clone(),
+            spec,
+            placement,
+            width: resolved.width,
+            height: resolved.height,
+            screens: resolved.screens,
+        },
+    );
+    trace.record(
+        Actor::Agent,
+        TraceEvent::ForkedFrom {
+            source: id.clone(),
+            up_to: body.up_to,
+        },
+    );
+
+    let report = replay_onto(&entry, &trace, &history, body.up_to).await;
+
+    // Close with what the replay produced, so a caller can compare it against
+    // the source's own last frame. They will rarely be the same bytes — a
+    // desktop animates, and a tooltip caught mid-fade is a different picture
+    // of the same state — which is why the report counts actions rather than
+    // claiming the two boxes match.
+    if let Ok(target) = entry.desktop(0).await {
+        let _ = capture(&trace, Actor::Agent, 0, target.as_desktop(), None).await;
+    }
+
+    answer(
+        &state.replies,
+        key.as_deref(),
+        StatusCode::CREATED,
+        &ForkResult {
+            created: view_of(&entry),
+            replay: report,
+        },
+    )
+}
+
+/// Do again, in order and at roughly the original pace, what the source was
+/// asked to do.
+async fn replay_onto(
+    entry: &Entry,
+    trace: &Trace,
+    history: &[TraceEntry],
+    up_to: Option<u64>,
+) -> ReplayReport {
+    let deadline = Instant::now() + REPLAY_BUDGET;
+    let mut report = ReplayReport {
+        attempted: 0,
+        ok: 0,
+        stopped_at: None,
+        truncated: false,
+    };
+    let mut previous: Option<u64> = None;
+
+    for source in history {
+        if up_to.is_some_and(|last| source.seq > last) {
+            break;
+        }
+
+        let TraceEvent::Acted {
+            screen,
+            action,
+            ok: true,
+            ..
+        } = &source.event
+        else {
+            // An action the original was refused is not part of what happened
+            // to it, so replaying it would invent a difference.
+            continue;
+        };
+
+        if Instant::now() >= deadline {
+            report.truncated = true;
+            break;
+        }
+
+        if let Some(before) = previous {
+            let gap = Duration::from_millis(source.at_ms.saturating_sub(before));
+            tokio::time::sleep(gap.min(REPLAY_GAP_CAP)).await;
+        }
+        previous = Some(source.at_ms);
+
+        let outcome = match entry.desktop(*screen).await {
+            Ok(target) => run(target.as_desktop(), target.as_screen(), action).await,
+            Err(error) => Err(error),
+        };
+
+        report.attempted += 1;
+        trace.record(
+            Actor::Agent,
+            TraceEvent::Acted {
+                screen: *screen,
+                action: action.clone(),
+                ok: outcome.is_ok(),
+                error: outcome.as_ref().err().map(|error| error.body.clone()),
+            },
+        );
+
+        match outcome {
+            Ok(()) => report.ok += 1,
+            Err(_) => {
+                report.stopped_at = Some(source.seq);
+                break;
+            }
+        }
+    }
+
+    report
+}
+
 #[derive(Debug, Deserialize)]
 struct TraceQuery {
     #[serde(default)]
@@ -636,7 +825,7 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn replay(replies: &Replies, key: Option<&str>) -> Option<Response> {
+fn replay_reply(replies: &Replies, key: Option<&str>) -> Option<Response> {
     let (status, body) = replies.get(key?)?;
     let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
 

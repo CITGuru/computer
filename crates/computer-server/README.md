@@ -77,12 +77,47 @@ Three things worth knowing:
 | `GET`/`PUT` `…/screens/{n}/clipboard` | `?selection=clipboard` or `primary` — they hold different text |
 | `POST`/`DELETE` `…/screens/{n}/takeover` | hand the screen to a person, and take it back |
 | `GET …/screens/{n}/viewers` | who is watching and who is driving |
+| `POST /v1/boxes/{id}/fork` | build it again from its trace |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |
 | `GET`/`PUT` `/v1/boxes/{id}/files` | base64 in, base64 out |
 
 Every error is the same shape — `code`, `message`, `retryable` — including a
 body that is not JSON at all, because that is the first error most clients
 ever see.
+
+## Fork a box
+
+```bash
+curl -s -X POST localhost:8080/v1/boxes/$BOX/fork \
+  -H 'content-type: application/json' -H 'idempotency-key: fork-1' \
+  -d '{ "up_to": 42 }'
+```
+
+Launches a box from the same spec and does again what was done to the first
+one, at roughly the original pace. It reads the *trace*, not the box, so **a box
+that has been removed can still be forked** — its record outlived it and carries
+the spec.
+
+The reply counts what happened rather than promising the two boxes match:
+
+```json
+{ "box": { "id": "box_…" }, "replay": { "attempted": 3, "ok": 3, "truncated": false } }
+```
+
+**A replay reconstructs, it does not copy.** The same actions against a page
+that has since changed, a slower network, or a dialog that appeared this time
+land somewhere else. Even a faithful replay rarely produces identical pixels —
+a desktop animates, and a tooltip caught mid-fade is a different picture of the
+same state. Compare frames yourself if you need to know how close it got; both
+boxes' traces end with one.
+
+Actions the original was refused are skipped, since replaying them would invent
+a difference. A replay stops at the first failure and names the source sequence
+that stopped it, and gives up after three minutes rather than holding one HTTP
+request for as long as the original box was driven.
+
+`"mode": "snapshot"` is refused. Copying a running machine needs a substrate
+that can freeze one, and a container runtime cannot checkpoint an X session.
 
 ## What happened to a box
 
@@ -121,8 +156,8 @@ means nothing visible happened while it was held.
 
 `spec.apps` parses and is **refused**, because there is no catalog behind it
 and a box handed back without the apps it named would look like the one that
-was asked for. Snapshots and fork are not built, though the trace carries whole
-actions so replay has what it needs.
+was asked for. Snapshot fork is refused, because nothing here can freeze a
+running desktop.
 
 Traces are held in memory and bounded — 10,000 entries and 256 distinct frames
 per box, 256 boxes — so this is a record rather than an archive, and a restart
