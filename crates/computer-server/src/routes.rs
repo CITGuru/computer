@@ -71,8 +71,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "ok": true }))
+async fn health() -> Json<Health> {
+    Json(Health {
+        ok: true,
+        service: computer_api::SERVICE.to_string(),
+    })
 }
 
 async fn create_box(

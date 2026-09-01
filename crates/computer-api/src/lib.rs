@@ -48,6 +48,18 @@ pub enum BoxState {
     Gone,
 }
 
+/// What `/v1/health` answers, so a client can tell this apart from whatever
+/// else happens to be listening on the port it guessed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Health {
+    pub ok: bool,
+    /// Names the server, because `{"ok": true}` is a thing many services say.
+    pub service: String,
+}
+
+/// The one value [`Health::service`] is ever set to.
+pub const SERVICE: &str = "computer-server";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxList {
     pub boxes: Vec<BoxView>,

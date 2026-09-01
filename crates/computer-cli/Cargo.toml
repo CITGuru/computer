@@ -7,8 +7,13 @@ description = "The computer command"
 license = "MIT"
 
 [dependencies]
+axum = "0.8"
 computer = { path = "../.." }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+computer-api = { path = "../computer-api" }
+computer-client = { path = "../computer-client" }
+computer-server = { path = "../computer-server" }
+computer-types = { path = "../computer-types" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "net"] }
 
 [lints.clippy]
 string_slice = "deny"

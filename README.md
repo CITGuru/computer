@@ -552,6 +552,8 @@ let removed = computer::sweep_expired(&DockerMachine::default(), SystemTime::now
 computer sweep
 ```
 
+The `computer` command lives in [`crates/computer-cli`](crates/computer-cli).
+
 `expires_when_idle(duration)` is the other half. It removes a desktop that nothing has asked anything of for that long, and every command, screenshot, and file copy through the handle counts as activity. Use `touch()` when work reaches the box some other way.
 
 ## Check what a desktop claims

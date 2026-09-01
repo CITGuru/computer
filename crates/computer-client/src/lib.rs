@@ -57,9 +57,21 @@ impl Client {
         self
     }
 
+    /// Whether a box server is answering here.
+    ///
+    /// Checks what answered, not merely that something did: a client that
+    /// guesses a port has to tell this apart from whatever else is on it.
     pub async fn health(&self) -> Result<()> {
-        self.send::<serde_json::Value>(reqwest::Method::GET, "/v1/health", None, &[])
+        let health: Health = self
+            .send(reqwest::Method::GET, "/v1/health", None, &[])
             .await?;
+
+        if !health.ok || health.service != computer_api::SERVICE {
+            return Err(Error::Transport(format!(
+                "something is answering here, and it is not a box server: {}",
+                health.service
+            )));
+        }
         Ok(())
     }
 
