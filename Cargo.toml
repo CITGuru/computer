@@ -22,6 +22,11 @@ microsandbox = ["dep:microsandbox"]
 # than on this host. Off by default: the seam and the machine compile without
 # it, and only the shipped client needs a TLS stack behind it.
 e2b = ["dep:reqwest"]
+# The macOS box, over `tart`. Off by default, and not because of a dependency:
+# it shells out like the container runtimes do. A macOS guest needs an Apple
+# silicon host and an image prepared out of band, so it is asked for rather
+# than compiled into every build.
+mac = []
 
 [dependencies]
 async-trait = "0.1"
@@ -55,6 +60,16 @@ path = "src/bin/computer.rs"
 required-features = ["cli"]
 
 [[example]]
+name = "mac_viewer"
+path = "examples/mac_viewer.rs"
+required-features = ["mac"]
+
+[[example]]
+name = "mac_smoke"
+path = "examples/mac_smoke.rs"
+required-features = ["mac"]
+
+[[example]]
 name = "e2b"
 path = "examples/e2b.rs"
 required-features = ["e2b"]
@@ -64,3 +79,8 @@ name = "e2b_takeover"
 path = "examples/e2b_takeover.rs"
 required-features = ["e2b"]
 
+
+# Listed rather than globbed: `crates/macos-vm` is an empty directory and a
+# glob would fail on it.
+[workspace]
+members = ["crates/computer-server"]

@@ -39,6 +39,8 @@ pub fn builtin(name: &str) -> Option<Arc<dyn Profile>> {
     match name {
         _ if name == crate::X11Profile.name() => Some(Arc::new(crate::X11Profile)),
         _ if name == crate::WaylandProfile.name() => Some(Arc::new(crate::WaylandProfile)),
+        #[cfg(feature = "mac")]
+        _ if name == crate::MacProfile.name() => Some(Arc::new(crate::MacProfile)),
         _ => None,
     }
 }
@@ -208,6 +210,31 @@ pub trait Profile: Send + Sync {
     /// process has nothing else to say what size it came up at.
     fn geometry_from(&self, environment: &BTreeMap<String, String>) -> Option<(u32, u32)>;
 
+    /// A command that succeeds when something is listening on `port` inside
+    /// the box.
+    ///
+    /// A command rather than an answer, so an image with no bash — or no
+    /// shell reached the way a container's is — answers for itself. The
+    /// default is what both bundled images carry: `/dev/tcp` is a bash
+    /// feature, and Debian's `sh` is dash, which answers "Directory
+    /// nonexistent" for it and so reports a listening browser as absent.
+    /// Every port the runtime is asked to carry when the box starts.
+    ///
+    /// Defaults to everything the layout serves. An image whose viewer is not
+    /// inside it publishes less: a port carried to nothing still answers, and
+    /// a URL built from it is a screen that never appears.
+    fn publish(&self) -> Vec<u16> {
+        self.ports().to_publish()
+    }
+
+    fn port_probe_command(&self, port: u16) -> Vec<String> {
+        vec![
+            "bash".to_string(),
+            "-c".to_string(),
+            format!("(echo > /dev/tcp/127.0.0.1/{port}) 2>/dev/null"),
+        ]
+    }
+
     /// Where a person watches a screen.
     ///
     /// Given the whole address rather than a port: the host a box is reached at
@@ -273,6 +300,23 @@ mod tests {
     use super::*;
 
     use crate::{WaylandProfile, X11Profile};
+
+    #[test]
+    fn test_a_port_is_probed_with_a_shell_that_has_dev_tcp() {
+        let probe = X11Profile.port_probe_command(9222);
+
+        assert_eq!(
+            probe[0], "bash",
+            "/dev/tcp is a bash feature, and Debian's sh is dash, which \
+             reports a listening browser as absent"
+        );
+        assert!(probe[2].contains("/dev/tcp/127.0.0.1/9222"));
+        assert_eq!(
+            probe,
+            WaylandProfile.port_probe_command(9222),
+            "whether a port answers is not something a display server decides"
+        );
+    }
 
     #[test]
     fn test_the_two_built_in_images_are_never_one_tag() {

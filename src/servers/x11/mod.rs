@@ -384,21 +384,6 @@ impl Clipboard for X11Desktop {
     }
 }
 
-/// Whether something is listening on a port inside the box.
-///
-/// Runs under `bash`, not `sh`. `/dev/tcp` is a bash feature, and Debian's
-/// `sh` is dash, which answers "Directory nonexistent" for it.
-pub async fn port_listening(host: &dyn ScreenHost, screen: ScreenId, port: u16) -> bool {
-    let probe = format!("(echo > /dev/tcp/127.0.0.1/{port}) 2>/dev/null");
-    let mut args = argv(&["bash", "-c"]);
-    args.push(probe);
-
-    host.run(&args, screen)
-        .await
-        .map(|result| result.code == 0)
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,5 +8,7 @@
 //! where synthetic input is a compositor privilege rather than anything a
 //! client may do.
 
+#[cfg(feature = "mac")]
+pub mod macos;
 pub mod wayland;
 pub mod x11;
