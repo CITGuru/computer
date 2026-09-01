@@ -11,9 +11,6 @@ categories = ["api-bindings", "development-tools"]
 
 [features]
 default = []
-# The `computer` command. Off by default so a library user does not pull in a
-# runtime they already have: `cargo install computer --features cli`.
-cli = ["tokio/macros", "tokio/rt-multi-thread"]
 # The binding to microsandbox 0.6, so a box can run in a microVM rather than a
 # container. Off by default: the vendor crate pulls a hypervisor, an ORM and a
 # database driver behind it, and most builds run containers.
@@ -49,11 +46,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-uti
 [lints.clippy]
 string_slice = "deny"
 
-[[bin]]
-name = "computer"
-path = "src/bin/computer.rs"
-required-features = ["cli"]
-
 [[example]]
 name = "e2b"
 path = "examples/e2b.rs"
@@ -70,6 +62,7 @@ required-features = ["e2b"]
 [workspace]
 members = [
     "crates/computer-types",
+    "crates/computer-cli",
     "crates/computer-api",
     "crates/computer-client",
     "crates/computer-server",

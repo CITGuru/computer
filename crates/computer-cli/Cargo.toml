@@ -1,0 +1,18 @@
+[package]
+name = "computer-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "The computer command"
+license = "MIT"
+
+[dependencies]
+computer = { path = "../.." }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.clippy]
+string_slice = "deny"
+
+[[bin]]
+name = "computer"
+path = "src/main.rs"
