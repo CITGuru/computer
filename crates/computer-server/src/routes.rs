@@ -9,8 +9,10 @@ use crate::error::{ApiError, ApiResult};
 use crate::extract::ApiJson;
 use crate::registry::Entry;
 use crate::spec;
+use crate::trace::Trace;
 use crate::wire::*;
 use crate::{AppState, idempotency::Replies};
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -30,6 +32,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 /// Deleting a box is not recoverable, and the caller is usually an agent.
 const CONFIRM_DELETE: &str = "x-computer-confirm-delete";
+/// Trace entries per page.
+const TRACE_PAGE: usize = 500;
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -37,6 +41,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes", get(list_boxes).post(create_box))
         .route("/v1/boxes/{id}", get(get_box).delete(delete_box))
         .route("/v1/boxes/{id}/exec", post(exec))
+        .route("/v1/boxes/{id}/trace", get(read_trace))
+        .route("/v1/boxes/{id}/trace/frames/{hash}", get(trace_frame))
         .route("/v1/boxes/{id}/files", get(read_file).put(write_file))
         .route("/v1/boxes/{id}/screens/{screen}/actions", post(actions))
         .route("/v1/boxes/{id}/screens/{screen}/frame", get(frame))
@@ -86,6 +92,16 @@ async fn create_box(
         )
         .await;
 
+    state.traces.of(&entry.id).record(
+        Actor::Agent,
+        TraceEvent::BoxCreated {
+            spec_digest: entry.spec_digest.clone(),
+            width: resolved.width,
+            height: resolved.height,
+            screens: resolved.screens,
+        },
+    );
+
     answer(
         &state.replies,
         key.as_deref(),
@@ -126,6 +142,11 @@ async fn delete_box(
     }
 
     state.registry.remove(&id).await?;
+    state
+        .traces
+        .of(&id)
+        .record(Actor::Agent, TraceEvent::BoxDeleted);
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -141,6 +162,7 @@ async fn actions(
     }
 
     let entry = state.registry.get(&id).await?;
+    let trace = state.traces.of(&id);
     let lock = entry.screen_lock(screen).await;
     let _held = lock.lock().await;
 
@@ -151,7 +173,19 @@ async fn actions(
     let mut stopped_at = None;
 
     for (index, action) in batch.actions.iter().enumerate() {
-        match run(desktop, target.as_screen(), action).await {
+        let outcome = run(desktop, target.as_screen(), action).await;
+
+        trace.record(
+            Actor::Agent,
+            TraceEvent::Acted {
+                screen,
+                action: action.clone(),
+                ok: outcome.is_ok(),
+                error: outcome.as_ref().err().map(|error| error.body.clone()),
+            },
+        );
+
+        match outcome {
             Ok(()) => results.push(ActionResult {
                 index,
                 ok: true,
@@ -177,7 +211,16 @@ async fn actions(
     }
 
     let frame = if batch.want.contains(&Want::Frame) {
-        Some(capture(&entry, screen, desktop, batch.have_frame.as_deref()).await?)
+        Some(
+            capture(
+                &trace,
+                Actor::Agent,
+                screen,
+                desktop,
+                batch.have_frame.as_deref(),
+            )
+            .await?,
+        )
     } else {
         None
     };
@@ -254,14 +297,24 @@ async fn frame(
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
 
-    let frame = capture(&entry, screen, target.as_desktop(), query.have.as_deref()).await?;
+    let trace = state.traces.of(&id);
+    let frame = capture(
+        &trace,
+        Actor::Agent,
+        screen,
+        target.as_desktop(),
+        query.have.as_deref(),
+    )
+    .await?;
+
     Ok(Json(frame))
 }
 
 /// A desktop is mostly still between steps, so a caller already holding this
 /// picture is told so rather than sent it again.
 async fn capture(
-    entry: &Entry,
+    trace: &Trace,
+    actor: Actor,
     screen: u32,
     desktop: &dyn EngineDesktop,
     have: Option<&str>,
@@ -272,7 +325,7 @@ async fn capture(
     hasher.update(&png);
     let hash = format!("{:x}", hasher.finalize());
 
-    entry.remember_frame(screen, &hash).await;
+    trace.note_frame(actor, screen, &hash, &png);
 
     if have == Some(hash.as_str()) {
         return Ok(Frame {
@@ -312,11 +365,20 @@ async fn get_clipboard(
 ) -> ApiResult<Json<ClipboardView>> {
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
-    let screen = target
+    let held = target
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen has no clipboard"))?;
 
-    let text = screen.selection(selection_in(query.selection)).await?;
+    let text = held.selection(selection_in(query.selection)).await?;
+
+    state.traces.of(&id).record(
+        Actor::Agent,
+        TraceEvent::ClipboardRead {
+            screen,
+            selection: query.selection,
+        },
+    );
+
     Ok(Json(ClipboardView { text }))
 }
 
@@ -327,13 +389,21 @@ async fn set_clipboard(
 ) -> ApiResult<StatusCode> {
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
-    let screen = target
+    let held = target
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen has no clipboard"))?;
 
-    screen
-        .set_selection(selection_in(body.selection), &body.text)
+    held.set_selection(selection_in(body.selection), &body.text)
         .await?;
+
+    state.traces.of(&id).record(
+        Actor::Agent,
+        TraceEvent::ClipboardSet {
+            screen,
+            selection: body.selection,
+        },
+    );
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -348,11 +418,24 @@ async fn start_takeover(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be handed over"))?;
 
+    let trace = state.traces.of(&id);
+    // The frame the person is being given, so what they changed is the
+    // difference between this and the one taken when they hand it back.
+    let _ = capture(&trace, Actor::Agent, screen, target.as_desktop(), None).await;
+
     let takeover = if body.shared {
         held.share().await?
     } else {
         held.hand_over().await?
     };
+
+    trace.record(
+        Actor::Agent,
+        TraceEvent::TakeoverStarted {
+            screen,
+            exclusive: takeover.exclusive(),
+        },
+    );
 
     Ok(Json(TakeoverView {
         url: takeover.url().map(str::to_string),
@@ -374,7 +457,15 @@ async fn end_takeover(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be reclaimed"))?;
 
+    let trace = state.traces.of(&id);
+    // Taken while the screen is still theirs — reading is allowed during a
+    // handover — so the frame is what the person left rather than what
+    // happened after they let go.
+    let _ = capture(&trace, Actor::Person, screen, target.as_desktop(), None).await;
+
     held.reclaim().await?;
+    trace.record(Actor::Agent, TraceEvent::TakeoverEnded { screen });
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -416,6 +507,15 @@ async fn exec(
         None => entry.computer.exec(&body.argv).await?,
     };
 
+    state.traces.of(&id).record(
+        Actor::Agent,
+        TraceEvent::Executed {
+            argv: body.argv.clone(),
+            code: result.code,
+            timed_out: result.timed_out,
+        },
+    );
+
     Ok(Json(ExecResponse {
         code: result.code,
         stdout: result.stdout_utf8(),
@@ -437,6 +537,14 @@ async fn read_file(
     let entry = state.registry.get(&id).await?;
     let bytes = entry.computer.read_file(&query.path).await?;
 
+    state.traces.of(&id).record(
+        Actor::Agent,
+        TraceEvent::FileRead {
+            path: query.path.clone(),
+            bytes: bytes.len(),
+        },
+    );
+
     Ok(Json(ReadFile {
         path: query.path,
         contents_base64: BASE64.encode(bytes),
@@ -456,7 +564,69 @@ async fn write_file(
 
     let entry = state.registry.get(&id).await?;
     entry.computer.write_file(&body.path, &bytes).await?;
+
+    state.traces.of(&id).record(
+        Actor::Agent,
+        TraceEvent::FileWritten {
+            path: body.path.clone(),
+            bytes: bytes.len(),
+        },
+    );
+
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+struct TraceQuery {
+    #[serde(default)]
+    after: Option<u64>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// What was done to this box, oldest first.
+///
+/// Answers for a box that has been removed: the record is the point.
+async fn read_trace(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(query): Query<TraceQuery>,
+) -> ApiResult<Json<TraceView>> {
+    let trace = state
+        .traces
+        .get(&id)
+        .ok_or_else(|| ApiError::not_found(format!("nothing was ever traced for {id}")))?;
+
+    let limit = query.limit.unwrap_or(TRACE_PAGE).clamp(1, TRACE_PAGE);
+    let entries = trace.entries(query.after, limit);
+    let next = (entries.len() == limit).then(|| entries.last().map(|entry| entry.seq));
+
+    Ok(Json(TraceView {
+        entries,
+        next: next.flatten(),
+    }))
+}
+
+async fn trace_frame(
+    State(state): State<Arc<AppState>>,
+    Path((id, hash)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    let png = state
+        .traces
+        .get(&id)
+        .and_then(|trace| trace.frame(&hash))
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "frame {hash} is not held for {id}; a trace keeps the most recent \
+                 frames and older entries name one that has gone"
+            ))
+        })?;
+
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "image/png")],
+        Body::from(png.as_slice().to_vec()),
+    )
+        .into_response())
 }
 
 fn header(headers: &HeaderMap, name: &str) -> Option<String> {

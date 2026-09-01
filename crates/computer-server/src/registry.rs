@@ -22,19 +22,12 @@ pub struct Entry {
     /// Per screen rather than per box, so two agents on two screens of one box
     /// do not queue behind each other.
     locks: Mutex<BTreeMap<u32, Arc<Mutex<()>>>>,
-    /// So `have_frame` is answerable without re-encoding a picture nobody
-    /// wants.
-    frames: Mutex<BTreeMap<u32, String>>,
 }
 
 impl Entry {
     pub async fn screen_lock(&self, screen: u32) -> Arc<Mutex<()>> {
         let mut locks = self.locks.lock().await;
         Arc::clone(locks.entry(screen).or_default())
-    }
-
-    pub async fn remember_frame(&self, screen: u32, hash: &str) {
-        self.frames.lock().await.insert(screen, hash.to_string());
     }
 
     /// Screen 0 is the box's own, already started. The rest start on first
@@ -110,7 +103,6 @@ impl Registry {
             height,
             computer,
             locks: Mutex::new(BTreeMap::new()),
-            frames: Mutex::new(BTreeMap::new()),
         });
 
         self.boxes.write().await.insert(id, Arc::clone(&entry));
@@ -142,11 +134,5 @@ impl Registry {
 
         entry.computer.machine().stop(&entry.id).await?;
         Ok(())
-    }
-
-    pub async fn last_frame(&self, id: &str, screen: u32) -> Option<String> {
-        let entry = self.boxes.read().await.get(id).cloned()?;
-        let frames = entry.frames.lock().await;
-        frames.get(&screen).cloned()
     }
 }

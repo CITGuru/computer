@@ -12,13 +12,18 @@ pub mod idempotency;
 pub mod registry;
 pub mod routes;
 pub mod spec;
+pub mod trace;
 pub mod wire;
 
 use idempotency::Replies;
 use registry::Registry;
+use trace::Traces;
 
 #[derive(Default)]
 pub struct AppState {
     pub registry: Registry,
     pub replies: Replies,
+    /// Kept beside the registry rather than on a box, because removing a box
+    /// must not remove the record of what was done in it.
+    pub traces: Traces,
 }

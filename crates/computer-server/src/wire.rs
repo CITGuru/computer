@@ -150,14 +150,14 @@ pub struct Frame {
     pub png_base64: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorBody {
     pub code: ErrorCode,
     pub message: String,
     pub retryable: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     BadRequest,
@@ -238,4 +238,103 @@ pub struct SetClipboard {
     pub text: String,
     #[serde(default)]
     pub selection: Selection,
+}
+
+/// Who asked for it.
+///
+/// `Person` marks custody, never input. A person's keystrokes arrive over VNC
+/// and never reach this server, so what is recorded is the interval a screen
+/// was theirs.
+///
+/// On a [`TraceEvent::Frame`] it means less again: who *held* the screen when
+/// it was observed, not who changed it. An agent can still act during a
+/// handover — `open_url` does not go through the gate that refuses synthetic
+/// input — so a person-held frame may be showing an agent's work. The agent's
+/// own entries are in the same interval, which is what the two together are
+/// for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Actor {
+    Agent,
+    Person,
+    System,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TraceEvent {
+    BoxCreated {
+        spec_digest: String,
+        width: u32,
+        height: u32,
+        screens: u32,
+    },
+    /// One action, with what it did. The action is carried whole so the run can
+    /// be replayed against a fresh box.
+    Acted {
+        screen: u32,
+        action: Action,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<ErrorBody>,
+    },
+    /// The screen changed. Written only when it did, so a caller polling a
+    /// still screen adds nothing, and no frame entry between a takeover's two
+    /// ends means nothing visible happened while it was held.
+    ///
+    /// The actor is whoever held the screen, not whoever changed it.
+    Frame {
+        screen: u32,
+    },
+    Executed {
+        argv: Vec<String>,
+        code: i32,
+        timed_out: bool,
+    },
+    FileWritten {
+        path: String,
+        bytes: usize,
+    },
+    FileRead {
+        path: String,
+        bytes: usize,
+    },
+    ClipboardSet {
+        screen: u32,
+        selection: Selection,
+    },
+    ClipboardRead {
+        screen: u32,
+        selection: Selection,
+    },
+    /// From here until `TakeoverEnded` the screen was a person's, and this
+    /// API's input was refused.
+    TakeoverStarted {
+        screen: u32,
+        exclusive: bool,
+    },
+    TakeoverEnded {
+        screen: u32,
+    },
+    BoxDeleted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceEntry {
+    pub seq: u64,
+    pub at_ms: u64,
+    pub actor: Actor,
+    pub event: TraceEvent,
+    /// The frame this entry left behind, by content. Fetch it from
+    /// `/v1/boxes/{id}/trace/frames/{hash}`, which answers 404 once it has
+    /// aged out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TraceView {
+    pub entries: Vec<TraceEntry>,
+    /// Pass back as `after` to continue. `None` where the end was reached.
+    pub next: Option<u64>,
 }

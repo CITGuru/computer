@@ -168,3 +168,18 @@ async fn test_an_empty_command_is_refused_rather_than_run() {
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn test_a_box_that_did_nothing_has_no_trace() {
+    let (status, body) = send(get("/v1/boxes/box_nope/trace")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}
+
+#[tokio::test]
+async fn test_a_frame_from_a_trace_that_does_not_exist_is_not_found() {
+    let (status, _) = send(get("/v1/boxes/box_nope/trace/frames/abc123")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

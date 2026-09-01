@@ -84,10 +84,47 @@ Every error is the same shape — `code`, `message`, `retryable` — including a
 body that is not JSON at all, because that is the first error most clients
 ever see.
 
+## What happened to a box
+
+```bash
+curl -s "localhost:8080/v1/boxes/$BOX/trace?after=12&limit=100"
+curl -s localhost:8080/v1/boxes/$BOX/trace/frames/$HASH -o frame.png
+```
+
+Every action is recorded with the actor that asked for it, and the action is
+carried whole, so a run can be replayed against a fresh box. A trace outlives
+the box it describes — removing a box must not remove the record of what was
+done in it.
+
+```
+  0 agent   box_created  1280x800
+  1 agent   acted  open_url ok=True
+  2 agent   frame frame=20376bc5
+  3 agent   takeover_started
+  4 agent   acted  open_url ok=True
+  5 person  frame frame=4fe5823c
+  6 agent   takeover_ended
+  7 agent   box_deleted
+```
+
+**A person's keystrokes are not in here, and cannot be.** They arrive over VNC
+and go straight into the box, so nothing out here sees one. What is recorded is
+custody: the interval a screen was theirs. On a frame the claim is weaker
+still — the actor is whoever *held* the screen when it was captured, not
+whoever changed it, and an agent can still act during a handover.
+
+Frame entries are written only when the screen actually moved, so polling a
+still screen adds nothing — and no frame entry between a takeover's two ends
+means nothing visible happened while it was held.
+
 ## Not here yet
 
 `spec.apps` parses and is **refused**, because there is no catalog behind it
 and a box handed back without the apps it named would look like the one that
-was asked for. Snapshots, fork and traces are not built. Boxes live in this
-process's memory, so a restart forgets them while their containers keep
-running — `computer sweep` is what collects those today.
+was asked for. Snapshots and fork are not built, though the trace carries whole
+actions so replay has what it needs.
+
+Traces are held in memory and bounded — 10,000 entries and 256 distinct frames
+per box, 256 boxes — so this is a record rather than an archive, and a restart
+forgets it. Boxes live in memory too, so a restart forgets them while their
+containers keep running; `computer sweep` is what collects those today.
