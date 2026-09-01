@@ -1,0 +1,25 @@
+[package]
+name = "computer-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "An MCP server that gives an agent a desktop"
+license = "MIT"
+
+[dependencies]
+base64 = "0.22"
+computer-api = { path = "../computer-api" }
+computer-client = { path = "../computer-client" }
+computer-types = { path = "../computer-types" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints.clippy]
+string_slice = "deny"
+
+[[bin]]
+name = "computer-mcp"
+path = "src/main.rs"

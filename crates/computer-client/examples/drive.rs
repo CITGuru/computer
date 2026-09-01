@@ -63,7 +63,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(frame) = &result.frame {
         let png = frame_png(frame)?.unwrap_or_default();
-        println!("  frame {} is {} bytes", &frame.hash[..12], png.len());
+        println!(
+            "  frame {} is {} bytes",
+            frame.hash.get(..12).unwrap_or(&frame.hash),
+            png.len()
+        );
 
         // The same hash back means nothing moved, and no picture travels.
         let again = client.frame(&box_.id, 0, Some(&frame.hash)).await?;
