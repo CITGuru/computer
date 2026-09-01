@@ -18,7 +18,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use computer::{Button, Delta, Desktop as EngineDesktop, Point as EnginePoint, Selection};
+use computer::{
+    Button as EngineButton, Delta, Desktop as EngineDesktop, Point as EnginePoint,
+    Selection as EngineSelection,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -299,7 +302,7 @@ async fn cursor(
 #[derive(Debug, Default, Deserialize)]
 struct SelectionQuery {
     #[serde(default)]
-    selection: ClipboardSelection,
+    selection: Selection,
 }
 
 async fn get_clipboard(
@@ -549,17 +552,17 @@ fn point_out(point: EnginePoint) -> Point {
     }
 }
 
-fn button_in(button: MouseButton) -> Button {
+fn button_in(button: Button) -> EngineButton {
     match button {
-        MouseButton::Left => Button::Left,
-        MouseButton::Right => Button::Right,
-        MouseButton::Middle => Button::Middle,
+        Button::Left => EngineButton::Left,
+        Button::Right => EngineButton::Right,
+        Button::Middle => EngineButton::Middle,
     }
 }
 
-fn selection_in(selection: ClipboardSelection) -> Selection {
+fn selection_in(selection: Selection) -> EngineSelection {
     match selection {
-        ClipboardSelection::Clipboard => Selection::Clipboard,
-        ClipboardSelection::Primary => Selection::Primary,
+        Selection::Clipboard => EngineSelection::Clipboard,
+        Selection::Primary => EngineSelection::Primary,
     }
 }

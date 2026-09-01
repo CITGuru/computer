@@ -5,11 +5,12 @@
 //! a client, and a client that compiles axum to send a request is a client
 //! nobody uses. The conversions live in [`crate::spec`] and [`crate::error`].
 //!
-//! The spec half is re-exported from `computer-spec`, which describes a
-//! desktop without knowing an API exists.
+//! The shared half is re-exported from `computer-types`, which describes a
+//! desktop and how to address one without knowing an API exists.
 
-pub use computer_spec::{
-    App, Auth, Bind, Desktop, DisplayServer, Feature, Placement, Policy, Spec,
+pub use computer_types::{
+    App, Auth, Bind, Button, Desktop, DisplayServer, Feature, Placement, Point, Policy, Selection,
+    Spec,
 };
 use serde::{Deserialize, Serialize};
 
@@ -48,21 +49,6 @@ pub struct BoxList {
     pub boxes: Vec<BoxView>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Point {
-    pub x: u32,
-    pub y: u32,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MouseButton {
-    #[default]
-    Left,
-    Right,
-    Middle,
-}
-
 /// One step an agent takes. `at` is optional wherever the pointer is already
 /// where it should be, so a move and a click in one batch need not repeat the
 /// coordinate.
@@ -76,19 +62,19 @@ pub enum Action {
         #[serde(default)]
         at: Option<Point>,
         #[serde(default)]
-        button: MouseButton,
+        button: Button,
     },
     DoubleClick {
         #[serde(default)]
         at: Option<Point>,
         #[serde(default)]
-        button: MouseButton,
+        button: Button,
     },
     Drag {
         from: Point,
         to: Point,
         #[serde(default)]
-        button: MouseButton,
+        button: Button,
     },
     Type {
         text: String,
@@ -251,13 +237,5 @@ pub struct ClipboardView {
 pub struct SetClipboard {
     pub text: String,
     #[serde(default)]
-    pub selection: ClipboardSelection,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ClipboardSelection {
-    #[default]
-    Clipboard,
-    Primary,
+    pub selection: Selection,
 }

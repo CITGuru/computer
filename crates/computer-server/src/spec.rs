@@ -8,11 +8,13 @@
 //!
 //! Defaults and limits live here rather than in the spec, because they belong
 //! to an image: eight screens is what `computer-desktop` allows, not what a
-//! desktop is.
+//! desktop is. They are asked of the profile the spec selects rather than read
+//! off one image's constants — `MacProfile` allows a single screen, because
+//! macOS has one GUI session per boot.
 
 use crate::error::ApiError;
-use computer::{Auth, Bind, Builder, Computer, WaylandProfile, X11Profile};
-use computer_spec::{self as spec, Placement, Spec};
+use computer::{Auth, Bind, Builder, Computer, Profile, WaylandProfile, X11Profile};
+use computer_types::{self as spec, Placement, Spec};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,7 +32,8 @@ pub fn plan(
     placement: &Placement,
     name: &str,
 ) -> Result<(Builder, Resolved), ApiError> {
-    let resolved = resolve(spec)?;
+    let profile = profile_for(spec.desktop.server);
+    let resolved = resolve_with(profile.as_ref(), spec)?;
 
     let mut builder = Computer::builder()
         .name(name)
@@ -41,12 +44,8 @@ pub fn plan(
         .size(resolved.width, resolved.height)
         .network(spec.policy.network)
         .auth(auth_of(spec.policy.auth))
-        .publish_on(bind_of(spec.policy.bind));
-
-    builder = match spec.desktop.server {
-        spec::DisplayServer::X11 => builder.profile(Arc::new(X11Profile)),
-        spec::DisplayServer::Wayland => builder.profile(Arc::new(WaylandProfile)),
-    };
+        .publish_on(bind_of(spec.policy.bind))
+        .profile(Arc::clone(&profile));
 
     let mut packages: Vec<String> = spec.desktop.packages.clone();
     for feature in &spec.desktop.features {
@@ -80,6 +79,17 @@ pub fn plan(
 }
 
 pub fn resolve(spec: &Spec) -> Result<Resolved, ApiError> {
+    resolve_with(profile_for(spec.desktop.server).as_ref(), spec)
+}
+
+fn profile_for(server: spec::DisplayServer) -> Arc<dyn Profile> {
+    match server {
+        spec::DisplayServer::X11 => Arc::new(X11Profile),
+        spec::DisplayServer::Wayland => Arc::new(WaylandProfile),
+    }
+}
+
+fn resolve_with(profile: &dyn Profile, spec: &Spec) -> Result<Resolved, ApiError> {
     if !spec.apps.is_empty() {
         let named: Vec<&str> = spec.apps.keys().map(String::as_str).collect();
         return Err(ApiError::bad_request(format!(
@@ -97,16 +107,19 @@ pub fn resolve(spec: &Spec) -> Result<Resolved, ApiError> {
         ));
     }
 
-    if screens > computer::image::MAX_SCREENS {
+    let most = profile.ports().max_screens;
+    if screens > most {
         return Err(ApiError::bad_request(format!(
-            "the image supports {} screens and this spec asks for {screens}",
-            computer::image::MAX_SCREENS
+            "the {} image runs {most} screen(s) and this spec asks for {screens}",
+            profile.name()
         )));
     }
 
+    let (width, height) = profile.default_size();
+
     Ok(Resolved {
-        width: spec.desktop.width.unwrap_or(computer::image::WIDTH),
-        height: spec.desktop.height.unwrap_or(computer::image::HEIGHT),
+        width: spec.desktop.width.unwrap_or(width),
+        height: spec.desktop.height.unwrap_or(height),
         screens,
     })
 }
@@ -142,12 +155,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_a_spec_that_names_no_size_takes_the_image_s() {
+    fn test_a_spec_that_names_no_size_takes_the_profile_s() {
         let resolved = resolve(&Spec::default()).expect("a spec that says nothing is launchable");
+        let (width, height) = X11Profile.default_size();
 
-        assert_eq!(resolved.width, computer::image::WIDTH);
-        assert_eq!(resolved.height, computer::image::HEIGHT);
+        assert_eq!((resolved.width, resolved.height), (width, height));
         assert_eq!(resolved.screens, 1);
+    }
+
+    #[test]
+    fn test_a_wayland_spec_resolves_against_the_wayland_profile() {
+        let spec: Spec = serde_json::from_str(r#"{"desktop":{"server":"wayland"}}"#).unwrap();
+        let resolved = resolve(&spec).expect("a wayland box is launchable");
+
+        assert_eq!(
+            (resolved.width, resolved.height),
+            WaylandProfile.default_size()
+        );
+    }
+
+    #[test]
+    fn test_the_screen_limit_comes_from_the_profile_rather_than_one_image() {
+        let spec: Spec = serde_json::from_str(r#"{"desktop":{"screens":99}}"#).unwrap();
+
+        let Err(error) = resolve(&spec) else {
+            panic!("a spec asking for more screens than the image runs was accepted");
+        };
+        // Naming the image is the difference between a caller fixing their
+        // spec and a caller filing a bug.
+        assert!(
+            error.body.message.contains(X11Profile.name()),
+            "the refusal names the image that refused: {}",
+            error.body.message
+        );
     }
 
     #[test]

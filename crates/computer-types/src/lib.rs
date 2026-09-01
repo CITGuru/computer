@@ -1,10 +1,13 @@
-//! What desktop is wanted, as something that can be written down.
+//! What a desktop is, and how a caller addresses one.
 //!
-//! A spec describes a desktop and says nothing about where it runs, which is
-//! what lets one travel between a container, a microVM and somebody else's
-//! cloud. [`Placement`] carries the other half.
+//! Two halves. A [`Spec`] describes a desktop and says nothing about where it
+//! runs, which is what lets one travel between a container, a microVM and
+//! somebody else's cloud; [`Placement`] carries the other half. The rest are
+//! the values every caller names — a point, a button, a selection — which a
+//! server, a client and the engine all need and none of them should redefine.
 //!
-//! Nothing here knows about an image. A spec that names no size is portable
+//! Nothing here knows about an image, and nothing here may depend on
+//! `computer`: that edge runs the other way once a builder can take a spec. A spec that names no size is portable
 //! across images whose natural sizes differ, and whatever compiles it applies
 //! its own defaults and its own limits — an X11 image allows eight screens
 //! and a macOS guest allows one, and neither number belongs in the
@@ -219,4 +222,47 @@ mod tests {
         assert_eq!(spec.desktop.screens, None);
         assert!(spec.apps.is_empty());
     }
+}
+
+/// Top-left origin, device pixels, and the same coordinates the frame came
+/// back in — a click against a scaled screenshot lands somewhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Point {
+    pub x: u32,
+    pub y: u32,
+}
+
+impl Point {
+    pub const fn new(x: u32, y: u32) -> Self {
+        Self { x, y }
+    }
+}
+
+impl From<(u32, u32)> for Point {
+    fn from((x, y): (u32, u32)) -> Self {
+        Self { x, y }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Button {
+    #[default]
+    Left,
+    Right,
+    Middle,
+}
+
+/// Which selection is meant.
+///
+/// Copy and paste uses the clipboard. Dragging the mouse over text fills the
+/// primary selection, which a middle click pastes. They hold different text,
+/// and reading one when you meant the other returns text that looks correct
+/// and is not.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Selection {
+    #[default]
+    Clipboard,
+    Primary,
 }

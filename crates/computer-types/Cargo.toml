@@ -1,9 +1,9 @@
 [package]
-name = "computer-spec"
+name = "computer-types"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A portable description of a desktop box"
+description = "The types a computer box is described and driven with"
 license = "MIT"
 
 # Serde and a digest, and nothing else. Everything that reads a spec depends
