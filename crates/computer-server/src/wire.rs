@@ -276,6 +276,11 @@ pub enum TraceEvent {
         height: u32,
         screens: u32,
     },
+    /// Found running after a restart. Everything before it is gone: the trace
+    /// lived in this process and the box did not.
+    Adopted {
+        runtime: String,
+    },
     ForkedFrom {
         source: String,
         #[serde(skip_serializing_if = "Option::is_none")]

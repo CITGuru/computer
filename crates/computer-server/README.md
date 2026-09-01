@@ -119,6 +119,29 @@ request for as long as the original box was driven.
 `"mode": "snapshot"` is refused. Copying a running machine needs a substrate
 that can freeze one, and a container runtime cannot checkpoint an X session.
 
+## Surviving a restart
+
+A box is a container and this server is a process, and the container is the one
+that survives. On startup it takes back every box it finds still running, so a
+restart does not leave them charging for memory nobody is using:
+
+```
+INFO took a box back box_=box_9cf78792… runtime=docker
+INFO took back boxes left running by an earlier server taken=1
+```
+
+Each box carries its own spec in a `computer.server.box` label, written where
+the runtime keeps it rather than where this process does. So what comes back is
+a box this server can drive *and* fork, rather than a name it has to guess
+about.
+
+Set `COMPUTER_SERVER_RUNTIMES=docker,podman` to look in more than one. A box
+placed on a runtime nobody asks about stays lost.
+
+**The trace does not come back.** It lived in memory and the box did not, so an
+adopted box starts a new one that says `adopted` and nothing before it. Forking
+one replays only what has happened since.
+
 ## What happened to a box
 
 ```bash
@@ -161,5 +184,4 @@ running desktop.
 
 Traces are held in memory and bounded — 10,000 entries and 256 distinct frames
 per box, 256 boxes — so this is a record rather than an archive, and a restart
-forgets it. Boxes live in memory too, so a restart forgets them while their
-containers keep running; `computer sweep` is what collects those today.
+forgets it. The boxes themselves come back; see above.

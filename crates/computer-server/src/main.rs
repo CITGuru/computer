@@ -16,6 +16,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()?;
 
     let state = Arc::new(AppState::default());
+
+    let runtimes = computer_server::recover::runtimes();
+    let taken = computer_server::recover::adopt(&state.registry, &state.traces, &runtimes).await;
+    if taken > 0 {
+        tracing::info!(taken, "took back boxes left running by an earlier server");
+    }
+
     let listener = tokio::net::TcpListener::bind(address).await?;
 
     tracing::info!(%address, "computer-server is listening");

@@ -13,6 +13,7 @@
 //! macOS has one GUI session per boot.
 
 use crate::error::ApiError;
+use crate::recover::{BOX_LABEL, BoxLabel};
 use computer::{Auth, Bind, Builder, Computer, Profile, WaylandProfile, X11Profile};
 use computer_types::{self as spec, Placement, Spec};
 use std::sync::Arc;
@@ -75,6 +76,20 @@ pub fn plan(
         builder = builder.expires_when_idle(Duration::from_secs(secs));
     }
 
+    // Written on the box rather than held in this process, so a restart can
+    // find it again and know what it was.
+    let label = BoxLabel {
+        digest: spec.digest(),
+        spec: spec.clone(),
+        placement: placement.clone(),
+        width: resolved.width,
+        height: resolved.height,
+        screens: resolved.screens,
+    };
+    if let Some(value) = label.encode() {
+        builder = builder.label(BOX_LABEL, value);
+    }
+
     Ok((builder, resolved))
 }
 
@@ -82,7 +97,7 @@ pub fn resolve(spec: &Spec) -> Result<Resolved, ApiError> {
     resolve_with(profile_for(spec.desktop.server).as_ref(), spec)
 }
 
-fn profile_for(server: spec::DisplayServer) -> Arc<dyn Profile> {
+pub fn profile_for(server: spec::DisplayServer) -> Arc<dyn Profile> {
     match server {
         spec::DisplayServer::X11 => Arc::new(X11Profile),
         spec::DisplayServer::Wayland => Arc::new(WaylandProfile),

@@ -9,6 +9,7 @@
 pub mod error;
 pub mod extract;
 pub mod idempotency;
+pub mod recover;
 pub mod registry;
 pub mod routes;
 pub mod spec;
