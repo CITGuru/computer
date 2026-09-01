@@ -10,6 +10,7 @@ pub mod auth;
 pub mod error;
 pub mod extract;
 pub mod idempotency;
+pub mod reap;
 pub mod recover;
 pub mod registry;
 pub mod routes;

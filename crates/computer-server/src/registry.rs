@@ -122,6 +122,14 @@ impl Registry {
         self.boxes.read().await.values().cloned().collect()
     }
 
+    /// Stop holding a box without taking it away.
+    ///
+    /// For one that has already gone: stopping it again would ask a runtime to
+    /// remove what it does not have, and answer an error nobody can act on.
+    pub async fn forget(&self, id: &str) {
+        self.boxes.write().await.remove(id);
+    }
+
     /// Through the machine rather than `Computer::shutdown`, which needs the
     /// handle by value while other requests may still be holding one.
     pub async fn remove(&self, id: &str) -> ApiResult<()> {

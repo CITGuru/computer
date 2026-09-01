@@ -280,6 +280,11 @@ pub enum TraceEvent {
         height: u32,
         screens: u32,
     },
+    /// Removed by something other than a request: its deadline passed, or the
+    /// runtime stopped holding it.
+    Gone {
+        why: String,
+    },
     /// Found running after a restart. Everything before it is gone: the trace
     /// lived in this process and the box did not.
     Adopted {

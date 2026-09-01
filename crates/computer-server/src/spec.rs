@@ -19,6 +19,14 @@ use computer_types::{self as spec, Placement, Spec};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The shortest life a box can usefully be given.
+///
+/// The engine starts the clock when a box is created, not when it is ready, and
+/// a box takes seconds to come up. Below this the deadline can pass while it is
+/// still starting, and the caller waits out the full ready timeout to be told
+/// the container went missing — which is true and useless.
+const MIN_LIFE: u64 = 60;
+
 /// What a spec that left things open turns out to be, once an image has
 /// answered for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +43,7 @@ pub fn plan(
 ) -> Result<(Builder, Resolved), ApiError> {
     let profile = profile_for(spec.desktop.server);
     let resolved = resolve_with(profile.as_ref(), spec)?;
+    placeable(placement)?;
 
     let mut builder = Computer::builder()
         .name(name)
@@ -139,6 +148,23 @@ fn resolve_with(profile: &dyn Profile, spec: &Spec) -> Result<Resolved, ApiError
     })
 }
 
+fn placeable(placement: &Placement) -> Result<(), ApiError> {
+    for (secs, what) in [
+        (placement.expires_after_secs, "expires_after_secs"),
+        (placement.idle_timeout_secs, "idle_timeout_secs"),
+    ] {
+        if let Some(secs) = secs
+            && secs < MIN_LIFE
+        {
+            return Err(ApiError::bad_request(format!(
+                "{what} of {secs}s is shorter than a box takes to come up. The clock starts when the box is created, not when it is ready, so it would be removed mid-launch and the wait would end in a timeout. {MIN_LIFE}s is the shortest that works."
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 fn packages_for(feature: spec::Feature) -> Vec<String> {
     use computer::bundle::Extras;
 
@@ -224,6 +250,43 @@ mod tests {
         let spec: Spec = serde_json::from_str(r#"{"desktop":{"screens":99}}"#).unwrap();
 
         assert!(resolve(&spec).is_err());
+    }
+
+    #[test]
+    fn test_a_life_too_short_to_start_in_is_refused() {
+        let placement = Placement {
+            expires_after_secs: Some(8),
+            ..Placement::default()
+        };
+
+        let Err(error) = plan(&Spec::default(), &placement, "box") else {
+            panic!("a box was accepted that would be removed while starting");
+        };
+        assert!(
+            error.body.message.contains("expires_after_secs"),
+            "the refusal names the field: {}",
+            error.body.message
+        );
+    }
+
+    #[test]
+    fn test_an_idle_timeout_too_short_is_refused_the_same_way() {
+        let placement = Placement {
+            idle_timeout_secs: Some(1),
+            ..Placement::default()
+        };
+
+        assert!(plan(&Spec::default(), &placement, "box").is_err());
+    }
+
+    #[test]
+    fn test_a_life_long_enough_is_allowed() {
+        let placement = Placement {
+            expires_after_secs: Some(MIN_LIFE),
+            ..Placement::default()
+        };
+
+        assert!(plan(&Spec::default(), &placement, "box").is_ok());
     }
 
     #[test]

@@ -152,6 +152,28 @@ request for as long as the original box was driven.
 `"mode": "snapshot"` is refused. Copying a running machine needs a substrate
 that can freeze one, and a container runtime cannot checkpoint an X session.
 
+## Boxes that should not still be here
+
+A deadline is armed by the engine when a box is launched — by a task in the
+process that launched it. Take a box back after a restart and nobody is counting
+for it any more, so the server sweeps the label the engine wrote, which is what
+that label is for. It also lets go of anything the runtime no longer holds, so
+`GET /v1/boxes` does not list a box that answers nothing.
+
+Both show up in the trace as `gone`, with what happened:
+
+```
+system  gone  its deadline passed
+system  gone  the runtime no longer has it
+```
+
+`COMPUTER_SERVER_REAP_SECS` sets the cadence, 30s by default.
+
+`expires_after_secs` and `idle_timeout_secs` under 60s are refused. The clock
+starts when a box is created rather than when it is ready, so a shorter deadline
+removes it mid-launch and the caller waits out the full ready timeout to be told
+the container went missing.
+
 ## Surviving a restart
 
 A box is a container and this server is a process, and the container is the one

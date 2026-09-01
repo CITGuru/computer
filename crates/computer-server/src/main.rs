@@ -35,6 +35,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(taken, "took back boxes left running by an earlier server");
     }
 
+    let every = std::env::var("COMPUTER_SERVER_REAP_SECS")
+        .ok()
+        .and_then(|secs| secs.parse().ok())
+        .map(std::time::Duration::from_secs)
+        .unwrap_or(computer_server::reap::EVERY);
+
+    computer_server::reap::spawn(Arc::clone(&state), runtimes, every);
+
     let listener = tokio::net::TcpListener::bind(address).await?;
 
     tracing::info!(
