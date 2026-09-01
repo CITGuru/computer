@@ -64,3 +64,8 @@ name = "e2b_takeover"
 path = "examples/e2b_takeover.rs"
 required-features = ["e2b"]
 
+
+# Listed rather than globbed: `crates/macos-vm` is an empty directory and a
+# glob would fail on it.
+[workspace]
+members = ["crates/computer-server"]
