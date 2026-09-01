@@ -1,54 +1,36 @@
-//! Turning a [`Spec`] into the engine's builder, and naming what it asked for.
+//! Turning a [`Spec`] into the engine's builder, and into the numbers the
+//! image actually gives it.
 //!
 //! This translation is the piece that moves. When the SDK can take a spec of
 //! its own — `Builder::from_spec` — this module becomes a call into it, and
 //! nothing else here changes. Keeping it in one file is what makes that a
 //! move rather than a refactor.
+//!
+//! Defaults and limits live here rather than in the spec, because they belong
+//! to an image: eight screens is what `computer-desktop` allows, not what a
+//! desktop is.
 
 use crate::error::ApiError;
-use crate::wire::{self, Placement, Spec};
 use computer::{Auth, Bind, Builder, Computer, WaylandProfile, X11Profile};
-use sha2::{Digest, Sha256};
+use computer_spec::{self as spec, Placement, Spec};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Two callers asking for the same desktop get the same digest, whatever
-/// order they wrote the keys in.
-pub fn digest(spec: &Spec) -> String {
-    // Through `serde_json::Value`, whose maps are ordered, so the digest
-    // follows the spec rather than the request body's formatting.
-    let canonical = serde_json::to_value(spec)
-        .and_then(|value| serde_json::to_string(&value))
-        .unwrap_or_default();
-
-    let mut hasher = Sha256::new();
-    hasher.update(canonical.as_bytes());
-    format!("{:x}", hasher.finalize())
+/// What a spec that left things open turns out to be, once an image has
+/// answered for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Resolved {
+    pub width: u32,
+    pub height: u32,
+    pub screens: u32,
 }
 
-pub fn builder_for(spec: &Spec, placement: &Placement, name: &str) -> Result<Builder, ApiError> {
-    if !spec.apps.is_empty() {
-        let named: Vec<&str> = spec.apps.keys().map(String::as_str).collect();
-        return Err(ApiError::bad_request(format!(
-            "apps are not installable yet and this spec names {}: a box handed \
-             back without them would look like the one that was asked for",
-            named.join(", ")
-        )));
-    }
-
-    if spec.desktop.screens == 0 {
-        return Err(ApiError::bad_request(
-            "a box has at least one screen: screen 0 starts with the desktop",
-        ));
-    }
-
-    if spec.desktop.screens > computer::image::MAX_SCREENS {
-        return Err(ApiError::bad_request(format!(
-            "the image supports {} screens and this spec asks for {}",
-            computer::image::MAX_SCREENS,
-            spec.desktop.screens
-        )));
-    }
+pub fn plan(
+    spec: &Spec,
+    placement: &Placement,
+    name: &str,
+) -> Result<(Builder, Resolved), ApiError> {
+    let resolved = resolve(spec)?;
 
     let mut builder = Computer::builder()
         .name(name)
@@ -56,14 +38,14 @@ pub fn builder_for(spec: &Spec, placement: &Placement, name: &str) -> Result<Bui
         // happens to be holding a handle. Without this a dropped handle takes
         // a caller's box away mid-session.
         .keep_on_drop(true)
-        .size(spec.desktop.width, spec.desktop.height)
+        .size(resolved.width, resolved.height)
         .network(spec.policy.network)
         .auth(auth_of(spec.policy.auth))
         .publish_on(bind_of(spec.policy.bind));
 
     builder = match spec.desktop.server {
-        wire::DisplayServer::X11 => builder.profile(Arc::new(X11Profile)),
-        wire::DisplayServer::Wayland => builder.profile(Arc::new(WaylandProfile)),
+        spec::DisplayServer::X11 => builder.profile(Arc::new(X11Profile)),
+        spec::DisplayServer::Wayland => builder.profile(Arc::new(WaylandProfile)),
     };
 
     let mut packages: Vec<String> = spec.desktop.packages.clone();
@@ -94,32 +76,64 @@ pub fn builder_for(spec: &Spec, placement: &Placement, name: &str) -> Result<Bui
         builder = builder.expires_when_idle(Duration::from_secs(secs));
     }
 
-    Ok(builder)
+    Ok((builder, resolved))
 }
 
-fn packages_for(feature: wire::Feature) -> Vec<String> {
+pub fn resolve(spec: &Spec) -> Result<Resolved, ApiError> {
+    if !spec.apps.is_empty() {
+        let named: Vec<&str> = spec.apps.keys().map(String::as_str).collect();
+        return Err(ApiError::bad_request(format!(
+            "apps are not installable yet and this spec names {}: a box handed \
+             back without them would look like the one that was asked for",
+            named.join(", ")
+        )));
+    }
+
+    let screens = spec.desktop.screens.unwrap_or(1);
+
+    if screens == 0 {
+        return Err(ApiError::bad_request(
+            "a box has at least one screen: screen 0 starts with the desktop",
+        ));
+    }
+
+    if screens > computer::image::MAX_SCREENS {
+        return Err(ApiError::bad_request(format!(
+            "the image supports {} screens and this spec asks for {screens}",
+            computer::image::MAX_SCREENS
+        )));
+    }
+
+    Ok(Resolved {
+        width: spec.desktop.width.unwrap_or(computer::image::WIDTH),
+        height: spec.desktop.height.unwrap_or(computer::image::HEIGHT),
+        screens,
+    })
+}
+
+fn packages_for(feature: spec::Feature) -> Vec<String> {
     use computer::bundle::Extras;
 
     match feature {
-        wire::Feature::WideFonts => Extras::wide_fonts().packages,
-        wire::Feature::Audio => Extras::audio().packages,
-        wire::Feature::Video => Extras::video().packages,
-        wire::Feature::Dock => Extras::dock().packages,
+        spec::Feature::WideFonts => Extras::wide_fonts().packages,
+        spec::Feature::Audio => Extras::audio().packages,
+        spec::Feature::Video => Extras::video().packages,
+        spec::Feature::Dock => Extras::dock().packages,
     }
 }
 
-fn auth_of(auth: wire::Auth) -> Auth {
+fn auth_of(auth: spec::Auth) -> Auth {
     match auth {
-        wire::Auth::None => Auth::Open,
-        wire::Auth::Password => Auth::Password,
-        wire::Auth::Token => Auth::Token,
+        spec::Auth::None => Auth::Open,
+        spec::Auth::Password => Auth::Password,
+        spec::Auth::Token => Auth::Token,
     }
 }
 
-fn bind_of(bind: wire::Bind) -> Bind {
+fn bind_of(bind: spec::Bind) -> Bind {
     match bind {
-        wire::Bind::Loopback => Bind::Loopback,
-        wire::Bind::Any => Bind::Any,
+        spec::Bind::Loopback => Bind::Loopback,
+        spec::Bind::Any => Bind::Any,
     }
 }
 
@@ -128,27 +142,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_the_digest_follows_the_spec_not_the_formatting() {
-        let one: Spec = serde_json::from_str(r#"{"desktop":{"width":800,"height":600}}"#).unwrap();
-        let two: Spec = serde_json::from_str(r#"{"desktop":{"height":600,"width":800}}"#).unwrap();
+    fn test_a_spec_that_names_no_size_takes_the_image_s() {
+        let resolved = resolve(&Spec::default()).expect("a spec that says nothing is launchable");
 
-        assert_eq!(digest(&one), digest(&two));
-    }
-
-    #[test]
-    fn test_a_different_desktop_is_a_different_digest() {
-        let one = Spec::default();
-        let mut two = Spec::default();
-        two.desktop.width += 1;
-
-        assert_ne!(digest(&one), digest(&two));
+        assert_eq!(resolved.width, computer::image::WIDTH);
+        assert_eq!(resolved.height, computer::image::HEIGHT);
+        assert_eq!(resolved.screens, 1);
     }
 
     #[test]
     fn test_a_spec_naming_apps_is_refused() {
         let spec: Spec = serde_json::from_str(r#"{"apps":{"vscode":{}}}"#).unwrap();
 
-        let Err(error) = builder_for(&spec, &Placement::default(), "box") else {
+        let Err(error) = resolve(&spec) else {
             panic!("a spec naming an app it cannot get was accepted");
         };
         assert!(
@@ -162,11 +168,13 @@ mod tests {
     fn test_more_screens_than_the_image_has_is_refused() {
         let spec: Spec = serde_json::from_str(r#"{"desktop":{"screens":99}}"#).unwrap();
 
-        assert!(builder_for(&spec, &Placement::default(), "box").is_err());
+        assert!(resolve(&spec).is_err());
     }
 
     #[test]
-    fn test_a_misspelled_key_is_refused_rather_than_ignored() {
-        assert!(serde_json::from_str::<Spec>(r#"{"desktop":{"widht":800}}"#).is_err());
+    fn test_a_box_with_no_screens_is_refused() {
+        let spec: Spec = serde_json::from_str(r#"{"desktop":{"screens":0}}"#).unwrap();
+
+        assert!(resolve(&spec).is_err());
     }
 }

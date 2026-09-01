@@ -64,9 +64,9 @@ async fn create_box(
         return Ok(replayed);
     }
 
-    let digest = spec::digest(&body.spec);
+    let digest = body.spec.digest();
     let id = new_id();
-    let builder = spec::builder_for(&body.spec, &body.placement, &id)?;
+    let (builder, resolved) = spec::plan(&body.spec, &body.placement, &id)?;
 
     tracing::info!(%id, %digest, "launching a box");
     let computer = builder.launch().await?;
@@ -76,9 +76,9 @@ async fn create_box(
         .insert(
             id,
             digest,
-            body.spec.desktop.screens,
-            body.spec.desktop.width,
-            body.spec.desktop.height,
+            resolved.screens,
+            resolved.width,
+            resolved.height,
             computer,
         )
         .await;

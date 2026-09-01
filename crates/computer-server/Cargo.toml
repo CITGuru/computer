@@ -8,6 +8,7 @@ license = "MIT"
 
 [dependencies]
 computer = { path = "../.." }
+computer-spec = { path = "../computer-spec" }
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }

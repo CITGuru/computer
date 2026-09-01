@@ -13,7 +13,12 @@ cargo run -p computer-server            # 127.0.0.1:8080, or $COMPUTER_SERVER_AD
 A box is described by a **spec** — what desktop is wanted — and placed by a
 **placement** — where it runs and for how long. They are separate because two
 identical desktops that differ only in a memory limit are one desktop, and
-`spec_digest` is what says so.
+`spec_digest` is what says so. Both live in `computer-spec`, which describes a
+desktop without knowing an API exists.
+
+`width`, `height` and `screens` are optional. A spec that leaves them open
+takes whatever the image gives, and is a different spec from one that pins
+them.
 
 ```bash
 curl -s localhost:8080/v1/boxes -H 'content-type: application/json' \
