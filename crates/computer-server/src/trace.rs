@@ -17,7 +17,7 @@
 //! A trace outlives the box it describes: removing a box must not remove the
 //! record of what was done in it.
 
-use crate::wire::{Actor, TraceEntry, TraceEvent};
+use computer_api::{Actor, TraceEntry, TraceEvent};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

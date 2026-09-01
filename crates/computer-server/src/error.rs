@@ -3,10 +3,10 @@
 //! The engine already splits its errors by what the caller does next, so this
 //! is a translation rather than a judgement.
 
-use crate::wire::{ErrorBody, ErrorCode};
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use computer_api::{ErrorBody, ErrorCode};
 
 #[derive(Debug, Clone)]
 pub struct ApiError {

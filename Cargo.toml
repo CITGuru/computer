@@ -68,4 +68,9 @@ required-features = ["e2b"]
 # Listed rather than globbed: `crates/macos-vm` is an empty directory and a
 # glob would fail on it.
 [workspace]
-members = ["crates/computer-types", "crates/computer-server"]
+members = [
+    "crates/computer-types",
+    "crates/computer-api",
+    "crates/computer-client",
+    "crates/computer-server",
+]

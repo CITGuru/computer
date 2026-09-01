@@ -15,7 +15,6 @@ pub mod registry;
 pub mod routes;
 pub mod spec;
 pub mod trace;
-pub mod wire;
 
 use idempotency::Replies;
 use registry::Registry;

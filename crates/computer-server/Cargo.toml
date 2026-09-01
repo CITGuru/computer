@@ -8,6 +8,7 @@ license = "MIT"
 
 [dependencies]
 computer = { path = "../.." }
+computer-api = { path = "../computer-api" }
 computer-types = { path = "../computer-types" }
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }

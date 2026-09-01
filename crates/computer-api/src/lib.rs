@@ -1,12 +1,16 @@
-//! The wire contract: what a client sends, and what it gets back.
+//! The HTTP contract: what a client sends, and what it gets back.
 //!
-//! Nothing here may reach for the HTTP framework or for the engine. These
-//! types are what a future `computer-api` crate hands to both this server and
-//! a client, and a client that compiles axum to send a request is a client
-//! nobody uses. The conversions live in [`crate::spec`] and [`crate::error`].
+//! Nothing here may reach for a web framework or for the engine. Both ends of
+//! the wire depend on these types, and a client that has to compile a server's
+//! dependencies to send a request is a client nobody uses.
 //!
-//! The shared half is re-exported from `computer-types`, which describes a
-//! desktop and how to address one without knowing an API exists.
+//! Every type goes both ways. The server never sends a request and never reads
+//! a reply, so half of each pair is unused here — but a client does both, and a
+//! protocol only one end can construct is not one.
+//!
+//! The vocabulary — a spec, a point, a button — is re-exported from
+//! `computer-types`, which the engine also needs and which therefore cannot
+//! live here. This crate is the protocol built out of it.
 
 pub use computer_types::{
     App, Auth, Bind, Button, Desktop, DisplayServer, Feature, Placement, Point, Policy, Selection,
@@ -14,7 +18,7 @@ pub use computer_types::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateBox {
     #[serde(default)]
@@ -23,7 +27,7 @@ pub struct CreateBox {
     pub placement: Placement,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxView {
     pub id: String,
     pub spec_digest: String,
@@ -37,14 +41,14 @@ pub struct BoxView {
     pub expires_at_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BoxState {
     Ready,
     Gone,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxList {
     pub boxes: Vec<BoxView>,
 }
@@ -104,7 +108,7 @@ pub enum Want {
     Cursor,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActionBatch {
     pub actions: Vec<Action>,
@@ -121,7 +125,7 @@ pub struct ActionBatch {
     pub have_frame: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
     pub results: Vec<ActionResult>,
     /// The index of the action that stopped the batch, if one did. Everything
@@ -133,7 +137,7 @@ pub struct BatchResult {
     pub cursor: Option<Point>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionResult {
     pub index: usize,
     pub ok: bool,
@@ -141,7 +145,7 @@ pub struct ActionResult {
     pub error: Option<ErrorBody>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub hash: String,
     pub unchanged: bool,
@@ -173,7 +177,7 @@ pub enum ErrorCode {
     Internal,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecRequest {
     pub argv: Vec<String>,
@@ -183,7 +187,7 @@ pub struct ExecRequest {
 
 /// Text rather than base64: an agent reads this. Binary belongs in a file,
 /// read back through `GET /boxes/{id}/files`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecResponse {
     pub code: i32,
     pub stdout: String,
@@ -191,20 +195,20 @@ pub struct ExecResponse {
     pub timed_out: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriteFile {
     pub path: String,
     pub contents_base64: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReadFile {
     pub path: String,
     pub contents_base64: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TakeoverRequest {
     /// `false` hands the screen over exclusively and holds this API's input
@@ -213,26 +217,26 @@ pub struct TakeoverRequest {
     pub shared: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TakeoverView {
     pub url: Option<String>,
     pub exclusive: bool,
     pub screen: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewersView {
     pub watching: usize,
     pub driving: usize,
     pub person_driving: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardView {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetClipboard {
     pub text: String,
@@ -349,14 +353,14 @@ pub struct TraceEntry {
     pub frame: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceView {
     pub entries: Vec<TraceEntry>,
     /// Pass back as `after` to continue. `None` where the end was reached.
     pub next: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ForkRequest {
     #[serde(default)]
@@ -381,7 +385,7 @@ pub enum ForkMode {
     Snapshot,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForkResult {
     #[serde(rename = "box")]
     pub created: BoxView,
@@ -394,7 +398,7 @@ pub struct ForkResult {
 /// that has since changed, or a slower network, or a dialog that appeared this
 /// time, land somewhere else — so this reports what was attempted rather than
 /// promising the two boxes match.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayReport {
     pub attempted: usize,
     pub ok: usize,
@@ -404,4 +408,22 @@ pub struct ReplayReport {
     pub stopped_at: Option<u64>,
     /// Whether the replay ran out of time before reaching the end.
     pub truncated: bool,
+}
+
+impl ErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BadRequest => "bad_request",
+            Self::NotFound => "not_found",
+            Self::Gone => "gone",
+            Self::Denied => "denied",
+            Self::ScreenUnavailable => "screen_unavailable",
+            Self::Unsupported => "unsupported",
+            Self::Failed => "failed",
+            Self::Timeout => "timeout",
+            Self::Unavailable => "unavailable",
+            Self::Transport => "transport",
+            Self::Internal => "internal",
+        }
+    }
 }

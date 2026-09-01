@@ -1,0 +1,25 @@
+[package]
+name = "computer-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A client for the computer box API"
+license = "MIT"
+
+[dependencies]
+computer-api = { path = "../computer-api" }
+computer-types = { path = "../computer-types" }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+base64 = "0.22"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.clippy]
+string_slice = "deny"

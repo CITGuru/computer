@@ -12,8 +12,8 @@
 use crate::registry::Registry;
 use crate::spec;
 use crate::trace::Traces;
-use crate::wire::{Actor, Placement, Spec, TraceEvent};
 use computer::{Computer, DockerMachine, Machine, SystemDocker};
+use computer_api::{Actor, Placement, Spec, TraceEvent};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

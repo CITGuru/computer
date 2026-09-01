@@ -10,7 +10,6 @@ use crate::extract::ApiJson;
 use crate::registry::Entry;
 use crate::spec;
 use crate::trace::Trace;
-use crate::wire::*;
 use crate::{AppState, idempotency::Replies};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -24,6 +23,7 @@ use computer::{
     Button as EngineButton, Delta, Desktop as EngineDesktop, Point as EnginePoint,
     Selection as EngineSelection,
 };
+use computer_api::*;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;

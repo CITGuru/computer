@@ -115,6 +115,9 @@ Every error is the same shape — `code`, `message`, `retryable` — including a
 body that is not JSON at all, because that is the first error most clients
 ever see.
 
+The wire types live in [`computer-api`](../computer-api), and
+[`computer-client`](../computer-client) is a Rust client over them.
+
 ## Fork a box
 
 ```bash

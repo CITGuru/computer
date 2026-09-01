@@ -12,13 +12,13 @@
 //! first unauthenticated request.
 
 use crate::error::ApiError;
-use crate::wire::ErrorCode;
 use crate::{AppState, routes};
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use computer::{Bind, Secret};
+use computer_api::ErrorCode;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
