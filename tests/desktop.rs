@@ -5,7 +5,7 @@
 //! container is the slowest possible place to discover that — so the mapping
 //! is pinned here and the image test is left to prove the image.
 
-use computer::servers::x11::{X11Desktop, port_listening};
+use computer::servers::x11::X11Desktop;
 use computer::testing::{ScriptedDesktop, ScriptedHost};
 use computer::{
     Button, ControlGate, Delta, Desktop, ExecResult, Point, ScreenHost, ScreenId, Selection,
@@ -374,21 +374,6 @@ async fn a_dead_display_says_which_display_it_was() {
 
     let error = screen.alive().await.expect_err("nothing is listening");
     assert!(error.to_string().contains(":3"), "{error}");
-}
-
-#[tokio::test]
-async fn a_browser_is_looked_for_where_it_actually_listens() {
-    let host = ScriptedHost::new();
-
-    assert!(port_listening(&host, ScreenId(0), 9222).await);
-    let sent = host.last().expect("a call");
-
-    assert_eq!(
-        sent[0], "bash",
-        "/dev/tcp is a bash feature; under dash a listening browser is \
-         reported as absent"
-    );
-    assert!(sent[2].contains("/dev/tcp/127.0.0.1/9222"));
 }
 
 #[tokio::test]

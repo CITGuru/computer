@@ -301,6 +301,20 @@ impl MachineHost {
         &self.profile
     }
 
+    /// Whether something is listening on `port` inside the box.
+    ///
+    /// The profile decides what to probe with; this reads the exit code. A
+    /// box that cannot be asked answers false, because the question was only
+    /// ever whether something is there.
+    pub async fn port_listening(&self, screen: ScreenId, port: u16) -> bool {
+        let argv = self.profile.port_probe_command(port);
+
+        ScreenHost::run(self, &argv, screen)
+            .await
+            .map(|result| result.code == 0)
+            .unwrap_or(false)
+    }
+
     /// Run something with no display attached.
     pub async fn exec(&self, argv: &[String]) -> Result<ExecResult> {
         self.run_within(argv, &BTreeMap::new(), self.timeout).await
@@ -649,6 +663,37 @@ mod tests {
         assert!(
             !sent.iter().any(|part| part.starts_with("DISPLAY=")),
             "a command that needs no screen must not pick one"
+        );
+    }
+
+    fn host_for(cli: Arc<ScriptedCli>) -> MachineHost {
+        MachineHost::new(Arc::new(docker(cli)), Arc::new(crate::X11Profile), "box")
+    }
+
+    #[tokio::test]
+    async fn test_a_port_probe_is_the_one_the_profile_asked_for() {
+        let cli = Arc::new(ScriptedCli::new());
+        let host = host_for(Arc::clone(&cli));
+
+        assert!(host.port_listening(ScreenId(0), 9222).await);
+
+        let sent = cli.last().expect("a call");
+        assert!(
+            sent.iter()
+                .any(|part| part.contains("/dev/tcp/127.0.0.1/9222")),
+            "the image decides what it can be probed with, and the host only \
+             runs it: {sent:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_refused_probe_reads_as_nothing_listening() {
+        let cli = Arc::new(ScriptedCli::new().failing(1, ""));
+
+        assert!(
+            !host_for(cli).port_listening(ScreenId(0), 9222).await,
+            "the question was only ever whether something is there, so a box \
+             that cannot be asked answers no rather than failing the probe"
         );
     }
 

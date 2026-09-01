@@ -71,6 +71,8 @@ pub mod audit;
 pub mod bundle;
 pub mod cdp;
 pub mod image;
+#[cfg(feature = "mac")]
+pub mod mac;
 pub mod machine;
 pub mod microvm;
 pub mod profile;
@@ -99,6 +101,8 @@ pub use reach::{Address, Bind, Reach, Scheme};
 pub use runtime::{Config, ContainerCli, SystemDocker};
 pub use screens::{ControlGate, DEFAULT_LEASE, ScreenLease, Screens};
 pub use secret::Secret;
+#[cfg(feature = "mac")]
+pub use servers::macos::{MacProfile, QuartzDesktop, QuartzDriver};
 pub use servers::wayland::{WaylandDesktop, WaylandDriver, WaylandProfile};
 pub use servers::x11::{X11Desktop, X11Driver, X11Profile};
 
@@ -457,7 +461,7 @@ impl Builder {
         }
         config.boot = self.profile.boot_command();
         config.publish = if self.publish {
-            self.profile.ports().to_publish()
+            self.profile.publish()
         } else {
             Vec::new()
         };
@@ -1056,9 +1060,7 @@ impl Computer {
 
         let browser = match self.devtools_port_in_box() {
             None => false,
-            Some(port) => {
-                servers::x11::port_listening(self.host.as_ref(), self.primary.id(), port).await
-            }
+            Some(port) => self.host.port_listening(self.primary.id(), port).await,
         };
 
         DesktopPresence {
@@ -1645,7 +1647,7 @@ impl Screen {
     /// Asked of the box, which holds the token, rather than of this process,
     /// which holds only its own gate.
     pub async fn person_driving(&self) -> bool {
-        servers::x11::port_listening(self.host.as_ref(), self.id, self.ports.control).await
+        self.host.port_listening(self.id, self.ports.control).await
     }
 
     /// End a takeover this process did not start.
