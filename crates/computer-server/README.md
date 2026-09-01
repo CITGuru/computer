@@ -8,6 +8,36 @@ mapping tools onto endpoints both work with no SDK in between.
 cargo run -p computer-server            # 127.0.0.1:8080, or $COMPUTER_SERVER_ADDR
 ```
 
+## The gate
+
+Whoever reaches this API creates boxes, drives them, reads their frames and runs
+commands inside them, so an address it answers on is worth more than any single
+viewer URL behind it.
+
+The rule is the engine's own. On loopback it opens without a token, which is
+what a box on a laptop has always been. Bound anywhere else it needs one, and
+says so at startup rather than on the first unauthenticated request:
+
+```
+$ COMPUTER_SERVER_ADDR=0.0.0.0:8080 cargo run -p computer-server
+Error: 0.0.0.0:8080 can be reached from off this host and COMPUTER_SERVER_TOKEN
+is not set. Whoever reaches this API can create boxes, drive them and run
+commands inside them. Set a token, or bind to 127.0.0.1.
+```
+
+```bash
+export COMPUTER_SERVER_TOKEN=$(openssl rand -hex 32)
+curl -s localhost:8080/v1/boxes -H "Authorization: Bearer $COMPUTER_SERVER_TOKEN"
+```
+
+The token is a `computer::Secret`, so it is refused under 16 characters, and it
+has no `Display` and no `Serialize` — it cannot reach a log by accident.
+Comparison is constant-time. `/v1/health` answers without one, since a load
+balancer has no token and a refusal would tell whoever asked the same thing.
+
+This gates the API. The viewer and control URLs it hands back carry their own
+credentials, set by `policy.auth` in the spec.
+
 ## Create a box
 
 A box is described by a **spec** — what desktop is wanted — and placed by a

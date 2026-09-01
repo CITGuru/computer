@@ -29,6 +29,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+pub const HEALTH: &str = "/v1/health";
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 /// Deleting a box is not recoverable, and the caller is usually an agent.
 const CONFIRM_DELETE: &str = "x-computer-confirm-delete";
@@ -43,7 +44,7 @@ const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/v1/health", get(health))
+        .route(HEALTH, get(health))
         .route("/v1/boxes", get(list_boxes).post(create_box))
         .route("/v1/boxes/{id}", get(get_box).delete(delete_box))
         .route("/v1/boxes/{id}/fork", post(fork))
@@ -63,6 +64,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(start_takeover).delete(end_takeover),
         )
         .route("/v1/boxes/{id}/screens/{screen}/viewers", get(viewers))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state),
+            crate::auth::gate,
+        ))
         .with_state(state)
 }
 

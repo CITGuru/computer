@@ -6,6 +6,7 @@
 //! step is several actions and one look, and one request per click spends a
 //! round trip on each.
 
+pub mod auth;
 pub mod error;
 pub mod extract;
 pub mod idempotency;
@@ -24,6 +25,9 @@ use trace::Traces;
 pub struct AppState {
     pub registry: Registry,
     pub replies: Replies,
+    /// `None` leaves the API open, which is only allowed on loopback — see
+    /// [`auth::allowed`].
+    pub token: Option<computer::Secret>,
     /// Kept beside the registry rather than on a box, because removing a box
     /// must not remove the record of what was done in it.
     pub traces: Traces,

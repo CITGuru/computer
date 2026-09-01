@@ -208,3 +208,78 @@ async fn test_a_snapshot_fork_says_why_it_cannot() {
         "the refusal names what to use instead: {body}"
     );
 }
+
+/// A server with a token turns away everything but health.
+async fn send_gated(request: Request<Body>) -> (StatusCode, Value) {
+    let state = Arc::new(AppState {
+        token: Some(computer::Secret::new("0123456789abcdef0123").expect("a secret")),
+        ..AppState::default()
+    });
+    let response = routes::router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answered");
+
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("a body")
+        .to_bytes();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
+
+    (status, body)
+}
+
+fn with_token(path: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .uri(path)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .expect("a request")
+}
+
+#[tokio::test]
+async fn test_a_gated_api_refuses_a_request_carrying_nothing() {
+    let (status, body) = send_gated(get("/v1/boxes")).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "denied");
+}
+
+#[tokio::test]
+async fn test_a_gated_api_refuses_the_wrong_token() {
+    let (status, _) = send_gated(with_token("/v1/boxes", "0123456789abcdef0124")).await;
+
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_the_right_token_gets_through() {
+    let (status, body) = send_gated(with_token("/v1/boxes", "0123456789abcdef0123")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["boxes"].as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn test_health_answers_without_one() {
+    // A load balancer has no token, and a refusal would tell whoever asked the
+    // same thing this does.
+    let (status, body) = send_gated(get("/v1/health")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["ok"], true);
+}
+
+#[tokio::test]
+async fn test_an_ungated_api_on_loopback_still_opens() {
+    let (status, _) = send(get("/v1/boxes")).await;
+
+    assert_eq!(status, StatusCode::OK);
+}

@@ -15,7 +15,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "127.0.0.1:8080".to_string())
         .parse()?;
 
-    let state = Arc::new(AppState::default());
+    let token = match std::env::var("COMPUTER_SERVER_TOKEN") {
+        Ok(value) => Some(computer::Secret::new(value)?),
+        Err(_) => None,
+    };
+
+    if let Err(why) = computer_server::auth::allowed(&address, token.as_ref()) {
+        return Err(why.into());
+    }
+
+    let state = Arc::new(AppState {
+        token,
+        ..AppState::default()
+    });
 
     let runtimes = computer_server::recover::runtimes();
     let taken = computer_server::recover::adopt(&state.registry, &state.traces, &runtimes).await;
@@ -25,7 +37,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = tokio::net::TcpListener::bind(address).await?;
 
-    tracing::info!(%address, "computer-server is listening");
+    tracing::info!(
+        %address,
+        gated = state.token.is_some(),
+        "computer-server is listening"
+    );
     axum::serve(listener, routes::router(state))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
