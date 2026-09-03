@@ -3,10 +3,13 @@
 use super::X11Driver;
 use crate::desktop::DesktopFactory;
 use crate::image;
-use crate::profile::{ImageSource, PortLayout, Profile};
+use crate::profile::{
+    DesktopContract, ImageSource, PortLayout, Profile, ScreenEnvironment, WallpaperRuntime,
+    X11Environment, X11WallpaperRuntime,
+};
 use crate::{DesktopSupport, ScreenAction, ScreenId};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 /// The image this crate carries: Xvfb, fluxbox, chromium and a noVNC viewer.
 ///
@@ -14,27 +17,34 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct X11Profile;
 
+static CONTRACT: LazyLock<DesktopContract> = LazyLock::new(|| {
+    DesktopContract::standard(
+        image::PROFILE_NAME,
+        ImageSource::Bundled(&crate::bundle::DESKTOP),
+    )
+});
+
+impl X11Profile {
+    pub fn contract() -> &'static DesktopContract {
+        LazyLock::force(&CONTRACT)
+    }
+}
+
 impl Profile for X11Profile {
     fn name(&self) -> &str {
-        image::PROFILE_NAME
+        Self::contract().name()
     }
 
     fn image(&self) -> ImageSource {
-        ImageSource::Bundled(&crate::bundle::DESKTOP)
+        Self::contract().image()
     }
 
     fn ports(&self) -> PortLayout {
-        PortLayout {
-            view_base: image::VIEW_PORT_BASE,
-            vnc_base: image::VNC_PORT_BASE,
-            devtools: Some(image::DEVTOOLS_PORT),
-            devtools_bridge: Some(image::DEVTOOLS_BRIDGE_PORT),
-            max_screens: image::MAX_SCREENS,
-        }
+        Self::contract().ports()
     }
 
     fn default_size(&self) -> (u32, u32) {
-        (image::WIDTH, image::HEIGHT)
+        Self::contract().default_size()
     }
 
     fn support_at(&self, width: u32, height: u32) -> DesktopSupport {
@@ -45,40 +55,33 @@ impl Profile for X11Profile {
         Arc::new(X11Driver)
     }
 
+    fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
+        Arc::new(X11WallpaperRuntime)
+    }
+
     fn screen_command(
         &self,
         action: ScreenAction,
         screen: ScreenId,
         extra: &[String],
     ) -> Vec<String> {
-        let mut command = vec![
-            image::SCREEN_COMMAND.to_string(),
-            action.verb().to_string(),
-            screen.0.to_string(),
-        ];
-        command.extend_from_slice(extra);
-        command
+        Self::contract().screen_command(action, screen, extra)
     }
 
     fn boot_command(&self) -> Vec<String> {
-        vec![image::DESKTOP_COMMAND.to_string(), "--once".to_string()]
+        Self::contract().boot_command()
     }
 
     fn launch_env(&self, width: u32, height: u32) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            (image::WIDTH_ENV.to_string(), width.to_string()),
-            (image::HEIGHT_ENV.to_string(), height.to_string()),
-        ])
+        Self::contract().launch_env(width, height)
     }
 
     fn geometry_from(&self, environment: &BTreeMap<String, String>) -> Option<(u32, u32)> {
-        let width = environment.get(image::WIDTH_ENV)?.parse().ok()?;
-        let height = environment.get(image::HEIGHT_ENV)?.parse().ok()?;
-        Some((width, height))
+        Self::contract().geometry_from(environment)
     }
 
     fn screen_env(&self, screen: ScreenId) -> BTreeMap<String, String> {
-        BTreeMap::from([("DISPLAY".to_string(), super::display_for(screen))])
+        X11Environment.environment(screen)
     }
 }
 

@@ -90,6 +90,9 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     );
     println!("  screenshot: {} bytes", frame.len());
 
+    screen.set_wallpaper(&frame).await?;
+    println!("  wallpaper changed from uploaded image bytes");
+
     // A real pointer, over the internet.
     screen.click(Point::new(640, 400), Button::Left).await?;
     assert_eq!(screen.cursor().await?, Point::new(640, 400));
