@@ -1,21 +1,15 @@
 //! What happened to a box, in order.
 //!
-//! Every action this API performs is recorded with the actor that asked for
-//! it. A person's input is not: it arrives over VNC and goes straight into the
-//! box, so nothing out here sees a keystroke. What the trace records instead is
-//! custody — when a screen was handed over and when it came back. A person's
-//! work is attributable to an interval, not to an action, and a reader that
-//! assumes otherwise is reading a claim this server cannot make.
-//!
-//! Frames carry the weaker claim still: the actor on one is whoever held the
-//! screen when it was captured, not whoever changed it.
+//! Every action this API performs is recorded with the actor that asked for it.
+//! A person's input is not: it arrives over VNC and goes straight into the box,
+//! so what the trace records is custody — when a screen was handed over and when
+//! it came back. A person's work is attributable to an interval, not to an
+//! action, and a reader that assumes otherwise is reading a claim this server
+//! cannot make.
 //!
 //! Frames are held by content, so a desktop that sits still costs one copy
-//! however long it sits, and an entry is written only when the screen actually
-//! changed.
-//!
-//! A trace outlives the box it describes: removing a box must not remove the
-//! record of what was done in it.
+//! however long it sits, and a trace outlives the box it describes: removing a
+//! box must not remove the record of what was done in it.
 
 use computer_api::{Actor, TraceEntry, TraceEvent};
 use std::collections::{HashMap, VecDeque};
@@ -53,10 +47,8 @@ impl Trace {
         self.write(actor, event, None)
     }
 
-    /// Keep a frame, and write an entry only where the screen moved.
-    ///
-    /// Returns whether it was worth recording, so a caller polling a still
-    /// screen can tell it changed nothing.
+    /// Writes an entry only where the screen moved, and returns whether it did,
+    /// so a caller polling a still screen can tell it changed nothing.
     pub fn note_frame(&self, actor: Actor, screen: u32, hash: &str, png: &[u8]) -> bool {
         self.put_frame(hash, png);
 

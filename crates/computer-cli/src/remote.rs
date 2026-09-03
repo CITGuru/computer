@@ -1,8 +1,4 @@
 //! Driving boxes through a server.
-//!
-//! The way round every command works unless `--local` says otherwise, whether
-//! the server is a fleet somewhere else or one this process started a moment
-//! ago for itself.
 
 use crate::{USAGE, flag, positional, present};
 use computer_api::{Action, ActionBatch, ForkMode, ForkRequest};
@@ -162,8 +158,6 @@ pub async fn click(client: &Client, args: &[String]) -> Done {
 pub async fn clip(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
 
-    // PRIMARY is what dragging the mouse over text fills, and a middle click
-    // pastes. It is a different selection from the one copy and paste uses.
     let selection = match present(args, "--primary") {
         true => Selection::Primary,
         false => Selection::Clipboard,

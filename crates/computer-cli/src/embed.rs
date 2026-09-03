@@ -1,18 +1,13 @@
 //! A server for the length of one command.
 //!
-//! The CLI speaks to a server whether or not anybody started one, so when
-//! nothing is listening it starts its own on a loopback port the operating
-//! system picks, and lets it die with the process.
-//!
-//! This works because a box carries its own spec in a label and is taken back
-//! on startup: a server that lives for one command is not amnesiac, it just
-//! rediscovers what is running each time. What it cannot rediscover is a trace,
-//! which lived in the memory of whatever server was there before.
+//! Works because a box carries its own spec in a label and is taken back on
+//! startup: a server that lives for one command is not amnesiac, it rediscovers
+//! what is running each time. What it cannot rediscover is a trace, which lived
+//! in the memory of whatever server was there before.
 
 use computer_server::{AppState, recover, routes};
 use std::sync::Arc;
 
-/// Start one, and answer where it is.
 pub async fn start() -> Result<String, String> {
     let state = Arc::new(AppState::default());
 

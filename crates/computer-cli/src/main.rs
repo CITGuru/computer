@@ -1,13 +1,9 @@
 //! `computer` — a desktop in a box, from the command line.
 //!
-//! For the times when writing a program is more ceremony than the job needs:
-//! open a box, look at it, point it at a page, hand it to somebody, take it
-//! away again.
-//!
-//! Commands go through a server, which is what lets the same ones reach a box
-//! on this machine and a box in somebody's fleet. When no server is named and
-//! none is listening, one is started here for the length of the command — so
-//! nothing has to be running first.
+//! Commands go through a server, which is what lets the same ones reach a box on
+//! this machine and a box in somebody's fleet. When no server is named and none
+//! is listening, one is started here for the length of the command, so nothing
+//! has to be running first.
 //!
 //! `--local` skips all that and drives the box from this process. Faster, and
 //! a smaller set: what a server remembers, a one-shot process does not.

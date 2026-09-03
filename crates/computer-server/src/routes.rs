@@ -33,7 +33,6 @@ pub const HEALTH: &str = "/v1/health";
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 /// Deleting a box is not recoverable, and the caller is usually an agent.
 const CONFIRM_DELETE: &str = "x-computer-confirm-delete";
-/// Trace entries per page.
 const TRACE_PAGE: usize = 500;
 /// The longest a replay is given before it stops and says so. A fork is one
 /// HTTP request, and a box that was driven for an hour cannot take one.
@@ -681,9 +680,8 @@ async fn fork(
     let report = replay_onto(&entry, &trace, &history, body.up_to).await;
 
     // Close with what the replay produced, so a caller can compare it against
-    // the source's own last frame. They will rarely be the same bytes — a
-    // desktop animates, and a tooltip caught mid-fade is a different picture
-    // of the same state — which is why the report counts actions rather than
+    // the source's own last frame. They will rarely be the same bytes: a
+    // desktop animates, which is why the report counts actions rather than
     // claiming the two boxes match.
     if let Ok(target) = entry.desktop(0).await {
         let _ = capture(&trace, Actor::Agent, 0, target.as_desktop(), None).await;
@@ -781,9 +779,8 @@ struct TraceQuery {
     limit: Option<usize>,
 }
 
-/// What was done to this box, oldest first.
-///
-/// Answers for a box that has been removed: the record is the point.
+/// Oldest first, and answers for a box that has been removed: the record is the
+/// point.
 async fn read_trace(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,

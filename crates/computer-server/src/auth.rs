@@ -1,15 +1,11 @@
 //! The gate on the API itself.
 //!
-//! Everything the engine is careful about downstream — a viewer beyond
-//! loopback is refused rather than published — applies here first and harder.
 //! Whoever reaches this API creates boxes, drives them, reads their frames and
 //! runs commands inside them, so an address it hands out is worth more than any
-//! single viewer URL behind it.
-//!
-//! The rule is the engine's own: [`Reach::needs_a_secret`]. Bound to loopback
-//! and it opens without one, which is what a box on a laptop has always been.
-//! Bound anywhere else and a token is required, at startup rather than on the
-//! first unauthenticated request.
+//! single viewer URL behind it. The rule is the engine's own
+//! [`computer::Reach::needs_a_secret`]: loopback opens without a token,
+//! anything routable requires one at startup rather than on the first
+//! unauthenticated request.
 
 use crate::error::ApiError;
 use crate::{AppState, routes};
@@ -22,7 +18,6 @@ use computer_api::ErrorCode;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// What the address a server was told to bind means for the gate.
 pub fn bind_of(address: &SocketAddr) -> Bind {
     let ip = address.ip();
 
@@ -35,8 +30,6 @@ pub fn bind_of(address: &SocketAddr) -> Bind {
     }
 }
 
-/// Whether this address may be served with the token that was supplied.
-///
 /// Refused at startup, because the alternative is a routable box factory that
 /// only reveals it is open when somebody finds it.
 pub fn allowed(address: &SocketAddr, token: Option<&Secret>) -> Result<(), String> {
@@ -51,8 +44,6 @@ pub fn allowed(address: &SocketAddr, token: Option<&Secret>) -> Result<(), Strin
     ))
 }
 
-/// Turn away anything without the token.
-///
 /// `/v1/health` is left open: it says only that a server is answering, which is
 /// what a load balancer needs and no more than a refused request already tells
 /// whoever asked.

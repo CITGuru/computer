@@ -57,8 +57,6 @@ impl Client {
         self
     }
 
-    /// Whether a box server is answering here.
-    ///
     /// Checks what answered, not merely that something did: a client that
     /// guesses a port has to tell this apart from whatever else is on it.
     pub async fn health(&self) -> Result<()> {

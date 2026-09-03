@@ -1,21 +1,12 @@
 //! What a desktop is, and how a caller addresses one.
 //!
-//! Two halves. A [`Spec`] describes a desktop and says nothing about where it
-//! runs, which is what lets one travel between a container, a microVM and
-//! somebody else's cloud; [`Placement`] carries the other half. The rest are
-//! the values every caller names — a point, a button, a selection — which a
-//! server, a client and the engine all need and none of them should redefine.
+//! Nothing here may depend on `computer`: that edge runs the other way once a
+//! builder can take a spec. Defaults and limits belong to whatever compiles a
+//! spec rather than to the description — an X11 image allows eight screens and
+//! a macOS guest allows one.
 //!
-//! Nothing here knows about an image, and nothing here may depend on
-//! `computer`: that edge runs the other way once a builder can take a spec. A spec that names no size is portable
-//! across images whose natural sizes differ, and whatever compiles it applies
-//! its own defaults and its own limits — an X11 image allows eight screens
-//! and a macOS guest allows one, and neither number belongs in the
-//! description.
-//!
-//! `deny_unknown_fields` throughout: a spec is written by hand, and a
-//! misspelled key that is quietly ignored hands back a box missing the thing
-//! it was misspelled for, with nothing anywhere saying so.
+//! `deny_unknown_fields` throughout: a misspelled key that is quietly ignored
+//! hands back a box missing the thing it was misspelled for.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -34,11 +25,8 @@ pub struct Spec {
 }
 
 impl Spec {
-    /// Two callers asking for the same desktop get the same digest, whatever
-    /// order they wrote the keys in.
-    ///
-    /// Through [`serde_json::Value`], whose maps are ordered, so the digest
-    /// follows the spec rather than the formatting it arrived in.
+    /// Through [`serde_json::Value`], whose maps are ordered, so two callers
+    /// who wrote the keys in a different order still get the same digest.
     pub fn digest(&self) -> String {
         let canonical = serde_json::to_value(self)
             .and_then(|value| serde_json::to_string(&value))
@@ -191,8 +179,6 @@ mod tests {
 
     #[test]
     fn test_naming_a_size_is_not_the_same_spec_as_leaving_it_open() {
-        // One pins the geometry and travels to an image that can hold it; the
-        // other takes whatever the image gives. Different desktops.
         let open = Spec::default();
         let pinned = Spec {
             desktop: Desktop {
@@ -253,8 +239,6 @@ pub enum Button {
     Middle,
 }
 
-/// Which selection is meant.
-///
 /// Copy and paste uses the clipboard. Dragging the mouse over text fills the
 /// primary selection, which a middle click pastes. They hold different text,
 /// and reading one when you meant the other returns text that looks correct

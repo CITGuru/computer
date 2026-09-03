@@ -209,7 +209,6 @@ async fn test_a_snapshot_fork_says_why_it_cannot() {
     );
 }
 
-/// A server with a token turns away everything but health.
 async fn send_gated(request: Request<Body>) -> (StatusCode, Value) {
     let state = Arc::new(AppState {
         token: Some(computer::Secret::new("0123456789abcdef0123").expect("a secret")),

@@ -7,10 +7,6 @@
 //! Every type goes both ways. The server never sends a request and never reads
 //! a reply, so half of each pair is unused here — but a client does both, and a
 //! protocol only one end can construct is not one.
-//!
-//! The vocabulary — a spec, a point, a button — is re-exported from
-//! `computer-types`, which the engine also needs and which therefore cannot
-//! live here. This crate is the protocol built out of it.
 
 pub use computer_types::{
     App, Auth, Bind, Button, Desktop, DisplayServer, Feature, Placement, Point, Policy, Selection,
@@ -57,7 +53,6 @@ pub struct Health {
     pub service: String,
 }
 
-/// The one value [`Health::service`] is ever set to.
 pub const SERVICE: &str = "computer-server";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -256,18 +251,9 @@ pub struct SetClipboard {
     pub selection: Selection,
 }
 
-/// Who asked for it.
-///
 /// `Person` marks custody, never input. A person's keystrokes arrive over VNC
 /// and never reach this server, so what is recorded is the interval a screen
 /// was theirs.
-///
-/// On a [`TraceEvent::Frame`] it means less again: who *held* the screen when
-/// it was observed, not who changed it. An agent can still act during a
-/// handover — `open_url` does not go through the gate that refuses synthetic
-/// input — so a person-held frame may be showing an agent's work. The agent's
-/// own entries are in the same interval, which is what the two together are
-/// for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Actor {
@@ -320,7 +306,8 @@ pub enum TraceEvent {
     /// still screen adds nothing, and no frame entry between a takeover's two
     /// ends means nothing visible happened while it was held.
     ///
-    /// The actor is whoever held the screen, not whoever changed it.
+    /// The actor is whoever held the screen, not whoever changed it: an agent
+    /// can act during a handover, so a person-held frame may show its work.
     Frame {
         screen: u32,
     },

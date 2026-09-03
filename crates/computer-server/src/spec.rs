@@ -1,16 +1,14 @@
 //! Turning a [`Spec`] into the engine's builder, and into the numbers the
 //! image actually gives it.
 //!
-//! This translation is the piece that moves. When the SDK can take a spec of
-//! its own — `Builder::from_spec` — this module becomes a call into it, and
-//! nothing else here changes. Keeping it in one file is what makes that a
-//! move rather than a refactor.
+//! This translation is the piece that moves: when the SDK can take a spec of its
+//! own, this module becomes a call into it. Keeping it in one file is what makes
+//! that a move rather than a refactor.
 //!
-//! Defaults and limits live here rather than in the spec, because they belong
-//! to an image: eight screens is what `computer-desktop` allows, not what a
-//! desktop is. They are asked of the profile the spec selects rather than read
-//! off one image's constants — `MacProfile` allows a single screen, because
-//! macOS has one GUI session per boot.
+//! Defaults and limits are asked of the profile the spec selects rather than
+//! read off one image's constants, because they belong to an image —
+//! `MacProfile` allows a single screen, because macOS has one GUI session per
+//! boot.
 
 use crate::error::ApiError;
 use crate::recover::{BOX_LABEL, BoxLabel};

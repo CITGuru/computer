@@ -1,15 +1,11 @@
 //! Boxes that should not still be here.
 //!
-//! Two ways one goes without this server doing it. Its deadline passes, which
-//! the engine arms a task for at launch — but that task belonged to whichever
-//! process launched it, so a box taken back after a restart has nobody counting
-//! for it. Or something else removed it, and the registry is holding a name
-//! that answers nothing.
-//!
-//! Both leave the same wreckage: `GET /v1/boxes` lists a box that is not there,
-//! and driving it fails somewhere confusing. So the deadline is swept from the
-//! label the engine wrote — which is what that label is for — and anything the
-//! runtime no longer holds is let go of.
+//! The engine arms a deadline task at launch, but it belongs to whichever
+//! process launched the box, so one taken back after a restart has nobody
+//! counting for it. Something else may also have removed a box this registry
+//! still holds. Either way `GET /v1/boxes` lists a box that is not there and
+//! driving it fails somewhere confusing, so the deadline is swept from the label
+//! the engine wrote and anything the runtime no longer holds is let go of.
 
 use crate::AppState;
 use computer::{DockerMachine, Machine, SystemDocker};
@@ -54,8 +50,6 @@ pub async fn once(state: &AppState, runtimes: &[String]) -> usize {
     gone + reconcile(state).await
 }
 
-/// Let go of anything the runtime no longer holds.
-///
 /// A box removed by a sweep on another server, by a person with `docker rm`, or
 /// by the engine's own timer is gone whatever this process still believes.
 async fn reconcile(state: &AppState) -> usize {

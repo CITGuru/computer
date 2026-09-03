@@ -1,13 +1,10 @@
 //! Boxes that outlived the server.
 //!
-//! A box is a container and this server is a process, and the container is the
-//! one that survives. Without this, a restart forgets every box it started
-//! while they carry on running and charging for it.
-//!
+//! A box is a container and this server is a process, so without this a restart
+//! forgets every box it started while they carry on running and charging for it.
 //! Each box carries its own spec in a label, so what comes back is a box this
-//! server can drive *and* fork, rather than a name it has to guess about. What
-//! does not come back is the trace: it lived in memory, and a box adopted after
-//! a restart starts a new one saying so.
+//! server can drive *and* fork rather than a name it has to guess about. What
+//! does not come back is the trace: it lived in memory.
 
 use crate::registry::Registry;
 use crate::spec;
@@ -44,8 +41,6 @@ impl BoxLabel {
     }
 }
 
-/// The runtimes to look in, from `COMPUTER_SERVER_RUNTIMES`.
-///
 /// A box placed on a runtime nobody asks about stays lost, so the list is
 /// configurable rather than assumed.
 pub fn runtimes() -> Vec<String> {
@@ -67,8 +62,6 @@ fn listed(named: Option<&str>) -> Vec<String> {
     found
 }
 
-/// Take back every box these runtimes are still holding.
-///
 /// Never fails: a runtime that is not installed is not an error at startup, and
 /// a box that will not come back must not stop the ones that will.
 pub async fn adopt(registry: &Registry, traces: &Traces, runtimes: &[String]) -> usize {

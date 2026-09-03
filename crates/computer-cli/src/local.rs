@@ -127,8 +127,6 @@ pub async fn click(args: &[String]) -> computer::Result<()> {
 pub async fn clip(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
 
-    // PRIMARY is what dragging the mouse over text fills, and a middle click
-    // pastes. It is a different selection from the one copy and paste uses.
     let selection = match present(args, "--primary") {
         true => computer::Selection::Primary,
         false => computer::Selection::Clipboard,
