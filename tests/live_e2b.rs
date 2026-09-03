@@ -66,10 +66,70 @@ async fn a_real_sandbox_runs_the_same_desktop() {
         println!("  watch it {url}");
     }
 
+    // The one deployment that is genuinely on the internet, so the one where
+    // the gate has to be watched rather than assumed.
+    let gate = the_viewer_refuses_a_wrong_ticket(&computer);
+
     let outcome = exercise(&computer).await;
+    gate.expect("the gate");
 
     computer.shutdown().await.expect("it goes away");
     outcome.expect("every step");
+}
+
+/// A wrong ticket must not open a desktop that anybody can route to.
+fn the_viewer_refuses_a_wrong_ticket(computer: &Computer) -> Result<(), String> {
+    let url = computer.viewer_url().ok_or("no viewer URL")?;
+    let authority = url
+        .split("//")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .ok_or("no authority")?;
+    let ticket = computer
+        .credentials()
+        .ok_or("a gated box holds a pair")?
+        .view
+        .expose()
+        .to_string();
+
+    let upgrade = |token: &str| -> String {
+        let output = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "--max-time",
+                "20",
+                "--http1.1",
+                "-H",
+                "Connection: Upgrade",
+                "-H",
+                "Upgrade: websocket",
+                "-H",
+                "Sec-WebSocket-Version: 13",
+                "-H",
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            ])
+            .arg(format!("https://{authority}/websockify?token={token}"))
+            .output()
+            .expect("curl is on the path");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
+    let refused = upgrade("not-the-ticket");
+    println!("  a wrong ticket over the internet: {refused}");
+    if refused == "101" {
+        return Err("a wrong ticket opened a public viewer".to_string());
+    }
+
+    let opened = upgrade(&ticket);
+    println!("  the right ticket over the internet: {opened}");
+    match opened == "101" {
+        true => Ok(()),
+        false => Err(format!("the right ticket was refused: {opened}")),
+    }
 }
 
 async fn exercise(computer: &Computer) -> computer::Result<()> {
