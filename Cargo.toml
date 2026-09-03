@@ -22,6 +22,9 @@ e2b = ["dep:reqwest"]
 
 [dependencies]
 async-trait = "0.1"
+# The vocabulary a spec is written in. The edge runs this way because the
+# builder takes a spec; nothing in computer-types knows this crate exists.
+computer-types = { path = "crates/computer-types", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 microsandbox = { version = "0.6", optional = true }

@@ -78,6 +78,7 @@ pub mod runtime;
 pub mod sandboxes;
 pub mod screens;
 pub mod servers;
+pub mod spec;
 pub mod testing;
 
 pub use audit::{Audit, audit};
@@ -107,6 +108,14 @@ pub use screens::{ControlGate, DEFAULT_LEASE, ScreenLease, Screens};
 pub use secret::Secret;
 pub use servers::wayland::{WaylandDesktop, WaylandDriver, WaylandProfile};
 pub use servers::x11::{X11Desktop, X11Driver, X11Profile};
+pub use spec::Resolved;
+
+/// The vocabulary a spec is written in, re-exported so a caller launching from
+/// one needs no second dependency. Aliased rather than glob-imported: its
+/// `Auth`, `Bind`, `Desktop`, `Point`, `Button` and `Selection` name the same
+/// ideas as this crate's and are not the same types.
+pub use computer_types as types;
+pub use computer_types::{Placement, Spec};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

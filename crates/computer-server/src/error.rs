@@ -53,6 +53,7 @@ impl From<computer::Error> for ApiError {
         let (status, code) = match &error {
             E::Unavailable { .. } => (StatusCode::SERVICE_UNAVAILABLE, ErrorCode::Unavailable),
             E::Unsupported { .. } => (StatusCode::BAD_REQUEST, ErrorCode::Unsupported),
+            E::Invalid { .. } => (StatusCode::BAD_REQUEST, ErrorCode::BadRequest),
             E::Gone(_) => (StatusCode::GONE, ErrorCode::Gone),
             // A person holding the screen is the usual reason, which is a
             // conflict rather than a permission failure.

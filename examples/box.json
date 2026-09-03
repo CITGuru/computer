@@ -1,0 +1,17 @@
+{
+  "spec": {
+    "desktop": {
+      "server": "x11",
+      "width": 1280,
+      "height": 800,
+      "features": ["wide_fonts"]
+    },
+    "policy": {
+      "network": true
+    }
+  },
+  "placement": {
+    "runtime": "docker",
+    "expires_after_secs": 300
+  }
+}
