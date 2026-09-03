@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 use crate::machine::MachineHost;
 use crate::machine::ScreenHost;
 use crate::microvm::{MicroVmApi, Plan};
-use crate::profile::{ImageSource, PortLayout, Profile};
+use crate::profile::{CommandScreen, ImageSource, PortLayout, Profile, ScreenCommands};
 use crate::runtime::ContainerCli;
 use crate::sandboxes::e2b::{self, E2bApi, Sandbox, SandboxPlan};
 use crate::screens::ControlGate;
@@ -337,13 +337,7 @@ impl Profile for ScriptedProfile {
         screen: ScreenId,
         extra: &[String],
     ) -> Vec<String> {
-        let mut command = vec![
-            Self::SCREEN_COMMAND.to_string(),
-            action.verb().to_string(),
-            screen.0.to_string(),
-        ];
-        command.extend_from_slice(extra);
-        command
+        CommandScreen::new(Self::SCREEN_COMMAND).command(action, screen, extra)
     }
 
     fn boot_command(&self) -> Vec<String> {

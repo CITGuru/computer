@@ -181,6 +181,16 @@ pub struct MicroVm {
 }
 
 impl MicroVm {
+    /// Make the directory a write is about to land in, so `upload` and
+    /// `write_file` agree about the same path.
+    async fn ensure_parent(&self, name: &str, path: &Path) {
+        if let Some(parent) = path.parent() {
+            let _ = self
+                .run(name, &["mkdir", "-p", &parent.display().to_string()])
+                .await;
+        }
+    }
+
     pub fn new(api: Arc<dyn MicroVmApi>) -> Self {
         Self {
             api,
@@ -373,17 +383,14 @@ impl Machine for MicroVm {
     }
 
     async fn write_file(&self, name: &str, path: &Path, bytes: &[u8]) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            let _ = self
-                .run(name, &["mkdir", "-p", &parent.display().to_string()])
-                .await;
-        }
+        self.ensure_parent(name, path).await;
         self.api
             .write(name, &path.display().to_string(), bytes)
             .await
     }
 
     async fn upload(&self, name: &str, from: &Path, to: &Path) -> Result<()> {
+        self.ensure_parent(name, to).await;
         self.api
             .copy_in(name, from, &to.display().to_string())
             .await

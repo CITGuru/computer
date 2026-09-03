@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       x11-xserver-utils \
       xterm \
       imagemagick \
+      hsetroot \
       novnc \
       websockify \
       python3 \

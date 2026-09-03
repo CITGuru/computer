@@ -362,6 +362,24 @@ impl DockerMachine {
     /// `docker cp`, rather than an encoding round trip: base64 flags differ
     /// between coreutils and BusyBox, and an argument list has a size ceiling
     /// that a screenshot walks straight through.
+    /// Make the directory a write is about to land in.
+    ///
+    /// `cp` refuses a target whose parent is missing, so without this `upload`
+    /// and `write_file` disagree about the same path. The outcome is not
+    /// checked: the copy is the real test, and it reports the failure with the
+    /// runtime's own words.
+    async fn ensure_parent(&self, name: &str, path: &Path) {
+        if let Some(parent) = path.parent() {
+            let _ = self
+                .exec(
+                    name,
+                    &[arg("mkdir"), arg("-p"), arg(parent.display().to_string())],
+                    &BTreeMap::new(),
+                )
+                .await;
+        }
+    }
+
     async fn copy(&self, from: &str, to: &str) -> Result<()> {
         let result = self.cli.run(&[arg("cp"), arg(from), arg(to)]).await?;
 
@@ -371,8 +389,28 @@ impl DockerMachine {
         Ok(())
     }
 
+    /// A staging path no other call will pick.
+    ///
+    /// `docker cp` moves bytes host-side through a file this process names, so
+    /// the name has to be unique per call: two reads of one box that shared it
+    /// deleted each other's bytes between the copy and the read, and every
+    /// concurrent pair failed.
+    ///
+    /// It lives in a directory this process owns at `0700`, because `cp`
+    /// writes wherever the path leads — and in a shared `/tmp`, a path chosen
+    /// before we look is a path somebody else can make a symlink.
     fn scratch(&self, name: &str, tag: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("computer-{name}-{tag}"))
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let ticket = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let home = std::env::temp_dir().join(format!("computer-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&home);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700));
+        }
+        home.join(format!("{name}-{tag}-{ticket}"))
     }
 }
 
@@ -515,15 +553,7 @@ impl Machine for DockerMachine {
             .await
             .map_err(|error| Error::transport(error.to_string(), false))?;
 
-        if let Some(parent) = path.parent() {
-            let _ = self
-                .exec(
-                    name,
-                    &[arg("mkdir"), arg("-p"), arg(parent.display().to_string())],
-                    &BTreeMap::new(),
-                )
-                .await;
-        }
+        self.ensure_parent(name, path).await;
 
         let outcome = self
             .copy(
@@ -537,6 +567,7 @@ impl Machine for DockerMachine {
 
     async fn upload(&self, name: &str, from: &Path, to: &Path) -> Result<()> {
         // Disk to disk: `docker cp` streams, so nothing is held in memory.
+        self.ensure_parent(name, to).await;
         self.copy(
             &from.display().to_string(),
             &format!("{}:{}", name, to.display()),
@@ -650,6 +681,48 @@ mod tests {
             !sent.iter().any(|part| part.starts_with("DISPLAY=")),
             "a command that needs no screen must not pick one"
         );
+    }
+
+    /// Two reads of one box used to stage through one path, so the first
+    /// call's `discard` deleted the second's bytes between the copy and the
+    /// read. Every concurrent pair failed.
+    #[tokio::test]
+    async fn test_two_reads_of_one_box_do_not_stage_through_one_path() {
+        let cli = Arc::new(ScriptedCli::new());
+        let machine = docker(Arc::clone(&cli));
+
+        let _ = machine.read_file("box", Path::new("/tmp/one")).await;
+        let _ = machine.read_file("box", Path::new("/tmp/two")).await;
+
+        let staged: Vec<String> = cli
+            .calls()
+            .into_iter()
+            .filter(|argv| argv.first().map(String::as_str) == Some("cp"))
+            .filter_map(|argv| argv.get(2).cloned())
+            .collect();
+
+        assert_eq!(staged.len(), 2, "both reads copied");
+        assert_ne!(
+            staged[0], staged[1],
+            "one staging path for two reads is bytes deleted under a caller"
+        );
+    }
+
+    /// `cp` refuses a target whose parent is missing, so an `upload` that did
+    /// not make it disagreed with `write_file` about the same path.
+    #[tokio::test]
+    async fn test_upload_makes_the_directory_write_file_would_have_made() {
+        let cli = Arc::new(ScriptedCli::new());
+        let machine = docker(Arc::clone(&cli));
+
+        let _ = machine
+            .upload("box", Path::new("/dev/null"), Path::new("/tmp/made/here"))
+            .await;
+
+        let made = cli.calls().into_iter().any(|argv| {
+            argv.contains(&"mkdir".to_string()) && argv.contains(&"/tmp/made".to_string())
+        });
+        assert!(made, "upload never made the directory it copies into");
     }
 
     #[tokio::test]

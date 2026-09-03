@@ -55,6 +55,9 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     );
     println!("  screenshot: {} bytes", frame.len());
 
+    screen.set_wallpaper(&frame).await?;
+    println!("  wallpaper changed from uploaded image bytes");
+
     // The pointer this driver moved, remembered because no Wayland protocol
     // will report it.
     screen.move_to(Point::new(100, 120)).await?;

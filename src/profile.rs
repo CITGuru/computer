@@ -4,12 +4,22 @@
 //! decision that image made. A [`Profile`] holds those decisions, so a second
 //! image is a second profile rather than an edit to the code that drives one.
 
+pub mod primitives;
+
 use crate::bundle::{Bundle, Extras};
 use crate::desktop::DesktopFactory;
 use crate::error::{Error, Result};
 use crate::{DesktopSupport, ScreenAction, ScreenId, ScreenPorts};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+
+pub use primitives::{
+    BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
+    CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, GeometrySpec, ProfileBuilder,
+    ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime,
+    WallpaperRuntime, WaylandEnvironment, WaylandWallpaperRuntime, X11Environment,
+    X11WallpaperRuntime,
+};
 
 /// Where an image declares which contract it implements.
 ///
@@ -179,6 +189,25 @@ pub trait Profile: Send + Sync {
     ///
     /// A default rather than a rule: [`crate::Builder::driver`] overrides it.
     fn driver(&self) -> Arc<dyn DesktopFactory>;
+
+    /// How screen lifecycle operations are performed.
+    ///
+    /// The default keeps the command protocol implemented by existing images.
+    fn screen_runtime(&self) -> Arc<dyn ScreenRuntime> {
+        Arc::new(CommandScreenRuntime)
+    }
+
+    /// How browser operations are performed.
+    ///
+    /// The default keeps the command protocol implemented by existing images.
+    fn browser_runtime(&self) -> Arc<dyn BrowserRuntime> {
+        Arc::new(CommandBrowserRuntime)
+    }
+
+    /// How a running screen's wallpaper is changed.
+    fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
+        Arc::new(UnsupportedWallpaperRuntime)
+    }
 
     /// Perform `action` on one screen, with whatever extra words it takes.
     ///
