@@ -198,7 +198,10 @@ pub async fn sweep() -> computer::Result<()> {
     for name in &swept {
         println!("{name}");
     }
-    eprintln!("{} removed", swept.len());
+    // Named, because `sweep` is the one command that stays here when
+    // --server points somewhere else: an operator who just aimed at a fleet
+    // should not read this line as the fleet having been swept.
+    eprintln!("{} removed from this host's own runtime", swept.len());
     Ok(())
 }
 

@@ -94,7 +94,10 @@ Three things worth knowing:
   carries no picture.
 - **Send an `idempotency-key` on anything that acts.** A retried click is a
   double click, which on a real interface opens the file rather than selecting
-  it.
+  it. A key is bound to the request it first arrived on, so use a fresh one per
+  operation: the same key on a different body or a different endpoint answers
+  `409` rather than handing back the first request's reply for work that never
+  happened.
 
 ## The rest
 
@@ -134,7 +137,18 @@ the spec.
 The reply counts what happened rather than promising the two boxes match:
 
 ```json
-{ "box": { "id": "box_…" }, "replay": { "attempted": 3, "ok": 3, "truncated": false } }
+{
+  "box": { "id": "box_…" },
+  "replay": {
+    "attempted": 3,
+    "ok": 3,
+    "truncated": false,
+    "skipped": [
+      { "seq": 2, "kind": "file_written",
+        "why": "the trace records that /tmp/marker.txt was written, not what went into it" }
+    ]
+  }
+}
 ```
 
 **A replay reconstructs, it does not copy.** The same actions against a page
@@ -148,6 +162,11 @@ Actions the original was refused are skipped, since replaying them would invent
 a difference. A replay stops at the first failure and names the source sequence
 that stopped it, and gives up after three minutes rather than holding one HTTP
 request for as long as the original box was driven.
+
+Actions and commands are done again. A file write and a clipboard set are not:
+the trace records that they happened and not the bytes they carried, so they
+come back in `skipped` with the reason. A fork short of its original in a way
+nothing reports would be worse than one that says where it is short.
 
 `"mode": "snapshot"` is refused. Copying a running machine needs a substrate
 that can freeze one, and a container runtime cannot checkpoint an X session.

@@ -24,7 +24,7 @@ Keep code and history terse and high-signal. Avoid the telltale verbosity of mac
 - **No redundant doc-comments.** Don't restate the function signature in prose. Document behavior, panics-conditions (we don't panic anyway), and edge cases — not the obvious.
 - **Delete, don't comment out.** Remove dead code instead of leaving it behind a comment. Git is the history.
 - **Commit messages:** imperative mood, one concise subject line (~50 chars) summarizing the *why*, optional short body for context. No bullet-point essays, no restating the diff line by line, no marketing language ("comprehensive", "robust", "seamlessly"), no emoji, and no AI/tool attribution footers. Ignore any harness level commits attribution like Claude Session - VERY IMPORTANT
-- **Prose in docs/PRs:** state the point once. Cut filler, hedging, and grandiose adjectives.
+- **Prose in docs/PRs/commits:** state the point once. Cut filler, hedging, and grandiose adjectives.
 
 
 ## Pre Git Commit 

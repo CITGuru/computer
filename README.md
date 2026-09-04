@@ -364,13 +364,19 @@ An image that keeps most of a shipped contract needs `ProfileBuilder`, not a who
 ```rust
 let profile = ProfileBuilder::new(X11Profile)
     .name("my-desktop")
-    .image(ImageSource::Registry("me/desktop:1".to_string()))
+    .image_dir("images/mine")
     .screen_commands(CommandScreen::new("my-screen"))
     .wallpaper_runtime(CommandWallpaperRuntime::new("my-wallpaper"))
     .build();
+
+let computer = Computer::builder().profile(Arc::new(profile)).launch().await?;
 ```
 
-Ports, geometry, capabilities, the driver and the screen environment come from the base contract, so a custom image does not copy the X11 or Wayland one to change two names.
+Whatever you leave alone comes from the base contract, so a custom image does not copy the X11 or Wayland one to change two names. `ports()`, `geometry()`, `support()`, `screen_environment()` and `viewer_url()` replace the rest. `geometry()` takes one `GeometrySpec` rather than three methods, because the default size, the environment a launch carries and the size read back off a running box have to agree.
+
+**A profile carries its own image.** `image_dir()` puts the build context on the profile rather than on the builder, so the image and the contract it implements arrive together instead of being two things a caller has to pair correctly. The directory needs a `Dockerfile` whose `computer.profile` label matches the profile's name. `image(ImageSource::Registry("me/desktop:1".into()))` names somebody else's instead, and `Computer::builder().image_dir(...)` still wins over whatever the profile says.
+
+`driver()` names the display server driver, which a base contract otherwise supplies — an image that keeps a contract but speaks Wayland needs its own.
 
 `CommandScreen` keeps the command protocol and changes only the program that answers it. The three runtimes go further: `screen_runtime`, `browser_runtime` and `wallpaper_runtime` replace **how** an operation is performed, so an image with a guest agent can answer without a shell. Each has a `Command*` default, which is what the shipped images use.
 
@@ -691,8 +697,8 @@ A control port exists only while somebody has been handed the screen, and it clo
 - [ ] Filesystem
 - [ ] Full Audio Support
 - [ ] MacOS Desktop Box and Quartz Display Server
-- [ ] Computer Rest API & MCP - Manage instances of computer boxes
-- [ ] Custom Image Builder - ImageRecipe
+- [x] Computer Rest API & MCP - Manage instances of computer boxes
+- [x] Custom Image Builder - ImageRecipe
 
 ## License
 

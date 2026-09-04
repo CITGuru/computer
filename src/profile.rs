@@ -11,12 +11,13 @@ use crate::desktop::DesktopFactory;
 use crate::error::{Error, Result};
 use crate::{DesktopSupport, ScreenAction, ScreenId, ScreenPorts};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use primitives::{
     BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
     CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, GeometrySpec, ProfileBuilder,
-    ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime,
+    ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime, ViewerUrl,
     WallpaperRuntime, WaylandEnvironment, WaylandWallpaperRuntime, X11Environment,
     X11WallpaperRuntime,
 };
@@ -75,6 +76,12 @@ pub enum ImageSource {
     Bundled(&'static Bundle),
     /// Fetched under this name, and never overwritten by ours.
     Registry(String),
+    /// Built from a directory on this host, which must hold a `Dockerfile`.
+    ///
+    /// A profile carries this so an image and the contract it implements
+    /// arrive together. [`crate::Builder::image_dir`] names one for a profile
+    /// that does not, and wins where both do.
+    Directory(PathBuf),
 }
 
 impl ImageSource {
@@ -88,6 +95,9 @@ impl ImageSource {
             Self::Registry(_) => Err(Error::Unsupported {
                 gaps: vec!["packages in an image this crate does not build"],
             }),
+            Self::Directory(directory) => {
+                crate::bundle::directory_image(directory, extras).map(|(_, tag)| tag)
+            }
         }
     }
 
@@ -95,7 +105,15 @@ impl ImageSource {
     pub fn bundle(&self) -> Option<&'static Bundle> {
         match self {
             Self::Bundled(bundle) => Some(bundle),
-            Self::Registry(_) => None,
+            Self::Registry(_) | Self::Directory(_) => None,
+        }
+    }
+
+    /// The build context this names, where it names one.
+    pub fn directory(&self) -> Option<&Path> {
+        match self {
+            Self::Directory(directory) => Some(directory),
+            Self::Bundled(_) | Self::Registry(_) => None,
         }
     }
 }

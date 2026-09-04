@@ -154,12 +154,16 @@ impl Traces {
             return Arc::clone(trace);
         }
 
-        let trace = Arc::new(Trace::default());
+        let fresh = Arc::new(Trace::default());
 
         if let Ok(mut traces) = self.by_box.lock() {
-            let trace = Arc::clone(traces.entry(id.to_string()).or_insert(trace));
+            // Two first-touches of one id race here. Whether this call is the
+            // one that inserted decides whether the id joins the eviction
+            // queue: pushing it twice would later drop a live box's trace.
+            let mine = !traces.contains_key(id);
+            let trace = Arc::clone(traces.entry(id.to_string()).or_insert(fresh));
 
-            if let Ok(mut order) = self.order.lock() {
+            if mine && let Ok(mut order) = self.order.lock() {
                 order.push_back(id.to_string());
                 while order.len() > MAX_TRACES {
                     let Some(oldest) = order.pop_front() else {
@@ -172,7 +176,7 @@ impl Traces {
             return trace;
         }
 
-        trace
+        Arc::new(Trace::default())
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<Trace>> {

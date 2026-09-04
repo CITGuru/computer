@@ -99,7 +99,7 @@ pub use profile::{
     BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
     CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, FORCE, GeometrySpec, ImageSource,
     PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, ProfileBuilder, SHARED, ScreenCommands,
-    ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime, WallpaperRuntime,
+    ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime,
     WaylandEnvironment, WaylandWallpaperRuntime, X11Environment, X11WallpaperRuntime,
 };
 pub use reach::{Address, Bind, Reach, Scheme};
@@ -228,6 +228,9 @@ impl Builder {
     /// The directory needs a `Dockerfile` and has to implement the active
     /// [`Profile`]. Its tag follows the files, the packages and the
     /// architecture, so an edit builds a new image.
+    ///
+    /// A profile can carry its own with [`ImageSource::Directory`]; one named
+    /// here replaces it.
     pub fn image_dir(mut self, directory: impl Into<PathBuf>) -> Self {
         self.image = None;
         self.image_dir = Some(directory.into());
@@ -459,16 +462,22 @@ impl Builder {
         let (width, height) = self.size.unwrap_or_else(|| self.profile.default_size());
         config.width = width;
         config.height = height;
-        if let Some(directory) = &self.image_dir {
-            let (directory, image) = bundle::directory_image(directory, &config.extras)?;
-            config.bundle = None;
-            config.image_dir = Some(directory);
-            config.image = image;
-        } else {
-            let source = self.source();
-            config.bundle = source.bundle().copied();
-            config.image_dir = None;
-            config.image = source.tag(&config.extras)?;
+        let source = self.source();
+        // The builder's own directory wins, then one the profile carries: a
+        // custom image and the contract it implements can arrive together
+        // instead of being two things a caller has to pair correctly.
+        match self.image_dir.as_deref().or_else(|| source.directory()) {
+            Some(directory) => {
+                let (directory, image) = bundle::directory_image(directory, &config.extras)?;
+                config.bundle = None;
+                config.image_dir = Some(directory);
+                config.image = image;
+            }
+            None => {
+                config.bundle = source.bundle().copied();
+                config.image_dir = None;
+                config.image = source.tag(&config.extras)?;
+            }
         }
         config.boot = self.profile.boot_command();
         config.publish = if self.publish {
@@ -870,13 +879,12 @@ impl Computer {
         let support = driven_by(profile.support_at(width, height), driver.as_ref());
 
         let mapped = machine.ports(&name).await;
-        let computer = Self::assemble(
-            Arc::new(MachineHost::new(machine, profile, name)),
-            driver,
-            support,
-            mapped,
-            None,
-        );
+        // The gate travels in the box's own environment, so a second process
+        // can rebuild it. Without this an attached handle hands out viewer
+        // URLs with no ticket on them, which the box's own gate then refuses.
+        let (auth, credentials) = auth::from_environment(&environment);
+        let host = MachineHost::new(machine, profile, name).gated_by(auth, credentials);
+        let computer = Self::assemble(Arc::new(host), driver, support, mapped, None);
 
         // A person may already have this screen, and the gate is per
         // process, so the box is asked rather than assumed.
@@ -1594,6 +1602,10 @@ impl Screen {
             return Err(Error::denied("a wallpaper cannot be empty"));
         }
 
+        // Asked before the upload: a profile with no wallpaper support would
+        // otherwise take the whole image into the box and then refuse it.
+        self.runtimes.wallpaper.supported()?;
+
         // The file stays: swaybg reads it after swaymsg has already returned,
         // and reads it again whenever sway restarts the background. One path
         // per screen, overwritten, so it cannot grow.
@@ -2235,6 +2247,39 @@ mod tests {
         assert_eq!(config.image_dir.as_deref(), Some(expected.as_path()));
         assert!(config.bundle.is_none());
         assert!(config.image.starts_with("computer-local:"));
+    }
+
+    #[test]
+    fn test_a_profile_can_carry_its_own_build_context() {
+        let asked = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu");
+        let expected = std::fs::canonicalize(&asked).expect("the Ubuntu image directory");
+        let profile = ProfileBuilder::new(X11Profile).image_dir(asked).build();
+
+        let config = Computer::builder()
+            .profile(Arc::new(profile))
+            .config()
+            .expect("the profile's own image");
+
+        assert_eq!(config.image_dir.as_deref(), Some(expected.as_path()));
+        assert!(config.bundle.is_none());
+        assert!(config.image.starts_with("computer-local:"));
+    }
+
+    #[test]
+    fn test_a_directory_on_the_builder_replaces_the_profiles_own() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .image_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("images/wayland"))
+            .build();
+        let asked = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu");
+        let expected = std::fs::canonicalize(&asked).expect("the Ubuntu image directory");
+
+        let config = Computer::builder()
+            .profile(Arc::new(profile))
+            .image_dir(asked)
+            .config()
+            .expect("the builder's image");
+
+        assert_eq!(config.image_dir.as_deref(), Some(expected.as_path()));
     }
 
     #[test]

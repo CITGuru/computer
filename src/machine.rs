@@ -359,9 +359,6 @@ impl DockerMachine {
         &self.cli
     }
 
-    /// `docker cp`, rather than an encoding round trip: base64 flags differ
-    /// between coreutils and BusyBox, and an argument list has a size ceiling
-    /// that a screenshot walks straight through.
     /// Make the directory a write is about to land in.
     ///
     /// `cp` refuses a target whose parent is missing, so without this `upload`
@@ -380,6 +377,9 @@ impl DockerMachine {
         }
     }
 
+    /// `docker cp`, rather than an encoding round trip: base64 flags differ
+    /// between coreutils and BusyBox, and an argument list has a size ceiling
+    /// that a screenshot walks straight through.
     async fn copy(&self, from: &str, to: &str) -> Result<()> {
         let result = self.cli.run(&[arg("cp"), arg(from), arg(to)]).await?;
 

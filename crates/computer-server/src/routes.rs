@@ -5,14 +5,15 @@
 //! server built by mapping tools onto endpoints both have to work without an
 //! SDK in between.
 
+use crate::AppState;
 use crate::error::{ApiError, ApiResult};
-use crate::extract::ApiJson;
-use crate::registry::Entry;
+use crate::extract::{ApiJson, ApiPath, ApiQuery};
+use crate::idempotency::{self, Lookup, Replies};
+use crate::registry::{AsDesktop, Entry};
 use crate::spec;
 use crate::trace::Trace;
-use crate::{AppState, idempotency::Replies};
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -26,6 +27,8 @@ use computer::{
 use computer_api::*;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry as Entry_;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -40,6 +43,13 @@ const REPLAY_BUDGET: Duration = Duration::from_secs(180);
 /// The most of an original pause a replay reproduces. Pacing matters — a page
 /// that had two seconds to load gets them — but an idle hour does not.
 const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
+/// A ceiling on any pause a request can ask for. The screen lock is held
+/// across a settle and across a wait, so an uncapped one from a single caller
+/// is a screen no other request can reach again.
+const MAX_PAUSE: Duration = Duration::from_secs(30);
+/// A ceiling on a command's own limit, above the engine's two-minute default
+/// but short of holding a connection open indefinitely.
+const MAX_EXEC: Duration = Duration::from_secs(600);
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -82,8 +92,8 @@ async fn create_box(
     headers: HeaderMap,
     ApiJson(body): ApiJson<CreateBox>,
 ) -> ApiResult<Response> {
-    let key = header(&headers, IDEMPOTENCY_KEY);
-    if let Some(replayed) = replay_reply(&state.replies, key.as_deref()) {
+    let stamp = Idempotent::of(&headers, "POST /v1/boxes", &body);
+    if let Some(replayed) = stamp.replay(&state.replies)? {
         return Ok(replayed);
     }
 
@@ -118,12 +128,7 @@ async fn create_box(
         },
     );
 
-    answer(
-        &state.replies,
-        key.as_deref(),
-        StatusCode::CREATED,
-        &view_of(&entry),
-    )
+    stamp.answer(&state.replies, StatusCode::CREATED, &view_of(&entry))
 }
 
 async fn list_boxes(State(state): State<Arc<AppState>>) -> Json<BoxList> {
@@ -140,7 +145,7 @@ async fn list_boxes(State(state): State<Arc<AppState>>) -> Json<BoxList> {
 
 async fn get_box(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.registry.get(&id).await?;
     Ok(Json(view_of(&entry)))
@@ -149,7 +154,7 @@ async fn get_box(
 async fn delete_box(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
 ) -> ApiResult<StatusCode> {
     if header(&headers, CONFIRM_DELETE).is_none() {
         return Err(ApiError::bad_request(format!(
@@ -169,17 +174,21 @@ async fn delete_box(
 async fn actions(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Path((id, screen)): Path<(String, u32)>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiJson(batch): ApiJson<ActionBatch>,
 ) -> ApiResult<Response> {
-    let key = header(&headers, IDEMPOTENCY_KEY);
-    if let Some(replayed) = replay_reply(&state.replies, key.as_deref()) {
+    let stamp = Idempotent::of(
+        &headers,
+        &format!("POST /v1/boxes/{id}/screens/{screen}/actions"),
+        &batch,
+    );
+    if let Some(replayed) = stamp.replay(&state.replies)? {
         return Ok(replayed);
     }
 
     let entry = state.registry.get(&id).await?;
     let trace = state.traces.of(&id);
-    let lock = entry.screen_lock(screen).await;
+    let lock = entry.screen_lock(screen).await?;
     let _held = lock.lock().await;
 
     let target = entry.desktop(screen).await?;
@@ -223,7 +232,7 @@ async fn actions(
     }
 
     if let Some(ms) = batch.settle_ms {
-        tokio::time::sleep(Duration::from_millis(ms)).await;
+        tokio::time::sleep(Duration::from_millis(ms).min(MAX_PAUSE)).await;
     }
 
     let frame = if batch.want.contains(&Want::Frame) {
@@ -247,9 +256,8 @@ async fn actions(
         None
     };
 
-    answer(
+    stamp.answer(
         &state.replies,
-        key.as_deref(),
         StatusCode::OK,
         &BatchResult {
             results,
@@ -293,7 +301,7 @@ async fn run(
             })?;
             screen.open_url(url).await?;
         }
-        Action::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms)).await,
+        Action::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms).min(MAX_PAUSE)).await,
     }
 
     Ok(())
@@ -307,8 +315,8 @@ struct FrameQuery {
 
 async fn frame(
     State(state): State<Arc<AppState>>,
-    Path((id, screen)): Path<(String, u32)>,
-    Query(query): Query<FrameQuery>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+    ApiQuery(query): ApiQuery<FrameQuery>,
 ) -> ApiResult<Json<Frame>> {
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
@@ -360,7 +368,7 @@ async fn capture(
 
 async fn cursor(
     State(state): State<Arc<AppState>>,
-    Path((id, screen)): Path<(String, u32)>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<Point>> {
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
@@ -376,8 +384,8 @@ struct SelectionQuery {
 
 async fn get_clipboard(
     State(state): State<Arc<AppState>>,
-    Path((id, screen)): Path<(String, u32)>,
-    Query(query): Query<SelectionQuery>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+    ApiQuery(query): ApiQuery<SelectionQuery>,
 ) -> ApiResult<Json<ClipboardView>> {
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
@@ -400,7 +408,7 @@ async fn get_clipboard(
 
 async fn set_clipboard(
     State(state): State<Arc<AppState>>,
-    Path((id, screen)): Path<(String, u32)>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiJson(body): ApiJson<SetClipboard>,
 ) -> ApiResult<StatusCode> {
     let entry = state.registry.get(&id).await?;
@@ -425,7 +433,7 @@ async fn set_clipboard(
 
 async fn start_takeover(
     State(state): State<Arc<AppState>>,
-    Path((id, screen)): Path<(String, u32)>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiJson(body): ApiJson<TakeoverRequest>,
 ) -> ApiResult<Json<TakeoverView>> {
     let entry = state.registry.get(&id).await?;
@@ -465,7 +473,7 @@ async fn start_takeover(
 /// driving lives in the box, which is what makes this possible.
 async fn end_takeover(
     State(state): State<Arc<AppState>>,
-    Path((id, screen)): Path<(String, u32)>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<StatusCode> {
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
@@ -487,7 +495,7 @@ async fn end_takeover(
 
 async fn viewers(
     State(state): State<Arc<AppState>>,
-    Path((id, screen)): Path<(String, u32)>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<ViewersView>> {
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
@@ -505,7 +513,7 @@ async fn viewers(
 
 async fn exec(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<ExecRequest>,
 ) -> ApiResult<Json<ExecResponse>> {
     if body.argv.is_empty() {
@@ -517,7 +525,7 @@ async fn exec(
         Some(ms) => {
             entry
                 .computer
-                .exec_within(&body.argv, Duration::from_millis(ms))
+                .exec_within(&body.argv, Duration::from_millis(ms).min(MAX_EXEC))
                 .await?
         }
         None => entry.computer.exec(&body.argv).await?,
@@ -547,8 +555,8 @@ struct PathQuery {
 
 async fn read_file(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(query): Query<PathQuery>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<PathQuery>,
 ) -> ApiResult<Json<ReadFile>> {
     let entry = state.registry.get(&id).await?;
     let bytes = entry.computer.read_file(&query.path).await?;
@@ -569,7 +577,7 @@ async fn read_file(
 
 async fn write_file(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<WriteFile>,
 ) -> ApiResult<StatusCode> {
     let bytes = BASE64
@@ -599,11 +607,11 @@ async fn write_file(
 async fn fork(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<ForkRequest>,
 ) -> ApiResult<Response> {
-    let key = header(&headers, IDEMPOTENCY_KEY);
-    if let Some(replayed) = replay_reply(&state.replies, key.as_deref()) {
+    let stamp = Idempotent::of(&headers, &format!("POST /v1/boxes/{id}/fork"), &body);
+    if let Some(replayed) = stamp.replay(&state.replies)? {
         return Ok(replayed);
     }
 
@@ -687,9 +695,8 @@ async fn fork(
         let _ = capture(&trace, Actor::Agent, 0, target.as_desktop(), None).await;
     }
 
-    answer(
+    stamp.answer(
         &state.replies,
-        key.as_deref(),
         StatusCode::CREATED,
         &ForkResult {
             created: view_of(&entry),
@@ -712,24 +719,58 @@ async fn replay_onto(
         ok: 0,
         stopped_at: None,
         truncated: false,
+        skipped: Vec::new(),
     };
     let mut previous: Option<u64> = None;
+    // Held across the replay: `desktop` runs the image's screen start command
+    // every time it is called, and a five hundred action history would spend
+    // most of its budget on those rather than on the actions.
+    let mut targets: BTreeMap<u32, Box<dyn AsDesktop + Send + '_>> = BTreeMap::new();
 
     for source in history {
         if up_to.is_some_and(|last| source.seq > last) {
             break;
         }
 
-        let TraceEvent::Acted {
-            screen,
-            action,
-            ok: true,
-            ..
-        } = &source.event
-        else {
+        let step = match &source.event {
+            TraceEvent::Acted {
+                screen,
+                action,
+                ok: true,
+                ..
+            } => Step::Act {
+                screen: *screen,
+                action: action.clone(),
+            },
             // An action the original was refused is not part of what happened
             // to it, so replaying it would invent a difference.
-            continue;
+            TraceEvent::Acted { .. } => continue,
+            TraceEvent::Executed { argv, .. } if !argv.is_empty() => {
+                Step::Exec { argv: argv.clone() }
+            }
+            // The trace keeps what a write or a copy was about, not the bytes
+            // it carried, so these cannot be done again from the record. Said
+            // out loud, because a fork short of the original in a way nothing
+            // reports is worse than one that says where it is short.
+            TraceEvent::FileWritten { path, .. } => {
+                report.skipped.push(Skipped {
+                    seq: source.seq,
+                    kind: "file_written".to_string(),
+                    why: format!(
+                        "the trace records that {path} was written, not what went into it"
+                    ),
+                });
+                continue;
+            }
+            TraceEvent::ClipboardSet { selection, .. } => {
+                report.skipped.push(Skipped {
+                    seq: source.seq,
+                    kind: "clipboard_set".to_string(),
+                    why: format!("the trace records that {selection:?} was set, not the text"),
+                });
+                continue;
+            }
+            _ => continue,
         };
 
         if Instant::now() >= deadline {
@@ -743,21 +784,47 @@ async fn replay_onto(
         }
         previous = Some(source.at_ms);
 
-        let outcome = match entry.desktop(*screen).await {
-            Ok(target) => run(target.as_desktop(), target.as_screen(), action).await,
-            Err(error) => Err(error),
-        };
-
         report.attempted += 1;
-        trace.record(
-            Actor::Agent,
-            TraceEvent::Acted {
-                screen: *screen,
-                action: action.clone(),
-                ok: outcome.is_ok(),
-                error: outcome.as_ref().err().map(|error| error.body.clone()),
-            },
-        );
+
+        let outcome = match &step {
+            Step::Act { screen, action } => {
+                let target = match targets.entry(*screen) {
+                    Entry_::Occupied(held) => Ok(held.into_mut()),
+                    Entry_::Vacant(slot) => entry.desktop(*screen).await.map(|it| slot.insert(it)),
+                };
+
+                let acted = match target {
+                    Ok(target) => run(target.as_desktop(), target.as_screen(), action).await,
+                    Err(error) => Err(error),
+                };
+
+                trace.record(
+                    Actor::Agent,
+                    TraceEvent::Acted {
+                        screen: *screen,
+                        action: action.clone(),
+                        ok: acted.is_ok(),
+                        error: acted.as_ref().err().map(|error| error.body.clone()),
+                    },
+                );
+                acted
+            }
+            Step::Exec { argv } => {
+                let ran = entry.computer.exec(argv).await.map_err(ApiError::from);
+
+                if let Ok(result) = &ran {
+                    trace.record(
+                        Actor::Agent,
+                        TraceEvent::Executed {
+                            argv: argv.clone(),
+                            code: result.code,
+                            timed_out: result.timed_out,
+                        },
+                    );
+                }
+                ran.map(|_| ())
+            }
+        };
 
         match outcome {
             Ok(()) => report.ok += 1,
@@ -769,6 +836,12 @@ async fn replay_onto(
     }
 
     report
+}
+
+/// One thing a replay does again.
+enum Step {
+    Act { screen: u32, action: Action },
+    Exec { argv: Vec<String> },
 }
 
 #[derive(Debug, Deserialize)]
@@ -783,8 +856,8 @@ struct TraceQuery {
 /// point.
 async fn read_trace(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Query(query): Query<TraceQuery>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<TraceQuery>,
 ) -> ApiResult<Json<TraceView>> {
     let trace = state
         .traces
@@ -803,7 +876,7 @@ async fn read_trace(
 
 async fn trace_frame(
     State(state): State<Arc<AppState>>,
-    Path((id, hash)): Path<(String, String)>,
+    ApiPath((id, hash)): ApiPath<(String, String)>,
 ) -> ApiResult<Response> {
     let png = state
         .traces
@@ -830,40 +903,77 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn replay_reply(replies: &Replies, key: Option<&str>) -> Option<Response> {
-    let (status, body) = replies.get(key?)?;
-    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
-
-    Some(
-        (
-            status,
-            [(axum::http::header::CONTENT_TYPE, "application/json")],
-            body,
-        )
-            .into_response(),
-    )
+/// One request's claim on an idempotency key.
+///
+/// The key is bound to the route and the body it first arrived on. A retry
+/// carries both again and is answered from the store; the same key on a
+/// different request is a client bug, and returning the first request's reply
+/// would hide it behind a success.
+struct Idempotent {
+    key: Option<String>,
+    print: idempotency::Fingerprint,
 }
 
-/// Keeps the answer where a retry of the same key will find it.
-fn answer<T: serde::Serialize>(
-    replies: &Replies,
-    key: Option<&str>,
-    status: StatusCode,
-    value: &T,
-) -> ApiResult<Response> {
-    let body = serde_json::to_vec(value)
-        .map_err(|error| ApiError::internal(format!("the answer would not serialise: {error}")))?;
+impl Idempotent {
+    fn of<T: serde::Serialize>(headers: &HeaderMap, route: &str, body: &T) -> Self {
+        let bytes = serde_json::to_vec(body).unwrap_or_default();
 
-    if let Some(key) = key {
-        replies.put(key, status.as_u16(), body.clone());
+        Self {
+            key: header(headers, IDEMPOTENCY_KEY),
+            print: idempotency::fingerprint(route, &bytes),
+        }
     }
 
-    Ok((
+    /// The reply this request was already given, if it is the same request.
+    fn replay(&self, replies: &Replies) -> ApiResult<Option<Response>> {
+        let Some(key) = self.key.as_deref() else {
+            return Ok(None);
+        };
+
+        match replies.lookup(key, self.print) {
+            Lookup::Fresh => Ok(None),
+            Lookup::Replay { status, body } => {
+                let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
+                Ok(Some(json_response(status, body)))
+            }
+            Lookup::Reused => Err(ApiError::new(
+                StatusCode::CONFLICT,
+                ErrorCode::Denied,
+                format!(
+                    "idempotency-key {key} was used for a different request; \
+                     answering this one with the other's reply would report \
+                     work that never happened"
+                ),
+            )),
+        }
+    }
+
+    /// Keeps the answer where a retry of the same request will find it.
+    fn answer<T: serde::Serialize>(
+        &self,
+        replies: &Replies,
+        status: StatusCode,
+        value: &T,
+    ) -> ApiResult<Response> {
+        let body = serde_json::to_vec(value).map_err(|error| {
+            ApiError::internal(format!("the answer would not serialise: {error}"))
+        })?;
+
+        if let Some(key) = self.key.as_deref() {
+            replies.put(key, self.print, status.as_u16(), body.clone());
+        }
+
+        Ok(json_response(status, body))
+    }
+}
+
+fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
+    (
         status,
         [(axum::http::header::CONTENT_TYPE, "application/json")],
         body,
     )
-        .into_response())
+        .into_response()
 }
 
 fn view_of(entry: &Entry) -> BoxView {

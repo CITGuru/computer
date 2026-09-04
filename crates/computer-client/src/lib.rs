@@ -242,7 +242,7 @@ impl Client {
         let read: ReadFile = self
             .send(
                 reqwest::Method::GET,
-                &format!("/v1/boxes/{id}/files?path={path}"),
+                &format!("/v1/boxes/{id}/files?path={}", query_value(path)),
                 None,
                 &[],
             )
@@ -397,6 +397,26 @@ impl Client {
 /// A free function rather than a method: `Frame` belongs to `computer-api`.
 pub fn frame_png(frame: &Frame) -> Result<Option<Vec<u8>>> {
     frame.png_base64.as_deref().map(decode).transpose()
+}
+
+/// Percent-encodes one query value.
+///
+/// A path is the caller's, and `&`, `#` or `?` in one ends the value early:
+/// the request then names a different file and the wrong bytes come back as a
+/// success.
+fn query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                out.push(char::from(*byte))
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+
+    out
 }
 
 fn decode(value: &str) -> Result<Vec<u8>> {

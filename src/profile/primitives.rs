@@ -7,7 +7,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// How a profile turns a typed screen action into an image command.
@@ -107,6 +107,14 @@ pub trait WallpaperRuntime: Send + Sync {
         screen: ScreenId,
         path: &Path,
     ) -> Result<()>;
+
+    /// Whether this runtime can set one at all.
+    ///
+    /// Separate from [`WallpaperRuntime::set`] so a caller can be refused
+    /// before it sends an image nothing will use.
+    fn supported(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// A wallpaper setter implemented by a command inside the image.
@@ -227,6 +235,10 @@ impl WallpaperRuntime for UnsupportedWallpaperRuntime {
         _screen: ScreenId,
         _path: &Path,
     ) -> Result<()> {
+        self.supported()
+    }
+
+    fn supported(&self) -> Result<()> {
         Err(Error::Unsupported {
             gaps: vec!["wallpaper"],
         })
@@ -525,6 +537,14 @@ pub trait ScreenEnvironment: Send + Sync {
     fn environment(&self, screen: ScreenId) -> BTreeMap<String, String>;
 }
 
+/// Where a person watches a screen.
+///
+/// The shipped images serve noVNC's `vnc.html`; an image with a viewer of its
+/// own hands back a different address for the same port.
+pub trait ViewerUrl: Send + Sync {
+    fn url(&self, at: &Address, ticket: Option<&Secret>) -> String;
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct X11Environment;
 
@@ -566,11 +586,17 @@ pub struct ConfiguredProfile {
     base: Arc<dyn Profile>,
     name: Option<String>,
     image: Option<ImageSource>,
+    driver: Option<Arc<dyn DesktopFactory>>,
     screens: Option<Arc<dyn ScreenCommands>>,
     screen_runtime: Option<Arc<dyn ScreenRuntime>>,
     browser_runtime: Option<Arc<dyn BrowserRuntime>>,
     wallpaper_runtime: Option<Arc<dyn WallpaperRuntime>>,
     boot: Option<Vec<String>>,
+    ports: Option<PortLayout>,
+    geometry: Option<GeometrySpec>,
+    screen_environment: Option<Arc<dyn ScreenEnvironment>>,
+    support: Option<DesktopSupport>,
+    viewer: Option<Arc<dyn ViewerUrl>>,
 }
 
 impl ConfiguredProfile {
@@ -586,6 +612,7 @@ impl std::fmt::Debug for ConfiguredProfile {
             .field("base", &self.base.name())
             .field("name", &self.name)
             .field("image", &self.image)
+            .field("driver", &self.driver.as_ref().map(|_| "custom"))
             .field("screens", &self.screens.as_ref().map(|_| "custom"))
             .field(
                 "screen_runtime",
@@ -600,6 +627,14 @@ impl std::fmt::Debug for ConfiguredProfile {
                 &self.wallpaper_runtime.as_ref().map(|_| "custom"),
             )
             .field("boot", &self.boot)
+            .field("ports", &self.ports)
+            .field("geometry", &self.geometry)
+            .field(
+                "screen_environment",
+                &self.screen_environment.as_ref().map(|_| "custom"),
+            )
+            .field("support", &self.support)
+            .field("viewer", &self.viewer.as_ref().map(|_| "custom"))
             .finish()
     }
 }
@@ -623,11 +658,17 @@ impl ProfileBuilder {
                 base,
                 name: None,
                 image: None,
+                driver: None,
                 screens: None,
                 screen_runtime: None,
                 browser_runtime: None,
                 wallpaper_runtime: None,
                 boot: None,
+                ports: None,
+                geometry: None,
+                screen_environment: None,
+                support: None,
+                viewer: None,
             },
         }
     }
@@ -642,6 +683,28 @@ impl ProfileBuilder {
 
     pub fn image(mut self, image: ImageSource) -> Self {
         self.profile.image = Some(image);
+        self
+    }
+
+    /// Build this profile's image from a local Docker build context.
+    ///
+    /// The directory needs a `Dockerfile` carrying this profile's name in its
+    /// `computer.profile` label. Carried here rather than on
+    /// [`crate::Builder`] so a launch cannot pair a custom image with the
+    /// wrong contract by omission.
+    pub fn image_dir(self, directory: impl Into<PathBuf>) -> Self {
+        self.image(ImageSource::Directory(directory.into()))
+    }
+
+    /// The driver this image expects.
+    ///
+    /// A base contract names one, and an image that keeps the contract but
+    /// speaks to a different display server needs its own.
+    pub fn driver<D>(mut self, driver: D) -> Self
+    where
+        D: DesktopFactory + 'static,
+    {
+        self.profile.driver = Some(Arc::new(driver));
         self
     }
 
@@ -686,6 +749,52 @@ impl ProfileBuilder {
         self
     }
 
+    /// Where this image's screens listen.
+    ///
+    /// The port arithmetic comes with it, so a screen's ports and the ones the
+    /// runtime publishes cannot disagree.
+    pub fn ports(mut self, ports: PortLayout) -> Self {
+        self.profile.ports = Some(ports);
+        self
+    }
+
+    /// How a desktop's size is asked for and read back.
+    ///
+    /// One spec rather than three methods: the default size, the environment a
+    /// launch carries and the geometry read off a running box have to agree,
+    /// and separately overridable versions of them would not have to.
+    pub fn geometry(mut self, geometry: GeometrySpec) -> Self {
+        self.profile.geometry = Some(geometry);
+        self
+    }
+
+    /// The variables one screen's commands run with.
+    pub fn screen_environment<E>(mut self, environment: E) -> Self
+    where
+        E: ScreenEnvironment + 'static,
+    {
+        self.profile.screen_environment = Some(Arc::new(environment));
+        self
+    }
+
+    /// What this image can do.
+    ///
+    /// The display is filled in per request from the size asked for, so a
+    /// caller states the capabilities and not the geometry twice.
+    pub fn support(mut self, support: DesktopSupport) -> Self {
+        self.profile.support = Some(support);
+        self
+    }
+
+    /// Where a person watches a screen.
+    pub fn viewer_url<V>(mut self, viewer: V) -> Self
+    where
+        V: ViewerUrl + 'static,
+    {
+        self.profile.viewer = Some(Arc::new(viewer));
+        self
+    }
+
     pub fn build(self) -> ConfiguredProfile {
         self.profile
     }
@@ -701,19 +810,35 @@ impl Profile for ConfiguredProfile {
     }
 
     fn ports(&self) -> PortLayout {
-        self.base.ports()
+        self.ports.unwrap_or_else(|| self.base.ports())
     }
 
     fn default_size(&self) -> (u32, u32) {
-        self.base.default_size()
+        match &self.geometry {
+            Some(geometry) => geometry.default_size(),
+            None => self.base.default_size(),
+        }
     }
 
     fn support_at(&self, width: u32, height: u32) -> DesktopSupport {
-        self.base.support_at(width, height)
+        let Some(support) = &self.support else {
+            return self.base.support_at(width, height);
+        };
+
+        // The size is the request's, not the template's: a caller states what
+        // the image can do once, and every size it is asked for reuses it.
+        DesktopSupport {
+            display: support.display.map(|display| crate::Display {
+                width,
+                height,
+                ..display
+            }),
+            ..support.clone()
+        }
     }
 
     fn driver(&self) -> Arc<dyn DesktopFactory> {
-        self.base.driver()
+        self.driver.clone().unwrap_or_else(|| self.base.driver())
     }
 
     fn screen_runtime(&self) -> Arc<dyn ScreenRuntime> {
@@ -753,19 +878,31 @@ impl Profile for ConfiguredProfile {
     }
 
     fn launch_env(&self, width: u32, height: u32) -> BTreeMap<String, String> {
-        self.base.launch_env(width, height)
+        match &self.geometry {
+            Some(geometry) => geometry.launch_env(width, height),
+            None => self.base.launch_env(width, height),
+        }
     }
 
     fn screen_env(&self, screen: ScreenId) -> BTreeMap<String, String> {
-        self.base.screen_env(screen)
+        match &self.screen_environment {
+            Some(environment) => environment.environment(screen),
+            None => self.base.screen_env(screen),
+        }
     }
 
     fn geometry_from(&self, environment: &BTreeMap<String, String>) -> Option<(u32, u32)> {
-        self.base.geometry_from(environment)
+        match &self.geometry {
+            Some(geometry) => geometry.from_env(environment),
+            None => self.base.geometry_from(environment),
+        }
     }
 
     fn viewer_url(&self, at: &Address, ticket: Option<&Secret>) -> String {
-        self.base.viewer_url(at, ticket)
+        match &self.viewer {
+            Some(viewer) => viewer.url(at, ticket),
+            None => self.base.viewer_url(at, ticket),
+        }
     }
 }
 
@@ -1107,6 +1244,117 @@ mod tests {
             profile.launch_env(1920, 1080),
             WaylandProfile.launch_env(1920, 1080)
         );
+    }
+
+    #[test]
+    fn test_a_profile_carries_the_build_context_it_was_given() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .image_dir("images/ubuntu")
+            .build();
+
+        assert_eq!(
+            profile.image().directory(),
+            Some(Path::new("images/ubuntu")),
+            "a derived profile has to name the image that implements it"
+        );
+        assert!(profile.image().bundle().is_none());
+    }
+
+    #[test]
+    fn test_a_derived_profile_can_name_its_own_driver() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .driver(crate::WaylandDriver)
+            .build();
+
+        // An image that keeps a contract but speaks to another display server
+        // needs its own driver, or it has to write the whole trait out.
+        assert_eq!(profile.driver().display_server(), DisplayServer::Wayland);
+        assert_eq!(X11Profile.driver().display_server(), DisplayServer::X11);
+    }
+
+    #[test]
+    fn test_a_derived_profile_can_name_its_own_ports() {
+        let ports = PortLayout {
+            view_base: 7000,
+            vnc_base: 7100,
+            devtools: None,
+            devtools_bridge: None,
+            max_screens: 2,
+        };
+        let profile = ProfileBuilder::new(X11Profile).ports(ports).build();
+
+        assert_eq!(profile.ports(), ports);
+        assert_ne!(profile.ports(), X11Profile.ports());
+    }
+
+    #[test]
+    fn test_one_spec_governs_every_way_a_size_is_carried() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .geometry(GeometrySpec::new("W", "H", (640, 480)))
+            .build();
+
+        assert_eq!(profile.default_size(), (640, 480));
+        let launch = profile.launch_env(1024, 768);
+        assert_eq!(launch.get("W").map(String::as_str), Some("1024"));
+        assert_eq!(launch.get("H").map(String::as_str), Some("768"));
+        assert_eq!(profile.geometry_from(&launch), Some((1024, 768)));
+
+        // The base reads other names, so a spec that governed only one of the
+        // three would let a launch and a read-back disagree.
+        assert_eq!(X11Profile.geometry_from(&launch), None);
+    }
+
+    #[test]
+    fn test_a_derived_profile_can_name_its_own_screen_environment() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .screen_environment(WaylandEnvironment)
+            .build();
+
+        assert_eq!(
+            profile.screen_env(ScreenId(1)),
+            WaylandEnvironment.environment(ScreenId(1))
+        );
+    }
+
+    #[test]
+    fn test_stated_support_takes_the_size_it_is_asked_for() {
+        let mut support = X11Profile.support_at(0, 0);
+        support.browser = None;
+        support.max_screens = 3;
+
+        let profile = ProfileBuilder::new(X11Profile).support(support).build();
+        let at = profile.support_at(1920, 1080);
+
+        assert!(at.browser.is_none());
+        assert_eq!(at.max_screens, 3);
+        assert_eq!(
+            at.display.map(|display| (display.width, display.height)),
+            Some((1920, 1080)),
+            "the size is the request's, not the template's"
+        );
+    }
+
+    #[test]
+    fn test_a_derived_profile_can_serve_its_own_viewer_page() {
+        struct OwnPage;
+        impl ViewerUrl for OwnPage {
+            fn url(&self, at: &Address, _ticket: Option<&Secret>) -> String {
+                format!("https://{}/watch", at.authority())
+            }
+        }
+
+        let profile = ProfileBuilder::new(X11Profile).viewer_url(OwnPage).build();
+        let at = Address {
+            scheme: crate::Scheme::Http,
+            host: "box.example".to_string(),
+            port: 6080,
+        };
+
+        assert_eq!(
+            profile.viewer_url(&at, None),
+            "https://box.example:6080/watch"
+        );
+        assert!(X11Profile.viewer_url(&at, None).contains("vnc.html"));
     }
 
     #[test]

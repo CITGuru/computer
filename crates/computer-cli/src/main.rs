@@ -152,8 +152,18 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
 }
 
 /// Take a flag out, so what is left is positional.
+/// Where this CLI's own arguments stop.
+///
+/// Everything after `--` belongs to the command running inside the box, so
+/// `exec BOX -- grep --local x` must not have its `--local` taken here.
+fn mine(args: &[String]) -> usize {
+    args.iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(args.len())
+}
+
 fn take(args: &mut Vec<String>, name: &str) -> bool {
-    match args.iter().position(|arg| arg == name) {
+    match args[..mine(args)].iter().position(|arg| arg == name) {
         Some(at) => {
             args.remove(at);
             true
@@ -163,7 +173,7 @@ fn take(args: &mut Vec<String>, name: &str) -> bool {
 }
 
 fn value(args: &mut Vec<String>, name: &str) -> Option<String> {
-    let at = args.iter().position(|arg| arg == name)?;
+    let at = args[..mine(args)].iter().position(|arg| arg == name)?;
     if at + 1 >= args.len() {
         return None;
     }

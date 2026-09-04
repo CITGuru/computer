@@ -72,6 +72,11 @@ impl Error {
                 retryable: true,
                 ..
             }
+            // A substrate that is not answering now is the case where trying
+            // again is the whole remedy: start the daemon, and the same
+            // request succeeds.
+            | Self::Unavailable { .. }
+            | Self::Timeout { .. }
         )
     }
 

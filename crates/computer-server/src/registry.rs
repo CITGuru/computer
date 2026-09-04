@@ -25,21 +25,32 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub async fn screen_lock(&self, screen: u32) -> Arc<Mutex<()>> {
+    /// Refuses a screen this box does not have, because the map below is keyed
+    /// by whatever number arrives and nothing prunes it: an unchecked number
+    /// lets a caller grow it a lock at a time.
+    pub async fn screen_lock(&self, screen: u32) -> ApiResult<Arc<Mutex<()>>> {
+        self.check(screen)?;
+
         let mut locks = self.locks.lock().await;
-        Arc::clone(locks.entry(screen).or_default())
+        Ok(Arc::clone(locks.entry(screen).or_default()))
     }
 
-    /// Screen 0 is the box's own, already started. The rest start on first
-    /// ask, and are taken unfenced because this server is the only thing
-    /// holding them — its own lock is the serialisation, not a lease.
-    pub async fn desktop(&self, screen: u32) -> ApiResult<Box<dyn AsDesktop + Send + '_>> {
+    fn check(&self, screen: u32) -> ApiResult<()> {
         if screen >= self.screens {
             return Err(ApiError::not_found(format!(
                 "this box has {} screen(s) and screen {screen} is not one of them",
                 self.screens
             )));
         }
+
+        Ok(())
+    }
+
+    /// Screen 0 is the box's own, already started. The rest start on first
+    /// ask, and are taken unfenced because this server is the only thing
+    /// holding them — its own lock is the serialisation, not a lease.
+    pub async fn desktop(&self, screen: u32) -> ApiResult<Box<dyn AsDesktop + Send + '_>> {
+        self.check(screen)?;
 
         if screen == 0 {
             return Ok(Box::new(Primary(&self.computer)));

@@ -70,10 +70,17 @@ async fn reconcile(state: &AppState) -> usize {
 
 async fn forget(state: &AppState, id: &str, why: &str) {
     state.registry.forget(id).await;
-    state.traces.of(id).record(
-        Actor::System,
-        TraceEvent::Gone {
-            why: why.to_string(),
-        },
-    );
+
+    // A lookup, not `of`: the label sweep reaches every expired box on the
+    // host, including ones another server or `--local` made. Starting a trace
+    // for each of those would push live boxes out of the cap and leave them
+    // running but untraceable.
+    if let Some(trace) = state.traces.get(id) {
+        trace.record(
+            Actor::System,
+            TraceEvent::Gone {
+                why: why.to_string(),
+            },
+        );
+    }
 }

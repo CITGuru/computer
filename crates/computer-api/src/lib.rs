@@ -412,6 +412,20 @@ pub struct ReplayReport {
     pub stopped_at: Option<u64>,
     /// Whether the replay ran out of time before reaching the end.
     pub truncated: bool,
+    /// Recorded work this replay could not reproduce. A trace keeps what was
+    /// done, not always the bytes it was done with, so a fork can be short of
+    /// the original in ways no failure reports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<Skipped>,
+}
+
+/// One piece of the source's history the fork does not carry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Skipped {
+    pub seq: u64,
+    /// The trace event kind, as it appears in the trace.
+    pub kind: String,
+    pub why: String,
 }
 
 impl ErrorCode {

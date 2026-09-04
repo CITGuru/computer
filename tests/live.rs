@@ -13,7 +13,7 @@
 //! One box for the whole test, because opening one costs seconds and every
 //! step below is independent of the others.
 
-use computer::{Button, Computer, Delta, Point, ScreenId};
+use computer::{Button, Computer, Delta, Point, ProfileBuilder, ScreenId, X11Profile};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,15 +32,41 @@ async fn a_real_box_does_everything_the_readme_claims() {
     outcome.expect("every step");
 }
 
+/// A local build context, reached the way a custom image is meant to reach one.
+///
+/// The profile carries the directory, so the image and the contract it
+/// implements arrive together rather than as two things a caller pairs by
+/// hand. One box, because a fourth desktop running beside the others is what
+/// makes this suite flake.
 #[tokio::test]
 #[ignore = "needs a container runtime and builds the Ubuntu image"]
 async fn a_local_image_directory_can_be_driven() {
     let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu");
+    let profile = ProfileBuilder::new(X11Profile)
+        .image_dir(&directory)
+        .build();
+
+    // Named on the builder, the same directory has to resolve to the same
+    // image: one path is the profile's own, the other overrides it.
+    let by_profile = Computer::builder()
+        .profile(Arc::new(profile))
+        .config()
+        .expect("the profile's image");
+    let by_builder = Computer::builder()
+        .image_dir(&directory)
+        .config()
+        .expect("the builder's image");
+    assert_eq!(by_profile.image, by_builder.image);
+    assert_eq!(by_profile.image_dir, by_builder.image_dir);
+
+    let profile = ProfileBuilder::new(X11Profile)
+        .image_dir(&directory)
+        .build();
     let computer = Computer::builder()
-        .image_dir(directory)
+        .profile(Arc::new(profile))
         .launch()
         .await
-        .expect("an Ubuntu box");
+        .expect("an Ubuntu box from a derived profile");
 
     let outcome = exercise(&computer).await;
     computer.shutdown().await.expect("it goes away");
