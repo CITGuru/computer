@@ -38,6 +38,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && chmod +x /usr/bin/fbsetbg \
   && ln -sfn /bin/true /usr/bin/xmessage
 
+# Repositories for packages Debian does not carry. One record per line, tab
+# separated: name, key URL, deb line. Added before the install below, because a
+# package from one of these does not resolve until its archive is known.
+ARG EXTRA_SOURCES=""
+RUN if [ -n "$EXTRA_SOURCES" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+      && printf '%s\n' "$EXTRA_SOURCES" | while IFS="$(printf '\t')" read -r name key list; do \
+           [ -n "$name" ] || continue; \
+           curl -fsSL "$key" | gpg --dearmor -o "/usr/share/keyrings/$name.gpg"; \
+           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/$name.gpg] $list" \
+             > "/etc/apt/sources.list.d/$name.list"; \
+         done \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 ARG EXTRA_PACKAGES=""
 RUN if [ -n "$EXTRA_PACKAGES" ]; then \
       apt-get update \

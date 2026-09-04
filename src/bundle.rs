@@ -119,6 +119,9 @@ impl Bundle {
             eat(body.as_bytes());
         }
         eat(extras.build_arg().as_bytes());
+        // A repository changes what a package name resolves to, so two images
+        // built from one list against two archives are two images.
+        eat(extras.sources_arg().as_bytes());
 
         format!("{hash:016x}")
     }
@@ -187,6 +190,13 @@ impl Bundle {
         if !extras.is_empty() {
             args.push("--build-arg".to_string());
             args.push(format!("EXTRA_PACKAGES={}", extras.build_arg()));
+
+            // Only where there are any: an empty argument would change the
+            // build command of every image that has never needed one.
+            if !extras.sources.is_empty() {
+                args.push("--build-arg".to_string());
+                args.push(format!("EXTRA_SOURCES={}", extras.sources_arg()));
+            }
         }
         args.push(dir.display().to_string());
 
@@ -295,6 +305,11 @@ async fn build_directory(
     if !extras.is_empty() {
         args.push("--build-arg".to_string());
         args.push(format!("EXTRA_PACKAGES={}", extras.build_arg()));
+
+        if !extras.sources.is_empty() {
+            args.push("--build-arg".to_string());
+            args.push(format!("EXTRA_SOURCES={}", extras.sources_arg()));
+        }
     }
     args.push(directory.display().to_string());
 
@@ -315,6 +330,21 @@ async fn build_directory(
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Extras {
     pub packages: Vec<String>,
+    /// Repositories to add before the packages are installed.
+    ///
+    /// Not every program is in Debian: VS Code ships from Microsoft's own
+    /// archive, so a package list alone cannot reach it.
+    pub sources: Vec<AptSource>,
+}
+
+/// One apt repository, added to the image before anything is installed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AptSource {
+    /// A name for the keyring and list files, so two sources do not overwrite
+    /// each other.
+    pub name: String,
+    pub key_url: String,
+    pub list: String,
 }
 
 impl Extras {
@@ -328,7 +358,25 @@ impl Extras {
         // than two builds of the same thing.
         packages.sort();
         packages.dedup();
-        Self { packages }
+        Self {
+            packages,
+            sources: Vec::new(),
+        }
+    }
+
+    /// The same packages, plus the repositories they come from.
+    pub fn from_sources(
+        packages: impl IntoIterator<Item = impl Into<String>>,
+        sources: impl IntoIterator<Item = AptSource>,
+    ) -> Self {
+        let mut sources: Vec<AptSource> = sources.into_iter().collect();
+        sources.sort();
+        sources.dedup();
+
+        Self {
+            sources,
+            ..Self::with(packages)
+        }
     }
 
     /// Fonts for the writing systems the base image cannot draw.
@@ -377,12 +425,24 @@ impl Extras {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.packages.is_empty()
+        self.packages.is_empty() && self.sources.is_empty()
     }
 
     /// The value the image's `EXTRA_PACKAGES` build argument takes.
     pub fn build_arg(&self) -> String {
         self.packages.join(" ")
+    }
+
+    /// The value the image's `EXTRA_SOURCES` build argument takes.
+    ///
+    /// One record per line, fields tab-separated: the Dockerfile reads it with
+    /// `while read`, and a URL cannot hold a tab or a newline.
+    pub fn sources_arg(&self) -> String {
+        self.sources
+            .iter()
+            .map(|source| format!("{}\t{}\t{}", source.name, source.key_url, source.list))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 

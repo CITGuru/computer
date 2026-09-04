@@ -67,6 +67,7 @@ mod exec;
 pub mod reach;
 mod secret;
 
+pub mod apps;
 pub mod audit;
 pub mod bundle;
 pub mod cdp;
@@ -253,6 +254,20 @@ impl Builder {
     /// builds it.
     pub fn packages(mut self, packages: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.config.extras = bundle::Extras::with(packages);
+        self
+    }
+
+    /// Packages, and the repositories they come from.
+    ///
+    /// For a program Debian does not carry. A source is added to the image
+    /// before anything is installed, and joins the tag: one package list
+    /// against two archives is two images.
+    pub fn packages_from(
+        mut self,
+        packages: impl IntoIterator<Item = impl Into<String>>,
+        sources: impl IntoIterator<Item = bundle::AptSource>,
+    ) -> Self {
+        self.config.extras = bundle::Extras::from_sources(packages, sources);
         self
     }
 

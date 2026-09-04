@@ -77,11 +77,55 @@ pub enum Feature {
     Dock,
 }
 
+/// One named program: how to install it, how to start it, and how to know it
+/// is on screen.
+///
+/// Every field is optional so a caller can name an app the catalog already
+/// knows and override one part of it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct App {
     #[serde(default)]
     pub packages: Vec<String>,
+    /// Where the packages come from, where it is not Debian. Refused from a
+    /// caller unless `policy.custom_sources` is set: a source is a URL the
+    /// image build fetches and a key it then trusts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
+    /// The whole argv. Some programs do not start without their flags: VS Code
+    /// refuses to run as root without `--no-sandbox` and a user data
+    /// directory, and everything in a box runs as root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowMatch>,
+    /// How long the window has to hold still before it counts as drawn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settle_ms: Option<u64>,
+}
+
+/// An apt repository a package comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    /// An armoured key, fetched and dearmoured when the image is built.
+    pub key_url: String,
+    /// The `deb` line, without the `signed-by` this crate fills in.
+    pub list: String,
+}
+
+/// Which window on a screen belongs to an app.
+///
+/// Says which window, not whether it has drawn: a splash screen carries the
+/// same class as the program that owns it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum WindowMatch {
+    /// X11 `WM_CLASS`, or a Wayland `app_id`. Preferred: a title moves with
+    /// the open document and a class does not.
+    Class(String),
+    /// Part of the title, for a program that sets no useful class.
+    Title(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +140,12 @@ pub struct Policy {
     /// The host to put in a viewer URL, where it is not the one bound to.
     #[serde(default)]
     pub advertise: Option<String>,
+    /// Whether this box's own spec may name an apt source.
+    ///
+    /// Off by default. A caller can already choose packages; choosing where
+    /// packages come from is a wider reach, and the build is what pays for it.
+    #[serde(default)]
+    pub custom_sources: bool,
 }
 
 impl Default for Policy {
@@ -105,6 +155,7 @@ impl Default for Policy {
             auth: Auth::default(),
             bind: Bind::default(),
             advertise: None,
+            custom_sources: false,
         }
     }
 }

@@ -93,16 +93,33 @@ async fn test_removing_a_box_without_saying_so_is_refused() {
 }
 
 #[tokio::test]
-async fn test_a_spec_naming_apps_is_refused_before_anything_starts() {
-    let (status, body) = send(post("/v1/boxes", r#"{"spec":{"apps":{"vscode":{}}}}"#)).await;
+async fn test_a_spec_naming_an_unknown_app_is_refused_before_anything_starts() {
+    let (status, body) = send(post("/v1/boxes", r#"{"spec":{"apps":{"gimpp":{}}}}"#)).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("vscode"),
+            .contains("gimpp"),
         "the refusal names the app: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_a_spec_naming_its_own_apt_source_is_refused_by_default() {
+    let spec = r#"{"spec":{"apps":{"thing":{"packages":["thing"],
+        "source":{"key_url":"https://example.invalid/k.asc",
+                  "list":"https://example.invalid/r stable main"}}}}}"#;
+    let (status, body) = send(post("/v1/boxes", spec)).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("custom_sources"),
+        "the refusal says what would allow it: {body}"
     );
 }
 
