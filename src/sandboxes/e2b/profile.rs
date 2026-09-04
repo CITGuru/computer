@@ -5,7 +5,7 @@
 //! and DevTools is not reachable at all.
 
 use super::api::Sandbox;
-use crate::profile::{PortLayout, Profile};
+use crate::profile::{BrowserRuntime, PortLayout, Profile, ScreenRuntime, WallpaperRuntime};
 use crate::{DesktopFactory, DesktopSupport, ImageSource, ScreenAction, ScreenId};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -104,6 +104,18 @@ impl Profile for E2bProfile {
 
     fn driver(&self) -> Arc<dyn DesktopFactory> {
         self.inner.driver()
+    }
+
+    fn screen_runtime(&self) -> Arc<dyn ScreenRuntime> {
+        self.inner.screen_runtime()
+    }
+
+    fn browser_runtime(&self) -> Arc<dyn BrowserRuntime> {
+        self.inner.browser_runtime()
+    }
+
+    fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
+        self.inner.wallpaper_runtime()
     }
 
     fn screen_command(

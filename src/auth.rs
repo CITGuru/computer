@@ -110,6 +110,29 @@ impl Credentials {
     }
 }
 
+/// The gate a running box carries, read back out of its environment.
+///
+/// A box outlives the process that made it, so what its viewers ask cannot
+/// live only in that process's memory.
+pub fn from_environment(
+    environment: &std::collections::BTreeMap<String, String>,
+) -> (Auth, Option<Credentials>) {
+    let auth = match environment.get(AUTH_ENV).map(String::as_str) {
+        Some("password") => Auth::Password,
+        Some("token") => Auth::Token,
+        _ => Auth::Open,
+    };
+
+    let pair = environment
+        .get(VIEW_SECRET_ENV)
+        .zip(environment.get(CONTROL_SECRET_ENV))
+        .and_then(|(view, control)| {
+            Credentials::new(Secret::new(view).ok()?, Secret::new(control).ok()?).ok()
+        });
+
+    (auth, pair)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

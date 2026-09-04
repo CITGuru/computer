@@ -19,6 +19,13 @@ pub enum Error {
     #[error("unsupported by this box: {}", gaps.join(", "))]
     Unsupported { gaps: Vec<&'static str> },
 
+    /// The request cannot be satisfied however it is pointed: a spec asking
+    /// for more screens than any image runs, or a lifetime shorter than a box
+    /// takes to start. Apart from [`Error::Unsupported`], which is one image
+    /// saying no to something another might allow.
+    #[error("invalid: {detail}")]
+    Invalid { detail: String },
+
     /// It existed and does not now — shut down, expired, or reclaimed. The
     /// caller launches a new one, and must assume the files are gone.
     #[error("box {0} is gone")]
@@ -65,6 +72,11 @@ impl Error {
                 retryable: true,
                 ..
             }
+            // A substrate that is not answering now is the case where trying
+            // again is the whole remedy: start the daemon, and the same
+            // request succeeds.
+            | Self::Unavailable { .. }
+            | Self::Timeout { .. }
         )
     }
 
@@ -75,6 +87,13 @@ impl Error {
             self,
             Self::Unavailable { .. } | Self::Unsupported { .. } | Self::Gone(_)
         )
+    }
+
+    /// A request that cannot be satisfied as written.
+    pub fn invalid(detail: impl Into<String>) -> Self {
+        Self::Invalid {
+            detail: detail.into(),
+        }
     }
 
     /// A refusal, for callers building their own checks on top of a box.
@@ -106,6 +125,17 @@ mod tests {
     fn test_only_a_transport_fault_is_retryable() {
         assert!(Error::transport("connection reset", true).retryable());
         assert!(!Error::transport("bad certificate", false).retryable());
+    }
+
+    #[test]
+    fn test_an_invalid_request_is_not_somewhere_else_s_problem() {
+        let invalid = Error::invalid("8s is shorter than a box takes to start");
+
+        assert!(
+            !invalid.needs_another_place(),
+            "another box would refuse it too"
+        );
+        assert!(!invalid.retryable());
     }
 
     #[test]

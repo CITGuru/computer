@@ -215,6 +215,19 @@ let computer = Computer::builder()
 - `keep_on_drop(true)` leaves the container running when the handle is dropped.
 - `expires_after(duration)` removes the desktop when the time runs out.
 
+### Change the wallpaper
+
+`set_wallpaper` sends image bytes into the box and applies them to one screen:
+
+```rust
+computer.set_wallpaper(&std::fs::read("background.png")?).await?;
+
+let second = computer.screen(ScreenId(1)).await?;
+second.set_wallpaper(&bytes).await?;
+```
+
+The display stack reads the format from the bytes, so PNG and JPEG both work. `Computer::set_wallpaper` changes screen 0. X11 applies it with `hsetroot`, Wayland through the compositor. A profile that declares no wallpaper support returns `Unsupported` rather than accepting the bytes and changing nothing.
+
 
 
 ### Record the screen
@@ -343,6 +356,29 @@ would not move
 An image that declares nothing is not refused — your own image owes this crate no label. Without one, a mismatch surfaces ninety seconds later as a display that never came up, which points at the display server rather than at the pairing.
 
 Use `Computer::attach_using()` to attach to a box that a different profile started. Neither the profile nor the driver is recorded on the box, so the attaching process must be told which to use.
+
+### Derive a profile from a tested one
+
+An image that keeps most of a shipped contract needs `ProfileBuilder`, not a whole `Profile`. Whatever you do not name stays on the base:
+
+```rust
+let profile = ProfileBuilder::new(X11Profile)
+    .name("my-desktop")
+    .image_dir("images/mine")
+    .screen_commands(CommandScreen::new("my-screen"))
+    .wallpaper_runtime(CommandWallpaperRuntime::new("my-wallpaper"))
+    .build();
+
+let computer = Computer::builder().profile(Arc::new(profile)).launch().await?;
+```
+
+Whatever you leave alone comes from the base contract, so a custom image does not copy the X11 or Wayland one to change two names. `ports()`, `geometry()`, `support()`, `screen_environment()` and `viewer_url()` replace the rest. `geometry()` takes one `GeometrySpec` rather than three methods, because the default size, the environment a launch carries and the size read back off a running box have to agree.
+
+**A profile carries its own image.** `image_dir()` puts the build context on the profile rather than on the builder, so the image and the contract it implements arrive together instead of being two things a caller has to pair correctly. The directory needs a `Dockerfile` whose `computer.profile` label matches the profile's name. `image(ImageSource::Registry("me/desktop:1".into()))` names somebody else's instead, and `Computer::builder().image_dir(...)` still wins over whatever the profile says.
+
+`driver()` names the display server driver, which a base contract otherwise supplies — an image that keeps a contract but speaks Wayland needs its own.
+
+`CommandScreen` keeps the command protocol and changes only the program that answers it. The three runtimes go further: `screen_runtime`, `browser_runtime` and `wallpaper_runtime` replace **how** an operation is performed, so an image with a guest agent can answer without a shell. Each has a `Command*` default, which is what the shipped images use.
 
 ### Attach to a running desktop
 
@@ -552,6 +588,8 @@ let removed = computer::sweep_expired(&DockerMachine::default(), SystemTime::now
 computer sweep
 ```
 
+The `computer` command lives in [`crates/computer-cli`](crates/computer-cli).
+
 `expires_when_idle(duration)` is the other half. It removes a desktop that nothing has asked anything of for that long, and every command, screenshot, and file copy through the handle counts as activity. Use `touch()` when work reaches the box some other way.
 
 ## Check what a desktop claims
@@ -654,11 +692,13 @@ A control port exists only while somebody has been handed the screen, and it clo
 
 ## Todo
 
-- [ ] Chrome Browser Context Support - ability to manage multiple pages as groups
+- [x] Chrome Browser Context Support - ability to manage multiple pages as groups
 - [x] Viewer Auth - Password Protect Viewer URL
+- [ ] Filesystem
 - [ ] Full Audio Support
 - [ ] MacOS Desktop Box and Quartz Display Server
-- [ ] Computer Rest API & MCP - Manage instances of computer boxes
+- [x] Computer Rest API & MCP - Manage instances of computer boxes
+- [x] Custom Image Builder - ImageRecipe
 
 ## License
 

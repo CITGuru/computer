@@ -23,7 +23,7 @@
 #![cfg(feature = "e2b")]
 
 use computer::sandboxes::e2b::{self, E2bApi, cloud::Cloud};
-use computer::{Button, Computer, Delta, Point, ScreenId, Selection, X11Profile};
+use computer::{Auth, Button, Computer, Delta, Point, ScreenId, Selection, X11Profile};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -50,7 +50,10 @@ async fn a_real_sandbox_runs_the_same_desktop() {
     let (machine, profile) = e2b::pair(Arc::new(cloud), Arc::new(X11Profile));
 
     let computer = Computer::builder()
-        // The link is the password, and this test wants to look at the screen.
+        // A public viewer is reachable from the internet, so it goes through
+        // the same gate as any other publish. `Token` because the URL printed
+        // below has to carry everything a person needs to open it.
+        .auth(Auth::Token)
         .machine(Arc::new(machine.public_viewer(true)))
         .profile(profile)
         .image(&template)
@@ -63,10 +66,70 @@ async fn a_real_sandbox_runs_the_same_desktop() {
         println!("  watch it {url}");
     }
 
+    // The one deployment that is genuinely on the internet, so the one where
+    // the gate has to be watched rather than assumed.
+    let gate = the_viewer_refuses_a_wrong_ticket(&computer);
+
     let outcome = exercise(&computer).await;
+    gate.expect("the gate");
 
     computer.shutdown().await.expect("it goes away");
     outcome.expect("every step");
+}
+
+/// A wrong ticket must not open a desktop that anybody can route to.
+fn the_viewer_refuses_a_wrong_ticket(computer: &Computer) -> Result<(), String> {
+    let url = computer.viewer_url().ok_or("no viewer URL")?;
+    let authority = url
+        .split("//")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .ok_or("no authority")?;
+    let ticket = computer
+        .credentials()
+        .ok_or("a gated box holds a pair")?
+        .view
+        .expose()
+        .to_string();
+
+    let upgrade = |token: &str| -> String {
+        let output = std::process::Command::new("curl")
+            .args([
+                "-s",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "--max-time",
+                "20",
+                "--http1.1",
+                "-H",
+                "Connection: Upgrade",
+                "-H",
+                "Upgrade: websocket",
+                "-H",
+                "Sec-WebSocket-Version: 13",
+                "-H",
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            ])
+            .arg(format!("https://{authority}/websockify?token={token}"))
+            .output()
+            .expect("curl is on the path");
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
+    let refused = upgrade("not-the-ticket");
+    println!("  a wrong ticket over the internet: {refused}");
+    if refused == "101" {
+        return Err("a wrong ticket opened a public viewer".to_string());
+    }
+
+    let opened = upgrade(&ticket);
+    println!("  the right ticket over the internet: {opened}");
+    match opened == "101" {
+        true => Ok(()),
+        false => Err(format!("the right ticket was refused: {opened}")),
+    }
 }
 
 async fn exercise(computer: &Computer) -> computer::Result<()> {
@@ -86,6 +149,9 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
         "the capture is not a PNG"
     );
     println!("  screenshot: {} bytes", frame.len());
+
+    screen.set_wallpaper(&frame).await?;
+    println!("  wallpaper changed from uploaded image bytes");
 
     // A real pointer, over the internet.
     screen.click(Point::new(640, 400), Button::Left).await?;
@@ -108,7 +174,28 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     let read = computer.exec(["cat", "/tmp/in.txt"]).await?;
     assert_eq!(read.stdout, bytes, "what went in is what came out");
     assert_eq!(computer.read_file("/tmp/in.txt").await?, bytes);
-    println!("  a file went over and came back");
+
+    // A directory nothing made yet. The container runtimes create it, so envd
+    // has to as well or the same call answers differently per machine.
+    computer.write_file("/tmp/made/here/in.txt", bytes).await?;
+    assert_eq!(computer.read_file("/tmp/made/here/in.txt").await?, bytes);
+
+    let local = std::env::temp_dir().join("computer-e2b-upload");
+    tokio::fs::write(&local, bytes)
+        .await
+        .expect("a file to send");
+    computer.upload(&local, "/tmp/sent/up.txt").await?;
+    assert_eq!(computer.read_file("/tmp/sent/up.txt").await?, bytes);
+
+    let back = std::env::temp_dir().join("computer-e2b-download");
+    let _ = tokio::fs::remove_file(&back).await;
+    computer.download("/tmp/sent/up.txt", &back).await?;
+    assert_eq!(
+        tokio::fs::read(&back).await.expect("what came back"),
+        bytes,
+        "upload and download have to agree with write_file and read_file"
+    );
+    println!("  files went over and came back, directories and all");
 
     // Withdrawn rather than broken: the browser is up in the box, and nothing
     // out here can reach its debugger.

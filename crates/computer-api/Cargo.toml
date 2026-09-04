@@ -1,0 +1,16 @@
+[package]
+name = "computer-api"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "The HTTP contract a computer box is managed and driven over"
+license = "MIT"
+
+# Serde and the shared types. A client that has to compile a web framework to
+# send a request is a client nobody uses, so nothing heavier belongs here.
+[dependencies]
+computer-types = { path = "../computer-types" }
+serde = { version = "1", features = ["derive"] }
+
+[lints.clippy]
+string_slice = "deny"

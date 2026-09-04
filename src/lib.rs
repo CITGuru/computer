@@ -78,6 +78,7 @@ pub mod runtime;
 pub mod sandboxes;
 pub mod screens;
 pub mod servers;
+pub mod spec;
 pub mod testing;
 
 pub use audit::{Audit, audit};
@@ -94,13 +95,27 @@ pub use image::{ScreenAction, ScreenPorts};
 pub use machine::ScreenHost;
 pub use machine::{DockerMachine, Machine, MachineHost, PortMap};
 pub use microvm::MicroVm;
-pub use profile::{FORCE, ImageSource, PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, SHARED};
+pub use profile::{
+    BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
+    CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, FORCE, GeometrySpec, ImageSource,
+    PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, ProfileBuilder, SHARED, ScreenCommands,
+    ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime,
+    WaylandEnvironment, WaylandWallpaperRuntime, X11Environment, X11WallpaperRuntime,
+};
 pub use reach::{Address, Bind, Reach, Scheme};
 pub use runtime::{Config, ContainerCli, SystemDocker};
 pub use screens::{ControlGate, DEFAULT_LEASE, ScreenLease, Screens};
 pub use secret::Secret;
 pub use servers::wayland::{WaylandDesktop, WaylandDriver, WaylandProfile};
 pub use servers::x11::{X11Desktop, X11Driver, X11Profile};
+pub use spec::Resolved;
+
+/// The vocabulary a spec is written in, re-exported so a caller launching from
+/// one needs no second dependency. Aliased rather than glob-imported: its
+/// `Auth`, `Bind`, `Desktop`, `Point`, `Button` and `Selection` name the same
+/// ideas as this crate's and are not the same types.
+pub use computer_types as types;
+pub use computer_types::{Placement, Spec};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -213,6 +228,9 @@ impl Builder {
     /// The directory needs a `Dockerfile` and has to implement the active
     /// [`Profile`]. Its tag follows the files, the packages and the
     /// architecture, so an edit builds a new image.
+    ///
+    /// A profile can carry its own with [`ImageSource::Directory`]; one named
+    /// here replaces it.
     pub fn image_dir(mut self, directory: impl Into<PathBuf>) -> Self {
         self.image = None;
         self.image_dir = Some(directory.into());
@@ -444,16 +462,22 @@ impl Builder {
         let (width, height) = self.size.unwrap_or_else(|| self.profile.default_size());
         config.width = width;
         config.height = height;
-        if let Some(directory) = &self.image_dir {
-            let (directory, image) = bundle::directory_image(directory, &config.extras)?;
-            config.bundle = None;
-            config.image_dir = Some(directory);
-            config.image = image;
-        } else {
-            let source = self.source();
-            config.bundle = source.bundle().copied();
-            config.image_dir = None;
-            config.image = source.tag(&config.extras)?;
+        let source = self.source();
+        // The builder's own directory wins, then one the profile carries: a
+        // custom image and the contract it implements can arrive together
+        // instead of being two things a caller has to pair correctly.
+        match self.image_dir.as_deref().or_else(|| source.directory()) {
+            Some(directory) => {
+                let (directory, image) = bundle::directory_image(directory, &config.extras)?;
+                config.bundle = None;
+                config.image_dir = Some(directory);
+                config.image = image;
+            }
+            None => {
+                config.bundle = source.bundle().copied();
+                config.image_dir = None;
+                config.image = source.tag(&config.extras)?;
+            }
         }
         config.boot = self.profile.boot_command();
         config.publish = if self.publish {
@@ -745,6 +769,23 @@ struct Cleanup {
     args: Vec<String>,
 }
 
+#[derive(Clone)]
+struct ProfileRuntimes {
+    screen: Arc<dyn ScreenRuntime>,
+    browser: Arc<dyn BrowserRuntime>,
+    wallpaper: Arc<dyn WallpaperRuntime>,
+}
+
+impl ProfileRuntimes {
+    fn from_profile(profile: &dyn Profile) -> Self {
+        Self {
+            screen: profile.screen_runtime(),
+            browser: profile.browser_runtime(),
+            wallpaper: profile.wallpaper_runtime(),
+        }
+    }
+}
+
 /// A running box: a place with a desktop in it.
 ///
 /// Which kind of place is a [`Machine`].
@@ -753,6 +794,7 @@ pub struct Computer {
     /// Both held for the life of the box: a screen started on demand has to get
     /// the same image contract and the same driver as the one it opened with.
     profile: Arc<dyn Profile>,
+    runtimes: ProfileRuntimes,
     driver: Arc<dyn DesktopFactory>,
     host: Arc<MachineHost>,
     name: String,
@@ -837,13 +879,12 @@ impl Computer {
         let support = driven_by(profile.support_at(width, height), driver.as_ref());
 
         let mapped = machine.ports(&name).await;
-        let computer = Self::assemble(
-            Arc::new(MachineHost::new(machine, profile, name)),
-            driver,
-            support,
-            mapped,
-            None,
-        );
+        // The gate travels in the box's own environment, so a second process
+        // can rebuild it. Without this an attached handle hands out viewer
+        // URLs with no ticket on them, which the box's own gate then refuses.
+        let (auth, credentials) = auth::from_environment(&environment);
+        let host = MachineHost::new(machine, profile, name).gated_by(auth, credentials);
+        let computer = Self::assemble(Arc::new(host), driver, support, mapped, None);
 
         // A person may already have this screen, and the gate is per
         // process, so the box is asked rather than assumed.
@@ -873,10 +914,12 @@ impl Computer {
     ) -> Self {
         let machine = Arc::clone(host.machine());
         let profile = Arc::clone(host.profile());
+        let runtimes = ProfileRuntimes::from_profile(profile.as_ref());
         let name = host.name().to_string();
 
         let primary = Screen::new(
             Arc::clone(&profile),
+            runtimes.clone(),
             driver.as_ref(),
             Arc::clone(&host),
             ScreenId(0),
@@ -887,6 +930,7 @@ impl Computer {
             screen_registry: Arc::new(Screens::new(support.max_screens)),
             machine,
             profile,
+            runtimes,
             driver,
             host,
             name,
@@ -971,17 +1015,14 @@ impl Computer {
             });
         }
 
-        let result = self.host.exec(&self.profile.start_command(screen)).await?;
-
-        if result.code != 0 {
-            return Err(Error::Failed {
-                code: result.code,
-                stderr: result.stderr_utf8().trim().to_string(),
-            });
-        }
+        self.runtimes
+            .screen
+            .start(self.host.as_ref(), self.profile.as_ref(), screen)
+            .await?;
 
         Ok(Screen::new(
             Arc::clone(&self.profile),
+            self.runtimes.clone(),
             self.driver.as_ref(),
             Arc::clone(&self.host),
             screen,
@@ -1041,10 +1082,10 @@ impl Computer {
 
     /// Stop a screen's whole stack.
     pub async fn close_screen(&self, screen: ScreenId) -> Result<()> {
-        self.host
-            .exec(&self.profile.stop_command(screen))
+        self.runtimes
+            .screen
+            .stop(self.host.as_ref(), self.profile.as_ref(), screen)
             .await
-            .map(|_| ())
     }
 
     /// Whether the screen and the browser answer now.
@@ -1138,6 +1179,11 @@ impl Computer {
     /// Open a URL in screen 0's browser.
     pub async fn open_url(&self, url: &str) -> Result<()> {
         self.primary.open_url(url).await
+    }
+
+    /// Replace screen 0's wallpaper with these image bytes.
+    pub async fn set_wallpaper(&self, image: &[u8]) -> Result<()> {
+        self.primary.set_wallpaper(image).await
     }
 
     /// The browser, driven through the DevTools protocol rather than through the
@@ -1460,6 +1506,7 @@ pub struct Screen {
     /// be edited to add a second one.
     driver: Arc<dyn Desktop>,
     profile: Arc<dyn Profile>,
+    runtimes: ProfileRuntimes,
     host: Arc<MachineHost>,
     id: ScreenId,
     ports: ScreenPorts,
@@ -1469,6 +1516,7 @@ pub struct Screen {
 impl Screen {
     fn new(
         profile: Arc<dyn Profile>,
+        runtimes: ProfileRuntimes,
         driver: &dyn DesktopFactory,
         host: Arc<MachineHost>,
         id: ScreenId,
@@ -1486,6 +1534,7 @@ impl Screen {
                 control_vnc: 0,
             }),
             profile,
+            runtimes,
             host,
             id,
             mapped,
@@ -1539,18 +1588,37 @@ impl Screen {
     /// A new tab, raised in front of the last one, so coordinates from an
     /// earlier screenshot now belong to a page that is no longer on screen.
     pub async fn open_url(&self, url: &str) -> Result<()> {
-        let result = self
-            .host
-            .exec(&self.profile.open_command(self.id, url))
-            .await?;
+        self.runtimes
+            .browser
+            .open(self.host.as_ref(), self.profile.as_ref(), self.id, url)
+            .await
+    }
 
-        if result.code != 0 {
-            return Err(Error::Failed {
-                code: result.code,
-                stderr: result.stderr_utf8().trim().to_string(),
-            });
+    /// Replace this screen's wallpaper with these image bytes.
+    ///
+    /// The display stack detects the image format from its contents.
+    pub async fn set_wallpaper(&self, image: &[u8]) -> Result<()> {
+        if image.is_empty() {
+            return Err(Error::denied("a wallpaper cannot be empty"));
         }
-        Ok(())
+
+        // Asked before the upload: a profile with no wallpaper support would
+        // otherwise take the whole image into the box and then refuse it.
+        self.runtimes.wallpaper.supported()?;
+
+        // The file stays: swaybg reads it after swaymsg has already returned,
+        // and reads it again whenever sway restarts the background. One path
+        // per screen, overwritten, so it cannot grow.
+        let path = PathBuf::from(format!("/tmp/computer/wallpaper-{}.image", self.id.0));
+        self.host.touch();
+        self.host
+            .machine()
+            .write_file(self.host.name(), &path, image)
+            .await?;
+        self.runtimes
+            .wallpaper
+            .set(self.host.as_ref(), self.profile.as_ref(), self.id, &path)
+            .await
     }
 
     /// Give the screen to a person, and stop sending input until they give it
@@ -1574,13 +1642,10 @@ impl Screen {
     ///
     /// Counted from live connections: both servers keep listening either way.
     pub async fn viewers(&self) -> Result<Viewers> {
-        let result = self
-            .host
-            .exec(&self.profile.viewers_command(self.id))
-            .await?;
-
-        Viewers::parse(&result.stdout_utf8())
-            .ok_or_else(|| Error::denied("the viewer count could not be read"))
+        self.runtimes
+            .screen
+            .viewers(self.host.as_ref(), self.profile.as_ref(), self.id)
+            .await
     }
 
     /// Wait until nobody is on the input any more.
@@ -1613,17 +1678,16 @@ impl Screen {
         // reading the file; the entropy is the rest.
         let token = format!("takeover-{}-{}", self.id.0, Secret::generate()?.expose());
 
-        let result = self
-            .host
-            .exec(&self.profile.control_command(self.id, &token, !exclusive))
+        self.runtimes
+            .screen
+            .control(
+                self.host.as_ref(),
+                self.profile.as_ref(),
+                self.id,
+                &token,
+                !exclusive,
+            )
             .await?;
-
-        if result.code != 0 {
-            return Err(Error::Failed {
-                code: result.code,
-                stderr: result.stderr_utf8().trim().to_string(),
-            });
-        }
 
         if exclusive {
             self.control().hand_over(token.clone(), SystemTime::now());
@@ -1632,6 +1696,7 @@ impl Screen {
         Ok(Takeover {
             host: Arc::clone(&self.host),
             profile: Arc::clone(&self.profile),
+            screen_runtime: Arc::clone(&self.runtimes.screen),
             control: Arc::clone(self.control()),
             screen: self.id,
             url: self.control_url(),
@@ -1655,17 +1720,10 @@ impl Screen {
     pub async fn reclaim(&self) -> Result<()> {
         // Forced: the takeover this ends is one the process never started,
         // so it holds no token to prove anything with.
-        let result = self
-            .host
-            .exec(&self.profile.reclaim_command(self.id))
+        self.runtimes
+            .screen
+            .reclaim(self.host.as_ref(), self.profile.as_ref(), self.id)
             .await?;
-
-        if result.code != 0 {
-            return Err(Error::Failed {
-                code: result.code,
-                stderr: result.stderr_utf8().trim().to_string(),
-            });
-        }
 
         self.control().reclaim();
         Ok(())
@@ -1999,6 +2057,7 @@ impl Drop for LeasedScreen {
 pub struct Takeover {
     host: Arc<MachineHost>,
     profile: Arc<dyn Profile>,
+    screen_runtime: Arc<dyn ScreenRuntime>,
     control: Arc<ControlGate>,
     screen: ScreenId,
     url: Option<String>,
@@ -2044,21 +2103,14 @@ impl Takeover {
 
         // … and checked again in the box, because a replacement started by
         // another process is one this gate never heard about.
-        let result = self
-            .host
-            .exec(&self.profile.release_command(self.screen, &self.token))
-            .await?;
-
-        match result.code {
-            0 => Ok(()),
-            3 => Err(Error::denied(
-                "this takeover was replaced; the screen belongs to whoever took it",
-            )),
-            code => Err(Error::Failed {
-                code,
-                stderr: result.stderr_utf8().trim().to_string(),
-            }),
-        }
+        self.screen_runtime
+            .release(
+                self.host.as_ref(),
+                self.profile.as_ref(),
+                self.screen,
+                &self.token,
+            )
+            .await
     }
 }
 
@@ -2195,6 +2247,39 @@ mod tests {
         assert_eq!(config.image_dir.as_deref(), Some(expected.as_path()));
         assert!(config.bundle.is_none());
         assert!(config.image.starts_with("computer-local:"));
+    }
+
+    #[test]
+    fn test_a_profile_can_carry_its_own_build_context() {
+        let asked = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu");
+        let expected = std::fs::canonicalize(&asked).expect("the Ubuntu image directory");
+        let profile = ProfileBuilder::new(X11Profile).image_dir(asked).build();
+
+        let config = Computer::builder()
+            .profile(Arc::new(profile))
+            .config()
+            .expect("the profile's own image");
+
+        assert_eq!(config.image_dir.as_deref(), Some(expected.as_path()));
+        assert!(config.bundle.is_none());
+        assert!(config.image.starts_with("computer-local:"));
+    }
+
+    #[test]
+    fn test_a_directory_on_the_builder_replaces_the_profiles_own() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .image_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("images/wayland"))
+            .build();
+        let asked = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu");
+        let expected = std::fs::canonicalize(&asked).expect("the Ubuntu image directory");
+
+        let config = Computer::builder()
+            .profile(Arc::new(profile))
+            .image_dir(asked)
+            .config()
+            .expect("the builder's image");
+
+        assert_eq!(config.image_dir.as_deref(), Some(expected.as_path()));
     }
 
     #[test]

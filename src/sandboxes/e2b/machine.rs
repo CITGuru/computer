@@ -341,6 +341,21 @@ impl Machine for E2bMachine {
 
     async fn write_file(&self, name: &str, path: &Path, bytes: &[u8]) -> Result<()> {
         let sandbox = self.sandbox(name).await?;
+        // The other two runtimes make it, so a caller who writes into a fresh
+        // directory has to get the same answer here.
+        if let Some(parent) = path.parent() {
+            let _ = self
+                .exec(
+                    name,
+                    &[
+                        "mkdir".to_string(),
+                        "-p".to_string(),
+                        parent.display().to_string(),
+                    ],
+                    &BTreeMap::new(),
+                )
+                .await;
+        }
         self.api
             .write(&sandbox, &path.display().to_string(), bytes)
             .await

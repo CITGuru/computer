@@ -1,109 +1,19 @@
-//! `computer` — a desktop in a box, from the command line.
+//! Driving boxes with the SDK, in this process.
 //!
-//! For the times when writing a program is more ceremony than the job needs:
-//! open a box, look at it, point it at a page, hand it to somebody, take it
-//! away again.
-//!
-//! ```text
-//! computer up [--size WxH] [--wide-fonts] [--url URL] [--name NAME] [--ttl MINUTES]
-//! computer ls
-//! computer shot <box> [file.png]
-//! computer open <box> <url>
-//! computer type <box> <text>
-//! computer key  <box> <chord>
-//! computer click <box> <x> <y> [left|right|middle]
-//! computer clip <box> [text]
-//! computer takeover <box>
-//! computer release <box>
-//! computer exec <box> -- <command> [args…]
-//! computer rm <box>
-//! ```
+//! The escape hatch behind `--local`: no server, no socket, nothing to start.
+//! It reaches a box on this machine and nothing else, so the commands that need
+//! a server to remember anything — a trace, and the fork built on one — are not
+//! here.
 
+use crate::{flag, positional, present};
 use computer::{Button, Computer, Point};
 use std::time::Duration;
 
-const USAGE: &str = "\
-computer — a desktop in a box
-
-  up [--size WxH] [--url URL] [--name NAME] [--ttl MINUTES] [--wide-fonts]
-                              open a box and print where to watch it
-  ls                          boxes this tool has opened
-  shot <box> [file.png]       capture the screen
-  open <box> <url>            open a URL in the box's browser
-  type <box> <text>           type into the focused window
-  key <box> <chord>           send a chord, such as ctrl+l or cmd+enter
-  click <box> <x> <y> [button] click at a point, in device pixels
-  clip <box> [text] [--primary]
-                              read a selection, or set it
-  takeover <box>              open the input viewer and print its URL
-  release <box>               close it and take the screen back
-  exec <box> -- <command…>    run a command inside the box
-  rm <box>                    take the box away
-  sweep                       remove every desktop whose deadline has passed
-
-The first `up` builds the image, which takes a few minutes. Every one after it
-starts in seconds.
-";
-
-#[tokio::main]
-async fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let command = args.first().map(String::as_str).unwrap_or("help");
-
-    let outcome = match command {
-        "up" => up(&args[1..]).await,
-        "ls" => list().await,
-        "shot" => shot(&args[1..]).await,
-        "open" => open(&args[1..]).await,
-        "type" => type_text(&args[1..]).await,
-        "key" => key(&args[1..]).await,
-        "click" => click(&args[1..]).await,
-        "clip" => clip(&args[1..]).await,
-        "takeover" => takeover(&args[1..]).await,
-        "release" => release(&args[1..]).await,
-        "exec" => exec(&args[1..]).await,
-        "rm" => remove(&args[1..]).await,
-        "sweep" => sweep().await,
-        "help" | "--help" | "-h" => {
-            print!("{USAGE}");
-            return;
-        }
-        other => {
-            eprintln!("unknown command: {other}\n\n{USAGE}");
-            std::process::exit(2);
-        }
-    };
-
-    if let Err(error) = outcome {
-        eprintln!("{error}");
-        std::process::exit(1);
-    }
-}
-
-/// A flag's value, where flags are `--name value`.
-fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.iter()
-        .position(|arg| arg == name)
-        .and_then(|at| args.get(at + 1))
-        .map(String::as_str)
-}
-
-fn present(args: &[String], name: &str) -> bool {
-    args.iter().any(|arg| arg == name)
-}
-
-/// A positional argument, or a usage failure that names what was wanted.
-fn positional<'a>(args: &'a [String], at: usize, what: &str) -> computer::Result<&'a str> {
-    args.get(at)
-        .map(String::as_str)
-        .ok_or_else(|| computer::Error::denied(format!("expected {what}\n\n{USAGE}")))
-}
-
-async fn attach(args: &[String]) -> computer::Result<Computer> {
+pub async fn attach(args: &[String]) -> computer::Result<Computer> {
     Computer::attach(positional(args, 0, "a box name")?).await
 }
 
-async fn up(args: &[String]) -> computer::Result<()> {
+pub async fn up(args: &[String]) -> computer::Result<()> {
     let mut builder = Computer::builder().keep_on_drop(true);
 
     if let Some(size) = flag(args, "--size") {
@@ -148,7 +58,7 @@ async fn up(args: &[String]) -> computer::Result<()> {
     Ok(())
 }
 
-async fn list() -> computer::Result<()> {
+pub async fn list() -> computer::Result<()> {
     // Through the runtime rather than through this crate: the boxes worth
     // listing are the ones that outlived whatever opened them.
     let output = tokio::process::Command::new("docker")
@@ -167,7 +77,7 @@ async fn list() -> computer::Result<()> {
     Ok(())
 }
 
-async fn shot(args: &[String]) -> computer::Result<()> {
+pub async fn shot(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let out = args.get(1).map(String::as_str).unwrap_or("screen.png");
 
@@ -180,23 +90,23 @@ async fn shot(args: &[String]) -> computer::Result<()> {
     Ok(())
 }
 
-async fn open(args: &[String]) -> computer::Result<()> {
+pub async fn open(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     computer.open_url(positional(args, 1, "a URL")?).await
 }
 
-async fn type_text(args: &[String]) -> computer::Result<()> {
+pub async fn type_text(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let text = args[1..].join(" ");
     computer.type_text(&text).await
 }
 
-async fn key(args: &[String]) -> computer::Result<()> {
+pub async fn key(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     computer.key(positional(args, 1, "a chord")?).await
 }
 
-async fn click(args: &[String]) -> computer::Result<()> {
+pub async fn click(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let x = positional(args, 1, "an x coordinate")?
         .parse()
@@ -214,11 +124,9 @@ async fn click(args: &[String]) -> computer::Result<()> {
     computer.click(Point::new(x, y), button).await
 }
 
-async fn clip(args: &[String]) -> computer::Result<()> {
+pub async fn clip(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
 
-    // PRIMARY is what dragging the mouse over text fills, and a middle click
-    // pastes. It is a different selection from the one copy and paste uses.
     let selection = match present(args, "--primary") {
         true => computer::Selection::Primary,
         false => computer::Selection::Clipboard,
@@ -238,7 +146,7 @@ async fn clip(args: &[String]) -> computer::Result<()> {
     }
 }
 
-async fn takeover(args: &[String]) -> computer::Result<()> {
+pub async fn takeover(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let takeover = computer.hand_over().await?;
 
@@ -250,14 +158,14 @@ async fn takeover(args: &[String]) -> computer::Result<()> {
     Ok(())
 }
 
-async fn release(args: &[String]) -> computer::Result<()> {
+pub async fn release(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     computer.reclaim().await?;
     eprintln!("{:?}", computer.viewers().await?);
     Ok(())
 }
 
-async fn exec(args: &[String]) -> computer::Result<()> {
+pub async fn exec(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
 
     // Everything after `--`, so the box's command keeps its own flags.
@@ -281,7 +189,7 @@ async fn exec(args: &[String]) -> computer::Result<()> {
     Ok(())
 }
 
-async fn sweep() -> computer::Result<()> {
+pub async fn sweep() -> computer::Result<()> {
     // The deadline is on the box itself, so this finds the ones whose program
     // died before it could clean up — which no timer is watching any more.
     let machine = computer::DockerMachine::default();
@@ -290,11 +198,14 @@ async fn sweep() -> computer::Result<()> {
     for name in &swept {
         println!("{name}");
     }
-    eprintln!("{} removed", swept.len());
+    // Named, because `sweep` is the one command that stays here when
+    // --server points somewhere else: an operator who just aimed at a fleet
+    // should not read this line as the fleet having been swept.
+    eprintln!("{} removed from this host's own runtime", swept.len());
     Ok(())
 }
 
-async fn remove(args: &[String]) -> computer::Result<()> {
+pub async fn remove(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let name = computer.name().to_string();
     computer.shutdown().await?;

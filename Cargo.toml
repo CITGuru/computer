@@ -11,9 +11,6 @@ categories = ["api-bindings", "development-tools"]
 
 [features]
 default = []
-# The `computer` command. Off by default so a library user does not pull in a
-# runtime they already have: `cargo install computer --features cli`.
-cli = ["tokio/macros", "tokio/rt-multi-thread"]
 # The binding to microsandbox 0.6, so a box can run in a microVM rather than a
 # container. Off by default: the vendor crate pulls a hypervisor, an ORM and a
 # database driver behind it, and most builds run containers.
@@ -25,6 +22,9 @@ e2b = ["dep:reqwest"]
 
 [dependencies]
 async-trait = "0.1"
+# The vocabulary a spec is written in. The edge runs this way because the
+# builder takes a spec; nothing in computer-types knows this crate exists.
+computer-types = { path = "crates/computer-types", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 microsandbox = { version = "0.6", optional = true }
@@ -49,11 +49,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-uti
 [lints.clippy]
 string_slice = "deny"
 
-[[bin]]
-name = "computer"
-path = "src/bin/computer.rs"
-required-features = ["cli"]
-
 [[example]]
 name = "e2b"
 path = "examples/e2b.rs"
@@ -64,3 +59,15 @@ name = "e2b_takeover"
 path = "examples/e2b_takeover.rs"
 required-features = ["e2b"]
 
+
+# Listed rather than globbed: `crates/macos-vm` is an empty directory and a
+# glob would fail on it.
+[workspace]
+members = [
+    "crates/computer-types",
+    "crates/computer-cli",
+    "crates/computer-api",
+    "crates/computer-client",
+    "crates/computer-server",
+    "crates/computer-mcp",
+]
