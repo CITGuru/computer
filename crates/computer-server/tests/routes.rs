@@ -1,18 +1,30 @@
 //! The API's answers that do not need a box behind them.
 //!
-//! Every refusal here is one a client meets before it ever launches
-//! anything, so none of them needs a container runtime.
+//! Every refusal here is one a client meets before it ever launches anything.
+//! The runtime is a double all the same: a test that asserts a refusal finds
+//! out the refusal stopped happening by leaving a real container behind, which
+//! is a slow and confusing way to learn it.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use computer::testing::ScriptedCli;
 use computer_server::{AppState, routes};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+/// A runtime that answers nothing, so an accepted spec fails at the double
+/// rather than starting a container on whoever is running the tests.
+fn nowhere() -> Arc<AppState> {
+    Arc::new(AppState {
+        cli: Some(Arc::new(ScriptedCli::new())),
+        ..AppState::default()
+    })
+}
+
 async fn send(request: Request<Body>) -> (StatusCode, Value) {
-    let router = routes::router(Arc::new(AppState::default()));
+    let router = routes::router(nowhere());
     let response = router.oneshot(request).await.expect("the router answered");
 
     let status = response.status();
@@ -298,4 +310,37 @@ async fn test_an_ungated_api_on_loopback_still_opens() {
     let (status, _) = send(get("/v1/boxes")).await;
 
     assert_eq!(status, StatusCode::OK);
+}
+
+/// The guard itself: a spec this server accepts goes to the double, not the
+/// host.
+///
+/// This is the case that leaked containers before the runtime was a seam. A
+/// spec that used to be refused became valid, and the suite found out by
+/// leaving real boxes running on whoever ran it.
+#[tokio::test]
+async fn test_an_accepted_spec_is_built_through_the_runtime_it_was_given() {
+    let cli = Arc::new(ScriptedCli::new());
+    let state = Arc::new(AppState {
+        cli: Some(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>),
+        ..AppState::default()
+    });
+
+    let response = routes::router(state)
+        .oneshot(post("/v1/boxes", r#"{"spec":{"apps":{"vscode":{}}}}"#))
+        .await
+        .expect("the router answered");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(
+        cli.count() > 0,
+        "the box was built somewhere, and it has to have been here"
+    );
+    assert!(
+        cli.calls()
+            .iter()
+            .any(|call| call.first().is_some_and(|verb| verb == "run")),
+        "a container was started through the double: {:?}",
+        cli.calls()
+    );
 }

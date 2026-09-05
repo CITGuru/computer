@@ -17,8 +17,10 @@ pub mod routes;
 pub mod spec;
 pub mod trace;
 
+use computer::ContainerCli;
 use idempotency::Replies;
 use registry::Registry;
+use std::sync::Arc;
 use trace::Traces;
 
 #[derive(Default)]
@@ -31,4 +33,11 @@ pub struct AppState {
     /// Kept beside the registry rather than on a box, because removing a box
     /// must not remove the record of what was done in it.
     pub traces: Traces,
+    /// What to reach the container runtime through.
+    ///
+    /// `None` is this host's own. A test supplies a double here, because
+    /// otherwise every request this server accepts starts a real container —
+    /// which a test asserting a refusal finds out about only when the
+    /// refusal stops happening.
+    pub cli: Option<Arc<dyn ContainerCli>>,
 }

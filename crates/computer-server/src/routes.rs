@@ -100,6 +100,7 @@ async fn create_box(
     let digest = body.spec.digest();
     let id = new_id();
     let (builder, resolved) = spec::plan(&body.spec, &body.placement, &id)?;
+    let builder = through(builder, &state);
 
     tracing::info!(%id, %digest, "launching a box");
     let computer = builder.launch().await?;
@@ -649,6 +650,7 @@ async fn fork(
     let placement = body.placement.clone().map(Box::new).unwrap_or(placement);
     let new_id = new_id();
     let (builder, resolved) = spec::plan(&spec, &placement, &new_id)?;
+    let builder = through(builder, &state);
 
     tracing::info!(from = %id, to = %new_id, "forking a box");
     let computer = builder.launch().await?;
@@ -894,6 +896,14 @@ async fn trace_frame(
         Body::from(png.as_slice().to_vec()),
     )
         .into_response())
+}
+
+/// The builder, pointed at whatever this server reaches runtimes through.
+fn through(builder: computer::Builder, state: &AppState) -> computer::Builder {
+    match &state.cli {
+        Some(cli) => builder.cli(Arc::clone(cli)),
+        None => builder,
+    }
 }
 
 fn header(headers: &HeaderMap, name: &str) -> Option<String> {
