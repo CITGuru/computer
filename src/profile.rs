@@ -15,11 +15,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use primitives::{
-    BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
-    CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, GeometrySpec, ProfileBuilder,
-    ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime, ViewerUrl,
-    WallpaperRuntime, WaylandEnvironment, WaylandWallpaperRuntime, X11Environment,
-    X11WallpaperRuntime,
+    AppRuntime, BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
+    CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, GeometrySpec, Launch,
+    ProfileBuilder, ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedAppRuntime,
+    UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime, WaylandEnvironment,
+    WaylandWallpaperRuntime, Window, X11AppRuntime, X11Environment, X11WallpaperRuntime,
 };
 
 /// Where an image declares which contract it implements.
@@ -225,6 +225,11 @@ pub trait Profile: Send + Sync {
     /// How a running screen's wallpaper is changed.
     fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
         Arc::new(UnsupportedWallpaperRuntime)
+    }
+
+    /// How programs are started on a screen, and how their windows are found.
+    fn app_runtime(&self) -> Arc<dyn AppRuntime> {
+        Arc::new(UnsupportedAppRuntime)
     }
 
     /// Perform `action` on one screen, with whatever extra words it takes.

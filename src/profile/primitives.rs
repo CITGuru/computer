@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// How a profile turns a typed screen action into an image command.
 ///
@@ -243,6 +244,313 @@ impl WallpaperRuntime for UnsupportedWallpaperRuntime {
             gaps: vec!["wallpaper"],
         })
     }
+}
+
+/// One window on a screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Window {
+    /// Whatever the display server calls it. An X11 window id, or a sway
+    /// container id.
+    pub id: String,
+    pub title: String,
+}
+
+/// Starting programs on a screen, and finding what they drew.
+///
+/// The whole reason this is a runtime rather than a command is readiness. A
+/// mapped window is not a drawn one: GIMP maps a splash screen carrying its
+/// own `WM_CLASS` about half a second before the program exists, and VS Code
+/// maps its real window and then paints for another second. Both are
+/// display-server questions, and neither is answerable in one command.
+/// What to start, and what counts as it having started.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    /// The whole argv, flags included.
+    pub command: Vec<String>,
+    /// The window class to wait for.
+    pub class: String,
+    /// How long the window has to hold still before it counts as drawn.
+    pub settle: Duration,
+    /// How long to wait for that before giving up.
+    pub within: Duration,
+}
+
+#[async_trait]
+pub trait AppRuntime: Send + Sync {
+    /// Start it, and return the window it drew.
+    ///
+    /// Returns only once a window of the class has held still for `settle`,
+    /// so a caller's next click lands on the app rather than on its splash
+    /// screen or its empty frame.
+    async fn launch(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        launch: &Launch,
+    ) -> Result<Window>;
+
+    async fn windows(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Vec<Window>>;
+
+    async fn focus(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()>;
+
+    async fn close(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()>;
+
+    /// Whether this runtime can start anything at all.
+    fn supported(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A profile that does not declare app support.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnsupportedAppRuntime;
+
+#[async_trait]
+impl AppRuntime for UnsupportedAppRuntime {
+    async fn launch(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _launch: &Launch,
+    ) -> Result<Window> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn windows(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+    ) -> Result<Vec<Window>> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn focus(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _window: &str,
+    ) -> Result<()> {
+        self.supported()
+    }
+
+    async fn close(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _window: &str,
+    ) -> Result<()> {
+        self.supported()
+    }
+
+    fn supported(&self) -> Result<()> {
+        Err(Error::Unsupported { gaps: vec!["apps"] })
+    }
+}
+
+/// Apps on an X11 screen, through `xdotool`, `xprop` and ImageMagick.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct X11AppRuntime;
+
+impl X11AppRuntime {
+    /// A visible, `_NET_WM_WINDOW_TYPE_NORMAL` window of this class, and the
+    /// hash of what it is showing.
+    ///
+    /// The window type is what tells a program from its splash screen: GIMP's
+    /// splash carries the same `WM_CLASS` as GIMP, and appears first.
+    fn probe(class: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "for w in $(xdotool search --onlyvisible --class {class} 2>/dev/null); do \
+                   xprop -id $w _NET_WM_WINDOW_TYPE 2>/dev/null | grep -q _NET_WM_WINDOW_TYPE_NORMAL || continue; \
+                   echo \"$w $(import -window $w png:- 2>/dev/null | cksum | cut -d\" \" -f1) $(xdotool getwindowname $w 2>/dev/null)\"; \
+                   exit 0; \
+                 done"
+            ),
+        ]
+    }
+}
+
+#[async_trait]
+impl AppRuntime for X11AppRuntime {
+    async fn launch(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        launch: &Launch,
+    ) -> Result<Window> {
+        let Launch {
+            command,
+            class,
+            settle,
+            within,
+        } = launch;
+        let (settle, within) = (*settle, *within);
+        let env = profile.screen_env(screen);
+
+        // Detached, and its output thrown away: a GUI program does not exit,
+        // so a call that waited for it would never come back.
+        let start = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "setsid {} >/dev/null 2>&1 </dev/null &",
+                command
+                    .iter()
+                    .map(|word| shell_word(word))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        ];
+        CommandScreenRuntime::succeeded(host.run_within(&start, &env, host.timeout()).await?)?;
+
+        let probe = Self::probe(class);
+        let deadline = Instant::now() + within;
+        let mut seen: Option<(String, String, String)> = None;
+        let mut since = Instant::now();
+
+        while Instant::now() < deadline {
+            let result = host.run_within(&probe, &env, host.timeout()).await?;
+            let line = result.stdout_utf8();
+            let mut words = line.trim().splitn(3, ' ');
+
+            match (words.next(), words.next()) {
+                (Some(id), Some(hash)) if !id.is_empty() => {
+                    let title = words.next().unwrap_or_default().to_string();
+                    let now = (id.to_string(), hash.to_string(), title);
+
+                    match seen.as_ref() {
+                        // Unchanged: it is drawing nothing new, which is the
+                        // only signal both a splash-screened program and an
+                        // Electron one give at the same point.
+                        Some((was_id, was_hash, _)) if was_id == &now.0 && was_hash == &now.1 => {
+                            if since.elapsed() >= settle {
+                                return Ok(Window {
+                                    id: now.0,
+                                    title: now.2,
+                                });
+                            }
+                        }
+                        _ => since = Instant::now(),
+                    }
+
+                    seen = Some(now);
+                }
+                _ => since = Instant::now(),
+            }
+
+            tokio::time::sleep(POLL).await;
+        }
+
+        Err(Error::Timeout {
+            after: within,
+            detail: format!(
+                "{} started, but no window of class {class} settled",
+                command.first().map(String::as_str).unwrap_or("the app")
+            ),
+        })
+    }
+
+    async fn windows(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Vec<Window>> {
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            r#"for w in $(xdotool search --onlyvisible --name . 2>/dev/null); do echo "$w $(xdotool getwindowname $w 2>/dev/null)"; done"#
+                .to_string(),
+        ];
+        let result = host
+            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        Ok(result
+            .stdout_utf8()
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .map(|(id, title)| Window {
+                id: id.to_string(),
+                title: title.to_string(),
+            })
+            .collect())
+    }
+
+    async fn focus(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = vec![
+            "xdotool".to_string(),
+            "windowactivate".to_string(),
+            window.to_string(),
+        ];
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+
+    async fn close(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = vec![
+            "xdotool".to_string(),
+            "windowclose".to_string(),
+            window.to_string(),
+        ];
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+}
+
+/// How often a launch asks whether the window has stopped moving.
+const POLL: Duration = Duration::from_millis(100);
+
+/// One word, safe inside the shell a launch builds.
+///
+/// A launch takes an argv and has to hand it to `setsid` through `sh -c`,
+/// because nothing else detaches. Quoting here is what keeps an argument an
+/// argument.
+fn shell_word(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 /// The lifecycle of a screen, independent of how an image implements it.

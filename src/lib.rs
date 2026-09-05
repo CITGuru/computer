@@ -97,11 +97,12 @@ pub use machine::ScreenHost;
 pub use machine::{DockerMachine, Machine, MachineHost, PortMap};
 pub use microvm::MicroVm;
 pub use profile::{
-    BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
+    AppRuntime, BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
     CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, FORCE, GeometrySpec, ImageSource,
-    PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, ProfileBuilder, SHARED, ScreenCommands,
-    ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime,
-    WaylandEnvironment, WaylandWallpaperRuntime, X11Environment, X11WallpaperRuntime,
+    Launch, PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, ProfileBuilder, SHARED,
+    ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedAppRuntime,
+    UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime, WaylandEnvironment,
+    WaylandWallpaperRuntime, Window, X11AppRuntime, X11Environment, X11WallpaperRuntime,
 };
 pub use reach::{Address, Bind, Reach, Scheme};
 pub use runtime::{Config, ContainerCli, SystemDocker};
@@ -789,6 +790,7 @@ struct ProfileRuntimes {
     screen: Arc<dyn ScreenRuntime>,
     browser: Arc<dyn BrowserRuntime>,
     wallpaper: Arc<dyn WallpaperRuntime>,
+    app: Arc<dyn AppRuntime>,
 }
 
 impl ProfileRuntimes {
@@ -797,6 +799,7 @@ impl ProfileRuntimes {
             screen: profile.screen_runtime(),
             browser: profile.browser_runtime(),
             wallpaper: profile.wallpaper_runtime(),
+            app: profile.app_runtime(),
         }
     }
 }
@@ -1633,6 +1636,48 @@ impl Screen {
         self.runtimes
             .wallpaper
             .set(self.host.as_ref(), self.profile.as_ref(), self.id, &path)
+            .await
+    }
+
+    /// Start an app on this screen and wait for it to draw.
+    ///
+    /// Returns once a window of `class` has held still for `settle`. That is
+    /// the whole point of the call: a window exists well before the program
+    /// behind it has drawn, and a click sent in between lands on a splash
+    /// screen or on an empty frame.
+    pub async fn launch(&self, launch: &Launch) -> Result<Window> {
+        if launch.command.is_empty() {
+            return Err(Error::invalid("an app with no command cannot be started"));
+        }
+
+        self.runtimes.app.supported()?;
+        self.runtimes
+            .app
+            .launch(self.host.as_ref(), self.profile.as_ref(), self.id, launch)
+            .await
+    }
+
+    /// What is on this screen.
+    pub async fn windows(&self) -> Result<Vec<Window>> {
+        self.runtimes
+            .app
+            .windows(self.host.as_ref(), self.profile.as_ref(), self.id)
+            .await
+    }
+
+    /// Bring one to the front.
+    pub async fn focus(&self, window: &str) -> Result<()> {
+        self.runtimes
+            .app
+            .focus(self.host.as_ref(), self.profile.as_ref(), self.id, window)
+            .await
+    }
+
+    /// Close one.
+    pub async fn close_window(&self, window: &str) -> Result<()> {
+        self.runtimes
+            .app
+            .close(self.host.as_ref(), self.profile.as_ref(), self.id, window)
             .await
     }
 

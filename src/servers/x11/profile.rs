@@ -4,8 +4,8 @@ use super::X11Driver;
 use crate::desktop::DesktopFactory;
 use crate::image;
 use crate::profile::{
-    DesktopContract, ImageSource, PortLayout, Profile, ScreenEnvironment, WallpaperRuntime,
-    X11Environment, X11WallpaperRuntime,
+    AppRuntime, DesktopContract, ImageSource, PortLayout, Profile, ScreenEnvironment,
+    WallpaperRuntime, X11AppRuntime, X11Environment, X11WallpaperRuntime,
 };
 use crate::{DesktopSupport, ScreenAction, ScreenId};
 use std::collections::BTreeMap;
@@ -57,6 +57,10 @@ impl Profile for X11Profile {
 
     fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
         Arc::new(X11WallpaperRuntime)
+    }
+
+    fn app_runtime(&self) -> Arc<dyn AppRuntime> {
+        Arc::new(X11AppRuntime)
     }
 
     fn screen_command(
