@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// How a profile turns a typed screen action into an image command.
 ///
@@ -243,6 +244,525 @@ impl WallpaperRuntime for UnsupportedWallpaperRuntime {
             gaps: vec!["wallpaper"],
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Window {
+    /// An X11 window id, or a sway container id.
+    pub id: String,
+    pub title: String,
+}
+
+/// Starting programs on a screen, and finding what they drew.
+///
+/// A mapped window is not a drawn one: GIMP maps a splash carrying its own
+/// `WM_CLASS` half a second before the program exists, and VS Code maps its
+/// real window and paints a second later.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub command: Vec<String>,
+    pub class: String,
+    /// How long the window has to hold still before it counts as drawn.
+    pub settle: Duration,
+    pub within: Duration,
+}
+
+#[async_trait]
+pub trait AppRuntime: Send + Sync {
+    /// Returns only once the window has held still for `settle`.
+    async fn launch(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        launch: &Launch,
+    ) -> Result<Window>;
+
+    async fn windows(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Vec<Window>>;
+
+    async fn focus(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()>;
+
+    async fn close(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()>;
+
+    fn supported(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnsupportedAppRuntime;
+
+#[async_trait]
+impl AppRuntime for UnsupportedAppRuntime {
+    async fn launch(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _launch: &Launch,
+    ) -> Result<Window> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn windows(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+    ) -> Result<Vec<Window>> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn focus(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _window: &str,
+    ) -> Result<()> {
+        self.supported()
+    }
+
+    async fn close(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _window: &str,
+    ) -> Result<()> {
+        self.supported()
+    }
+
+    fn supported(&self) -> Result<()> {
+        Err(Error::Unsupported { gaps: vec!["apps"] })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct X11AppRuntime;
+
+impl X11AppRuntime {
+    /// The whole wait, as one command in the box: a loop out here would pay a
+    /// container exec per probe.
+    ///
+    /// The window type separates a program from its splash, and the hash a
+    /// drawn window from an empty one. A window declaring no type is taken as
+    /// ordinary — `xterm` sets none, and requiring it would hide every program
+    /// older than the hint.
+    fn wait_for(class: &str, settle: Duration, within: Duration) -> Vec<String> {
+        let settle_ms = settle.as_millis();
+        let within_ms = within.as_millis();
+
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                r#"end=$(( $(date +%s%N) / 1000000 + {within_ms} )); last=""; since=0
+while [ $(( $(date +%s%N) / 1000000 )) -lt $end ]; do
+  id=""
+  for w in $(xdotool search --onlyvisible --class {class} 2>/dev/null); do
+    t=$(xprop -id $w _NET_WM_WINDOW_TYPE 2>/dev/null)
+    case "$t" in *_NET_WM_WINDOW_TYPE_NORMAL*) ;; *_NET_WM_WINDOW_TYPE_*) continue ;; esac
+    id=$w; break
+  done
+  now=$(( $(date +%s%N) / 1000000 ))
+  if [ -n "$id" ]; then
+    h=$(import -window $id png:- 2>/dev/null | cksum | cut -d' ' -f1)
+    if [ "$h" = "$last" ] && [ -n "$h" ]; then
+      [ $since -eq 0 ] && since=$now
+      if [ $(( now - since )) -ge {settle_ms} ]; then
+        echo "drawn $id $(xdotool getwindowname $id 2>/dev/null)"
+        exit 0
+      fi
+    else
+      last="$h"; since=0
+    fi
+  fi
+  sleep 0.1
+done
+echo waited"#
+            ),
+        ]
+    }
+}
+
+#[async_trait]
+impl AppRuntime for X11AppRuntime {
+    async fn launch(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        launch: &Launch,
+    ) -> Result<Window> {
+        let Launch {
+            command,
+            class,
+            settle,
+            within,
+        } = launch;
+        let (settle, within) = (*settle, *within);
+        let env = profile.screen_env(screen);
+
+        let start = start_command(command);
+        let started = host.run_within(&start, &env, host.timeout()).await?;
+
+        // Otherwise the wait spends its deadline on a window that was never
+        // coming, and blames the window.
+        if started.code == 127 {
+            return Err(Error::invalid(format!(
+                "{} is not installed in this box: an app has to be named in \
+                 the spec the box was created with",
+                command.first().map(String::as_str).unwrap_or("that app")
+            )));
+        }
+        CommandScreenRuntime::succeeded(started)?;
+
+        let waited = host
+            .run_within(&Self::wait_for(class, settle, within), &env, within + SLACK)
+            .await?;
+
+        let answer = waited.stdout_utf8();
+        let mut words = answer.trim().splitn(3, ' ');
+
+        match (words.next(), words.next()) {
+            (Some("drawn"), Some(id)) => Ok(Window {
+                id: id.to_string(),
+                title: words.next().unwrap_or_default().to_string(),
+            }),
+            _ => Err(Error::Timeout {
+                after: within,
+                detail: format!(
+                    "{} started, but no window of class {class} settled",
+                    command.first().map(String::as_str).unwrap_or("the app")
+                ),
+            }),
+        }
+    }
+
+    async fn windows(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Vec<Window>> {
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            r#"for w in $(xdotool search --onlyvisible --name . 2>/dev/null); do echo "$w $(xdotool getwindowname $w 2>/dev/null)"; done"#
+                .to_string(),
+        ];
+        let result = host
+            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        Ok(result
+            .stdout_utf8()
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .map(|(id, title)| Window {
+                id: id.to_string(),
+                title: title.to_string(),
+            })
+            .collect())
+    }
+
+    async fn focus(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = vec![
+            "xdotool".to_string(),
+            "windowactivate".to_string(),
+            window.to_string(),
+        ];
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+
+    async fn close(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = vec![
+            "xdotool".to_string(),
+            "windowclose".to_string(),
+            window.to_string(),
+        ];
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WaylandAppRuntime;
+
+impl WaylandAppRuntime {
+    /// Read from the file the image wrote, not derived from the screen
+    /// number: a name built from a number points every screen after the first
+    /// at nothing.
+    fn socket(screen: ScreenId) -> String {
+        format!("\"$(cat /tmp/computer/screen-{}.sway)\"", screen.0)
+    }
+
+    /// Python because the tree is JSON and this image has no `jq`. Sway has
+    /// no `_NET_WM_WINDOW_TYPE`, so the largest match wins instead: a splash
+    /// is a small window and a program's own is not.
+    const PICK: &'static str = r#"
+import json,sys
+def walk(n):
+    yield n
+    for k in ('nodes','floating_nodes'):
+        for c in n.get(k) or []:
+            yield from walk(c)
+want=sys.argv[1].lower()
+best=None
+for n in walk(json.load(sys.stdin)):
+    props=n.get('window_properties') or {}
+    if (props.get('window_type') or '').lower()=='splash':
+        continue
+    names={(n.get('app_id') or '').lower(),(props.get('class') or '').lower()}
+    if want not in names or not n.get('id'):
+        continue
+    r=n.get('rect') or {}
+    w,h=r.get('width') or 0,r.get('height') or 0
+    if w<1 or h<1:
+        continue
+    if best is None or w*h>best[0]:
+        best=(w*h,n['id'],r.get('x') or 0,r.get('y') or 0,w,h)
+if best:
+    print(best[1],best[2],best[3],best[4],best[5])
+"#;
+
+    fn wait_for(screen: ScreenId, class: &str, settle: Duration, within: Duration) -> Vec<String> {
+        let settle_ms = settle.as_millis();
+        let within_ms = within.as_millis();
+        let socket = Self::socket(screen);
+        let pick = shell_word(Self::PICK);
+        let class = shell_word(class);
+
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                r#"end=$(( $(date +%s%N) / 1000000 + {within_ms} )); last=""; since=0
+while [ $(( $(date +%s%N) / 1000000 )) -lt $end ]; do
+  found=$(swaymsg -s {socket} -t get_tree 2>/dev/null | python3 -c {pick} {class})
+  now=$(( $(date +%s%N) / 1000000 ))
+  if [ -n "$found" ]; then
+    set -- $found
+    h=$(grim -g "$2,$3 $4x$5" - 2>/dev/null | cksum | cut -d' ' -f1)
+    if [ "$h" = "$last" ] && [ -n "$h" ]; then
+      [ $since -eq 0 ] && since=$now
+      if [ $(( now - since )) -ge {settle_ms} ]; then
+        echo "drawn $1"
+        exit 0
+      fi
+    else
+      last="$h"; since=0
+    fi
+  fi
+  sleep 0.1
+done
+echo waited"#
+            ),
+        ]
+    }
+
+    fn tell(screen: ScreenId, words: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("swaymsg -s {} {words}", Self::socket(screen)),
+        ]
+    }
+}
+
+#[async_trait]
+impl AppRuntime for WaylandAppRuntime {
+    async fn launch(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        launch: &Launch,
+    ) -> Result<Window> {
+        let Launch {
+            command,
+            class,
+            settle,
+            within,
+        } = launch;
+        let (settle, within) = (*settle, *within);
+        let env = profile.screen_env(screen);
+
+        let started = host
+            .run_within(&start_command(command), &env, host.timeout())
+            .await?;
+
+        if started.code == 127 {
+            return Err(Error::invalid(format!(
+                "{} is not installed in this box: an app has to be named in \
+                 the spec the box was created with",
+                command.first().map(String::as_str).unwrap_or("that app")
+            )));
+        }
+        CommandScreenRuntime::succeeded(started)?;
+
+        let waited = host
+            .run_within(
+                &Self::wait_for(screen, class, settle, within),
+                &env,
+                within + SLACK,
+            )
+            .await?;
+
+        let answer = waited.stdout_utf8();
+        let mut words = answer.split_whitespace();
+
+        match (words.next(), words.next()) {
+            (Some("drawn"), Some(id)) => Ok(Window {
+                id: id.to_string(),
+                title: String::new(),
+            }),
+            _ => Err(Error::Timeout {
+                after: within,
+                detail: format!(
+                    "{} started, but no window of app id {class} settled",
+                    command.first().map(String::as_str).unwrap_or("the app")
+                ),
+            }),
+        }
+    }
+
+    async fn windows(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Vec<Window>> {
+        let listing = r#"
+import json,sys
+def walk(n):
+    yield n
+    for k in ('nodes','floating_nodes'):
+        for c in n.get(k) or []:
+            yield from walk(c)
+for n in walk(json.load(sys.stdin)):
+    if n.get('id') and (n.get('app_id') or n.get('window_properties')):
+        print(n['id'], n.get('name') or '')
+"#;
+        let argv = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "swaymsg -s {} -t get_tree 2>/dev/null | python3 -c {}",
+                Self::socket(screen),
+                shell_word(listing)
+            ),
+        ];
+        let result = host
+            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        Ok(result
+            .stdout_utf8()
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .map(|(id, title)| Window {
+                id: id.to_string(),
+                title: title.to_string(),
+            })
+            .collect())
+    }
+
+    async fn focus(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = Self::tell(screen, &format!("[con_id={window}] focus"));
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+
+    async fn close(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = Self::tell(screen, &format!("[con_id={window}] kill"));
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+}
+
+/// Slack over the wait's own deadline, so a slow exec does not turn its
+/// report into a transport timeout.
+const SLACK: Duration = Duration::from_secs(5);
+
+/// Detached, because a GUI program does not exit — which is also why its own
+/// exit code reaches nobody, and why the command is checked first.
+fn start_command(command: &[String]) -> Vec<String> {
+    let words = command
+        .iter()
+        .map(|word| shell_word(word))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "command -v {} >/dev/null 2>&1 || exit 127; setsid {words} >/dev/null 2>&1 </dev/null &",
+            shell_word(command.first().map(String::as_str).unwrap_or(""))
+        ),
+    ]
+}
+
+/// A launch hands its argv to `setsid` through `sh -c`, because nothing else
+/// detaches. This is what keeps an argument an argument.
+fn shell_word(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
 }
 
 /// The lifecycle of a screen, independent of how an image implements it.
@@ -571,6 +1091,8 @@ impl ScreenEnvironment for WaylandEnvironment {
                 "XDG_RUNTIME_DIR".to_string(),
                 crate::servers::wayland::runtime_dir(screen),
             ),
+            // For an X11 program under Xwayland, which sway puts on `:0`.
+            ("DISPLAY".to_string(), ":0".to_string()),
         ])
     }
 }

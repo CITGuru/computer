@@ -108,6 +108,40 @@ pub async fn open(client: &Client, args: &[String]) -> Done {
     .await
 }
 
+/// Open an app by name, and wait until it has drawn.
+pub async fn app(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let app = positional(args, 1, "an app").map_err(|e| e.to_string())?;
+
+    act(
+        client,
+        id,
+        Action::Launch {
+            app: app.to_string(),
+            args: args.get(2..).unwrap_or_default().to_vec(),
+        },
+    )
+    .await
+}
+
+/// The app names this server can open.
+pub async fn apps(client: &Client) -> Done {
+    for name in client.catalog().await.map_err(|e| e.to_string())? {
+        println!("{name}");
+    }
+    Ok(())
+}
+
+/// What is on a screen, whoever opened it.
+pub async fn windows(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+
+    for window in client.windows(id, 0).await.map_err(|e| e.to_string())? {
+        println!("{}\t{}", window.id, window.title);
+    }
+    Ok(())
+}
+
 pub async fn type_text(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     act(
@@ -315,6 +349,7 @@ fn summarise(event: &computer_api::TraceEvent) -> String {
         ),
         E::Frame { screen } => format!("screen {screen}  the screen changed"),
         E::Executed { argv, code, .. } => format!("ran {} → {code}", argv.join(" ")),
+        E::AppLaunched { screen, app, .. } => format!("screen {screen}  opened {app}"),
         E::FileWritten { path, bytes } => format!("wrote {bytes} bytes to {path}"),
         E::FileRead { path, bytes } => format!("read {bytes} bytes from {path}"),
         E::ClipboardSet { selection, .. } => format!("set the {selection:?} selection"),
@@ -343,6 +378,10 @@ fn name_of(action: &Action) -> String {
         Action::Key { chord } => format!("key {chord}"),
         Action::Scroll { dy, .. } => format!("scroll {dy}"),
         Action::OpenUrl { url } => format!("open {url}"),
+        Action::Launch { app, args } => match args.is_empty() {
+            true => format!("open {app}"),
+            false => format!("open {app} {}", args.join(" ")),
+        },
         Action::Wait { ms } => format!("wait {ms}ms"),
     }
 }

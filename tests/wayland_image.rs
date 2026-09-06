@@ -553,3 +553,25 @@ fn neither_viewer_reaches_websockify_around_the_gate() {
         "the control viewer still passes its target around the gate"
     );
 }
+
+/// Xwayland is started from whether it is installed, not from a constant.
+///
+/// The two have to agree: a configuration that says `enable` in an image
+/// without Xwayland makes sway fail to start, and one that says `disable` in
+/// an image with it wastes the packages.
+#[test]
+fn the_second_display_server_is_started_only_where_it_exists() {
+    assert!(
+        SWAY_CONFIG.contains("xwayland %XWAYLAND%"),
+        "the setting is substituted rather than fixed"
+    );
+    assert!(
+        WAYLAND_SCREEN_SH.contains("command -v Xwayland")
+            && WAYLAND_SCREEN_SH.contains("s/%XWAYLAND%/"),
+        "the script decides it by presence and fills the template in"
+    );
+    assert!(
+        !computer::bundle::Extras::x11_apps().packages.is_empty(),
+        "the feature installs something for that check to find"
+    );
+}

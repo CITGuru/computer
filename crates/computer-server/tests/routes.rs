@@ -1,18 +1,27 @@
 //! The API's answers that do not need a box behind them.
 //!
-//! Every refusal here is one a client meets before it ever launches
-//! anything, so none of them needs a container runtime.
+//! The runtime is a double all the same: a test asserting a refusal would
+//! otherwise learn the refusal stopped by leaving a real container behind.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use computer::testing::ScriptedCli;
 use computer_server::{AppState, routes};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+/// So an accepted spec reaches the double, not the host.
+fn nowhere() -> Arc<AppState> {
+    Arc::new(AppState {
+        cli: Some(Arc::new(ScriptedCli::new())),
+        ..AppState::default()
+    })
+}
+
 async fn send(request: Request<Body>) -> (StatusCode, Value) {
-    let router = routes::router(Arc::new(AppState::default()));
+    let router = routes::router(nowhere());
     let response = router.oneshot(request).await.expect("the router answered");
 
     let status = response.status();
@@ -93,16 +102,33 @@ async fn test_removing_a_box_without_saying_so_is_refused() {
 }
 
 #[tokio::test]
-async fn test_a_spec_naming_apps_is_refused_before_anything_starts() {
-    let (status, body) = send(post("/v1/boxes", r#"{"spec":{"apps":{"vscode":{}}}}"#)).await;
+async fn test_a_spec_naming_an_unknown_app_is_refused_before_anything_starts() {
+    let (status, body) = send(post("/v1/boxes", r#"{"spec":{"apps":{"gimpp":{}}}}"#)).await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("vscode"),
+            .contains("gimpp"),
         "the refusal names the app: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_a_spec_naming_its_own_apt_source_is_refused_by_default() {
+    let spec = r#"{"spec":{"apps":{"thing":{"packages":["thing"],
+        "source":{"key_url":"https://example.invalid/k.asc",
+                  "list":"https://example.invalid/r stable main"}}}}}"#;
+    let (status, body) = send(post("/v1/boxes", spec)).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("custom_sources"),
+        "the refusal says what would allow it: {body}"
     );
 }
 
@@ -281,4 +307,57 @@ async fn test_an_ungated_api_on_loopback_still_opens() {
     let (status, _) = send(get("/v1/boxes")).await;
 
     assert_eq!(status, StatusCode::OK);
+}
+
+/// The case that leaked containers before the runtime was a seam: a spec that
+/// used to be refused became valid, and the suite said so by leaving boxes
+/// running.
+#[tokio::test]
+async fn test_an_accepted_spec_is_built_through_the_runtime_it_was_given() {
+    let cli = Arc::new(ScriptedCli::new());
+    let state = Arc::new(AppState {
+        cli: Some(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>),
+        ..AppState::default()
+    });
+
+    let response = routes::router(state)
+        .oneshot(post("/v1/boxes", r#"{"spec":{"apps":{"vscode":{}}}}"#))
+        .await
+        .expect("the router answered");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(
+        cli.count() > 0,
+        "the box was built somewhere, and it has to have been here"
+    );
+    assert!(
+        cli.calls()
+            .iter()
+            .any(|call| call.first().is_some_and(|verb| verb == "run")),
+        "a container was started through the double: {:?}",
+        cli.calls()
+    );
+}
+
+#[tokio::test]
+async fn test_the_catalog_names_what_a_launch_can_ask_for() {
+    let (status, body) = send(get("/v1/catalog")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.get("vscode").is_some(),
+        "an agent reads the names here rather than guessing one: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_launching_an_app_no_catalog_holds_is_refused() {
+    let (status, body) = send(post(
+        "/v1/boxes/box_nothing/screens/0/actions",
+        r#"{"actions":[{"type":"launch","app":"gimpp"}]}"#,
+    ))
+    .await;
+
+    // The box is missing first: a name is checked against a box's own spec.
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }

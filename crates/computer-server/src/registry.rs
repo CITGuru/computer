@@ -2,6 +2,7 @@
 
 use crate::error::{ApiError, ApiResult};
 use computer::{Computer, ScreenId};
+use computer_types::Spec;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -9,7 +10,9 @@ use tokio::sync::{Mutex, RwLock};
 
 pub struct Entry {
     pub id: String,
-    pub spec_digest: String,
+    /// Kept whole rather than as its digest alone, because a launch has to
+    /// resolve an app name against the apps this box was asked for.
+    pub spec: Spec,
     pub created_at: SystemTime,
     pub screens: u32,
     pub width: u32,
@@ -25,6 +28,11 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// What names this box's spec, for a caller comparing two boxes.
+    pub fn spec_digest(&self) -> String {
+        self.spec.digest()
+    }
+
     /// Refuses a screen this box does not have, because the map below is keyed
     /// by whatever number arrives and nothing prunes it: an unchecked number
     /// lets a caller grow it a lock at a time.
@@ -99,7 +107,7 @@ impl Registry {
     pub async fn insert(
         &self,
         id: String,
-        spec_digest: String,
+        spec: Spec,
         screens: u32,
         width: u32,
         height: u32,
@@ -107,7 +115,7 @@ impl Registry {
     ) -> Arc<Entry> {
         let entry = Arc::new(Entry {
             id: id.clone(),
-            spec_digest,
+            spec,
             created_at: SystemTime::now(),
             screens,
             width,

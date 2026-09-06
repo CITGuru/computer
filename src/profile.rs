@@ -15,10 +15,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use primitives::{
-    BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
-    CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, GeometrySpec, ProfileBuilder,
-    ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime, ViewerUrl,
-    WallpaperRuntime, WaylandEnvironment, WaylandWallpaperRuntime, X11Environment,
+    AppRuntime, BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
+    CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, GeometrySpec, Launch,
+    ProfileBuilder, ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedAppRuntime,
+    UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime, WaylandAppRuntime,
+    WaylandEnvironment, WaylandWallpaperRuntime, Window, X11AppRuntime, X11Environment,
     X11WallpaperRuntime,
 };
 
@@ -227,6 +228,11 @@ pub trait Profile: Send + Sync {
         Arc::new(UnsupportedWallpaperRuntime)
     }
 
+    /// How programs are started on a screen, and how their windows are found.
+    fn app_runtime(&self) -> Arc<dyn AppRuntime> {
+        Arc::new(UnsupportedAppRuntime)
+    }
+
     /// Perform `action` on one screen, with whatever extra words it takes.
     ///
     /// One command method, so an image with a script of the same shape
@@ -367,10 +373,12 @@ mod tests {
             wayland.get("XDG_RUNTIME_DIR").map(String::as_str),
             Some("/tmp/computer/run-2")
         );
-        assert!(
-            !wayland.contains_key("DISPLAY"),
-            "an X11 variable against a compositor is a command that goes in \
-             and moves nothing"
+        assert_eq!(
+            wayland.get("DISPLAY").map(String::as_str),
+            Some(":0"),
+            "for an X11 program under Xwayland, which sway puts on :0. The \
+             driver's own commands read the socket above and not this, so it \
+             steers nothing that belongs to the compositor"
         );
         assert!(
             wayland.contains_key("XDG_RUNTIME_DIR"),

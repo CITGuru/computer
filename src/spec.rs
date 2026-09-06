@@ -8,7 +8,8 @@
 //! off one image's constants: [`X11Profile`] runs eight screens and a macOS
 //! guest runs one, and neither number belongs in the description.
 
-use crate::bundle::Extras;
+use crate::apps;
+use crate::bundle::{self, Extras};
 use crate::{Auth, Bind, Builder, Computer, Error, Profile, Result, WaylandProfile, X11Profile};
 use computer_types as spec;
 use computer_types::{Placement, Spec};
@@ -65,8 +66,38 @@ impl Builder {
         for feature in &spec.desktop.features {
             packages.extend(packages_for(*feature));
         }
-        if !packages.is_empty() {
-            builder = builder.packages(packages);
+
+        let mut sources = Vec::new();
+        let mut launchers = Vec::new();
+
+        for (name, app) in apps::resolve_all(spec)? {
+            packages.extend(app.packages);
+
+            if let Some(source) = app.source {
+                sources.push(bundle::AptSource {
+                    name: name.clone(),
+                    key_url: source.key_url,
+                    list: source.list,
+                });
+            }
+
+            // An app the dock can offer needs both: a class to return to what
+            // is already open, and a command to start it with.
+            if let (Some(spec::WindowMatch::Class(class)), false) =
+                (app.window.clone(), app.command.is_empty())
+            {
+                launchers.push(bundle::Launcher {
+                    name,
+                    class,
+                    command: app.command,
+                });
+            }
+        }
+
+        if !packages.is_empty() || !sources.is_empty() {
+            builder = builder
+                .packages_from(packages, sources)
+                .launchers(launchers);
         }
 
         if let Some(host) = &spec.policy.advertise {
@@ -101,14 +132,10 @@ impl Builder {
 }
 
 fn resolve_with(profile: &dyn Profile, spec: &Spec) -> Result<Resolved> {
-    if !spec.apps.is_empty() {
-        let named: Vec<&str> = spec.apps.keys().map(String::as_str).collect();
-        return Err(Error::invalid(format!(
-            "apps are not installable yet and this spec names {}: a box handed \
-             back without them would look like the one that was asked for",
-            named.join(", ")
-        )));
-    }
+    // Resolved here as well as in `from_spec`, so a spec naming an app the
+    // catalog does not hold is refused by `resolve` too rather than only when
+    // something tries to build it.
+    apps::resolve_all(spec)?;
 
     let screens = spec.desktop.screens.unwrap_or(1);
 
@@ -158,6 +185,7 @@ fn packages_for(feature: spec::Feature) -> Vec<String> {
         spec::Feature::Audio => Extras::audio().packages,
         spec::Feature::Video => Extras::video().packages,
         spec::Feature::Dock => Extras::dock().packages,
+        spec::Feature::X11Apps => Extras::x11_apps().packages,
     }
 }
 
@@ -226,14 +254,53 @@ mod tests {
     }
 
     #[test]
-    fn test_a_spec_naming_apps_is_refused() {
-        let Err(error) = resolve(&parsed(r#"{"apps":{"vscode":{}}}"#)) else {
+    fn test_a_spec_naming_an_app_the_catalog_holds_is_accepted() {
+        resolve(&parsed(r#"{"apps":{"vscode":{}}}"#)).expect("a name this crate knows");
+    }
+
+    #[test]
+    fn test_a_spec_naming_an_app_nothing_can_install_is_refused() {
+        let Err(error) = resolve(&parsed(r#"{"apps":{"gimpp":{}}}"#)) else {
             panic!("a spec naming an app it cannot get was accepted");
         };
 
         assert!(
-            error.to_string().contains("vscode"),
+            error.to_string().contains("gimpp"),
             "the refusal names what it could not install: {error}"
+        );
+    }
+
+    #[test]
+    fn test_an_apps_packages_and_source_reach_the_build() {
+        let builder = Builder::from_spec(&parsed(r#"{"apps":{"vscode":{}}}"#)).expect("a builder");
+        let config = builder.config().expect("the image it would build");
+
+        assert!(
+            config.extras.packages.contains(&"code".to_string()),
+            "the app's package is installed: {:?}",
+            config.extras.packages
+        );
+        assert_eq!(
+            config.extras.sources.len(),
+            1,
+            "VS Code is not in Debian, so its archive travels with it"
+        );
+    }
+
+    #[test]
+    fn test_one_app_list_against_two_archives_is_two_images() {
+        let plain = Builder::from_spec(&parsed(r#"{"desktop":{"packages":["code"]}}"#))
+            .expect("a builder")
+            .config()
+            .expect("its image");
+        let sourced = Builder::from_spec(&parsed(r#"{"apps":{"vscode":{}}}"#))
+            .expect("a builder")
+            .config()
+            .expect("its image");
+
+        assert_ne!(
+            plain.image, sourced.image,
+            "a package name means something different once its archive is added"
         );
     }
 

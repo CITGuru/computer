@@ -142,7 +142,25 @@ start() {
   # Opt-in through `Extras::dock`: a box driven by a program wants the pixels,
   # a box a person looks at wants the desk.
   if command -v tint2 >/dev/null 2>&1; then
-    DISPLAY="$display" tint2 -c /etc/computer/tint2rc >"${logs}-dock.log" 2>&1 &
+    # The list is whatever the image was built with, so the configuration is
+    # written here rather than baked in.
+    apps=""
+    for entry in /usr/share/applications/computer-app-*.desktop; do
+      [ -e "$entry" ] || continue
+      apps="${apps}launcher_item_app = ${entry}
+"
+    done
+
+    # Two built-in launchers plus one per app.
+    count=$(printf '%s' "$apps" | grep -c launcher_item_app || true)
+    width=$(( (count + 2) * 52 + 28 ))
+
+    dock="${wm_home}/tint2rc"
+    awk -v apps="$apps" -v width="$width" \
+      '{ sub(/^%APPS%$/, apps); sub(/%PANELWIDTH%/, width); print }' \
+      /etc/computer/tint2rc > "$dock"
+
+    DISPLAY="$display" tint2 -c "$dock" >"${logs}-dock.log" 2>&1 &
   fi
 
   # One profile per screen. A shared profile makes one screen's login every
@@ -192,7 +210,7 @@ stop() {
   # pattern built from it matches nothing.
   pkill -f "fluxbox -rc ${wm_home}/.fluxbox/init" || true
   pkill -f -- "--user-data-dir=${profile}" || true
-  pkill -f "tint2 -c /etc/computer/tint2rc" || true
+  pkill -f "tint2 -c ${wm_home}/tint2rc" || true
   pkill -f "^x11vnc .* -rfbport ${view_vnc}" || true
   pkill -f "^x11vnc .* -rfbport ${control_vnc}" || true
   pkill -f "websockify.*${view_port}" || true
