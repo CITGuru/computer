@@ -129,6 +129,52 @@ impl Client {
         .await
     }
 
+    /// The app names this server can open.
+    pub async fn catalog(&self) -> Result<Vec<String>> {
+        let apps: std::collections::BTreeMap<String, serde_json::Value> = self
+            .send(reqwest::Method::GET, "/v1/catalog", None, &[])
+            .await?;
+
+        Ok(apps.into_keys().collect())
+    }
+
+    /// What is on a screen, whoever opened it.
+    pub async fn windows(&self, id: &str, screen: u32) -> Result<Vec<Window>> {
+        self.send(
+            reqwest::Method::GET,
+            &format!("/v1/boxes/{id}/screens/{screen}/windows"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn focus_window(&self, id: &str, screen: u32, window: &str) -> Result<()> {
+        self.nothing(
+            reqwest::Method::POST,
+            &format!(
+                "/v1/boxes/{id}/screens/{screen}/windows/{}/focus",
+                query_value(window)
+            ),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn close_window(&self, id: &str, screen: u32, window: &str) -> Result<()> {
+        self.nothing(
+            reqwest::Method::DELETE,
+            &format!(
+                "/v1/boxes/{id}/screens/{screen}/windows/{}",
+                query_value(window)
+            ),
+            None,
+            &[],
+        )
+        .await
+    }
+
     /// One action and a look, which is most of what an agent ever asks for.
     pub async fn act_once(&self, id: &str, screen: u32, action: Action) -> Result<BatchResult> {
         self.act(

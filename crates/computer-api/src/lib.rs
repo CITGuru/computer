@@ -106,6 +106,19 @@ pub enum Action {
     Wait {
         ms: u64,
     },
+    /// A name, not a command: an argv posted to a driving endpoint would be
+    /// `exec` in disguise.
+    Launch {
+        app: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Window {
+    pub id: String,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +155,9 @@ pub struct BatchResult {
     pub stopped_at: Option<usize>,
     pub frame: Option<Frame>,
     pub cursor: Option<Point>,
+    /// What any `launch` in this batch drew, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<Window>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,6 +331,14 @@ pub enum TraceEvent {
         argv: Vec<String>,
         code: i32,
         timed_out: bool,
+    },
+    /// Replayable: the name and arguments are the whole launch.
+    AppLaunched {
+        screen: u32,
+        app: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+        window: String,
     },
     FileWritten {
         path: String,

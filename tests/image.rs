@@ -798,3 +798,26 @@ fn neither_viewer_reaches_websockify_around_the_gate() {
         "the control viewer still passes its target around the gate"
     );
 }
+
+/// A desktop carrying applications and no way to open one is a desk with the
+/// drawers locked.
+#[test]
+fn an_app_the_box_was_built_with_is_offered_by_the_dock() {
+    assert!(
+        DOCKERFILE.contains("ARG EXTRA_APPS") && DOCKERFILE.contains("computer-app-$name.desktop"),
+        "the build writes a launcher per app"
+    );
+    assert!(
+        DOCKERFILE.contains("Exec=computer-launch $class $command"),
+        "through computer-launch, so a second click returns to the open window"
+    );
+    assert!(
+        TINT2RC.contains("%APPS%"),
+        "the dock's launcher list is filled in rather than fixed"
+    );
+    assert!(
+        SCREEN_SH.contains("computer-app-*.desktop") && SCREEN_SH.contains("%APPS%"),
+        "and the script is what fills it: {}",
+        "the entries exist only in an image built with apps"
+    );
+}

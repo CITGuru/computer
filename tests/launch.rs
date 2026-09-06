@@ -851,7 +851,10 @@ async fn a_wayland_box_is_driven_through_the_compositor_and_says_so() {
         "a compositor is reached through its socket, not through a display \
          number"
     );
-    assert!(!sent.iter().any(|part| part.starts_with("DISPLAY=")));
+    // `DISPLAY` rides along for Xwayland, and is not what carried this one:
+    // a command that reached the compositor through a display number would
+    // have gone in and moved nothing.
+    assert!(!sent.contains(&"DISPLAY=:1".to_string()));
 }
 
 #[tokio::test]

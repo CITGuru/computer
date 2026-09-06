@@ -90,6 +90,28 @@ pub fn catalogue() -> Value {
             with_box(json!({ "url": { "type": "string" } }), &["url"])
         ),
         tool(
+            "open_app",
+            "Open an application by name and wait until it has drawn. The name has to be one \
+             the box was created with — `list_apps` says which. The picture that comes back is \
+             of the app once it is ready to be clicked, not of the moment its window appeared.",
+            with_box(
+                json!({
+                    "app": { "type": "string" },
+                    "args": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Arguments for the app itself, such as a file to open."
+                    }
+                }),
+                &["app"]
+            )
+        ),
+        tool(
+            "list_apps",
+            "The application names this server can open. Read them rather than guessing one.",
+            json!({ "type": "object", "properties": {} })
+        ),
+        tool(
             "click",
             "Click at a point taken from the most recent screenshot. Work the coordinate out \
              from a picture you have just seen, not from an older one and never from a scaled \
@@ -227,6 +249,39 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 2500,
             )
             .await
+        }
+        "open_app" => {
+            let args = arguments
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(|arg| arg.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // No settle of its own: the launch already waited for the app to
+            // stop drawing, and a second wait on top would be paid for
+            // nothing.
+            act(
+                client,
+                arguments,
+                Action::Launch {
+                    app: text(arguments, "app")?,
+                    args,
+                },
+                0,
+            )
+            .await
+        }
+        "list_apps" => {
+            let names = client.catalog().await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(match names.is_empty() {
+                true => "this server knows no apps".to_string(),
+                false => names.join(", "),
+            }))
         }
         "click" => {
             let at = Some(point(arguments, "x", "y")?);
@@ -529,8 +584,12 @@ mod tests {
     #[test]
     fn test_a_tool_that_needs_a_box_says_so() {
         let listed = catalogue();
+        // The three that ask the server rather than a box: two list what it
+        // holds, and one lists what it can install.
+        let serverwide = ["launch_box", "list_boxes", "list_apps"];
+
         for one in listed.as_array().expect("a list") {
-            if one["name"] == "launch_box" || one["name"] == "list_boxes" {
+            if serverwide.iter().any(|name| one["name"] == *name) {
                 continue;
             }
             let required = one["inputSchema"]["required"].as_array().expect("required");

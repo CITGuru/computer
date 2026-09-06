@@ -255,6 +255,8 @@ Computer::builder()
 
 `Extras::audio()` adds a sound card, `Extras::video()` adds a recorder, and `Extras::everything()` adds all three sets.
 
+`Extras::x11_apps()` puts Xwayland in the Wayland image, so an X11 program can run on a compositor. Opt-in, because it is a trade: about seventy megabytes resident, paid by every box that carries it whether or not an X11 program is ever started. Without it that image has no X server at all, and an X11 program fails to open a display rather than failing to draw.
+
 The package list is part of the image tag, so each list builds its own image and no desktop receives a list it was not built with. The first launch with a new list takes as long as installing those packages. `wide_fonts()` adds about 100 MB.
 
 Without those fonts, a page in Chinese, Japanese, or Korean shows empty boxes, and so does emoji. The screenshot still looks like a working page.
@@ -330,6 +332,8 @@ A local directory can supply the Docker build context:
 ```rust
 Computer::builder().image_dir("images/ubuntu")
 ```
+
+`examples/custom_image.rs` builds one and drives a box in it, and `examples/images/acme/` is the whole Dockerfile: an image that keeps the X11 contract adds to the base rather than reimplementing it, which is why that file is a dozen lines. `images/ubuntu/` is the other way round — a contract built from a bare distribution, which is what a genuinely different base needs.
 
 The directory can be anywhere and must contain a `Dockerfile` that implements the selected profile. Its tag follows the context contents, extra packages and host architecture, so an edit builds a new image instead of reusing stale bytes. Extra packages are passed as the `EXTRA_PACKAGES` build argument.
 
@@ -642,6 +646,7 @@ cargo run --example takeover -- <box>
 cargo run --example browser -- <box>
 cargo run --example demo -- media/demo.gif
 cargo run --example live_desktop
+cargo run --example custom_image
 cargo run --example microvm
 cargo run --features e2b --example e2b -- <template-id>
 ```
@@ -658,6 +663,7 @@ cargo run --features e2b --example e2b -- <template-id>
 | `browser`      | Drive Chromium over the DevTools protocol            |
 | `demo`         | Build the animation at the top of this file          |
 | `live_desktop` | Test the image with a real container                 |
+| `custom_image` | Build your own image and drive a box in it           |
 | `microvm`      | Run the desktop with microsandbox                    |
 | `e2b`          | Run the desktop in an E2B cloud sandbox              |
 

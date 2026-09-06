@@ -30,7 +30,9 @@ background_color = #ffffff 0
 panel_items = L
 panel_monitor = all
 panel_position = bottom center horizontal
-panel_size = 132 62
+# From how many launchers there are: a fixed width cuts the later ones off,
+# and 100% turns the slab into a bar across the screen.
+panel_size = %PANELWIDTH% 62
 panel_margin = 0 0
 panel_padding = 18 9 8
 panel_background_id = 1
@@ -51,4 +53,6 @@ launcher_icon_size = 44
 launcher_icon_theme = hicolor
 launcher_item_app = /usr/share/applications/computer-terminal.desktop
 launcher_item_app = /usr/share/applications/computer-browser.desktop
+# One more per app the box was built with, appended by `computer-screen`.
+%APPS%
 launcher_tooltip = 1

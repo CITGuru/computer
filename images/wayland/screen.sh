@@ -142,9 +142,15 @@ start() {
 
   # The geometry and the socket path go into the configuration, because sway
   # reads no environment in it.
+  # Enabled by presence: an image built with the X11 apps feature carries
+  # Xwayland, and one without it must not be told to start what it lacks.
+  xwayland=disable
+  command -v Xwayland >/dev/null 2>&1 && xwayland=enable
+
   sed -e "s/%WIDTH%/${width}/" \
       -e "s/%HEIGHT%/${height}/" \
       -e "s|%SOCKFILE%|${sockfile}|" \
+      -e "s/%XWAYLAND%/${xwayland}/" \
       /etc/computer/sway.config > "${runtime}/sway.config"
 
   # Headless, and told there are no input devices: sway on a real backend

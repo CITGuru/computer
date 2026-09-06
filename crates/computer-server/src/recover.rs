@@ -119,7 +119,7 @@ async fn adopt_one(
     let entry = registry
         .insert(
             name.to_string(),
-            label.digest.clone(),
+            label.spec.clone(),
             label.screens,
             label.width,
             label.height,

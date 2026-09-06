@@ -5,8 +5,8 @@ use crate::bundle;
 use crate::desktop::DesktopFactory;
 use crate::image;
 use crate::profile::{
-    DesktopContract, ImageSource, PortLayout, Profile, ScreenEnvironment, WallpaperRuntime,
-    WaylandEnvironment, WaylandWallpaperRuntime,
+    AppRuntime, DesktopContract, ImageSource, PortLayout, Profile, ScreenEnvironment,
+    WallpaperRuntime, WaylandAppRuntime, WaylandEnvironment, WaylandWallpaperRuntime,
 };
 use crate::{DesktopSupport, Display, DisplayServer, ScreenAction, ScreenId};
 use std::collections::BTreeMap;
@@ -66,6 +66,10 @@ impl Profile for WaylandProfile {
 
     fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
         Arc::new(WaylandWallpaperRuntime)
+    }
+
+    fn app_runtime(&self) -> Arc<dyn AppRuntime> {
+        Arc::new(WaylandAppRuntime)
     }
 
     fn screen_command(

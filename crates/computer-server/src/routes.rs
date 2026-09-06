@@ -25,6 +25,7 @@ use computer::{
     Selection as EngineSelection,
 };
 use computer_api::*;
+use computer_types::Spec;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -73,6 +74,16 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(start_takeover).delete(end_takeover),
         )
         .route("/v1/boxes/{id}/screens/{screen}/viewers", get(viewers))
+        .route("/v1/boxes/{id}/screens/{screen}/windows", get(list_windows))
+        .route(
+            "/v1/boxes/{id}/screens/{screen}/windows/{window}/focus",
+            post(focus_window),
+        )
+        .route(
+            "/v1/boxes/{id}/screens/{screen}/windows/{window}",
+            axum::routing::delete(close_window),
+        )
+        .route("/v1/catalog", get(catalog))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::auth::gate,
@@ -100,6 +111,7 @@ async fn create_box(
     let digest = body.spec.digest();
     let id = new_id();
     let (builder, resolved) = spec::plan(&body.spec, &body.placement, &id)?;
+    let builder = through(builder, &state);
 
     tracing::info!(%id, %digest, "launching a box");
     let computer = builder.launch().await?;
@@ -108,7 +120,7 @@ async fn create_box(
         .registry
         .insert(
             id,
-            digest,
+            body.spec.clone(),
             resolved.screens,
             resolved.width,
             resolved.height,
@@ -119,7 +131,7 @@ async fn create_box(
     state.traces.of(&entry.id).record(
         Actor::Agent,
         TraceEvent::BoxCreated {
-            spec_digest: entry.spec_digest.clone(),
+            spec_digest: entry.spec_digest(),
             spec: Box::new(body.spec.clone()),
             placement: Box::new(body.placement.clone()),
             width: resolved.width,
@@ -195,27 +207,43 @@ async fn actions(
     let desktop = target.as_desktop();
 
     let mut results = Vec::with_capacity(batch.actions.len());
+    let mut windows = Vec::new();
     let mut stopped_at = None;
 
     for (index, action) in batch.actions.iter().enumerate() {
-        let outcome = run(desktop, target.as_screen(), action).await;
+        let outcome = run(desktop, target.as_screen(), action, &entry.spec).await;
 
-        trace.record(
-            Actor::Agent,
-            TraceEvent::Acted {
-                screen,
-                action: action.clone(),
-                ok: outcome.is_ok(),
-                error: outcome.as_ref().err().map(|error| error.body.clone()),
-            },
-        );
+        // Its own event: a name and its arguments are the whole launch.
+        match (&outcome, action) {
+            (Ok(Some(window)), Action::Launch { app, args }) => trace.record(
+                Actor::Agent,
+                TraceEvent::AppLaunched {
+                    screen,
+                    app: app.clone(),
+                    args: args.clone(),
+                    window: window.id.clone(),
+                },
+            ),
+            _ => trace.record(
+                Actor::Agent,
+                TraceEvent::Acted {
+                    screen,
+                    action: action.clone(),
+                    ok: outcome.is_ok(),
+                    error: outcome.as_ref().err().map(|error| error.body.clone()),
+                },
+            ),
+        };
 
         match outcome {
-            Ok(()) => results.push(ActionResult {
-                index,
-                ok: true,
-                error: None,
-            }),
+            Ok(window) => {
+                windows.extend(window);
+                results.push(ActionResult {
+                    index,
+                    ok: true,
+                    error: None,
+                })
+            }
             Err(error) => {
                 // Stop here. A click that follows a move which failed lands
                 // wherever the pointer was, and the frame afterwards looks
@@ -261,6 +289,7 @@ async fn actions(
         StatusCode::OK,
         &BatchResult {
             results,
+            windows,
             stopped_at,
             frame,
             cursor,
@@ -272,7 +301,8 @@ async fn run(
     desktop: &dyn EngineDesktop,
     screen: Option<&computer::Screen>,
     action: &Action,
-) -> ApiResult<()> {
+    spec: &Spec,
+) -> ApiResult<Option<Window>> {
     match action {
         Action::Move { to } => desktop.move_to(point_in(*to)).await?,
         Action::Click { at, button } => {
@@ -302,9 +332,40 @@ async fn run(
             screen.open_url(url).await?;
         }
         Action::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms).min(MAX_PAUSE)).await,
+        Action::Launch { app, args } => {
+            let screen =
+                screen.ok_or_else(|| ApiError::bad_request("this screen cannot start an app"))?;
+            let known = computer::apps::resolve(spec, app)?;
+
+            let Some(computer_types::WindowMatch::Class(class)) = known.window else {
+                return Err(ApiError::bad_request(format!(
+                    "{app} names no window class, so a launch could not tell \
+                     when it had drawn"
+                )));
+            };
+
+            let mut command = known.command.clone();
+            command.extend(args.iter().cloned());
+
+            let window = screen
+                .launch(&computer::Launch {
+                    command,
+                    class,
+                    settle: Duration::from_millis(
+                        known.settle_ms.unwrap_or(computer::apps::SETTLE_MS),
+                    ),
+                    within: Duration::from_millis(computer::apps::READY_MS),
+                })
+                .await?;
+
+            return Ok(Some(Window {
+                id: window.id,
+                title: window.title,
+            }));
+        }
     }
 
-    Ok(())
+    Ok(None)
 }
 
 #[derive(Debug, Deserialize)]
@@ -649,6 +710,7 @@ async fn fork(
     let placement = body.placement.clone().map(Box::new).unwrap_or(placement);
     let new_id = new_id();
     let (builder, resolved) = spec::plan(&spec, &placement, &new_id)?;
+    let builder = through(builder, &state);
 
     tracing::info!(from = %id, to = %new_id, "forking a box");
     let computer = builder.launch().await?;
@@ -657,7 +719,7 @@ async fn fork(
         .registry
         .insert(
             new_id.clone(),
-            spec.digest(),
+            (*spec).clone(),
             resolved.screens,
             resolved.width,
             resolved.height,
@@ -669,7 +731,7 @@ async fn fork(
     trace.record(
         Actor::Agent,
         TraceEvent::BoxCreated {
-            spec_digest: entry.spec_digest.clone(),
+            spec_digest: entry.spec_digest(),
             spec,
             placement,
             width: resolved.width,
@@ -748,6 +810,16 @@ async fn replay_onto(
             TraceEvent::Executed { argv, .. } if !argv.is_empty() => {
                 Step::Exec { argv: argv.clone() }
             }
+            // Replayable, unlike a file write: the trace holds all of it.
+            TraceEvent::AppLaunched {
+                screen, app, args, ..
+            } => Step::Act {
+                screen: *screen,
+                action: Action::Launch {
+                    app: app.clone(),
+                    args: args.clone(),
+                },
+            },
             // The trace keeps what a write or a copy was about, not the bytes
             // it carried, so these cannot be done again from the record. Said
             // out loud, because a fork short of the original in a way nothing
@@ -794,20 +866,33 @@ async fn replay_onto(
                 };
 
                 let acted = match target {
-                    Ok(target) => run(target.as_desktop(), target.as_screen(), action).await,
+                    Ok(target) => {
+                        run(target.as_desktop(), target.as_screen(), action, &entry.spec).await
+                    }
                     Err(error) => Err(error),
                 };
 
-                trace.record(
-                    Actor::Agent,
-                    TraceEvent::Acted {
-                        screen: *screen,
-                        action: action.clone(),
-                        ok: acted.is_ok(),
-                        error: acted.as_ref().err().map(|error| error.body.clone()),
-                    },
-                );
-                acted
+                match (&acted, action) {
+                    (Ok(Some(window)), Action::Launch { app, args }) => trace.record(
+                        Actor::Agent,
+                        TraceEvent::AppLaunched {
+                            screen: *screen,
+                            app: app.clone(),
+                            args: args.clone(),
+                            window: window.id.clone(),
+                        },
+                    ),
+                    _ => trace.record(
+                        Actor::Agent,
+                        TraceEvent::Acted {
+                            screen: *screen,
+                            action: action.clone(),
+                            ok: acted.is_ok(),
+                            error: acted.as_ref().err().map(|error| error.body.clone()),
+                        },
+                    ),
+                };
+                acted.map(|_| ())
             }
             Step::Exec { argv } => {
                 let ran = entry.computer.exec(argv).await.map_err(ApiError::from);
@@ -896,6 +981,72 @@ async fn trace_frame(
         .into_response())
 }
 
+async fn list_windows(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+) -> ApiResult<Json<Vec<Window>>> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let screen = target
+        .as_screen()
+        .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
+
+    Ok(Json(
+        screen
+            .windows()
+            .await?
+            .into_iter()
+            .map(|window| Window {
+                id: window.id,
+                title: window.title,
+            })
+            .collect(),
+    ))
+}
+
+/// Untraced: a replay against a fork whose windows opened in another order
+/// would raise the wrong one.
+async fn focus_window(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen, window)): ApiPath<(String, u32, String)>,
+) -> ApiResult<StatusCode> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let screen = target
+        .as_screen()
+        .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
+
+    screen.focus(&window).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn close_window(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen, window)): ApiPath<(String, u32, String)>,
+) -> ApiResult<StatusCode> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let screen = target
+        .as_screen()
+        .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
+
+    screen.close_window(&window).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// So an agent reads the names rather than guessing one and meeting a 400.
+async fn catalog() -> Json<BTreeMap<String, computer_types::App>> {
+    Json(computer::apps::builtin())
+}
+
+/// The builder, pointed at whatever this server reaches runtimes through.
+fn through(builder: computer::Builder, state: &AppState) -> computer::Builder {
+    match &state.cli {
+        Some(cli) => builder.cli(Arc::clone(cli)),
+        None => builder,
+    }
+}
+
 fn header(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -979,7 +1130,7 @@ fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
 fn view_of(entry: &Entry) -> BoxView {
     BoxView {
         id: entry.id.clone(),
-        spec_digest: entry.spec_digest.clone(),
+        spec_digest: entry.spec_digest(),
         state: BoxState::Ready,
         screens: entry.screens,
         width: entry.width,

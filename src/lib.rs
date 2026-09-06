@@ -67,6 +67,7 @@ mod exec;
 pub mod reach;
 mod secret;
 
+pub mod apps;
 pub mod audit;
 pub mod bundle;
 pub mod cdp;
@@ -96,11 +97,13 @@ pub use machine::ScreenHost;
 pub use machine::{DockerMachine, Machine, MachineHost, PortMap};
 pub use microvm::MicroVm;
 pub use profile::{
-    BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
+    AppRuntime, BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
     CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, FORCE, GeometrySpec, ImageSource,
-    PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, ProfileBuilder, SHARED, ScreenCommands,
-    ScreenEnvironment, ScreenRuntime, UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime,
-    WaylandEnvironment, WaylandWallpaperRuntime, X11Environment, X11WallpaperRuntime,
+    Launch, PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, ProfileBuilder, SHARED,
+    ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedAppRuntime,
+    UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime, WaylandAppRuntime,
+    WaylandEnvironment, WaylandWallpaperRuntime, Window, X11AppRuntime, X11Environment,
+    X11WallpaperRuntime,
 };
 pub use reach::{Address, Bind, Reach, Scheme};
 pub use runtime::{Config, ContainerCli, SystemDocker};
@@ -253,6 +256,24 @@ impl Builder {
     /// builds it.
     pub fn packages(mut self, packages: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.config.extras = bundle::Extras::with(packages);
+        self
+    }
+
+    /// Replaces the list rather than adding to it, so set it after the
+    /// packages.
+    pub fn launchers(mut self, launchers: impl IntoIterator<Item = bundle::Launcher>) -> Self {
+        self.config.extras = self.config.extras.clone().with_launchers(launchers);
+        self
+    }
+
+    /// For a program Debian does not carry. A source joins the tag: one
+    /// package list against two archives is two images.
+    pub fn packages_from(
+        mut self,
+        packages: impl IntoIterator<Item = impl Into<String>>,
+        sources: impl IntoIterator<Item = bundle::AptSource>,
+    ) -> Self {
+        self.config.extras = bundle::Extras::from_sources(packages, sources);
         self
     }
 
@@ -774,6 +795,7 @@ struct ProfileRuntimes {
     screen: Arc<dyn ScreenRuntime>,
     browser: Arc<dyn BrowserRuntime>,
     wallpaper: Arc<dyn WallpaperRuntime>,
+    app: Arc<dyn AppRuntime>,
 }
 
 impl ProfileRuntimes {
@@ -782,6 +804,7 @@ impl ProfileRuntimes {
             screen: profile.screen_runtime(),
             browser: profile.browser_runtime(),
             wallpaper: profile.wallpaper_runtime(),
+            app: profile.app_runtime(),
         }
     }
 }
@@ -1618,6 +1641,41 @@ impl Screen {
         self.runtimes
             .wallpaper
             .set(self.host.as_ref(), self.profile.as_ref(), self.id, &path)
+            .await
+    }
+
+    /// Returns once the window has held still for `settle`: a window exists
+    /// well before the program behind it has drawn.
+    pub async fn launch(&self, launch: &Launch) -> Result<Window> {
+        if launch.command.is_empty() {
+            return Err(Error::invalid("an app with no command cannot be started"));
+        }
+
+        self.runtimes.app.supported()?;
+        self.runtimes
+            .app
+            .launch(self.host.as_ref(), self.profile.as_ref(), self.id, launch)
+            .await
+    }
+
+    pub async fn windows(&self) -> Result<Vec<Window>> {
+        self.runtimes
+            .app
+            .windows(self.host.as_ref(), self.profile.as_ref(), self.id)
+            .await
+    }
+
+    pub async fn focus(&self, window: &str) -> Result<()> {
+        self.runtimes
+            .app
+            .focus(self.host.as_ref(), self.profile.as_ref(), self.id, window)
+            .await
+    }
+
+    pub async fn close_window(&self, window: &str) -> Result<()> {
+        self.runtimes
+            .app
+            .close(self.host.as_ref(), self.profile.as_ref(), self.id, window)
             .await
     }
 

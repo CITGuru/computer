@@ -75,13 +75,52 @@ pub enum Feature {
     Audio,
     Video,
     Dock,
+    /// X11 programs on a Wayland desktop, through Xwayland.
+    ///
+    /// Opt-in: about seventy megabytes resident, paid whether or not an X11
+    /// program is ever started.
+    X11Apps,
 }
 
+/// One named program. Every field is optional, so a caller can name an app
+/// the catalog knows and override one part of it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct App {
     #[serde(default)]
     pub packages: Vec<String>,
+    /// Refused from a caller unless `policy.custom_sources` is set: a source
+    /// is a URL the image build fetches and a key it then trusts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<Source>,
+    /// The whole argv: some programs do not start without their flags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowMatch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settle_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    /// Armoured, and dearmoured when the image is built.
+    pub key_url: String,
+    /// Without the `signed-by` this crate fills in.
+    pub list: String,
+}
+
+/// Which window belongs to an app — not whether it has drawn, since a splash
+/// carries the same class as the program that owns it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum WindowMatch {
+    /// X11 `WM_CLASS`, or a Wayland `app_id`. Preferred: a title moves with
+    /// the open document.
+    Class(String),
+    /// For a program that sets no useful class.
+    Title(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +135,10 @@ pub struct Policy {
     /// The host to put in a viewer URL, where it is not the one bound to.
     #[serde(default)]
     pub advertise: Option<String>,
+    /// Off by default: choosing where packages come from is wider reach than
+    /// choosing packages, and the image build is what pays for it.
+    #[serde(default)]
+    pub custom_sources: bool,
 }
 
 impl Default for Policy {
@@ -105,6 +148,7 @@ impl Default for Policy {
             auth: Auth::default(),
             bind: Bind::default(),
             advertise: None,
+            custom_sources: false,
         }
     }
 }

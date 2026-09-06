@@ -99,6 +99,30 @@ Three things worth knowing:
   `409` rather than handing back the first request's reply for work that never
   happened.
 
+## Open an app
+
+An app is named, not commanded: a caller who could post an argv to a driving
+endpoint would be running programs through one meant for clicks, and `exec`
+already does that in the open.
+
+```bash
+curl -s localhost:8080/v1/boxes/$BOX/screens/0/actions \
+  -H 'content-type: application/json' -d '{
+    "actions": [{ "type": "launch", "app": "gimp" }],
+    "want": ["frame"]
+  }'
+```
+
+**The call returns once the app has drawn**, and answers with the window it
+drew. That is the whole point of it. A window exists well before the program
+behind it has painted — GIMP maps a splash screen carrying its own class about
+half a second before the real one, and VS Code maps its window and paints a
+second later — so a launch that returned on the window appearing would hand
+back a screen the next click lands wrong on.
+
+The app has to be in the box already: `GET /v1/catalog` names what this server
+knows, and `spec.apps` is what installs one when the box is created.
+
 ## The rest
 
 | | |
@@ -111,6 +135,9 @@ Three things worth knowing:
 | `POST`/`DELETE` `…/screens/{n}/takeover` | hand the screen to a person, and take it back |
 | `GET …/screens/{n}/viewers` | who is watching and who is driving |
 | `POST /v1/boxes/{id}/fork` | build it again from its trace |
+| `GET /v1/catalog` | the app names a launch can ask for |
+| `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
+| `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |
 | `GET`/`PUT` `/v1/boxes/{id}/files` | base64 in, base64 out |
 

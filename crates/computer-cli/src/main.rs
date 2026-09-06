@@ -22,6 +22,9 @@ computer — a desktop in a box
   ls                          boxes that are running
   shot <box> [file.png]       capture the screen
   open <box> <url>            open a URL in the box's browser
+  app <box> <name> [args…]    open an application, and wait until it has drawn
+  apps                        the application names a box can be given
+  windows <box>               what is on the screen
   type <box> <text>           type into the focused window
   key <box> <chord>           send a chord, such as ctrl+l or cmd+enter
   click <box> <x> <y> [button] click at a point, in device pixels
@@ -105,6 +108,9 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "ls" => remote::list(client).await,
         "shot" => remote::shot(client, args).await,
         "open" => remote::open(client, args).await,
+        "app" => remote::app(client, args).await,
+        "apps" => remote::apps(client).await,
+        "windows" => remote::windows(client, args).await,
         "type" => remote::type_text(client, args).await,
         "key" => remote::key(client, args).await,
         "click" => remote::click(client, args).await,
@@ -128,6 +134,11 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "ls" => local::list().await,
         "shot" => local::shot(args).await,
         "open" => local::open(args).await,
+        // Both need a server: a name is resolved against the catalog it
+        // serves, and the box's own spec, which no local handle carries.
+        "app" | "apps" | "windows" => Err(computer::Error::invalid(format!(
+            "`{command}` needs a server; drop --local"
+        ))),
         "type" => local::type_text(args).await,
         "key" => local::key(args).await,
         "click" => local::click(args).await,

@@ -119,6 +119,9 @@ impl Bundle {
             eat(body.as_bytes());
         }
         eat(extras.build_arg().as_bytes());
+        // A repository changes what a package name resolves to.
+        eat(extras.sources_arg().as_bytes());
+        eat(extras.apps_arg().as_bytes());
 
         format!("{hash:016x}")
     }
@@ -187,6 +190,18 @@ impl Bundle {
         if !extras.is_empty() {
             args.push("--build-arg".to_string());
             args.push(format!("EXTRA_PACKAGES={}", extras.build_arg()));
+
+            // An empty argument would change the build command of every
+            // image that never needed one.
+            if !extras.sources.is_empty() {
+                args.push("--build-arg".to_string());
+                args.push(format!("EXTRA_SOURCES={}", extras.sources_arg()));
+            }
+
+            if !extras.launchers.is_empty() {
+                args.push("--build-arg".to_string());
+                args.push(format!("EXTRA_APPS={}", extras.apps_arg()));
+            }
         }
         args.push(dir.display().to_string());
 
@@ -295,6 +310,16 @@ async fn build_directory(
     if !extras.is_empty() {
         args.push("--build-arg".to_string());
         args.push(format!("EXTRA_PACKAGES={}", extras.build_arg()));
+
+        if !extras.sources.is_empty() {
+            args.push("--build-arg".to_string());
+            args.push(format!("EXTRA_SOURCES={}", extras.sources_arg()));
+        }
+
+        if !extras.launchers.is_empty() {
+            args.push("--build-arg".to_string());
+            args.push(format!("EXTRA_APPS={}", extras.apps_arg()));
+        }
     }
     args.push(directory.display().to_string());
 
@@ -315,6 +340,30 @@ async fn build_directory(
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Extras {
     pub packages: Vec<String>,
+    /// Not every program is in Debian: VS Code ships from Microsoft's own
+    /// archive, so a package list alone cannot reach it.
+    pub sources: Vec<AptSource>,
+    pub launchers: Vec<Launcher>,
+}
+
+/// One app the dock offers.
+///
+/// For the person looking at the desktop, who would otherwise have installed
+/// applications and no way to open one. `Screen::launch` is the other path.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Launcher {
+    pub name: String,
+    /// So a second click returns to the open window rather than a second copy.
+    pub class: String,
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AptSource {
+    /// Names the keyring and list files, so two sources do not collide.
+    pub name: String,
+    pub key_url: String,
+    pub list: String,
 }
 
 impl Extras {
@@ -328,7 +377,25 @@ impl Extras {
         // than two builds of the same thing.
         packages.sort();
         packages.dedup();
-        Self { packages }
+        Self {
+            packages,
+            sources: Vec::new(),
+            launchers: Vec::new(),
+        }
+    }
+
+    pub fn from_sources(
+        packages: impl IntoIterator<Item = impl Into<String>>,
+        sources: impl IntoIterator<Item = AptSource>,
+    ) -> Self {
+        let mut sources: Vec<AptSource> = sources.into_iter().collect();
+        sources.sort();
+        sources.dedup();
+
+        Self {
+            sources,
+            ..Self::with(packages)
+        }
     }
 
     /// Fonts for the writing systems the base image cannot draw.
@@ -368,6 +435,12 @@ impl Extras {
         Self::with(["tint2", "hsetroot"])
     }
 
+    /// Xwayland, so the Wayland image can run X11 programs. Ten megabytes of
+    /// image, and seventy resident while it runs.
+    pub fn x11_apps() -> Self {
+        Self::with(["xwayland"])
+    }
+
     pub fn everything() -> Self {
         let mut packages = Self::wide_fonts().packages;
         packages.extend(Self::audio().packages);
@@ -376,13 +449,41 @@ impl Extras {
         Self::with(packages)
     }
 
+    pub fn with_launchers(mut self, launchers: impl IntoIterator<Item = Launcher>) -> Self {
+        let mut launchers: Vec<Launcher> = launchers.into_iter().collect();
+        launchers.sort();
+        launchers.dedup();
+
+        self.launchers = launchers;
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.packages.is_empty()
+        self.packages.is_empty() && self.sources.is_empty() && self.launchers.is_empty()
     }
 
     /// The value the image's `EXTRA_PACKAGES` build argument takes.
     pub fn build_arg(&self) -> String {
         self.packages.join(" ")
+    }
+
+    /// One record per line: name, class, command, tab-separated. The command
+    /// is the rest of the line, so its own words need no quoting.
+    pub fn apps_arg(&self) -> String {
+        self.launchers
+            .iter()
+            .map(|app| format!("{}\t{}\t{}", app.name, app.class, app.command.join(" ")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// One record per line, tab-separated: a URL holds neither.
+    pub fn sources_arg(&self) -> String {
+        self.sources
+            .iter()
+            .map(|source| format!("{}\t{}\t{}", source.name, source.key_url, source.list))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
