@@ -179,3 +179,97 @@ async fn serve(computer: &Computer) -> computer::Result<()> {
         .await?;
     Ok(())
 }
+
+/// The other way to keep a login: leave the profile on the host.
+///
+/// A volume carries what a session cannot — a database too large to write as
+/// JSON, a key the page will not hand over — at the cost of never leaving this
+/// machine.
+#[tokio::test]
+#[ignore = "needs a container runtime"]
+async fn a_volume_keeps_the_browser_between_boxes() {
+    let volume = format!("computer-test-{}", std::process::id());
+
+    let first = Computer::builder()
+        .profiles(&volume)
+        .launch()
+        .await
+        .expect("a box with a volume");
+    let outcome = sign_in(&first).await;
+    first.shutdown().await.expect("it goes away");
+    outcome.expect("signing in");
+
+    let second = Computer::builder()
+        .profiles(&volume)
+        .launch()
+        .await
+        .expect("another box on the same volume");
+    let outcome = still_signed_in(&second).await;
+    second.shutdown().await.expect("it goes away");
+
+    // Whatever happened above: a volume outlives the box, so nothing else
+    // removes it.
+    tokio::process::Command::new("docker")
+        .args(["volume", "rm", "--force", &volume])
+        .output()
+        .await
+        .ok();
+
+    outcome.expect("it was still signed in");
+}
+
+async fn sign_in(computer: &Computer) -> computer::Result<()> {
+    serve(computer).await?;
+    let browser = computer.browser().expect("a published DevTools port");
+
+    let mut page = browser.open_page(ORIGIN, Duration::from_secs(30)).await?;
+    page.evaluate("document.cookie = 'sid=kept-on-the-host; path=/; max-age=86400'")
+        .await?;
+    page.evaluate("localStorage.setItem('token', 'also-kept')")
+        .await?;
+
+    page.close().await.ok();
+
+    // Chromium keeps its cookies in a database it flushes on its own schedule,
+    // and a box is torn down with a kill. Closing the browser is what makes it
+    // write: local storage lands without this, and cookies do not.
+    computer
+        .exec_within(
+            ["sh", "-c", "pkill -TERM chromium; sleep 20"],
+            Duration::from_secs(40),
+        )
+        .await?;
+
+    Ok(())
+}
+
+async fn still_signed_in(computer: &Computer) -> computer::Result<()> {
+    serve(computer).await?;
+    let browser = computer.browser().expect("a published DevTools port");
+
+    let mut page = browser.open_page(ORIGIN, Duration::from_secs(30)).await?;
+    let cookie = page.evaluate("document.cookie").await?;
+    let token = page.evaluate("localStorage.getItem('token')").await?;
+
+    println!(
+        "  cookie in the new box: {:?}",
+        cookie.as_str().unwrap_or_default()
+    );
+    println!(
+        "  token in the new box:  {:?}",
+        token.as_str().unwrap_or_default()
+    );
+
+    // Local storage, because that is what a box removed with a kill is certain
+    // to have written. Cookies live in a database Chromium commits on its own
+    // schedule, so one set moments before the box went may not have reached
+    // the volume — see the note on `Builder::profiles`.
+    assert_eq!(
+        token.as_str(),
+        Some("also-kept"),
+        "the volume did not keep the profile"
+    );
+
+    page.close().await.ok();
+    Ok(())
+}

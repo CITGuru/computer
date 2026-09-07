@@ -1011,7 +1011,7 @@ async fn loopback_spelled_out_opens_like_the_default() {
         .expect("a box on loopback");
 }
 
-/// The deployment `docs/viewer-auth.md` argues for: the box on loopback behind
+/// The deployment argues for: the box on loopback behind
 /// a proxy, and the URL naming the proxy. That name is not derivable from
 /// anything this crate holds, so a URL built from the bind is wrong for every
 /// box that is not reached at 127.0.0.1.

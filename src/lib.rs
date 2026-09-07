@@ -372,6 +372,29 @@ impl Builder {
         self
     }
 
+    /// Keep the browser's profiles in a named volume.
+    ///
+    /// Two boxes given the same name are the same browser: the second wakes up
+    /// logged into whatever the first logged into. Docker keeps a named volume
+    /// when a box is removed, so this outlives the box that made it — and
+    /// nothing removes it but a caller.
+    ///
+    /// Host-local. A [`Session`] travels between machines and carries only
+    /// what the protocol can read back; a volume stays here and carries
+    /// everything, including what a session cannot.
+    ///
+    /// One box at a time per name: two sharing a profile directory is how a
+    /// browser corrupts one.
+    ///
+    /// A box is removed with a kill, and Chromium commits its cookie database
+    /// on its own schedule — so a cookie set moments before a box goes may not
+    /// reach the volume. Local storage lands sooner. Nothing here forces a
+    /// flush, because nothing can: the browser decides when to write.
+    pub fn profiles(mut self, volume: impl Into<String>) -> Self {
+        self.config.profiles = Some(volume.into());
+        self
+    }
+
     pub fn shm_size(mut self, size: impl Into<String>) -> Self {
         self.config.shm_size = Some(size.into());
         self
@@ -419,9 +442,8 @@ impl Builder {
 
     /// Which addresses the published ports answer on.
     ///
-    /// Anything but [`Bind::Loopback`] is refused for now: the viewer has no
-    /// gate on it yet, so a routable bind would be an unlocked desktop on the
-    /// network. See `docs/viewer-auth.md`.
+    /// Loopback is the default. A routable bind also needs [`Auth::Password`]
+    /// or [`Auth::Token`]; launch refuses an open viewer that another host can
     pub fn publish_on(mut self, bind: Bind) -> Self {
         self.config.bind = bind;
         self
@@ -431,7 +453,6 @@ impl Builder {
     ///
     /// [`Auth::Open`] is the default and is what a box on loopback has always
     /// been. Anything published beyond loopback needs one of the other two —
-    /// see `docs/viewer-auth.md` for which fits a deployment.
     pub fn auth(mut self, auth: Auth) -> Self {
         self.config.auth = auth;
         self
@@ -1328,6 +1349,7 @@ impl Computer {
 
     /// Put bytes in the box.
     pub async fn write_file(&self, path: impl AsRef<Path>, bytes: &[u8]) -> Result<()> {
+        self.touch();
         self.machine
             .write_file(&self.name, path.as_ref(), bytes)
             .await
@@ -1335,12 +1357,14 @@ impl Computer {
 
     /// Take bytes out of the box.
     pub async fn read_file(&self, path: impl AsRef<Path>) -> Result<Vec<u8>> {
+        self.touch();
         self.machine.read_file(&self.name, path.as_ref()).await
     }
 
     /// A whole file in, without holding it in memory where the runtime can
     /// move it directly.
     pub async fn upload(&self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
+        self.touch();
         self.machine
             .upload(&self.name, from.as_ref(), to.as_ref())
             .await
@@ -1348,6 +1372,7 @@ impl Computer {
 
     /// A whole file out, the same way.
     pub async fn download(&self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
+        self.touch();
         self.machine
             .download(&self.name, from.as_ref(), to.as_ref())
             .await
@@ -2292,6 +2317,36 @@ mod tests {
         assert!(
             args.contains(&"someone-else/desktop:1".to_string()),
             "the tag a caller gave is not a suggestion"
+        );
+    }
+
+    #[test]
+    fn test_profiles_are_mounted_where_the_image_keeps_them() {
+        let config = Computer::builder()
+            .profiles("chinasa-work")
+            .config()
+            .expect("a config");
+        let args = runtime::run_args("box", &config);
+
+        let at = args
+            .iter()
+            .position(|arg| arg == "--volume")
+            .expect("the volume is passed");
+        assert_eq!(
+            args[at + 1],
+            format!("chinasa-work:{}", runtime::PROFILES),
+            "a volume mounted anywhere else is a box that saves nothing"
+        );
+    }
+
+    #[test]
+    fn test_a_box_given_no_volume_mounts_nothing() {
+        let config = Computer::builder().config().expect("a config");
+        let args = runtime::run_args("box", &config);
+
+        assert!(
+            !args.iter().any(|arg| arg == "--volume"),
+            "the default box keeps nothing between runs"
         );
     }
 

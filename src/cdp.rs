@@ -171,7 +171,6 @@ impl Devtools {
         Ok(page)
     }
 
-    /// Attach to the first page, opening one if the browser has none.
     /// Take the logged-in state for these origins out of the browser.
     ///
     /// An origin is `https://example.com` — scheme and host, no path. Only
@@ -285,10 +284,10 @@ impl Devtools {
 
     /// Put one back.
     ///
-    /// Refuses anything the session does not claim: a cookie whose domain no
+    /// Ignores anything the session does not claim: a cookie whose domain no
     /// listed origin covers, and storage for an origin that is not in it.
-    /// Without that check a vault entry is a way to hand any site's cookies to
-    /// any other.
+    /// Without that filter a vault entry could hand one site's cookies to
+    /// another.
     /// Hands back the tabs it left open. Session storage belongs to a tab, so
     /// one restored into a tab nobody keeps is one nobody has: a caller that
     /// asked for it should go on working in these.
@@ -428,6 +427,7 @@ impl Devtools {
         Ok(None)
     }
 
+    /// Attach to the first page, opening one if the browser has none.
     pub async fn first_page(&self) -> Result<Page> {
         let target = match self.pages().await?.into_iter().next() {
             Some(target) => target,

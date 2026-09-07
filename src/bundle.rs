@@ -295,6 +295,8 @@ pub(crate) fn directory_image(directory: &Path, extras: &Extras) -> Result<(Path
         }
     }
     eat(extras.build_arg().as_bytes());
+    eat(extras.sources_arg().as_bytes());
+    eat(extras.apps_arg().as_bytes());
 
     let tag = format!("{LOCAL_IMAGE_NAME}:{hash:016x}-{}", std::env::consts::ARCH);
     Ok((root, tag))
@@ -669,6 +671,40 @@ mod tests {
         assert_ne!(with_script, changed);
         assert!(changed.starts_with("computer-local:"));
         assert!(changed.ends_with(std::env::consts::ARCH));
+    }
+
+    #[test]
+    fn test_a_local_image_tag_follows_sources_and_launchers() {
+        let directory = local_image();
+        let from_one = Extras::from_sources(
+            ["code"],
+            [AptSource {
+                name: "editor".to_string(),
+                key_url: "https://one.example/key".to_string(),
+                list: "https://one.example stable main".to_string(),
+            }],
+        );
+        let from_another = Extras::from_sources(
+            ["code"],
+            [AptSource {
+                name: "editor".to_string(),
+                key_url: "https://two.example/key".to_string(),
+                list: "https://two.example stable main".to_string(),
+            }],
+        );
+        let with_launcher = from_one.clone().with_launchers([Launcher {
+            name: "editor".to_string(),
+            class: "Editor".to_string(),
+            command: vec!["editor".to_string()],
+        }]);
+
+        let (_, one) = directory_image(&directory, &from_one).expect("the first source");
+        let (_, another) = directory_image(&directory, &from_another).expect("the other source");
+        let (_, launched) = directory_image(&directory, &with_launcher).expect("the launcher");
+        fs::remove_dir_all(directory).expect("remove the test image");
+
+        assert_ne!(one, another);
+        assert_ne!(one, launched);
     }
 
     #[test]

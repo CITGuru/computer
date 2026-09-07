@@ -4,6 +4,20 @@
 
 ![Nine frames of a desktop being driven from Rust: a page opening, a URL typed, text selected by a drag, a context menu, a paste, and a second screen](./media/demo.gif)
 
+## Documentation
+
+Read the [public guide](https://citguru.github.io/computer/) for the full
+documentation. Its source is in [`docs/`](docs/index.md).
+
+- [get started](docs/getting-started/rust.md);
+- [control the desktop](docs/guides/desktop.md);
+- [control the browser](docs/guides/browser.md);
+- [install and launch applications](docs/guides/apps.md);
+- [choose a runtime](docs/runtimes/containers.md);
+- [deploy securely](docs/operations/security.md).
+
+The Rust API reference is on [docs.rs](https://docs.rs/computer).
+
 ## Requirements
 
 Install Rust and one supported runtime:
@@ -17,10 +31,16 @@ You do not need to download or build a desktop image. The crate contains the ima
 
 ## Quick start
 
-Add the crate and run the example:
+Add the crate and an async runtime:
 
 ```bash
 cargo add computer
+cargo add tokio --features macros,rt-multi-thread
+```
+
+From this repository, you can run the bundled example:
+
+```bash
 cargo run --example quickstart
 ```
 
@@ -29,6 +49,8 @@ The basic API is:
 ```rust
 use computer::{Button, Computer, Point};
 
+#[tokio::main]
+async fn main() -> computer::Result<()> {
 let computer = Computer::launch().await?;
 
 let viewer_url = computer.viewer_url().unwrap_or_default();
@@ -40,7 +62,8 @@ computer.type_text("driven from rust").await?;
 
 let png = computer.screenshot().await?;
 
-computer.shutdown().await?;
+computer.shutdown().await
+}
 ```
 
 `Computer::launch()` starts one 1280x800 screen. The viewer URL lets you watch that screen in a browser. `shutdown()` stops and removes the container.
@@ -228,8 +251,6 @@ second.set_wallpaper(&bytes).await?;
 
 The display stack reads the format from the bytes, so PNG and JPEG both work. `Computer::set_wallpaper` changes screen 0. X11 applies it with `hsetroot`, Wayland through the compositor. A profile that declares no wallpaper support returns `Unsupported` rather than accepting the bytes and changing nothing.
 
-
-
 ### Record the screen
 
 `recording` builds a GIF from screenshots, and needs nothing extra. For real video, add a recorder:
@@ -304,8 +325,6 @@ takeover.end().await?;
 // A person moved a pointer this driver did not move.
 assert!(computer.cursor().await.is_err());
 ```
-
-
 
 ### Use a different image or display server
 
@@ -426,6 +445,23 @@ it is asked for rather than assumed.
 The profile directory is deliberately not what moves: it is about a third of a
 gigabyte, tied to the Chromium build that wrote it, and carries a browser's
 whole history besides.
+
+### Keep the whole browser instead
+
+Where a session is not enough — a database too large to write as JSON, a key a
+page will not hand over — keep the profile itself:
+
+```rust
+Computer::builder().profiles("chinasa-work").launch().await?;
+```
+
+A named volume, which Docker keeps when a box is removed, so two boxes given
+the same name are the same browser. Everything comes with it: logins, history,
+extensions, and whatever a session cannot carry.
+
+The trade against a session is where it can go. A session is data a caller can
+put anywhere; a volume never leaves this host. And one box at a time per name,
+because two browsers sharing a profile directory is how one gets corrupted.
 
 **A session is the account.** A password may sit behind a second factor; a
 session has already passed one, so whoever holds this is the user. `Session`
@@ -627,7 +663,7 @@ Computer::builder().machine(Arc::new(machine.public_viewer(true)))
 
 DevTools does not travel. An endpoint out here would be `wss` on a public host and this crate's DevTools client speaks plain TCP, so `E2bProfile` drops the bridge port and clears the `cdp` claim. `devtools()` returns `None` and `audit` skips the browser check rather than failing it. Synthetic input, screenshots, the clipboard, the viewer and the takeover are untouched.
 
-`E2bApi` is the seam and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. `docs/e2b-machine.md` records the design.
+`E2bApi` is the seam and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. [`docs/runtimes/e2b-machine.md`](docs/runtimes/e2b-machine.md) records the design.
 
 ## Remove desktops that outlived their program
 
@@ -693,11 +729,16 @@ cargo run --example tour -- <box>
 cargo run --example recording -- output.gif
 cargo run --example takeover -- <box>
 cargo run --example browser -- <box>
+cargo run --example elements -- <box>
+cargo run --example waiting -- <box>
+cargo run --example research -- <box> "a subject"
+cargo run --example from_spec -- examples/box.json
 cargo run --example demo -- media/demo.gif
 cargo run --example live_desktop
 cargo run --example custom_image
 cargo run --example microvm
 cargo run --features e2b --example e2b -- <template-id>
+cargo run --features e2b --example e2b_takeover -- <template-id>
 ```
 
 
@@ -710,11 +751,16 @@ cargo run --features e2b --example e2b -- <template-id>
 | `recording`    | Save the desktop as an animated GIF                  |
 | `takeover`     | Give control to a person and reclaim it              |
 | `browser`      | Drive Chromium over the DevTools protocol            |
+| `elements`     | Find and act on browser elements by name              |
+| `waiting`      | Wait for browser state and use history                |
+| `research`     | Search, open results, and read pages                  |
+| `from_spec`    | Launch from a portable box specification              |
 | `demo`         | Build the animation at the top of this file          |
 | `live_desktop` | Test the image with a real container                 |
 | `custom_image` | Build your own image and drive a box in it           |
 | `microvm`      | Run the desktop with microsandbox                    |
 | `e2b`          | Run the desktop in an E2B cloud sandbox              |
+| `e2b_takeover` | Give an E2B desktop to a person                       |
 
 
 ## Security
