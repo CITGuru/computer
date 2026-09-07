@@ -166,6 +166,21 @@ pub enum OnElement {
     Choose { query: String, option: String },
     /// Hand a file input paths, which are the box's own.
     Upload { query: String, paths: Vec<String> },
+    /// Wait until something matching the query is on the page, or gone.
+    ///
+    /// The alternative is a sleep, which is either short enough to act too
+    /// early or long enough to be paid on every step.
+    WaitFor {
+        query: String,
+        #[serde(default)]
+        gone: bool,
+        #[serde(default)]
+        within_ms: Option<u64>,
+    },
+    /// Put the pointer over something without pressing anything.
+    Hover { query: String },
+    /// Back, forward or again through this page's own history.
+    History { go: Where },
     /// Move the page, or one scrollable thing on it.
     ///
     /// `to` is `by`, `top` or `bottom`; `by` takes `dx`/`dy` in pixels. Not
@@ -181,6 +196,14 @@ pub enum OnElement {
         #[serde(default)]
         dy: i32,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Where {
+    Back,
+    Forward,
+    Reload,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -49,6 +49,10 @@ const PAGE_TEXT: usize = 20_000;
 const LINKS: usize = 100;
 /// The most matches one find answers with.
 const FOUND: usize = 50;
+/// How long a wait runs by default, and the longest one it can be asked for:
+/// a request holds a connection while it waits.
+const WAIT_MS: u64 = 10_000;
+const MAX_WAIT: Duration = Duration::from_secs(60);
 /// The most of an original pause a replay reproduces. Pacing matters — a page
 /// that had two seconds to load gets them — but an idle hour does not.
 const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
@@ -1113,6 +1117,31 @@ async fn on_element(
         }
         OnElement::Upload { query, paths } => {
             page.upload(&query, &paths).await?;
+            ElementResult::default()
+        }
+        OnElement::WaitFor {
+            query,
+            gone,
+            within_ms,
+        } => {
+            let within = Duration::from_millis(within_ms.unwrap_or(WAIT_MS)).min(MAX_WAIT);
+            let found = page.wait_for(&query, gone, within).await?;
+
+            ElementResult {
+                element: found.map(element_out),
+                ..ElementResult::default()
+            }
+        }
+        OnElement::Hover { query } => ElementResult {
+            element: Some(element_out(page.hover(&query).await?)),
+            ..ElementResult::default()
+        },
+        OnElement::History { go } => {
+            match go {
+                Where::Back => page.back().await?,
+                Where::Forward => page.forward().await?,
+                Where::Reload => page.reload().await?,
+            }
             ElementResult::default()
         }
         OnElement::Scroll { query, to, dx, dy } => {

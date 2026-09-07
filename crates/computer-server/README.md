@@ -185,7 +185,7 @@ a server and this endpoint is only the HTTP in front of it.
 | `GET /v1/catalog` | the app names a launch can ask for |
 | `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
 | `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
-| `POST /v1/boxes/{id}/page/element` | click, fill, dropdown or upload, by query |
+| `POST /v1/boxes/{id}/page/element` | click, fill, dropdown, upload, hover, wait, history or scroll, by query |
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |

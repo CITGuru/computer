@@ -8,7 +8,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, ForkMode, ForkRequest, OnElement, Reading, ScrollTo, Want,
+    Action, ActionBatch, ForkMode, ForkRequest, OnElement, Reading, ScrollTo, Want, Where,
 };
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
@@ -182,6 +182,39 @@ pub fn catalogue() -> Value {
                     "option": { "type": "string", "description": "Required for select." }
                 }),
                 &["query", "op"]
+            )
+        ),
+        tool(
+            "wait_for",
+            "Wait until something matching the query is on the page, or with `gone` until it \
+             leaves. Use this after anything that makes the page fetch — a sleep is either short \
+             enough to act too early or long enough to be paid on every step. Answers with what \
+             it found, and fails saying what never appeared.",
+            with_box(
+                json!({
+                    "query": { "type": "string" },
+                    "gone": {
+                        "type": "boolean",
+                        "description": "Wait for it to leave instead: a spinner ending, a dialog closing."
+                    },
+                    "within_ms": { "type": "integer", "description": "How long to wait." }
+                }),
+                &["query"]
+            )
+        ),
+        tool(
+            "hover",
+            "Put the pointer over something without pressing anything. A menu that opens on \
+             hover has nothing to click until the pointer arrives.",
+            with_box(json!({ "query": { "type": "string" } }), &["query"])
+        ),
+        tool(
+            "history",
+            "Go back, forward, or reload. Back is not the same as opening the previous URL \
+             again: that discards what the page held, and a form half filled in comes back empty.",
+            with_box(
+                json!({ "go": { "type": "string", "enum": ["back", "forward", "reload"] } }),
+                &["go"]
             )
         ),
         tool(
@@ -504,6 +537,29 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 paths,
             };
             element(client, arguments, what, "handed over").await
+        }
+        "wait_for" => {
+            let what = OnElement::WaitFor {
+                query: text(arguments, "query")?,
+                gone: flag(arguments, "gone"),
+                within_ms: arguments.get("within_ms").and_then(Value::as_u64),
+            };
+            element(client, arguments, what, "there").await
+        }
+        "hover" => {
+            let what = OnElement::Hover {
+                query: text(arguments, "query")?,
+            };
+            element(client, arguments, what, "hovering over").await
+        }
+        "history" => {
+            let go = match text(arguments, "go")?.as_str() {
+                "back" => Where::Back,
+                "forward" => Where::Forward,
+                "reload" => Where::Reload,
+                other => return Err(format!("no such direction: {other}")),
+            };
+            element(client, arguments, OnElement::History { go }, "went").await
         }
         "scroll_page" => {
             let to = match arguments.get("to").and_then(Value::as_str) {

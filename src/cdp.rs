@@ -601,6 +601,9 @@ pub struct Page {
 const TEXT_DEFAULT: usize = 100_000;
 const LINKS_DEFAULT: usize = 100;
 
+/// How often a wait asks whether the page has caught up.
+const POLL: Duration = Duration::from_millis(120);
+
 /// Where a scroll should end up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scroll {
@@ -1140,6 +1143,114 @@ impl Page {
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))?;
 
         Ok(moved)
+    }
+
+    /// Wait until something matching `query` is on the page.
+    ///
+    /// The alternative is a sleep, which is either short enough to act too
+    /// early or long enough to be paid on every step. A page that answers a
+    /// click by fetching says nothing when it starts and everything when the
+    /// result appears.
+    ///
+    /// `gone` waits for the opposite — a spinner leaving, a dialog closing.
+    pub async fn wait_for(
+        &mut self,
+        query: &str,
+        gone: bool,
+        within: Duration,
+    ) -> Result<Option<Element>> {
+        let deadline = Instant::now() + within;
+
+        loop {
+            let found = self.find(query, Some(1), None).await?;
+            let here = found.first().cloned();
+
+            match (gone, &here) {
+                (false, Some(_)) => return Ok(here),
+                (true, None) => return Ok(None),
+                _ => {}
+            }
+
+            if Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    after: within,
+                    detail: match gone {
+                        true => format!("{query} was still on the page"),
+                        false => format!("nothing matching {query} appeared"),
+                    },
+                });
+            }
+
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
+    /// Back through this page's own history.
+    ///
+    /// Not the same as opening the previous URL again: that discards whatever
+    /// the page had put in it, and a form half filled in comes back empty.
+    pub async fn back(&mut self) -> Result<()> {
+        self.step_history(-1).await
+    }
+
+    pub async fn forward(&mut self) -> Result<()> {
+        self.step_history(1).await
+    }
+
+    pub async fn reload(&mut self) -> Result<()> {
+        self.call("Page.reload", json!({})).await.map(|_| ())
+    }
+
+    /// One step along the history, in whichever direction.
+    async fn step_history(&mut self, by: i64) -> Result<()> {
+        let history = self.call("Page.getNavigationHistory", json!({})).await?;
+
+        let at = history
+            .get("currentIndex")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| Error::denied("the page keeps no history"))?;
+
+        let entries = history
+            .get("entries")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::denied("the page keeps no history"))?;
+
+        let want = at + by;
+        let entry = usize::try_from(want)
+            .ok()
+            .and_then(|want| entries.get(want))
+            .and_then(|entry| entry.get("id"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                Error::denied(match by < 0 {
+                    true => "nothing before this page",
+                    false => "nothing after this page",
+                })
+            })?;
+
+        self.call("Page.navigateToHistoryEntry", json!({ "entryId": entry }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Put the pointer over something without pressing anything.
+    ///
+    /// A menu that opens on hover has no click to send: the thing worth
+    /// clicking does not exist until the pointer arrives.
+    pub async fn hover(&mut self, query: &str) -> Result<Element> {
+        let element = self.reach(query).await?;
+
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseMoved",
+                "x": element.at.x,
+                "y": element.at.y,
+            }),
+        )
+        .await?;
+
+        Ok(element)
     }
 
     /// Bring one into view and click its middle.

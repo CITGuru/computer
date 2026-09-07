@@ -28,8 +28,8 @@ cargo install --path crates/computer-mcp
 ## The tools
 
 `launch_box` · `list_boxes` · `remove_box` · `screenshot` · `read_page` ·
-`find` · `click_element` · `fill_field` · `dropdown` · `upload_file` ·
-`scroll_page` ·
+`find` · `wait_for` · `click_element` · `fill_field` · `dropdown` ·
+`upload_file` · `hover` · `history` · `scroll_page` ·
 `open_url` · `open_app` · `list_apps` · `click` · `type_text` · `press_key` ·
 `scroll` · `drag` · `run_command` · `hand_over` · `reclaim_screen` · `fork_box`
 
@@ -40,6 +40,12 @@ moves under it, and two of these have no coordinate at all: a file chooser is
 the operating system's window, and a native dropdown opens a menu no screenshot
 shows and no click reaches. `click`, `type_text` and `drag` remain for
 everything that is not a page.
+
+**`wait_for` after anything that makes the page fetch.** A sleep is either
+short enough to act too early or long enough to be paid on every step, and a
+page that answers a click by fetching says nothing when it starts and
+everything when the result arrives. `gone` waits the other way, for a spinner
+ending or a dialog closing.
 
 **Two scrolls, and they are not the same.** `scroll` sends wheel clicks at a
 screen point, so it needs a coordinate and moves whatever sits under the
