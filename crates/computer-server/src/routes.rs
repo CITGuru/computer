@@ -47,6 +47,8 @@ const REPLAY_BUDGET: Duration = Duration::from_secs(180);
 /// for less than this, and a page is unbounded.
 const PAGE_TEXT: usize = 20_000;
 const LINKS: usize = 100;
+/// The most matches one find answers with.
+const FOUND: usize = 50;
 /// The most of an original pause a replay reproduces. Pacing matters — a page
 /// that had two seconds to load gets them — but an idle hour does not.
 const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
@@ -91,6 +93,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/catalog", get(catalog))
         .route("/v1/boxes/{id}/page", get(read_page))
+        .route("/v1/boxes/{id}/page/find", get(find_elements))
+        .route("/v1/boxes/{id}/page/element", post(on_element))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::auth::gate,
@@ -1048,6 +1052,117 @@ async fn read_page(
             })
             .collect(),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+struct FindQuery {
+    q: String,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    scroll: Option<bool>,
+}
+
+/// What on the page matches, best first.
+async fn find_elements(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<FindQuery>,
+) -> ApiResult<Json<Vec<Element>>> {
+    let mut page = visible(&state, &id).await?;
+    let found = page
+        .find(
+            &query.q,
+            Some(query.limit.unwrap_or(FOUND).clamp(1, FOUND)),
+            query.scroll,
+        )
+        .await?;
+
+    Ok(Json(found.into_iter().map(element_out).collect()))
+}
+
+/// Act on the element a query names.
+///
+/// By name rather than by coordinate: a point worked out from a frame is stale
+/// the moment the page moves under it, and some of these have no coordinate at
+/// all — a file chooser is the operating system's window, and a native
+/// dropdown opens a menu no screenshot shows.
+async fn on_element(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<OnElement>,
+) -> ApiResult<Json<ElementResult>> {
+    let mut page = visible(&state, &id).await?;
+
+    Ok(Json(match body {
+        OnElement::Click { query } => ElementResult {
+            element: Some(element_out(page.click_on(&query).await?)),
+            ..ElementResult::default()
+        },
+        OnElement::Fill { query, text } => {
+            page.fill(&query, &text).await?;
+            ElementResult::default()
+        }
+        OnElement::Options { query } => ElementResult {
+            options: page.options(&query).await?,
+            ..ElementResult::default()
+        },
+        OnElement::Choose { query, option } => {
+            page.choose(&query, &option).await?;
+            ElementResult::default()
+        }
+        OnElement::Upload { query, paths } => {
+            page.upload(&query, &paths).await?;
+            ElementResult::default()
+        }
+        OnElement::Scroll { query, to, dx, dy } => {
+            let how = match to {
+                ScrollTo::By => computer::Scroll::By { x: dx, y: dy },
+                ScrollTo::Top => computer::Scroll::Top,
+                ScrollTo::Bottom => computer::Scroll::Bottom,
+            };
+            let (x, y) = page.scroll(query.as_deref(), how).await?;
+
+            ElementResult {
+                // Never negative: a browser clamps a scroll at the top.
+                at: Some(Point {
+                    x: x.max(0) as u32,
+                    y: y.max(0) as u32,
+                }),
+                ..ElementResult::default()
+            }
+        }
+    }))
+}
+
+/// The page the screen is showing.
+async fn visible(state: &AppState, id: &str) -> ApiResult<computer::Page> {
+    let entry = state.registry.get(id).await?;
+    let browser = entry
+        .computer
+        .browser()
+        .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
+
+    browser
+        .visible_page()
+        .await?
+        .ok_or_else(|| ApiError::not_found("no page is on screen"))
+}
+
+fn element_out(element: computer::Element) -> Element {
+    Element {
+        text: element.text,
+        tag: element.tag,
+        kind: element.kind,
+        at: Point {
+            x: element.at.x,
+            y: element.at.y,
+        },
+        width: element.width,
+        height: element.height,
+        enabled: element.enabled,
+        value: element.value,
+    }
 }
 
 async fn list_windows(

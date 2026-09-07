@@ -601,6 +601,123 @@ pub struct Page {
 const TEXT_DEFAULT: usize = 100_000;
 const LINKS_DEFAULT: usize = 100;
 
+/// Where a scroll should end up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scroll {
+    /// This far from where it is now. Positive `y` moves down the page.
+    By {
+        x: i32,
+        y: i32,
+    },
+    /// To this position, counted from the top.
+    To {
+        x: i32,
+        y: i32,
+    },
+    /// As far down as it goes. What a page that loads more on arrival wants.
+    Bottom,
+    Top,
+}
+
+impl Scroll {
+    fn as_js(self) -> String {
+        match self {
+            Self::By { x, y } => format!("{{ x: null, dx: {x}, dy: {y} }}"),
+            Self::To { x, y } => format!("{{ x: {x}, y: {y} }}"),
+            // Larger than any document, since the browser clamps it and
+            // `scrollHeight` on the wrong element is a different number.
+            Self::Bottom => "{ x: 0, y: 1e9 }".to_string(),
+            Self::Top => "{ x: 0, y: 0 }".to_string(),
+        }
+    }
+}
+
+/// How many matches a find carries when the caller names no number.
+const FOUND_DEFAULT: usize = 20;
+
+/// One thing on a page a caller can act on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Element {
+    /// What it says, which is usually what a caller was looking for.
+    pub text: String,
+    /// Its tag, lowercased: `button`, `input`, `select`, `a`.
+    pub tag: String,
+    /// An `input`'s type, where it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The middle of it, in the page's own coordinates — which is what
+    /// [`Page::click`] takes, and is not where it sits on the screen.
+    pub at: Point,
+    pub width: u32,
+    pub height: u32,
+    /// A disabled control is worth knowing about before it is clicked and
+    /// nothing happens.
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// Elements matching a query, best first.
+///
+/// A CSS selector where the query is one, a `name`, `id` or placeholder where
+/// it names a field, and visible words otherwise: an agent knows a button says
+/// "Sign in" and rarely knows its class.
+const MATCH: &str = r#"(q) => {
+  const seen = new Set();
+  const out = [];
+  const add = el => {
+    if (!el || seen.has(el)) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none') return;
+    seen.add(el); out.push(el);
+  };
+
+  try { document.querySelectorAll(q).forEach(add); } catch (e) {}
+
+  // A field is usually named rather than worded: `custname` is what a form
+  // calls it, and a bare word is not a selector that finds it.
+  for (const by of ['[name=', '[id=', '[placeholder=', '[aria-label=']) {
+    try { document.querySelectorAll(by + JSON.stringify(q) + ']').forEach(add); } catch (e) {}
+  }
+
+  const want = q.trim().toLowerCase();
+  const words = el => (el.innerText || el.value || el.getAttribute('aria-label') ||
+                       el.getAttribute('placeholder') || el.getAttribute('title') || '')
+                        .replace(/\s+/g, ' ').trim().toLowerCase();
+  const clickable = 'a,button,input,select,textarea,[role=button],[role=link],[onclick]';
+
+  for (const pass of [
+    el => words(el) === want,
+    el => words(el).includes(want),
+  ]) {
+    for (const el of document.querySelectorAll(clickable)) if (pass(el)) add(el);
+    for (const el of document.querySelectorAll('*')) if (pass(el)) add(el);
+  }
+
+  // Not sorted by position: the passes above are the ranking, and a form
+  // containing a button sits higher on the page than the button does. Sorting
+  // by top would hand back the form.
+  return out;
+}"#;
+
+/// One element, as a caller sees it.
+const DESCRIBE: &str = r#"(el) => {
+  const r = el.getBoundingClientRect();
+  return {
+    text: (el.innerText || el.value || el.getAttribute('aria-label') || '')
+            .replace(/\s+/g, ' ').trim().slice(0, 200),
+    tag: el.tagName.toLowerCase(),
+    kind: el.getAttribute('type') || undefined,
+    at: { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) },
+    width: Math.round(r.width),
+    height: Math.round(r.height),
+    enabled: !el.disabled,
+    value: el.value === undefined ? undefined : String(el.value).slice(0, 200),
+  };
+}"#;
+
 /// How a page should be read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -944,6 +1061,219 @@ impl Page {
             .await?;
         }
         Ok(())
+    }
+
+    /// Elements matching `query`, best match first.
+    ///
+    /// Exact words beat a substring, and something clickable beats a `div`
+    /// that happens to contain them.
+    ///
+    /// `scroll` brings the best match into view before anything is measured.
+    /// Without it a match below the fold is described where it sits in a
+    /// document the window is not showing, and its coordinates address
+    /// nothing.
+    ///
+    /// A CSS selector where the query is one, and visible text otherwise: an
+    /// agent knows a button says "Sign in" and rarely knows its class.
+    pub async fn find(
+        &mut self,
+        query: &str,
+        limit: Option<usize>,
+        scroll: Option<bool>,
+    ) -> Result<Vec<Element>> {
+        let found = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const found = ({MATCH})({}).slice(0, {});
+                     // Scrolled before it is measured, not after: a coordinate
+                     // is the viewport's, so one taken for an element below
+                     // the fold points past the bottom of the window and a
+                     // click on it lands nowhere.
+                     if ({scroll} && found[0]) {{
+                       found[0].scrollIntoView({{ block: 'center', inline: 'center' }});
+                     }}
+                     return JSON.stringify(found.map({DESCRIBE}));
+                   }})()"#,
+                json!(query),
+                limit.unwrap_or(FOUND_DEFAULT),
+                scroll = scroll.unwrap_or(false)
+            ))
+            .await?;
+
+        serde_json::from_str(found.as_str().unwrap_or("[]"))
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    /// Move the page, or one scrollable thing on it.
+    ///
+    /// The desktop's own scroll sends wheel clicks at a screen point, so it
+    /// needs a coordinate and moves whatever sits under the pointer. This
+    /// moves the page itself, in pixels.
+    ///
+    /// Answers with where it ended up, which is how a caller tells that it
+    /// arrived: a page that loads more as you reach the bottom returns the
+    /// same position twice when there is no more to load.
+    pub async fn scroll(&mut self, what: Option<&str>, how: Scroll) -> Result<(i32, i32)> {
+        let target = match what {
+            Some(query) => format!("({MATCH})({}).find(Boolean)", json!(query)),
+            None => "null".to_string(),
+        };
+
+        let moved = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const el = {target};
+                     const box = el || document.scrollingElement || document.body;
+                     const to = {how};
+                     if (to.x === null) {{
+                       box.scrollBy(to.dx, to.dy);
+                     }} else {{
+                       box.scrollTo(to.x, to.y);
+                     }}
+                     return JSON.stringify([Math.round(box.scrollLeft), Math.round(box.scrollTop)]);
+                   }})()"#,
+                how = how.as_js()
+            ))
+            .await?;
+
+        let moved: (i32, i32) = serde_json::from_str(moved.as_str().unwrap_or("[0,0]"))
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))?;
+
+        Ok(moved)
+    }
+
+    /// Bring one into view and click its middle.
+    ///
+    /// Its own coordinates rather than a caller's: a point worked out from a
+    /// screenshot is stale the moment the page moves under it, and a click
+    /// against a stale point lands on whatever took that place.
+    pub async fn click_on(&mut self, query: &str) -> Result<Element> {
+        let element = self.reach(query).await?;
+        self.click(element.at).await?;
+        Ok(element)
+    }
+
+    /// Put `text` in a field, as typing rather than as an assignment.
+    ///
+    /// A page watching for keystrokes — a search box filtering as you type, a
+    /// form validating a field — sees nothing when a value is only assigned.
+    pub async fn fill(&mut self, query: &str, text: &str) -> Result<()> {
+        let element = self.reach(query).await?;
+        self.click(element.at).await?;
+
+        self.evaluate(&format!(
+            "(({MATCH})({}).find(Boolean) || {{}}).value = ''",
+            json!(query)
+        ))
+        .await?;
+
+        self.type_text(text).await
+    }
+
+    /// What a dropdown offers.
+    pub async fn options(&mut self, query: &str) -> Result<Vec<String>> {
+        let listed = self
+            .evaluate(&format!(
+                "JSON.stringify(Array.from((({MATCH})({}).find(e => e.tagName === 'SELECT') || {{ options: [] }}).options).map(o => o.text.trim()))",
+                json!(query)
+            ))
+            .await?;
+
+        serde_json::from_str(listed.as_str().unwrap_or("[]"))
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    /// Choose one of them, by its visible words.
+    ///
+    /// Through the element rather than through the screen: a native dropdown
+    /// opens a menu the compositor owns, which a screenshot does not show and
+    /// a click cannot reach.
+    pub async fn choose(&mut self, query: &str, option: &str) -> Result<()> {
+        let chose = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const el = ({MATCH})({}).find(e => e.tagName === 'SELECT');
+                     if (!el) return 'no dropdown matched';
+                     const want = {}.trim().toLowerCase();
+                     const at = Array.from(el.options)
+                       .findIndex(o => o.text.trim().toLowerCase() === want ||
+                                       String(o.value).toLowerCase() === want);
+                     if (at < 0) return 'no such option';
+                     el.selectedIndex = at;
+                     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                     return 'ok';
+                   }})()"#,
+                json!(query),
+                json!(option)
+            ))
+            .await?;
+
+        match chose.as_str() {
+            Some("ok") => Ok(()),
+            other => Err(Error::denied(format!(
+                "{}: {query} / {option}",
+                other.unwrap_or("the page answered nothing")
+            ))),
+        }
+    }
+
+    /// Hand files to a file input.
+    ///
+    /// The paths are the box's own. A file chooser is the operating system's
+    /// window, not the page's, so nothing on screen can be clicked to fill one
+    /// in — this sets the input directly.
+    pub async fn upload(&mut self, query: &str, paths: &[String]) -> Result<()> {
+        let handle = self
+            .call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": format!(
+                        "({MATCH})({}).find(e => e.tagName === 'INPUT' && e.type === 'file')",
+                        json!(query)
+                    ),
+                    "returnByValue": false,
+                }),
+            )
+            .await?;
+
+        let object = handle
+            .get("result")
+            .and_then(|result| result.get("objectId"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::denied(format!("no file input matched {query}")))?;
+
+        self.call(
+            "DOM.setFileInputFiles",
+            json!({ "files": paths, "objectId": object }),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// The first match, brought into view.
+    async fn reach(&mut self, query: &str) -> Result<Element> {
+        let found = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const el = ({MATCH})({}).find(Boolean);
+                     if (!el) return 'null';
+                     el.scrollIntoView({{ block: 'center', inline: 'center' }});
+                     return JSON.stringify(({DESCRIBE})(el));
+                   }})()"#,
+                json!(query)
+            ))
+            .await?;
+
+        let found = found.as_str().unwrap_or("null");
+        if found == "null" {
+            return Err(Error::denied(format!(
+                "nothing on the page matched {query}"
+            )));
+        }
+
+        serde_json::from_str(found)
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
     /// Type text into whatever the page has focused.

@@ -139,6 +139,13 @@ says whether that cut anything. Both are ceilings here rather than defaults a
 caller can raise; `computer::Page::read` has no ceiling, because a library owes
 its caller none and a deployment owes one to whoever it answers.
 
+`find` answers with each match's position **in the page**, which is what
+`click_element` and the rest use. `scroll=true` brings the best match into view
+before measuring: a match below the fold is otherwise described where the
+window is not looking, and its coordinates address nothing. On a page four
+thousand pixels tall, the same button reads `y=4011` without it and `y=903`
+with.
+
 `format` is `markdown` (the default), `text` or `raw`. Markdown keeps the
 headings, lists, tables and code a flat rendering loses, and puts each link's
 address beside its words. `text` is the cheapest answer to "what does this
@@ -177,6 +184,8 @@ a server and this endpoint is only the HTTP in front of it.
 | `POST /v1/boxes/{id}/fork` | build it again from its trace |
 | `GET /v1/catalog` | the app names a launch can ask for |
 | `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
+| `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
+| `POST /v1/boxes/{id}/page/element` | click, fill, dropdown or upload, by query |
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |
