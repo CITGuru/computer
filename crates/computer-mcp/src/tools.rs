@@ -107,6 +107,23 @@ pub fn catalogue() -> Value {
             )
         ),
         tool(
+            "read_page",
+            "Read the page on screen as text, with the links and the addresses behind them. \
+             Use it to find out what a page says: a screenshot is a picture of text, shows \
+             one viewport of a page that may be far longer, and renders a link as its label \
+             rather than its URL. Take a screenshot when you need to know where to click — \
+             this says what is there, that says where it is.",
+            with_box(
+                json!({
+                    "limit": {
+                        "type": "integer",
+                        "description": "Characters of text to return. Defaults to the server's cap."
+                    }
+                }),
+                &[]
+            )
+        ),
+        tool(
             "list_apps",
             "The application names this server can open. Read them rather than guessing one.",
             json!({ "type": "object", "properties": {} })
@@ -274,6 +291,33 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 0,
             )
             .await
+        }
+        "read_page" => {
+            let id = text(arguments, "box_id")?;
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|limit| limit as usize);
+
+            let page = client.page(&id, limit).await.map_err(|e| e.to_string())?;
+
+            let links = page
+                .links
+                .iter()
+                .map(|link| format!("{} -> {}", link.text, link.href))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            Ok(Answer::Text(format!(
+                "{}\n{}\n\n{}{}\n\nLinks:\n{links}",
+                page.title,
+                page.url,
+                page.text,
+                match page.truncated {
+                    true => " …(cut)",
+                    false => "",
+                }
+            )))
         }
         "list_apps" => {
             let names = client.catalog().await.map_err(|e| e.to_string())?;

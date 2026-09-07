@@ -27,9 +27,14 @@ cargo install --path crates/computer-mcp
 
 ## The tools
 
-`launch_box` · `list_boxes` · `remove_box` · `screenshot` · `open_url` ·
-`click` · `type_text` · `press_key` · `scroll` · `drag` · `run_command` ·
-`hand_over` · `reclaim_screen` · `fork_box`
+`launch_box` · `list_boxes` · `remove_box` · `screenshot` · `read_page` ·
+`open_url` · `open_app` · `list_apps` · `click` · `type_text` · `press_key` ·
+`scroll` · `drag` · `run_command` · `hand_over` · `reclaim_screen` · `fork_box`
+
+`read_page` and `screenshot` answer different questions. A frame says **where**
+to click, which is the only place a coordinate can come from. `read_page` says
+**what is there** — as text rather than a picture of text, past the fold, and
+with the address behind each link instead of its label.
 
 **Every tool that moves the screen answers with the frame it produced**, as an
 image rather than a hash. An agent that has to ask for a screenshot after every

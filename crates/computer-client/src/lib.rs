@@ -129,6 +129,16 @@ impl Client {
         .await
     }
 
+    /// What the page in front is showing, as text.
+    pub async fn page(&self, id: &str, limit: Option<usize>) -> Result<PageText> {
+        let path = match limit {
+            Some(limit) => format!("/v1/boxes/{id}/page?limit={limit}"),
+            None => format!("/v1/boxes/{id}/page"),
+        };
+
+        self.send(reqwest::Method::GET, &path, None, &[]).await
+    }
+
     /// The app names this server can open.
     pub async fn catalog(&self) -> Result<Vec<String>> {
         let apps: std::collections::BTreeMap<String, serde_json::Value> = self

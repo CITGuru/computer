@@ -123,6 +123,27 @@ back a screen the next click lands wrong on.
 The app has to be in the box already: `GET /v1/catalog` names what this server
 knows, and `spec.apps` is what installs one when the box is created.
 
+## Read the page
+
+A frame says where to click. It does not say what a page holds: it is a picture
+of text, shows one viewport of a document that may be far longer, and renders a
+link as its label rather than its address.
+
+```bash
+curl -s "localhost:8080/v1/boxes/$BOX/page?limit=4000"
+```
+
+Answers with the visible page's title, URL, rendered text and its links with
+their `href`s — so a caller reads what is there, and navigates by URL rather
+than guessing a coordinate for an anchor. Clicking is still how everything that
+is not a link is reached.
+
+The read is scoped rather than an `evaluate` endpoint: running a caller's
+JavaScript in the box's browser is a wider door than any tool here needs.
+
+The reading itself is `computer::Page::read`, so a library user gets it without
+a server and this endpoint is only the HTTP in front of it.
+
 ## The rest
 
 | | |
@@ -136,6 +157,7 @@ knows, and `spec.apps` is what installs one when the box is created.
 | `GET …/screens/{n}/viewers` | who is watching and who is driving |
 | `POST /v1/boxes/{id}/fork` | build it again from its trace |
 | `GET /v1/catalog` | the app names a launch can ask for |
+| `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |

@@ -41,6 +41,12 @@ const TRACE_PAGE: usize = 500;
 /// The longest a replay is given before it stops and says so. A fork is one
 /// HTTP request, and a box that was driven for an hour cannot take one.
 const REPLAY_BUDGET: Duration = Duration::from_secs(180);
+/// The most page text one read answers with, and the most links.
+///
+/// A cap rather than the whole document: a page is unbounded and a caller
+/// asking what it says wants what it says, not every byte behind it.
+const PAGE_TEXT: usize = 20_000;
+const LINKS: usize = 100;
 /// The most of an original pause a replay reproduces. Pacing matters — a page
 /// that had two seconds to load gets them — but an idle hour does not.
 const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
@@ -84,6 +90,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             axum::routing::delete(close_window),
         )
         .route("/v1/catalog", get(catalog))
+        .route("/v1/boxes/{id}/page", get(read_page))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::auth::gate,
@@ -979,6 +986,52 @@ async fn trace_frame(
         Body::from(png.as_slice().to_vec()),
     )
         .into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct PageQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// What the page in front is showing, as text.
+///
+/// The page the screen shows, not the first one open: a caller reading what it
+/// can see is the point, and a frame and this have to agree.
+async fn read_page(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<PageQuery>,
+) -> ApiResult<Json<PageText>> {
+    let entry = state.registry.get(&id).await?;
+    let browser = entry
+        .computer
+        .browser()
+        .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
+
+    let mut page = browser
+        .visible_page()
+        .await?
+        .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
+
+    let read = page
+        .read(query.limit.unwrap_or(PAGE_TEXT).clamp(1, PAGE_TEXT), LINKS)
+        .await?;
+
+    Ok(Json(PageText {
+        url: read.url,
+        title: read.title,
+        text: read.text,
+        truncated: read.truncated,
+        links: read
+            .links
+            .into_iter()
+            .map(|link| Link {
+                text: link.text,
+                href: link.href,
+            })
+            .collect(),
+    }))
 }
 
 async fn list_windows(

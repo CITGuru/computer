@@ -115,6 +115,27 @@ pub enum Action {
     },
 }
 
+/// What the page in front is showing.
+///
+/// Text rather than a picture of text, and links with the addresses behind
+/// them: a frame says where to click, and this says what it says.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageText {
+    pub url: String,
+    pub title: String,
+    /// The rendered text, whitespace collapsed and cut at `limit`.
+    pub text: String,
+    /// Whether the cut lost anything.
+    pub truncated: bool,
+    pub links: Vec<Link>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Link {
+    pub text: String,
+    pub href: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Window {
     pub id: String,

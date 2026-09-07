@@ -9,6 +9,7 @@
 
 use crate::error::{Error, Result};
 use crate::{BrowserEndpoint, Point};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
@@ -593,6 +594,27 @@ pub struct Page {
     target: Target,
 }
 
+/// What a page is showing.
+///
+/// Text rather than a picture of text, and links with the addresses behind
+/// them: a frame says where to click, and this says what it says.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageText {
+    pub url: String,
+    pub title: String,
+    /// Rendered text, whitespace collapsed and cut at the caller's limit.
+    pub text: String,
+    /// Whether the cut lost anything.
+    pub truncated: bool,
+    pub links: Vec<Link>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Link {
+    pub text: String,
+    pub href: String,
+}
+
 impl Page {
     pub fn target(&self) -> &Target {
         &self.target
@@ -678,6 +700,45 @@ impl Page {
     }
 
     /// The current URL, asked of the page rather than read off a screenshot.
+    /// What this page is showing, as text and links.
+    ///
+    /// Read in the page rather than over the wire: a document is megabytes of
+    /// markup, and what a reader wants is what it renders. Scripts, styles and
+    /// SVG go; navigation stays, because telling a site's chrome from its
+    /// content is a heuristic and a wrong one silently drops the page.
+    pub async fn read(&mut self, limit: usize, links: usize) -> Result<PageText> {
+        let read = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const clone = document.body ? document.body.cloneNode(true) : null;
+                     if (clone) {{
+                       clone.querySelectorAll('script,style,noscript,svg,template')
+                         .forEach(n => n.remove());
+                     }}
+                     const text = (clone ? clone.innerText : '').replace(/\s+/g, ' ').trim();
+                     const links = Array.from(document.querySelectorAll('a[href]'))
+                       .map(a => ({{ text: (a.innerText || '').replace(/\s+/g, ' ').trim(), href: a.href }}))
+                       .filter(l => l.text && l.href.startsWith('http'))
+                       .slice(0, {links});
+                     return JSON.stringify({{
+                       url: location.href,
+                       title: document.title,
+                       text: text.slice(0, {limit}),
+                       truncated: text.length > {limit},
+                       links,
+                     }});
+                   }})()"#
+            ))
+            .await?;
+
+        let read = read
+            .as_str()
+            .ok_or_else(|| Error::denied("the page answered with something unreadable"))?;
+
+        serde_json::from_str(read)
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
     pub async fn url(&mut self) -> Result<String> {
         Ok(self
             .evaluate("location.href")
