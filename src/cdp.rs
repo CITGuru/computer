@@ -9,6 +9,7 @@
 
 use crate::error::{Error, Result};
 use crate::{BrowserEndpoint, Point};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, OnceLock};
@@ -171,6 +172,55 @@ impl Devtools {
     }
 
     /// Attach to the first page, opening one if the browser has none.
+    /// Put a query to a search engine, and hand back the results page.
+    ///
+    /// The URL is built rather than written by a caller: a query with `&` or
+    /// `#` in it, pasted into a template, searches for something other than
+    /// what was asked for.
+    pub async fn search(
+        &self,
+        query: &str,
+        provider: SearchProvider,
+        within: Duration,
+    ) -> Result<Page> {
+        self.open_page(&provider.url_for(query), within).await
+    }
+
+    /// Close pages beyond the newest `keep`, and answer how many went.
+    ///
+    /// `open_url` raises a new tab every time, by design — a person opening a
+    /// link expects one. A program doing it fifty times leaves fifty behind,
+    /// and a browser holding them all gets slower at everything.
+    ///
+    /// Never the visible one, whatever its age: it is the page the screen is
+    /// showing and a caller is probably reading it.
+    pub async fn tidy(&self, keep: usize) -> Result<usize> {
+        let pages = self.pages().await?;
+        if pages.len() <= keep {
+            return Ok(0);
+        }
+
+        let showing = match self.visible_page().await {
+            Ok(Some(mut page)) => page.url().await.ok(),
+            _ => None,
+        };
+
+        let mut closed = 0;
+        // Newest first, as the debugger lists them, so the tail is what has
+        // been sitting there longest.
+        for target in pages.into_iter().skip(keep) {
+            if showing.as_deref() == Some(target.url.as_str()) {
+                continue;
+            }
+
+            if self.close(&target.id).await.is_ok() {
+                closed += 1;
+            }
+        }
+
+        Ok(closed)
+    }
+
     pub async fn visible_page(&self) -> Result<Option<Page>> {
         for target in self.pages().await? {
             let mut page = self.attach(&target).await?;
@@ -587,10 +637,336 @@ impl Drop for Connection {
     }
 }
 
+/// Which search engine a query is put to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SearchProvider {
+    /// Its plain endpoint, which renders results as ordinary HTML.
+    ///
+    /// The default because it is the one a reader gets anything from. It also
+    /// refuses a shell that asks too often — a browser it serves, `curl` it
+    /// answers with a puzzle about ducks.
+    #[default]
+    DuckDuckGo,
+    /// Answers, but as an application rather than a document: results arrive
+    /// after script runs, behind a consent page in much of the world.
+    Google,
+    /// Answers, and sometimes to a different question. A quoted name here
+    /// returned land records for an Indian state.
+    Bing,
+}
+
+impl SearchProvider {
+    /// Where to send this query.
+    pub fn url_for(&self, query: &str) -> String {
+        let query = encode(query);
+
+        match self {
+            Self::DuckDuckGo => format!("https://duckduckgo.com/html/?q={query}"),
+            Self::Google => format!("https://www.google.com/search?q={query}"),
+            Self::Bing => format!("https://www.bing.com/search?q={query}"),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Google => "google",
+            Self::Bing => "bing",
+        }
+    }
+}
+
+/// Percent-encode one query.
+///
+/// By hand because the crate carries no URL library, and wrongly by hand is
+/// how a search for a quoted phrase becomes a search for something else: `&`
+/// starts another parameter, `#` ends the URL, and a space is not a `+`
+/// everywhere it is written as one.
+fn encode(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+
+    for byte in query.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(char::from(*byte))
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+
+    out
+}
+
 /// One attached target.
 pub struct Page {
     connection: Connection,
     target: Target,
+}
+
+/// What a read carries when the caller names no numbers.
+///
+/// Defaults, not limits: a library imposes no ceiling on its caller, and a
+/// deployment that needs one puts it in front — see `computer-server`.
+const TEXT_DEFAULT: usize = 100_000;
+const LINKS_DEFAULT: usize = 100;
+
+/// How often a wait asks whether the page has caught up.
+const POLL: Duration = Duration::from_millis(120);
+
+/// Where a scroll should end up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scroll {
+    /// This far from where it is now. Positive `y` moves down the page.
+    By {
+        x: i32,
+        y: i32,
+    },
+    /// To this position, counted from the top.
+    To {
+        x: i32,
+        y: i32,
+    },
+    /// As far down as it goes. What a page that loads more on arrival wants.
+    Bottom,
+    Top,
+}
+
+impl Scroll {
+    fn as_js(self) -> String {
+        match self {
+            Self::By { x, y } => format!("{{ x: null, dx: {x}, dy: {y} }}"),
+            Self::To { x, y } => format!("{{ x: {x}, y: {y} }}"),
+            // Larger than any document, since the browser clamps it and
+            // `scrollHeight` on the wrong element is a different number.
+            Self::Bottom => "{ x: 0, y: 1e9 }".to_string(),
+            Self::Top => "{ x: 0, y: 0 }".to_string(),
+        }
+    }
+}
+
+/// How many matches a find carries when the caller names no number.
+const FOUND_DEFAULT: usize = 20;
+
+/// One thing on a page a caller can act on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Element {
+    /// What it says, which is usually what a caller was looking for.
+    pub text: String,
+    /// Its tag, lowercased: `button`, `input`, `select`, `a`.
+    pub tag: String,
+    /// An `input`'s type, where it has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The middle of it, in the page's own coordinates — which is what
+    /// [`Page::click`] takes, and is not where it sits on the screen.
+    pub at: Point,
+    pub width: u32,
+    pub height: u32,
+    /// A disabled control is worth knowing about before it is clicked and
+    /// nothing happens.
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// Elements matching a query, best first.
+///
+/// A CSS selector where the query is one, a `name`, `id` or placeholder where
+/// it names a field, and visible words otherwise: an agent knows a button says
+/// "Sign in" and rarely knows its class.
+const MATCH: &str = r#"(q) => {
+  const seen = new Set();
+  const out = [];
+  const add = el => {
+    if (!el || seen.has(el)) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none') return;
+    seen.add(el); out.push(el);
+  };
+
+  try { document.querySelectorAll(q).forEach(add); } catch (e) {}
+
+  // A field is usually named rather than worded: `custname` is what a form
+  // calls it, and a bare word is not a selector that finds it.
+  for (const by of ['[name=', '[id=', '[placeholder=', '[aria-label=']) {
+    try { document.querySelectorAll(by + JSON.stringify(q) + ']').forEach(add); } catch (e) {}
+  }
+
+  const want = q.trim().toLowerCase();
+  const words = el => (el.innerText || el.value || el.getAttribute('aria-label') ||
+                       el.getAttribute('placeholder') || el.getAttribute('title') || '')
+                        .replace(/\s+/g, ' ').trim().toLowerCase();
+  const clickable = 'a,button,input,select,textarea,[role=button],[role=link],[onclick]';
+
+  for (const pass of [
+    el => words(el) === want,
+    el => words(el).includes(want),
+  ]) {
+    for (const el of document.querySelectorAll(clickable)) if (pass(el)) add(el);
+    for (const el of document.querySelectorAll('*')) if (pass(el)) add(el);
+  }
+
+  // Not sorted by position: the passes above are the ranking, and a form
+  // containing a button sits higher on the page than the button does. Sorting
+  // by top would hand back the form.
+  return out;
+}"#;
+
+/// One element, as a caller sees it.
+const DESCRIBE: &str = r#"(el) => {
+  const r = el.getBoundingClientRect();
+  return {
+    text: (el.innerText || el.value || el.getAttribute('aria-label') || '')
+            .replace(/\s+/g, ' ').trim().slice(0, 200),
+    tag: el.tagName.toLowerCase(),
+    kind: el.getAttribute('type') || undefined,
+    at: { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) },
+    width: Math.round(r.width),
+    height: Math.round(r.height),
+    enabled: !el.disabled,
+    value: el.value === undefined ? undefined : String(el.value).slice(0, 200),
+  };
+}"#;
+
+/// How a page should be read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reading {
+    /// Headings, lists, tables and inline links kept. The default, because a
+    /// reader that flattens them cannot tell a heading from body text.
+    #[default]
+    Markdown,
+    /// Rendered text, whitespace collapsed. The cheapest answer to "what does
+    /// this say".
+    Text,
+    /// The document's own HTML. An escape hatch for what the readers above do
+    /// not carry, and megabytes where they are kilobytes.
+    Raw,
+}
+
+/// Rendered text, scripts and styles removed.
+///
+/// Navigation stays: telling a site's chrome from its content is a heuristic,
+/// and a wrong one silently drops the page.
+const TEXT: &str = r#"
+  // The live tree, not a copy of it: `innerText` is what the page renders, and
+  // a detached clone has no layout — it falls back to every character in the
+  // document, including whatever is hidden. Scripts and styles are not
+  // rendered either, so nothing has to be stripped.
+  const root = document.querySelector('main, article') || document.body;
+  return (root ? root.innerText : '').replace(/\s+/g, ' ').trim();
+"#;
+
+/// The document as markdown.
+///
+/// A walk rather than a library: nothing may be fetched into the box to read a
+/// page, and the shapes worth keeping — headings, lists, tables, code, links —
+/// are few enough to name.
+const MARKDOWN: &str = r#"
+  const skip = new Set(['SCRIPT','STYLE','NOSCRIPT','SVG','TEMPLATE','IFRAME','CANVAS']);
+  const inline = t => t.replace(/\s+/g, ' ');
+  const out = [];
+
+  const walk = (node, depth) => {
+    if (node.nodeType === 3) { out.push(inline(node.nodeValue)); return; }
+    if (node.nodeType !== 1 || skip.has(node.tagName)) return;
+    if (node.getAttribute && node.getAttribute('aria-hidden') === 'true') return;
+
+    // What the page is not showing is not what it says: a wizard keeps its
+    // later steps in the document, and a reader that returns them describes a
+    // page nobody is looking at.
+    const shown = getComputedStyle(node);
+    if (shown.display === 'none' || shown.visibility === 'hidden') return;
+
+    const tag = node.tagName;
+    const kids = () => Array.from(node.childNodes).forEach(c => walk(c, depth));
+
+    if (/^H[1-6]$/.test(tag)) {
+      out.push('\n\n' + '#'.repeat(+tag[1]) + ' '); kids(); out.push('\n');
+      return;
+    }
+    switch (tag) {
+      case 'BR': out.push('\n'); return;
+      case 'HR': out.push('\n\n---\n'); return;
+      case 'P': case 'DIV': case 'SECTION': case 'ARTICLE': case 'MAIN':
+        out.push('\n\n'); kids(); return;
+      case 'UL': case 'OL': out.push('\n'); kids(); out.push('\n'); return;
+      case 'LI': {
+        // Written after its content, so an item that renders to nothing
+        // leaves no bullet behind.
+        const mark = out.length;
+        out.push('');
+        Array.from(node.childNodes).forEach(c => walk(c, depth + 1));
+        const body = out.slice(mark + 1).join('').trim();
+        out[mark] = body ? '\n' + '  '.repeat(depth) + '- ' : '';
+        return;
+      }
+      case 'A': {
+        const href = node.getAttribute('href') || '';
+        // `innerText` is empty for anything not rendered — a collapsed menu,
+        // a hidden tab — and those links would come out as bare bullets.
+        const words = inline(node.innerText || node.textContent || '').trim();
+        if (!words) return;
+        out.push(href.startsWith('http') ? '[' + words + '](' + href + ')' : words);
+        return;
+      }
+      case 'STRONG': case 'B': out.push('**'); kids(); out.push('**'); return;
+      case 'EM': case 'I': out.push('_'); kids(); out.push('_'); return;
+      case 'CODE':
+        if (node.closest('pre')) { kids(); return; }
+        out.push('`'); kids(); out.push('`'); return;
+      case 'PRE':
+        out.push('\n\n```\n' + (node.innerText || '') + '\n```\n'); return;
+      case 'BLOCKQUOTE': out.push('\n\n> '); kids(); out.push('\n'); return;
+      case 'IMG': {
+        const alt = node.getAttribute('alt');
+        if (alt) out.push('![' + inline(alt) + ']');
+        return;
+      }
+      case 'TR': out.push('\n| '); kids(); out.push(' |'); return;
+      case 'TH': case 'TD': kids(); out.push(' | '); return;
+      case 'TABLE': out.push('\n'); kids(); out.push('\n'); return;
+      default: kids();
+    }
+  };
+
+  // `main` and `article` are not guesses: HTML defines them as the document's
+  // content, and a page that marks one has already said which part matters.
+  // Wikipedia otherwise spends a reader's whole budget on its language
+  // sidebar before the article begins. Nothing is dropped where neither
+  // exists — telling chrome from content without them is a real heuristic,
+  // and a wrong one loses the page.
+  const root = document.querySelector('main, article') || document.body;
+  if (root) walk(root, 0);
+  return out.join('')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+"#;
+
+/// What a page is showing.
+///
+/// Text rather than a picture of text, and links with the addresses behind
+/// them: a frame says where to click, and this says what it says.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageText {
+    pub url: String,
+    pub title: String,
+    /// Rendered text, whitespace collapsed and cut at the caller's limit.
+    pub text: String,
+    /// Whether the cut lost anything.
+    pub truncated: bool,
+    pub links: Vec<Link>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Link {
+    pub text: String,
+    pub href: String,
 }
 
 impl Page {
@@ -677,6 +1053,74 @@ impl Page {
             .unwrap_or(Value::Null))
     }
 
+    /// What this page is showing.
+    ///
+    /// Read in the page rather than over the wire: a document is megabytes of
+    /// markup, and what a reader wants is what it renders.
+    ///
+    /// `limit` and `max_links` default when they are `None`. A caller deciding
+    /// whether a page is worth reading asks for a few hundred characters
+    /// rather than paying for all of it; one that wants the whole thing says
+    /// so.
+    pub async fn read(
+        &mut self,
+        format: Reading,
+        limit: Option<usize>,
+        max_links: Option<usize>,
+    ) -> Result<PageText> {
+        let limit = limit.unwrap_or(TEXT_DEFAULT);
+        let links = max_links.unwrap_or(LINKS_DEFAULT);
+
+        let body = match format {
+            // Structure survives: a heading stays a heading, a list stays a
+            // list, and a link keeps its address beside its words rather than
+            // in a separate list nothing can place back in context.
+            Reading::Markdown => MARKDOWN,
+            Reading::Text => TEXT,
+            // The document as it came. An escape hatch for what the reader
+            // above did not carry — a `meta` tag, embedded JSON-LD — and
+            // costly enough that it is nobody's default.
+            Reading::Raw => "return document.documentElement.outerHTML;",
+        };
+
+        let read = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const body = (() => {{ {body} }})();
+                     const text = String(body || '');
+                     const links = Array.from(document.querySelectorAll('a[href]'))
+                       .map(a => ({{ text: (a.innerText || '').replace(/\s+/g, ' ').trim(), href: a.href }}))
+                       .filter(l => l.text && l.href.startsWith('http'))
+                       .slice(0, {links});
+                     return JSON.stringify({{
+                       url: location.href,
+                       title: document.title,
+                       text: text.slice(0, {limit}),
+                       truncated: text.length > {limit},
+                       links,
+                     }});
+                   }})()"#
+            ))
+            .await?;
+
+        let read = read
+            .as_str()
+            .ok_or_else(|| Error::denied("the page answered with something unreadable"))?;
+
+        serde_json::from_str(read)
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    /// Close it.
+    ///
+    /// Whoever opened a page closes it. Nothing does so on drop, because a
+    /// close is a round trip and a drop cannot wait for one — so a program
+    /// that opens a page per step and never says this leaves the browser
+    /// holding every one of them.
+    pub async fn close(&mut self) -> Result<()> {
+        self.call("Page.close", json!({})).await.map(|_| ())
+    }
+
     /// The current URL, asked of the page rather than read off a screenshot.
     pub async fn url(&mut self) -> Result<String> {
         Ok(self
@@ -748,6 +1192,327 @@ impl Page {
             .await?;
         }
         Ok(())
+    }
+
+    /// Elements matching `query`, best match first.
+    ///
+    /// Exact words beat a substring, and something clickable beats a `div`
+    /// that happens to contain them.
+    ///
+    /// `scroll` brings the best match into view before anything is measured.
+    /// Without it a match below the fold is described where it sits in a
+    /// document the window is not showing, and its coordinates address
+    /// nothing.
+    ///
+    /// A CSS selector where the query is one, and visible text otherwise: an
+    /// agent knows a button says "Sign in" and rarely knows its class.
+    pub async fn find(
+        &mut self,
+        query: &str,
+        limit: Option<usize>,
+        scroll: Option<bool>,
+    ) -> Result<Vec<Element>> {
+        let found = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const found = ({MATCH})({}).slice(0, {});
+                     // Scrolled before it is measured, not after: a coordinate
+                     // is the viewport's, so one taken for an element below
+                     // the fold points past the bottom of the window and a
+                     // click on it lands nowhere.
+                     if ({scroll} && found[0]) {{
+                       found[0].scrollIntoView({{ block: 'center', inline: 'center' }});
+                     }}
+                     return JSON.stringify(found.map({DESCRIBE}));
+                   }})()"#,
+                json!(query),
+                limit.unwrap_or(FOUND_DEFAULT),
+                scroll = scroll.unwrap_or(false)
+            ))
+            .await?;
+
+        serde_json::from_str(found.as_str().unwrap_or("[]"))
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    /// Move the page, or one scrollable thing on it.
+    ///
+    /// The desktop's own scroll sends wheel clicks at a screen point, so it
+    /// needs a coordinate and moves whatever sits under the pointer. This
+    /// moves the page itself, in pixels.
+    ///
+    /// Answers with where it ended up, which is how a caller tells that it
+    /// arrived: a page that loads more as you reach the bottom returns the
+    /// same position twice when there is no more to load.
+    pub async fn scroll(&mut self, what: Option<&str>, how: Scroll) -> Result<(i32, i32)> {
+        let target = match what {
+            Some(query) => format!("({MATCH})({}).find(Boolean)", json!(query)),
+            None => "null".to_string(),
+        };
+
+        let moved = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const el = {target};
+                     const box = el || document.scrollingElement || document.body;
+                     const to = {how};
+                     if (to.x === null) {{
+                       box.scrollBy(to.dx, to.dy);
+                     }} else {{
+                       box.scrollTo(to.x, to.y);
+                     }}
+                     return JSON.stringify([Math.round(box.scrollLeft), Math.round(box.scrollTop)]);
+                   }})()"#,
+                how = how.as_js()
+            ))
+            .await?;
+
+        let moved: (i32, i32) = serde_json::from_str(moved.as_str().unwrap_or("[0,0]"))
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))?;
+
+        Ok(moved)
+    }
+
+    /// Wait until something matching `query` is on the page.
+    ///
+    /// The alternative is a sleep, which is either short enough to act too
+    /// early or long enough to be paid on every step. A page that answers a
+    /// click by fetching says nothing when it starts and everything when the
+    /// result appears.
+    ///
+    /// `gone` waits for the opposite — a spinner leaving, a dialog closing.
+    pub async fn wait_for(
+        &mut self,
+        query: &str,
+        gone: bool,
+        within: Duration,
+    ) -> Result<Option<Element>> {
+        let deadline = Instant::now() + within;
+
+        loop {
+            let found = self.find(query, Some(1), None).await?;
+            let here = found.first().cloned();
+
+            match (gone, &here) {
+                (false, Some(_)) => return Ok(here),
+                (true, None) => return Ok(None),
+                _ => {}
+            }
+
+            if Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    after: within,
+                    detail: match gone {
+                        true => format!("{query} was still on the page"),
+                        false => format!("nothing matching {query} appeared"),
+                    },
+                });
+            }
+
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
+    /// Back through this page's own history.
+    ///
+    /// Not the same as opening the previous URL again: that discards whatever
+    /// the page had put in it, and a form half filled in comes back empty.
+    pub async fn back(&mut self) -> Result<()> {
+        self.step_history(-1).await
+    }
+
+    pub async fn forward(&mut self) -> Result<()> {
+        self.step_history(1).await
+    }
+
+    pub async fn reload(&mut self) -> Result<()> {
+        self.call("Page.reload", json!({})).await.map(|_| ())
+    }
+
+    /// One step along the history, in whichever direction.
+    async fn step_history(&mut self, by: i64) -> Result<()> {
+        let history = self.call("Page.getNavigationHistory", json!({})).await?;
+
+        let at = history
+            .get("currentIndex")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| Error::denied("the page keeps no history"))?;
+
+        let entries = history
+            .get("entries")
+            .and_then(Value::as_array)
+            .ok_or_else(|| Error::denied("the page keeps no history"))?;
+
+        let want = at + by;
+        let entry = usize::try_from(want)
+            .ok()
+            .and_then(|want| entries.get(want))
+            .and_then(|entry| entry.get("id"))
+            .and_then(Value::as_i64)
+            .ok_or_else(|| {
+                Error::denied(match by < 0 {
+                    true => "nothing before this page",
+                    false => "nothing after this page",
+                })
+            })?;
+
+        self.call("Page.navigateToHistoryEntry", json!({ "entryId": entry }))
+            .await
+            .map(|_| ())
+    }
+
+    /// Put the pointer over something without pressing anything.
+    ///
+    /// A menu that opens on hover has no click to send: the thing worth
+    /// clicking does not exist until the pointer arrives.
+    pub async fn hover(&mut self, query: &str) -> Result<Element> {
+        let element = self.reach(query).await?;
+
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseMoved",
+                "x": element.at.x,
+                "y": element.at.y,
+            }),
+        )
+        .await?;
+
+        Ok(element)
+    }
+
+    /// Bring one into view and click its middle.
+    ///
+    /// Its own coordinates rather than a caller's: a point worked out from a
+    /// screenshot is stale the moment the page moves under it, and a click
+    /// against a stale point lands on whatever took that place.
+    pub async fn click_on(&mut self, query: &str) -> Result<Element> {
+        let element = self.reach(query).await?;
+        self.click(element.at).await?;
+        Ok(element)
+    }
+
+    /// Put `text` in a field, as typing rather than as an assignment.
+    ///
+    /// A page watching for keystrokes — a search box filtering as you type, a
+    /// form validating a field — sees nothing when a value is only assigned.
+    pub async fn fill(&mut self, query: &str, text: &str) -> Result<()> {
+        let element = self.reach(query).await?;
+        self.click(element.at).await?;
+
+        self.evaluate(&format!(
+            "(({MATCH})({}).find(Boolean) || {{}}).value = ''",
+            json!(query)
+        ))
+        .await?;
+
+        self.type_text(text).await
+    }
+
+    /// What a dropdown offers.
+    pub async fn options(&mut self, query: &str) -> Result<Vec<String>> {
+        let listed = self
+            .evaluate(&format!(
+                "JSON.stringify(Array.from((({MATCH})({}).find(e => e.tagName === 'SELECT') || {{ options: [] }}).options).map(o => o.text.trim()))",
+                json!(query)
+            ))
+            .await?;
+
+        serde_json::from_str(listed.as_str().unwrap_or("[]"))
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    /// Choose one of them, by its visible words.
+    ///
+    /// Through the element rather than through the screen: a native dropdown
+    /// opens a menu the compositor owns, which a screenshot does not show and
+    /// a click cannot reach.
+    pub async fn choose(&mut self, query: &str, option: &str) -> Result<()> {
+        let chose = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const el = ({MATCH})({}).find(e => e.tagName === 'SELECT');
+                     if (!el) return 'no dropdown matched';
+                     const want = {}.trim().toLowerCase();
+                     const at = Array.from(el.options)
+                       .findIndex(o => o.text.trim().toLowerCase() === want ||
+                                       String(o.value).toLowerCase() === want);
+                     if (at < 0) return 'no such option';
+                     el.selectedIndex = at;
+                     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                     return 'ok';
+                   }})()"#,
+                json!(query),
+                json!(option)
+            ))
+            .await?;
+
+        match chose.as_str() {
+            Some("ok") => Ok(()),
+            other => Err(Error::denied(format!(
+                "{}: {query} / {option}",
+                other.unwrap_or("the page answered nothing")
+            ))),
+        }
+    }
+
+    /// Hand files to a file input.
+    ///
+    /// The paths are the box's own. A file chooser is the operating system's
+    /// window, not the page's, so nothing on screen can be clicked to fill one
+    /// in — this sets the input directly.
+    pub async fn upload(&mut self, query: &str, paths: &[String]) -> Result<()> {
+        let handle = self
+            .call(
+                "Runtime.evaluate",
+                json!({
+                    "expression": format!(
+                        "({MATCH})({}).find(e => e.tagName === 'INPUT' && e.type === 'file')",
+                        json!(query)
+                    ),
+                    "returnByValue": false,
+                }),
+            )
+            .await?;
+
+        let object = handle
+            .get("result")
+            .and_then(|result| result.get("objectId"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::denied(format!("no file input matched {query}")))?;
+
+        self.call(
+            "DOM.setFileInputFiles",
+            json!({ "files": paths, "objectId": object }),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// The first match, brought into view.
+    async fn reach(&mut self, query: &str) -> Result<Element> {
+        let found = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const el = ({MATCH})({}).find(Boolean);
+                     if (!el) return 'null';
+                     el.scrollIntoView({{ block: 'center', inline: 'center' }});
+                     return JSON.stringify(({DESCRIBE})(el));
+                   }})()"#,
+                json!(query)
+            ))
+            .await?;
+
+        let found = found.as_str().unwrap_or("null");
+        if found == "null" {
+            return Err(Error::denied(format!(
+                "nothing on the page matched {query}"
+            )));
+        }
+
+        serde_json::from_str(found)
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
     /// Type text into whatever the page has focused.
@@ -1128,6 +1893,59 @@ fn escape(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_a_space_is_not_left_in_a_url() {
+        assert_eq!(
+            SearchProvider::DuckDuckGo.url_for("chinasa onyenkpa"),
+            "https://duckduckgo.com/html/?q=chinasa+onyenkpa"
+        );
+    }
+
+    #[test]
+    fn test_a_quoted_phrase_survives_being_sent() {
+        let url = SearchProvider::DuckDuckGo.url_for("\"exact words\"");
+
+        assert!(url.ends_with("q=%22exact+words%22"), "{url}");
+    }
+
+    #[test]
+    fn test_a_query_cannot_start_another_parameter() {
+        // The failure this exists to prevent: `&` unescaped turns the rest of
+        // the query into somebody else's parameter, and the search runs on
+        // half of what was asked for.
+        let url = SearchProvider::Google.url_for("cats & dogs");
+
+        assert!(url.ends_with("q=cats+%26+dogs"), "{url}");
+        assert_eq!(url.matches('&').count(), 0);
+    }
+
+    #[test]
+    fn test_a_fragment_cannot_cut_the_url_short() {
+        let url = SearchProvider::Bing.url_for("c# tutorial");
+
+        assert!(url.ends_with("q=c%23+tutorial"), "{url}");
+    }
+
+    #[test]
+    fn test_every_provider_puts_the_query_in_the_url() {
+        for provider in [
+            SearchProvider::DuckDuckGo,
+            SearchProvider::Google,
+            SearchProvider::Bing,
+        ] {
+            let url = provider.url_for("rust");
+
+            assert!(url.starts_with("https://"), "{provider:?}: {url}");
+            assert!(url.ends_with("q=rust"), "{provider:?}: {url}");
+        }
+    }
+
+    #[test]
+    fn test_the_default_is_the_one_a_reader_gets_results_from() {
+        assert_eq!(SearchProvider::default(), SearchProvider::DuckDuckGo);
+    }
+
     use super::*;
 
     #[test]

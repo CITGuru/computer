@@ -99,6 +99,36 @@ Three things worth knowing:
   `409` rather than handing back the first request's reply for work that never
   happened.
 
+## A whole form in one request
+
+Page operations are also actions, so a form is one batch rather than a call per
+field. The screen lock is held across the whole of it, and one frame comes back
+instead of one per step.
+
+```bash
+curl -s localhost:8080/v1/boxes/$BOX/screens/0/actions \
+  -H 'content-type: application/json' -d '{
+    "actions": [
+      { "type": "open_url", "url": "https://example.com/order" },
+      { "type": "on_page", "what": { "op": "fill",     "query": "name", "text": "…" } },
+      { "type": "on_page", "what": { "op": "click",    "query": "Continue" } },
+      { "type": "on_page", "what": { "op": "wait_for", "query": "Details" } },
+      { "type": "on_page", "what": { "op": "choose",   "query": "size", "option": "Large" } },
+      { "type": "on_page", "what": { "op": "upload",   "query": "spec", "paths": ["/tmp/spec.pdf"] } }
+    ],
+    "want": ["frame"]
+  }'
+```
+
+The page is resolved when the first `on_page` asks rather than up front, and
+dropped again whenever `open_url` runs: that raises a new tab, so a handle
+taken earlier would address the one it replaced.
+
+Tabs beyond the newest twelve are closed as new ones open — never the one on
+screen. A person opening a link expects a new tab, but a program doing it fifty
+times leaves fifty behind and a browser holding them all gets slower at
+everything.
+
 ## Open an app
 
 An app is named, not commanded: a caller who could post an argv to a driving
@@ -123,6 +153,53 @@ back a screen the next click lands wrong on.
 The app has to be in the box already: `GET /v1/catalog` names what this server
 knows, and `spec.apps` is what installs one when the box is created.
 
+## Read the page
+
+A frame says where to click. It does not say what a page holds: it is a picture
+of text, shows one viewport of a document that may be far longer, and renders a
+link as its label rather than its address.
+
+```bash
+curl -s "localhost:8080/v1/boxes/$BOX/page?format=markdown&limit=4000&max_links=20"
+```
+
+`limit` and `max_links` are optional and cap what comes back — ask for a few
+hundred characters to decide whether a page is worth reading, and `truncated`
+says whether that cut anything. Both are ceilings here rather than defaults a
+caller can raise; `computer::Page::read` has no ceiling, because a library owes
+its caller none and a deployment owes one to whoever it answers.
+
+`find` answers with each match's position **in the page**, which is what
+`click_element` and the rest use. `scroll=true` brings the best match into view
+before measuring: a match below the fold is otherwise described where the
+window is not looking, and its coordinates address nothing. On a page four
+thousand pixels tall, the same button reads `y=4011` without it and `y=903`
+with.
+
+`format` is `markdown` (the default), `text` or `raw`. Markdown keeps the
+headings, lists, tables and code a flat rendering loses, and puts each link's
+address beside its words. `text` is the cheapest answer to "what does this
+say". `raw` is the document's own HTML — an escape hatch for what the other two
+do not carry, and megabytes where they are kilobytes.
+
+A page marking `<main>` or `<article>` is read from there, since HTML already
+defines those as its content. Where neither exists the whole body is read:
+telling chrome from content without them is a real heuristic, and a wrong one
+loses the page. Wikipedia marks a `<main>` that holds its own sidebar, so a
+chrome-heavy page can still spend a reader's budget before its article
+begins — raise `limit` or go straight to the section you want.
+
+Answers with the visible page's title, URL, rendered text and its links with
+their `href`s — so a caller reads what is there, and navigates by URL rather
+than guessing a coordinate for an anchor. Clicking is still how everything that
+is not a link is reached.
+
+The read is scoped rather than an `evaluate` endpoint: running a caller's
+JavaScript in the box's browser is a wider door than any tool here needs.
+
+The reading itself is `computer::Page::read`, so a library user gets it without
+a server and this endpoint is only the HTTP in front of it.
+
 ## The rest
 
 | | |
@@ -136,6 +213,9 @@ knows, and `spec.apps` is what installs one when the box is created.
 | `GET …/screens/{n}/viewers` | who is watching and who is driving |
 | `POST /v1/boxes/{id}/fork` | build it again from its trace |
 | `GET /v1/catalog` | the app names a launch can ask for |
+| `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
+| `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
+| `POST /v1/boxes/{id}/page/element` | click, fill, dropdown, upload, hover, wait, history or scroll, by query |
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |

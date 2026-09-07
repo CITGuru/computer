@@ -41,6 +41,22 @@ const TRACE_PAGE: usize = 500;
 /// The longest a replay is given before it stops and says so. A fork is one
 /// HTTP request, and a box that was driven for an hour cannot take one.
 const REPLAY_BUDGET: Duration = Duration::from_secs(180);
+/// The most page text one read answers with.
+///
+/// A ceiling rather than a default a caller can raise: `limit` is there to ask
+/// for less than this, and a page is unbounded.
+const PAGE_TEXT: usize = 20_000;
+const LINKS: usize = 100;
+/// The most matches one find answers with.
+const FOUND: usize = 50;
+/// How many tabs a box keeps. Enough that a caller can come back to what it
+/// opened a few steps ago, few enough that a long run does not bury the
+/// browser.
+const TABS: usize = 12;
+/// How long a wait runs by default, and the longest one it can be asked for:
+/// a request holds a connection while it waits.
+const WAIT_MS: u64 = 10_000;
+const MAX_WAIT: Duration = Duration::from_secs(60);
 /// The most of an original pause a replay reproduces. Pacing matters — a page
 /// that had two seconds to load gets them — but an idle hour does not.
 const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
@@ -84,6 +100,9 @@ pub fn router(state: Arc<AppState>) -> Router {
             axum::routing::delete(close_window),
         )
         .route("/v1/catalog", get(catalog))
+        .route("/v1/boxes/{id}/page", get(read_page))
+        .route("/v1/boxes/{id}/page/find", get(find_elements))
+        .route("/v1/boxes/{id}/page/element", post(on_element))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::auth::gate,
@@ -206,12 +225,25 @@ async fn actions(
     let target = entry.desktop(screen).await?;
     let desktop = target.as_desktop();
 
+    // Resolved when the first page action asks, not before: `open_url` raises a
+    // new tab, so a handle taken up front would address the one it replaced.
+    let browser = entry.computer.browser();
+    let mut page = None;
+
     let mut results = Vec::with_capacity(batch.actions.len());
     let mut windows = Vec::new();
     let mut stopped_at = None;
 
     for (index, action) in batch.actions.iter().enumerate() {
-        let outcome = run(desktop, target.as_screen(), action, &entry.spec).await;
+        let outcome = run(
+            desktop,
+            target.as_screen(),
+            action,
+            &entry.spec,
+            browser.as_ref(),
+            &mut page,
+        )
+        .await;
 
         // Its own event: a name and its arguments are the whole launch.
         match (&outcome, action) {
@@ -302,6 +334,8 @@ async fn run(
     screen: Option<&computer::Screen>,
     action: &Action,
     spec: &Spec,
+    browser: Option<&computer::Devtools>,
+    page: &mut Option<computer::Page>,
 ) -> ApiResult<Option<Window>> {
     match action {
         Action::Move { to } => desktop.move_to(point_in(*to)).await?,
@@ -330,8 +364,33 @@ async fn run(
                 ApiError::bad_request("this screen has no browser to open a page in")
             })?;
             screen.open_url(url).await?;
+
+            // A new tab, raised in front of the last one. Whatever page action
+            // follows wants that one, not the page this batch started on.
+            *page = None;
+
+            // And the ones before it do not accumulate. Best effort: a browser
+            // that would not say what it holds is not a reason to refuse the
+            // page that just opened.
+            if let Some(browser) = browser {
+                let _ = browser.tidy(TABS).await;
+            }
         }
         Action::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms).min(MAX_PAUSE)).await,
+        Action::OnPage { what } => {
+            if page.is_none() {
+                let browser = browser
+                    .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
+
+                *page = browser.visible_page().await?;
+            }
+
+            let page = page
+                .as_mut()
+                .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
+
+            apply(page, what.clone()).await?;
+        }
         Action::Launch { app, args } => {
             let screen =
                 screen.ok_or_else(|| ApiError::bad_request("this screen cannot start an app"))?;
@@ -867,7 +926,15 @@ async fn replay_onto(
 
                 let acted = match target {
                     Ok(target) => {
-                        run(target.as_desktop(), target.as_screen(), action, &entry.spec).await
+                        run(
+                            target.as_desktop(),
+                            target.as_screen(),
+                            action,
+                            &entry.spec,
+                            None,
+                            &mut None,
+                        )
+                        .await
                     }
                     Err(error) => Err(error),
                 };
@@ -979,6 +1046,212 @@ async fn trace_frame(
         Body::from(png.as_slice().to_vec()),
     )
         .into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct PageQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    max_links: Option<usize>,
+    #[serde(default)]
+    format: Option<Reading>,
+}
+
+/// What the page in front is showing, as text.
+///
+/// The page the screen shows, not the first one open: a caller reading what it
+/// can see is the point, and a frame and this have to agree.
+async fn read_page(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<PageQuery>,
+) -> ApiResult<Json<PageText>> {
+    let entry = state.registry.get(&id).await?;
+    let browser = entry
+        .computer
+        .browser()
+        .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
+
+    let mut page = browser
+        .visible_page()
+        .await?
+        .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
+
+    let format = match query.format.unwrap_or_default() {
+        Reading::Markdown => computer::Reading::Markdown,
+        Reading::Text => computer::Reading::Text,
+        Reading::Raw => computer::Reading::Raw,
+    };
+
+    // Clamped here rather than in the engine: a ceiling is what a deployment
+    // owes whoever it answers, and a library owes its caller none.
+    let read = page
+        .read(
+            format,
+            Some(query.limit.unwrap_or(PAGE_TEXT).clamp(1, PAGE_TEXT)),
+            Some(query.max_links.unwrap_or(LINKS).clamp(0, LINKS)),
+        )
+        .await?;
+
+    Ok(Json(PageText {
+        url: read.url,
+        title: read.title,
+        text: read.text,
+        truncated: read.truncated,
+        links: read
+            .links
+            .into_iter()
+            .map(|link| Link {
+                text: link.text,
+                href: link.href,
+            })
+            .collect(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct FindQuery {
+    q: String,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    scroll: Option<bool>,
+}
+
+/// What on the page matches, best first.
+async fn find_elements(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<FindQuery>,
+) -> ApiResult<Json<Vec<Element>>> {
+    let mut page = visible(&state, &id).await?;
+    let found = page
+        .find(
+            &query.q,
+            Some(query.limit.unwrap_or(FOUND).clamp(1, FOUND)),
+            query.scroll,
+        )
+        .await?;
+
+    Ok(Json(found.into_iter().map(element_out).collect()))
+}
+
+/// Act on the element a query names.
+///
+/// By name rather than by coordinate: a point worked out from a frame is stale
+/// the moment the page moves under it, and some of these have no coordinate at
+/// all — a file chooser is the operating system's window, and a native
+/// dropdown opens a menu no screenshot shows.
+async fn on_element(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<OnElement>,
+) -> ApiResult<Json<ElementResult>> {
+    let mut page = visible(&state, &id).await?;
+
+    Ok(Json(apply(&mut page, body).await?))
+}
+
+/// One element operation against a page already in hand.
+///
+/// Shared with the action batch, so a form is one round trip rather than one
+/// per field and the screen lock is held across the whole of it.
+async fn apply(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementResult> {
+    Ok(match what {
+        OnElement::Click { query } => ElementResult {
+            element: Some(element_out(page.click_on(&query).await?)),
+            ..ElementResult::default()
+        },
+        OnElement::Fill { query, text } => {
+            page.fill(&query, &text).await?;
+            ElementResult::default()
+        }
+        OnElement::Options { query } => ElementResult {
+            options: page.options(&query).await?,
+            ..ElementResult::default()
+        },
+        OnElement::Choose { query, option } => {
+            page.choose(&query, &option).await?;
+            ElementResult::default()
+        }
+        OnElement::Upload { query, paths } => {
+            page.upload(&query, &paths).await?;
+            ElementResult::default()
+        }
+        OnElement::WaitFor {
+            query,
+            gone,
+            within_ms,
+        } => {
+            let within = Duration::from_millis(within_ms.unwrap_or(WAIT_MS)).min(MAX_WAIT);
+            let found = page.wait_for(&query, gone, within).await?;
+
+            ElementResult {
+                element: found.map(element_out),
+                ..ElementResult::default()
+            }
+        }
+        OnElement::Hover { query } => ElementResult {
+            element: Some(element_out(page.hover(&query).await?)),
+            ..ElementResult::default()
+        },
+        OnElement::History { go } => {
+            match go {
+                Where::Back => page.back().await?,
+                Where::Forward => page.forward().await?,
+                Where::Reload => page.reload().await?,
+            }
+            ElementResult::default()
+        }
+        OnElement::Scroll { query, to, dx, dy } => {
+            let how = match to {
+                ScrollTo::By => computer::Scroll::By { x: dx, y: dy },
+                ScrollTo::Top => computer::Scroll::Top,
+                ScrollTo::Bottom => computer::Scroll::Bottom,
+            };
+            let (x, y) = page.scroll(query.as_deref(), how).await?;
+
+            ElementResult {
+                // Never negative: a browser clamps a scroll at the top.
+                at: Some(Point {
+                    x: x.max(0) as u32,
+                    y: y.max(0) as u32,
+                }),
+                ..ElementResult::default()
+            }
+        }
+    })
+}
+
+/// The page the screen is showing.
+async fn visible(state: &AppState, id: &str) -> ApiResult<computer::Page> {
+    let entry = state.registry.get(id).await?;
+    let browser = entry
+        .computer
+        .browser()
+        .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
+
+    browser
+        .visible_page()
+        .await?
+        .ok_or_else(|| ApiError::not_found("no page is on screen"))
+}
+
+fn element_out(element: computer::Element) -> Element {
+    Element {
+        text: element.text,
+        tag: element.tag,
+        kind: element.kind,
+        at: Point {
+            x: element.at.x,
+            y: element.at.y,
+        },
+        width: element.width,
+        height: element.height,
+        enabled: element.enabled,
+        value: element.value,
+    }
 }
 
 async fn list_windows(

@@ -129,6 +129,60 @@ impl Client {
         .await
     }
 
+    /// What the page in front is showing, as text.
+    pub async fn page(
+        &self,
+        id: &str,
+        format: Reading,
+        limit: Option<usize>,
+        max_links: Option<usize>,
+    ) -> Result<PageText> {
+        let format = match format {
+            Reading::Markdown => "markdown",
+            Reading::Text => "text",
+            Reading::Raw => "raw",
+        };
+        let mut path = format!("/v1/boxes/{id}/page?format={format}");
+        if let Some(limit) = limit {
+            path.push_str(&format!("&limit={limit}"));
+        }
+        if let Some(max_links) = max_links {
+            path.push_str(&format!("&max_links={max_links}"));
+        }
+
+        self.send(reqwest::Method::GET, &path, None, &[]).await
+    }
+
+    /// What on the page matches, best first.
+    pub async fn find(
+        &self,
+        id: &str,
+        query: &str,
+        limit: Option<usize>,
+        scroll: Option<bool>,
+    ) -> Result<Vec<Element>> {
+        let mut path = format!("/v1/boxes/{id}/page/find?q={}", query_value(query));
+        if let Some(limit) = limit {
+            path.push_str(&format!("&limit={limit}"));
+        }
+        if let Some(scroll) = scroll {
+            path.push_str(&format!("&scroll={scroll}"));
+        }
+
+        self.send(reqwest::Method::GET, &path, None, &[]).await
+    }
+
+    /// Act on the element a query names.
+    pub async fn on_element(&self, id: &str, what: &OnElement) -> Result<ElementResult> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/page/element"),
+            Some(serde_json::to_value(what).map_err(|error| Error::Transport(error.to_string()))?),
+            &[],
+        )
+        .await
+    }
+
     /// The app names this server can open.
     pub async fn catalog(&self) -> Result<Vec<String>> {
         let apps: std::collections::BTreeMap<String, serde_json::Value> = self

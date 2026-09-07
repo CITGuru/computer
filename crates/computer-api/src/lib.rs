@@ -106,6 +106,18 @@ pub enum Action {
     Wait {
         ms: u64,
     },
+    /// Act on the element a query names, in the page the screen is showing.
+    ///
+    /// The same operations as `POST …/page/element`, so a form is one batch
+    /// rather than a call per field: the screen lock is held across the whole
+    /// of it, and one frame comes back instead of one per step.
+    ///
+    /// Nested rather than flattened: `deny_unknown_fields` and `flatten` do
+    /// not work together, and a misspelled key silently dropped is worse than
+    /// a word of nesting.
+    OnPage {
+        what: OnElement,
+    },
     /// A name, not a command: an argv posted to a driving endpoint would be
     /// `exec` in disguise.
     Launch {
@@ -113,6 +125,132 @@ pub enum Action {
         #[serde(default)]
         args: Vec<String>,
     },
+}
+
+/// What the page in front is showing.
+///
+/// Text rather than a picture of text, and links with the addresses behind
+/// them: a frame says where to click, and this says what it says.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageText {
+    pub url: String,
+    pub title: String,
+    /// The rendered text, whitespace collapsed and cut at `limit`.
+    pub text: String,
+    /// Whether the cut lost anything.
+    pub truncated: bool,
+    pub links: Vec<Link>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Link {
+    pub text: String,
+    pub href: String,
+}
+
+/// One thing on a page a caller can act on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Element {
+    pub text: String,
+    pub tag: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The middle of it, in the page's own coordinates — not the screen's.
+    pub at: Point,
+    pub width: u32,
+    pub height: u32,
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// What to do to the element a query names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OnElement {
+    /// Bring it into view and click its middle.
+    Click { query: String },
+    /// Put text in a field, as typing rather than as an assignment.
+    Fill { query: String, text: String },
+    /// What a dropdown offers.
+    Options { query: String },
+    /// Choose one of them, by its visible words.
+    Choose { query: String, option: String },
+    /// Hand a file input paths, which are the box's own.
+    Upload { query: String, paths: Vec<String> },
+    /// Wait until something matching the query is on the page, or gone.
+    ///
+    /// The alternative is a sleep, which is either short enough to act too
+    /// early or long enough to be paid on every step.
+    WaitFor {
+        query: String,
+        #[serde(default)]
+        gone: bool,
+        #[serde(default)]
+        within_ms: Option<u64>,
+    },
+    /// Put the pointer over something without pressing anything.
+    Hover { query: String },
+    /// Back, forward or again through this page's own history.
+    History { go: Where },
+    /// Move the page, or one scrollable thing on it.
+    ///
+    /// `to` is `by`, `top` or `bottom`; `by` takes `dx`/`dy` in pixels. Not
+    /// the same as the `scroll` action, which sends wheel clicks at a screen
+    /// point and moves whatever sits under the pointer.
+    Scroll {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        query: Option<String>,
+        #[serde(default)]
+        to: ScrollTo,
+        #[serde(default)]
+        dx: i32,
+        #[serde(default)]
+        dy: i32,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Where {
+    Back,
+    Forward,
+    Reload,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollTo {
+    #[default]
+    By,
+    Top,
+    Bottom,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ElementResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element: Option<Element>,
+    /// What a dropdown offered, where the operation asked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// Where a scroll ended up. The same answer twice means it did not move,
+    /// which is how a page that loads more on arrival says there is no more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Point>,
+}
+
+/// How a page should be read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reading {
+    /// Headings, lists, tables and inline links kept.
+    #[default]
+    Markdown,
+    /// Rendered text, whitespace collapsed.
+    Text,
+    /// The document's own HTML, for what the readers above do not carry.
+    Raw,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -7,7 +7,9 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use computer_api::{Action, ActionBatch, ForkMode, ForkRequest, Want};
+use computer_api::{
+    Action, ActionBatch, ForkMode, ForkRequest, OnElement, Reading, ScrollTo, Want, Where,
+};
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
 use serde_json::{Value, json};
@@ -104,6 +106,151 @@ pub fn catalogue() -> Value {
                     }
                 }),
                 &["app"]
+            )
+        ),
+        tool(
+            "read_page",
+            "Read the page on screen as text, with the links and the addresses behind them. \
+             Use it to find out what a page says: a screenshot is a picture of text, shows \
+             one viewport of a page that may be far longer, and renders a link as its label \
+             rather than its URL. Take a screenshot when you need to know where to click — \
+             this says what is there, that says where it is.",
+            with_box(
+                json!({
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "text", "raw"],
+                        "description": "markdown (default) keeps headings, lists, tables and \
+                                        inline links; text is the flat rendering; raw is the \
+                                        page's own HTML, for what the other two do not carry."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Characters to return. Defaults to the server's cap."
+                    }
+                }),
+                &[]
+            )
+        ),
+        tool(
+            "find",
+            "Find things on the page by their words, or by a name, id, placeholder or CSS \
+             selector. Answers with what each one is, whether it is enabled, and where it sits \
+             in the page. Use it to see what is there before acting, then act by the same query \
+             rather than by a coordinate — a point taken from a screenshot is wrong the moment \
+             the page moves under it.",
+            with_box(
+                json!({
+                    "query": { "type": "string" },
+                    "limit": { "type": "integer", "description": "How many matches to return." },
+                    "scroll": {
+                        "type": "boolean",
+                        "description": "Bring the best match into view first. A match below the \
+                                        fold is otherwise measured where the window is not \
+                                        looking, and its coordinates address nothing."
+                    }
+                }),
+                &["query"]
+            )
+        ),
+        tool(
+            "click_element",
+            "Bring the thing this query names into view and click it. Prefer this over `click` \
+             for anything on a web page: it finds the element itself, so nothing depends on a \
+             coordinate being still correct.",
+            with_box(json!({ "query": { "type": "string" } }), &["query"])
+        ),
+        tool(
+            "fill_field",
+            "Put text in the field this query names. Types it rather than assigning it, so a \
+             page watching for keystrokes — a box that filters as you type, a form that \
+             validates — sees what it expects.",
+            with_box(
+                json!({ "query": { "type": "string" }, "text": { "type": "string" } }),
+                &["query", "text"]
+            )
+        ),
+        tool(
+            "dropdown",
+            "List what a dropdown offers, or choose one of them. A native dropdown opens a menu \
+             the operating system draws, which no screenshot shows and no click can reach, so \
+             this is the only way to work one.",
+            with_box(
+                json!({
+                    "query": { "type": "string" },
+                    "op": { "type": "string", "enum": ["list", "select"] },
+                    "option": { "type": "string", "description": "Required for select." }
+                }),
+                &["query", "op"]
+            )
+        ),
+        tool(
+            "wait_for",
+            "Wait until something matching the query is on the page, or with `gone` until it \
+             leaves. Use this after anything that makes the page fetch — a sleep is either short \
+             enough to act too early or long enough to be paid on every step. Answers with what \
+             it found, and fails saying what never appeared.",
+            with_box(
+                json!({
+                    "query": { "type": "string" },
+                    "gone": {
+                        "type": "boolean",
+                        "description": "Wait for it to leave instead: a spinner ending, a dialog closing."
+                    },
+                    "within_ms": { "type": "integer", "description": "How long to wait." }
+                }),
+                &["query"]
+            )
+        ),
+        tool(
+            "hover",
+            "Put the pointer over something without pressing anything. A menu that opens on \
+             hover has nothing to click until the pointer arrives.",
+            with_box(json!({ "query": { "type": "string" } }), &["query"])
+        ),
+        tool(
+            "history",
+            "Go back, forward, or reload. Back is not the same as opening the previous URL \
+             again: that discards what the page held, and a form half filled in comes back empty.",
+            with_box(
+                json!({ "go": { "type": "string", "enum": ["back", "forward", "reload"] } }),
+                &["go"]
+            )
+        ),
+        tool(
+            "scroll_page",
+            "Move the page itself, or one scrollable thing on it, in pixels. Use `to: bottom` on \
+             a page that loads more as you reach the end — the answer says where it stopped, and \
+             the same position twice means there is no more. Different from `scroll`, which \
+             sends wheel clicks at a screen point and moves whatever sits under the pointer.",
+            with_box(
+                json!({
+                    "to": {
+                        "type": "string",
+                        "enum": ["by", "top", "bottom"],
+                        "description": "Defaults to by."
+                    },
+                    "dy": { "type": "integer", "description": "Pixels down, for to: by." },
+                    "dx": { "type": "integer", "description": "Pixels right, for to: by." },
+                    "query": {
+                        "type": "string",
+                        "description": "A scrollable element to move instead of the page."
+                    }
+                }),
+                &[]
+            )
+        ),
+        tool(
+            "upload_file",
+            "Hand files to a file input. The paths are the box's own — put the file there first \
+             with write_file. A file chooser is the operating system's window rather than the \
+             page's, so nothing on screen can be clicked to fill one in.",
+            with_box(
+                json!({
+                    "query": { "type": "string" },
+                    "paths": { "type": "array", "items": { "type": "string" } }
+                }),
+                &["query", "paths"]
             )
         ),
         tool(
@@ -274,6 +421,181 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 0,
             )
             .await
+        }
+        "read_page" => {
+            let id = text(arguments, "box_id")?;
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|limit| limit as usize);
+
+            let format = match arguments.get("format").and_then(Value::as_str) {
+                Some("text") => Reading::Text,
+                Some("raw") => Reading::Raw,
+                _ => Reading::Markdown,
+            };
+
+            let max_links = arguments
+                .get("max_links")
+                .and_then(Value::as_u64)
+                .map(|links| links as usize);
+
+            let page = client
+                .page(&id, format, limit, max_links)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let links = page
+                .links
+                .iter()
+                .map(|link| format!("{} -> {}", link.text, link.href))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            Ok(Answer::Text(format!(
+                "{}\n{}\n\n{}{}\n\nLinks:\n{links}",
+                page.title,
+                page.url,
+                page.text,
+                match page.truncated {
+                    true => " …(cut)",
+                    false => "",
+                }
+            )))
+        }
+        "find" => {
+            let id = text(arguments, "box_id")?;
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize);
+
+            let found = client
+                .find(
+                    &id,
+                    &text(arguments, "query")?,
+                    limit,
+                    arguments.get("scroll").and_then(Value::as_bool),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(match found.is_empty() {
+                true => "nothing on the page matched".to_string(),
+                false => found
+                    .iter()
+                    .map(|one| {
+                        format!(
+                            "{} {}{} at {},{} ({}x{}){}",
+                            one.tag,
+                            one.kind.as_deref().unwrap_or(""),
+                            match one.text.is_empty() {
+                                true => String::new(),
+                                false => format!(" {:?}", one.text),
+                            },
+                            one.at.x,
+                            one.at.y,
+                            one.width,
+                            one.height,
+                            match one.enabled {
+                                true => "",
+                                false => "  disabled",
+                            }
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            }))
+        }
+        "click_element" => {
+            let what = OnElement::Click {
+                query: text(arguments, "query")?,
+            };
+            element(client, arguments, what, "clicked").await
+        }
+        "fill_field" => {
+            let what = OnElement::Fill {
+                query: text(arguments, "query")?,
+                text: text(arguments, "text")?,
+            };
+            element(client, arguments, what, "filled").await
+        }
+        "upload_file" => {
+            let paths = arguments
+                .get("paths")
+                .and_then(Value::as_array)
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter_map(|p| p.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let what = OnElement::Upload {
+                query: text(arguments, "query")?,
+                paths,
+            };
+            element(client, arguments, what, "handed over").await
+        }
+        "wait_for" => {
+            let what = OnElement::WaitFor {
+                query: text(arguments, "query")?,
+                gone: flag(arguments, "gone"),
+                within_ms: arguments.get("within_ms").and_then(Value::as_u64),
+            };
+            element(client, arguments, what, "there").await
+        }
+        "hover" => {
+            let what = OnElement::Hover {
+                query: text(arguments, "query")?,
+            };
+            element(client, arguments, what, "hovering over").await
+        }
+        "history" => {
+            let go = match text(arguments, "go")?.as_str() {
+                "back" => Where::Back,
+                "forward" => Where::Forward,
+                "reload" => Where::Reload,
+                other => return Err(format!("no such direction: {other}")),
+            };
+            element(client, arguments, OnElement::History { go }, "went").await
+        }
+        "scroll_page" => {
+            let to = match arguments.get("to").and_then(Value::as_str) {
+                Some("top") => ScrollTo::Top,
+                Some("bottom") => ScrollTo::Bottom,
+                _ => ScrollTo::By,
+            };
+            let axis = |name| {
+                arguments
+                    .get(name)
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default() as i32
+            };
+
+            let what = OnElement::Scroll {
+                query: arguments
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                to,
+                dx: axis("dx"),
+                dy: axis("dy"),
+            };
+            element(client, arguments, what, "scrolled").await
+        }
+        "dropdown" => {
+            let query = text(arguments, "query")?;
+            let what = match text(arguments, "op")?.as_str() {
+                "list" => OnElement::Options { query },
+                "select" => OnElement::Choose {
+                    query,
+                    option: text(arguments, "option")?,
+                },
+                other => return Err(format!("no such op: {other}; use list or select")),
+            };
+            element(client, arguments, what, "done").await
         }
         "list_apps" => {
             let names = client.catalog().await.map_err(|e| e.to_string())?;
@@ -478,6 +800,48 @@ async fn run(client: &Client, arguments: &Value) -> Result<Answer, String> {
 }
 
 /// Do the thing, let the screen settle, and hand back what it looks like now.
+/// One element operation, and a screenshot of what it did.
+async fn element(
+    client: &Client,
+    arguments: &Value,
+    what: OnElement,
+    did: &str,
+) -> Result<Answer, String> {
+    let id = text(arguments, "box_id")?;
+    let result = client
+        .on_element(&id, &what)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !result.options.is_empty() {
+        return Ok(Answer::Text(result.options.join("\n")));
+    }
+
+    let said = match (result.element, result.at) {
+        (Some(one), _) => format!("{did} {:?}", one.text),
+        (None, Some(at)) => format!("{did} to {},{}", at.x, at.y),
+        (None, None) => did.to_string(),
+    };
+
+    // The frame it produced, like every other tool that moves the screen: an
+    // agent that has to ask for one after each step spends two round trips on
+    // one, and forgets to look on the second.
+    let frame = client
+        .frame(&id, 0, None)
+        .await
+        .ok()
+        .and_then(|frame| frame_png(&frame).ok().flatten())
+        .unwrap_or_default();
+
+    match frame.is_empty() {
+        true => Ok(Answer::Text(said)),
+        false => Ok(Answer::Shot {
+            text: said,
+            png: frame,
+        }),
+    }
+}
+
 async fn act(
     client: &Client,
     arguments: &Value,

@@ -27,9 +27,36 @@ cargo install --path crates/computer-mcp
 
 ## The tools
 
-`launch_box` · `list_boxes` · `remove_box` · `screenshot` · `open_url` ·
-`click` · `type_text` · `press_key` · `scroll` · `drag` · `run_command` ·
-`hand_over` · `reclaim_screen` · `fork_box`
+`launch_box` · `list_boxes` · `remove_box` · `screenshot` · `read_page` ·
+`find` · `wait_for` · `click_element` · `fill_field` · `dropdown` ·
+`upload_file` · `hover` · `history` · `scroll_page` ·
+`open_url` · `open_app` · `list_apps` · `click` · `type_text` · `press_key` ·
+`scroll` · `drag` · `run_command` · `hand_over` · `reclaim_screen` · `fork_box`
+
+**On a web page, act by name rather than by coordinate.** `find` says what is
+there; `click_element`, `fill_field`, `dropdown` and `upload_file` act on what
+a query names. A point taken from a screenshot is wrong the moment the page
+moves under it, and two of these have no coordinate at all: a file chooser is
+the operating system's window, and a native dropdown opens a menu no screenshot
+shows and no click reaches. `click`, `type_text` and `drag` remain for
+everything that is not a page.
+
+**`wait_for` after anything that makes the page fetch.** A sleep is either
+short enough to act too early or long enough to be paid on every step, and a
+page that answers a click by fetching says nothing when it starts and
+everything when the result arrives. `gone` waits the other way, for a spinner
+ending or a dialog closing.
+
+**Two scrolls, and they are not the same.** `scroll` sends wheel clicks at a
+screen point, so it needs a coordinate and moves whatever sits under the
+pointer — right for a desktop application. `scroll_page` moves the page itself
+in pixels and answers with where it stopped, which is how a caller tells that a
+page loading more on arrival has run out: the same position twice.
+
+`read_page` and `screenshot` answer different questions. A frame says **where**
+to click, which is the only place a coordinate can come from. `read_page` says
+**what is there** — as text rather than a picture of text, past the fold, and
+with the address behind each link instead of its label.
 
 **Every tool that moves the screen answers with the frame it produced**, as an
 image rather than a hash. An agent that has to ask for a screenshot after every
