@@ -38,7 +38,7 @@ logs="/tmp/computer/screen-${number}"
 export XDG_RUNTIME_DIR="$runtime"
 export WAYLAND_DISPLAY="$wayland_display"
 
-# The gate in front of both viewers, as `docs/viewer-auth.md` describes it.
+# The gate in front of both viewers, as describes it.
 #
 # `open` is what a box on loopback has always been; the crate refuses to publish
 # an open viewer beyond loopback, so anything reachable arrives here gated.
@@ -165,6 +165,18 @@ start() {
   # that returns no image.
   await test -S "${runtime}/${wayland_display}" \
     || { echo "the compositor is not on ${wayland_display}" >&2; exit 1; }
+
+  # A profile kept in a volume comes back with the lock the last box left in
+  # it, naming a container that is gone — and Chromium will not start on a
+  # profile another machine says it holds. Cleared only when the name is not
+  # this one: a lock written here is a browser that really is running.
+  lock="$profile/SingletonLock"
+  if [ -L "$lock" ]; then
+    case "$(readlink "$lock")" in
+      "$(hostname)-"*) ;;
+      *) rm -f "$lock" "$profile/SingletonSocket" "$profile/SingletonCookie" ;;
+    esac
+  fi
 
   # One profile per screen. A shared profile makes one screen's login every
   # screen's, and the singleton lock stops the second launch outright.

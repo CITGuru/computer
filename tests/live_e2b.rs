@@ -51,8 +51,7 @@ async fn a_real_sandbox_runs_the_same_desktop() {
 
     let computer = Computer::builder()
         // A public viewer is reachable from the internet, so it goes through
-        // the same gate as any other publish. `Token` because the URL printed
-        // below has to carry everything a person needs to open it.
+        // the same gate as any other publish.
         .auth(Auth::Token)
         .machine(Arc::new(machine.public_viewer(true)))
         .profile(profile)
@@ -62,8 +61,8 @@ async fn a_real_sandbox_runs_the_same_desktop() {
         .expect("a sandbox");
 
     println!("  {} on {}", computer.name(), computer.runtime());
-    if let Some(url) = computer.viewer_url() {
-        println!("  watch it {url}");
+    if computer.viewer_url().is_some() {
+        println!("  viewer available");
     }
 
     // The one deployment that is genuinely on the internet, so the one where

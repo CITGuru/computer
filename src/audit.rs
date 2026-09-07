@@ -77,7 +77,7 @@ impl std::fmt::Display for Audit {
 
 /// Exercise every capability the box claims.
 ///
-/// The screen is left as it was found, apart from the pointer.
+/// The screen is left as it was found, apart from the pointer and clipboard.
 pub async fn audit(computer: &Computer) -> Audit {
     let mut audit = Audit::default();
     let support = computer.support().clone();

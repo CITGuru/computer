@@ -115,6 +115,17 @@ pub struct Config {
     /// `--disable-dev-shm-usage`, so this is only for a caller who would
     /// rather give it the memory than the workaround.
     pub shm_size: Option<String>,
+    /// A named volume to keep the browser's profiles in.
+    ///
+    /// A box is thrown away and its profiles go with it. Docker keeps a
+    /// *named* volume across `rm --volumes`, which is what removes a box here,
+    /// so two boxes given the same name are the same browser: logged into what
+    /// the last one logged into, with its history and its extensions.
+    ///
+    /// The whole profile rather than a session, so it holds what
+    /// [`crate::Session`] cannot — a device-bound key, a database too large to
+    /// carry. It never leaves this host, which a session does.
+    pub profiles: Option<String>,
     pub labels: BTreeMap<String, String>,
     /// Packages to install into the image, which make it a different image.
     pub extras: bundle::Extras,
@@ -154,6 +165,7 @@ impl Default for Config {
             memory: None,
             cpus: None,
             shm_size: None,
+            profiles: None,
             labels: BTreeMap::new(),
             extras: bundle::Extras::none(),
             bundle: Some(bundle::DESKTOP),
@@ -212,6 +224,11 @@ pub fn run_args(name: &str, config: &Config) -> Vec<String> {
         args.push(shm.clone());
     }
 
+    if let Some(volume) = &config.profiles {
+        args.push(arg("--volume"));
+        args.push(format!("{volume}:{PROFILES}"));
+    }
+
     args.push(arg("--label"));
     args.push(arg("computer-rs=1"));
     for (key, value) in &config.labels {
@@ -225,6 +242,12 @@ pub fn run_args(name: &str, config: &Config) -> Vec<String> {
     args.push(config.image.clone());
     args
 }
+
+/// Where the images keep their browser profiles.
+///
+/// One directory holding every screen's, so a box with three screens carries
+/// all three in one volume.
+pub const PROFILES: &str = "/home/computer/.browser-profiles";
 
 /// `docker port` output, as container port to host port.
 ///
