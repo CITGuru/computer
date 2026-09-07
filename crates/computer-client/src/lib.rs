@@ -130,11 +130,25 @@ impl Client {
     }
 
     /// What the page in front is showing, as text.
-    pub async fn page(&self, id: &str, limit: Option<usize>) -> Result<PageText> {
-        let path = match limit {
-            Some(limit) => format!("/v1/boxes/{id}/page?limit={limit}"),
-            None => format!("/v1/boxes/{id}/page"),
+    pub async fn page(
+        &self,
+        id: &str,
+        format: Reading,
+        limit: Option<usize>,
+        max_links: Option<usize>,
+    ) -> Result<PageText> {
+        let format = match format {
+            Reading::Markdown => "markdown",
+            Reading::Text => "text",
+            Reading::Raw => "raw",
         };
+        let mut path = format!("/v1/boxes/{id}/page?format={format}");
+        if let Some(limit) = limit {
+            path.push_str(&format!("&limit={limit}"));
+        }
+        if let Some(max_links) = max_links {
+            path.push_str(&format!("&max_links={max_links}"));
+        }
 
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }

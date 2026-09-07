@@ -594,6 +594,122 @@ pub struct Page {
     target: Target,
 }
 
+/// What a read carries when the caller names no numbers.
+///
+/// Defaults, not limits: a library imposes no ceiling on its caller, and a
+/// deployment that needs one puts it in front — see `computer-server`.
+const TEXT_DEFAULT: usize = 100_000;
+const LINKS_DEFAULT: usize = 100;
+
+/// How a page should be read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reading {
+    /// Headings, lists, tables and inline links kept. The default, because a
+    /// reader that flattens them cannot tell a heading from body text.
+    #[default]
+    Markdown,
+    /// Rendered text, whitespace collapsed. The cheapest answer to "what does
+    /// this say".
+    Text,
+    /// The document's own HTML. An escape hatch for what the readers above do
+    /// not carry, and megabytes where they are kilobytes.
+    Raw,
+}
+
+/// Rendered text, scripts and styles removed.
+///
+/// Navigation stays: telling a site's chrome from its content is a heuristic,
+/// and a wrong one silently drops the page.
+const TEXT: &str = r#"
+  const root = document.querySelector('main, article') || document.body;
+  const clone = root ? root.cloneNode(true) : null;
+  if (clone) clone.querySelectorAll('script,style,noscript,svg,template').forEach(n => n.remove());
+  return (clone ? clone.innerText : '').replace(/\s+/g, ' ').trim();
+"#;
+
+/// The document as markdown.
+///
+/// A walk rather than a library: nothing may be fetched into the box to read a
+/// page, and the shapes worth keeping — headings, lists, tables, code, links —
+/// are few enough to name.
+const MARKDOWN: &str = r#"
+  const skip = new Set(['SCRIPT','STYLE','NOSCRIPT','SVG','TEMPLATE','IFRAME','CANVAS']);
+  const inline = t => t.replace(/\s+/g, ' ');
+  const out = [];
+
+  const walk = (node, depth) => {
+    if (node.nodeType === 3) { out.push(inline(node.nodeValue)); return; }
+    if (node.nodeType !== 1 || skip.has(node.tagName)) return;
+    if (node.getAttribute && node.getAttribute('aria-hidden') === 'true') return;
+
+    const tag = node.tagName;
+    const kids = () => Array.from(node.childNodes).forEach(c => walk(c, depth));
+
+    if (/^H[1-6]$/.test(tag)) {
+      out.push('\n\n' + '#'.repeat(+tag[1]) + ' '); kids(); out.push('\n');
+      return;
+    }
+    switch (tag) {
+      case 'BR': out.push('\n'); return;
+      case 'HR': out.push('\n\n---\n'); return;
+      case 'P': case 'DIV': case 'SECTION': case 'ARTICLE': case 'MAIN':
+        out.push('\n\n'); kids(); return;
+      case 'UL': case 'OL': out.push('\n'); kids(); out.push('\n'); return;
+      case 'LI': {
+        // Written after its content, so an item that renders to nothing
+        // leaves no bullet behind.
+        const mark = out.length;
+        out.push('');
+        Array.from(node.childNodes).forEach(c => walk(c, depth + 1));
+        const body = out.slice(mark + 1).join('').trim();
+        out[mark] = body ? '\n' + '  '.repeat(depth) + '- ' : '';
+        return;
+      }
+      case 'A': {
+        const href = node.getAttribute('href') || '';
+        // `innerText` is empty for anything not rendered — a collapsed menu,
+        // a hidden tab — and those links would come out as bare bullets.
+        const words = inline(node.innerText || node.textContent || '').trim();
+        if (!words) return;
+        out.push(href.startsWith('http') ? '[' + words + '](' + href + ')' : words);
+        return;
+      }
+      case 'STRONG': case 'B': out.push('**'); kids(); out.push('**'); return;
+      case 'EM': case 'I': out.push('_'); kids(); out.push('_'); return;
+      case 'CODE':
+        if (node.closest('pre')) { kids(); return; }
+        out.push('`'); kids(); out.push('`'); return;
+      case 'PRE':
+        out.push('\n\n```\n' + (node.innerText || '') + '\n```\n'); return;
+      case 'BLOCKQUOTE': out.push('\n\n> '); kids(); out.push('\n'); return;
+      case 'IMG': {
+        const alt = node.getAttribute('alt');
+        if (alt) out.push('![' + inline(alt) + ']');
+        return;
+      }
+      case 'TR': out.push('\n| '); kids(); out.push(' |'); return;
+      case 'TH': case 'TD': kids(); out.push(' | '); return;
+      case 'TABLE': out.push('\n'); kids(); out.push('\n'); return;
+      default: kids();
+    }
+  };
+
+  // `main` and `article` are not guesses: HTML defines them as the document's
+  // content, and a page that marks one has already said which part matters.
+  // Wikipedia otherwise spends a reader's whole budget on its language
+  // sidebar before the article begins. Nothing is dropped where neither
+  // exists — telling chrome from content without them is a real heuristic,
+  // and a wrong one loses the page.
+  const root = document.querySelector('main, article') || document.body;
+  if (root) walk(root, 0);
+  return out.join('')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+"#;
+
 /// What a page is showing.
 ///
 /// Text rather than a picture of text, and links with the addresses behind
@@ -699,23 +815,41 @@ impl Page {
             .unwrap_or(Value::Null))
     }
 
-    /// The current URL, asked of the page rather than read off a screenshot.
-    /// What this page is showing, as text and links.
+    /// What this page is showing.
     ///
     /// Read in the page rather than over the wire: a document is megabytes of
-    /// markup, and what a reader wants is what it renders. Scripts, styles and
-    /// SVG go; navigation stays, because telling a site's chrome from its
-    /// content is a heuristic and a wrong one silently drops the page.
-    pub async fn read(&mut self, limit: usize, links: usize) -> Result<PageText> {
+    /// markup, and what a reader wants is what it renders.
+    ///
+    /// `limit` and `max_links` default when they are `None`. A caller deciding
+    /// whether a page is worth reading asks for a few hundred characters
+    /// rather than paying for all of it; one that wants the whole thing says
+    /// so.
+    pub async fn read(
+        &mut self,
+        format: Reading,
+        limit: Option<usize>,
+        max_links: Option<usize>,
+    ) -> Result<PageText> {
+        let limit = limit.unwrap_or(TEXT_DEFAULT);
+        let links = max_links.unwrap_or(LINKS_DEFAULT);
+
+        let body = match format {
+            // Structure survives: a heading stays a heading, a list stays a
+            // list, and a link keeps its address beside its words rather than
+            // in a separate list nothing can place back in context.
+            Reading::Markdown => MARKDOWN,
+            Reading::Text => TEXT,
+            // The document as it came. An escape hatch for what the reader
+            // above did not carry — a `meta` tag, embedded JSON-LD — and
+            // costly enough that it is nobody's default.
+            Reading::Raw => "return document.documentElement.outerHTML;",
+        };
+
         let read = self
             .evaluate(&format!(
                 r#"(() => {{
-                     const clone = document.body ? document.body.cloneNode(true) : null;
-                     if (clone) {{
-                       clone.querySelectorAll('script,style,noscript,svg,template')
-                         .forEach(n => n.remove());
-                     }}
-                     const text = (clone ? clone.innerText : '').replace(/\s+/g, ' ').trim();
+                     const body = (() => {{ {body} }})();
+                     const text = String(body || '');
                      const links = Array.from(document.querySelectorAll('a[href]'))
                        .map(a => ({{ text: (a.innerText || '').replace(/\s+/g, ' ').trim(), href: a.href }}))
                        .filter(l => l.text && l.href.startsWith('http'))
@@ -739,6 +873,7 @@ impl Page {
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
+    /// The current URL, asked of the page rather than read off a screenshot.
     pub async fn url(&mut self) -> Result<String> {
         Ok(self
             .evaluate("location.href")

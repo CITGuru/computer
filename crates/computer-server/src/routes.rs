@@ -41,10 +41,10 @@ const TRACE_PAGE: usize = 500;
 /// The longest a replay is given before it stops and says so. A fork is one
 /// HTTP request, and a box that was driven for an hour cannot take one.
 const REPLAY_BUDGET: Duration = Duration::from_secs(180);
-/// The most page text one read answers with, and the most links.
+/// The most page text one read answers with.
 ///
-/// A cap rather than the whole document: a page is unbounded and a caller
-/// asking what it says wants what it says, not every byte behind it.
+/// A ceiling rather than a default a caller can raise: `limit` is there to ask
+/// for less than this, and a page is unbounded.
 const PAGE_TEXT: usize = 20_000;
 const LINKS: usize = 100;
 /// The most of an original pause a replay reproduces. Pacing matters — a page
@@ -992,6 +992,10 @@ async fn trace_frame(
 struct PageQuery {
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    max_links: Option<usize>,
+    #[serde(default)]
+    format: Option<Reading>,
 }
 
 /// What the page in front is showing, as text.
@@ -1014,8 +1018,20 @@ async fn read_page(
         .await?
         .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
 
+    let format = match query.format.unwrap_or_default() {
+        Reading::Markdown => computer::Reading::Markdown,
+        Reading::Text => computer::Reading::Text,
+        Reading::Raw => computer::Reading::Raw,
+    };
+
+    // Clamped here rather than in the engine: a ceiling is what a deployment
+    // owes whoever it answers, and a library owes its caller none.
     let read = page
-        .read(query.limit.unwrap_or(PAGE_TEXT).clamp(1, PAGE_TEXT), LINKS)
+        .read(
+            format,
+            Some(query.limit.unwrap_or(PAGE_TEXT).clamp(1, PAGE_TEXT)),
+            Some(query.max_links.unwrap_or(LINKS).clamp(0, LINKS)),
+        )
         .await?;
 
     Ok(Json(PageText {

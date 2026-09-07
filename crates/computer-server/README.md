@@ -130,8 +130,27 @@ of text, shows one viewport of a document that may be far longer, and renders a
 link as its label rather than its address.
 
 ```bash
-curl -s "localhost:8080/v1/boxes/$BOX/page?limit=4000"
+curl -s "localhost:8080/v1/boxes/$BOX/page?format=markdown&limit=4000&max_links=20"
 ```
+
+`limit` and `max_links` are optional and cap what comes back — ask for a few
+hundred characters to decide whether a page is worth reading, and `truncated`
+says whether that cut anything. Both are ceilings here rather than defaults a
+caller can raise; `computer::Page::read` has no ceiling, because a library owes
+its caller none and a deployment owes one to whoever it answers.
+
+`format` is `markdown` (the default), `text` or `raw`. Markdown keeps the
+headings, lists, tables and code a flat rendering loses, and puts each link's
+address beside its words. `text` is the cheapest answer to "what does this
+say". `raw` is the document's own HTML — an escape hatch for what the other two
+do not carry, and megabytes where they are kilobytes.
+
+A page marking `<main>` or `<article>` is read from there, since HTML already
+defines those as its content. Where neither exists the whole body is read:
+telling chrome from content without them is a real heuristic, and a wrong one
+loses the page. Wikipedia marks a `<main>` that holds its own sidebar, so a
+chrome-heavy page can still spend a reader's budget before its article
+begins — raise `limit` or go straight to the section you want.
 
 Answers with the visible page's title, URL, rendered text and its links with
 their `href`s — so a caller reads what is there, and navigates by URL rather

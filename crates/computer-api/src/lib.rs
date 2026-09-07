@@ -136,6 +136,19 @@ pub struct Link {
     pub href: String,
 }
 
+/// How a page should be read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reading {
+    /// Headings, lists, tables and inline links kept.
+    #[default]
+    Markdown,
+    /// Rendered text, whitespace collapsed.
+    Text,
+    /// The document's own HTML, for what the readers above do not carry.
+    Raw,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Window {
     pub id: String,

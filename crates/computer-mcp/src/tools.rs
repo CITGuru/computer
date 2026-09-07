@@ -7,7 +7,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use computer_api::{Action, ActionBatch, ForkMode, ForkRequest, Want};
+use computer_api::{Action, ActionBatch, ForkMode, ForkRequest, Reading, Want};
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
 use serde_json::{Value, json};
@@ -115,9 +115,16 @@ pub fn catalogue() -> Value {
              this says what is there, that says where it is.",
             with_box(
                 json!({
+                    "format": {
+                        "type": "string",
+                        "enum": ["markdown", "text", "raw"],
+                        "description": "markdown (default) keeps headings, lists, tables and \
+                                        inline links; text is the flat rendering; raw is the \
+                                        page's own HTML, for what the other two do not carry."
+                    },
                     "limit": {
                         "type": "integer",
-                        "description": "Characters of text to return. Defaults to the server's cap."
+                        "description": "Characters to return. Defaults to the server's cap."
                     }
                 }),
                 &[]
@@ -299,7 +306,21 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .and_then(Value::as_u64)
                 .map(|limit| limit as usize);
 
-            let page = client.page(&id, limit).await.map_err(|e| e.to_string())?;
+            let format = match arguments.get("format").and_then(Value::as_str) {
+                Some("text") => Reading::Text,
+                Some("raw") => Reading::Raw,
+                _ => Reading::Markdown,
+            };
+
+            let max_links = arguments
+                .get("max_links")
+                .and_then(Value::as_u64)
+                .map(|links| links as usize);
+
+            let page = client
+                .page(&id, format, limit, max_links)
+                .await
+                .map_err(|e| e.to_string())?;
 
             let links = page
                 .links
