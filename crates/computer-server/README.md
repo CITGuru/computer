@@ -99,6 +99,31 @@ Three things worth knowing:
   `409` rather than handing back the first request's reply for work that never
   happened.
 
+## A whole form in one request
+
+Page operations are also actions, so a form is one batch rather than a call per
+field. The screen lock is held across the whole of it, and one frame comes back
+instead of one per step.
+
+```bash
+curl -s localhost:8080/v1/boxes/$BOX/screens/0/actions \
+  -H 'content-type: application/json' -d '{
+    "actions": [
+      { "type": "open_url", "url": "https://example.com/order" },
+      { "type": "on_page", "what": { "op": "fill",     "query": "name", "text": "…" } },
+      { "type": "on_page", "what": { "op": "click",    "query": "Continue" } },
+      { "type": "on_page", "what": { "op": "wait_for", "query": "Details" } },
+      { "type": "on_page", "what": { "op": "choose",   "query": "size", "option": "Large" } },
+      { "type": "on_page", "what": { "op": "upload",   "query": "spec", "paths": ["/tmp/spec.pdf"] } }
+    ],
+    "want": ["frame"]
+  }'
+```
+
+The page is resolved when the first `on_page` asks rather than up front, and
+dropped again whenever `open_url` runs: that raises a new tab, so a handle
+taken earlier would address the one it replaced.
+
 ## Open an app
 
 An app is named, not commanded: a caller who could post an argv to a driving

@@ -363,6 +363,22 @@ fn summarise(event: &computer_api::TraceEvent) -> String {
     }
 }
 
+fn op_of(what: &computer_api::OnElement) -> &'static str {
+    use computer_api::OnElement as O;
+
+    match what {
+        O::Click { .. } => "click",
+        O::Fill { .. } => "fill",
+        O::Options { .. } => "options",
+        O::Choose { .. } => "choose",
+        O::Upload { .. } => "upload",
+        O::WaitFor { .. } => "wait",
+        O::Hover { .. } => "hover",
+        O::History { .. } => "history",
+        O::Scroll { .. } => "scroll",
+    }
+}
+
 fn name_of(action: &Action) -> String {
     match action {
         Action::Move { to } => format!("move to {},{}", to.x, to.y),
@@ -378,6 +394,7 @@ fn name_of(action: &Action) -> String {
         Action::Key { chord } => format!("key {chord}"),
         Action::Scroll { dy, .. } => format!("scroll {dy}"),
         Action::OpenUrl { url } => format!("open {url}"),
+        Action::OnPage { what } => format!("page {}", op_of(what)),
         Action::Launch { app, args } => match args.is_empty() {
             true => format!("open {app}"),
             false => format!("open {app} {}", args.join(" ")),

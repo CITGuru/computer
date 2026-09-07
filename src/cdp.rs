@@ -742,10 +742,12 @@ pub enum Reading {
 /// Navigation stays: telling a site's chrome from its content is a heuristic,
 /// and a wrong one silently drops the page.
 const TEXT: &str = r#"
+  // The live tree, not a copy of it: `innerText` is what the page renders, and
+  // a detached clone has no layout — it falls back to every character in the
+  // document, including whatever is hidden. Scripts and styles are not
+  // rendered either, so nothing has to be stripped.
   const root = document.querySelector('main, article') || document.body;
-  const clone = root ? root.cloneNode(true) : null;
-  if (clone) clone.querySelectorAll('script,style,noscript,svg,template').forEach(n => n.remove());
-  return (clone ? clone.innerText : '').replace(/\s+/g, ' ').trim();
+  return (root ? root.innerText : '').replace(/\s+/g, ' ').trim();
 "#;
 
 /// The document as markdown.
@@ -762,6 +764,12 @@ const MARKDOWN: &str = r#"
     if (node.nodeType === 3) { out.push(inline(node.nodeValue)); return; }
     if (node.nodeType !== 1 || skip.has(node.tagName)) return;
     if (node.getAttribute && node.getAttribute('aria-hidden') === 'true') return;
+
+    // What the page is not showing is not what it says: a wizard keeps its
+    // later steps in the document, and a reader that returns them describes a
+    // page nobody is looking at.
+    const shown = getComputedStyle(node);
+    if (shown.display === 'none' || shown.visibility === 'hidden') return;
 
     const tag = node.tagName;
     const kids = () => Array.from(node.childNodes).forEach(c => walk(c, depth));

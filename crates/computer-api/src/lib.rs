@@ -106,6 +106,18 @@ pub enum Action {
     Wait {
         ms: u64,
     },
+    /// Act on the element a query names, in the page the screen is showing.
+    ///
+    /// The same operations as `POST …/page/element`, so a form is one batch
+    /// rather than a call per field: the screen lock is held across the whole
+    /// of it, and one frame comes back instead of one per step.
+    ///
+    /// Nested rather than flattened: `deny_unknown_fields` and `flatten` do
+    /// not work together, and a misspelled key silently dropped is worse than
+    /// a word of nesting.
+    OnPage {
+        what: OnElement,
+    },
     /// A name, not a command: an argv posted to a driving endpoint would be
     /// `exec` in disguise.
     Launch {
@@ -153,7 +165,7 @@ pub struct Element {
 }
 
 /// What to do to the element a query names.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OnElement {
     /// Bring it into view and click its middle.

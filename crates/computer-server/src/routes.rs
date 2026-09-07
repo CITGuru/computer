@@ -221,12 +221,25 @@ async fn actions(
     let target = entry.desktop(screen).await?;
     let desktop = target.as_desktop();
 
+    // Resolved when the first page action asks, not before: `open_url` raises a
+    // new tab, so a handle taken up front would address the one it replaced.
+    let browser = entry.computer.browser();
+    let mut page = None;
+
     let mut results = Vec::with_capacity(batch.actions.len());
     let mut windows = Vec::new();
     let mut stopped_at = None;
 
     for (index, action) in batch.actions.iter().enumerate() {
-        let outcome = run(desktop, target.as_screen(), action, &entry.spec).await;
+        let outcome = run(
+            desktop,
+            target.as_screen(),
+            action,
+            &entry.spec,
+            browser.as_ref(),
+            &mut page,
+        )
+        .await;
 
         // Its own event: a name and its arguments are the whole launch.
         match (&outcome, action) {
@@ -317,6 +330,8 @@ async fn run(
     screen: Option<&computer::Screen>,
     action: &Action,
     spec: &Spec,
+    browser: Option<&computer::Devtools>,
+    page: &mut Option<computer::Page>,
 ) -> ApiResult<Option<Window>> {
     match action {
         Action::Move { to } => desktop.move_to(point_in(*to)).await?,
@@ -345,8 +360,26 @@ async fn run(
                 ApiError::bad_request("this screen has no browser to open a page in")
             })?;
             screen.open_url(url).await?;
+
+            // A new tab, raised in front of the last one. Whatever page action
+            // follows wants that one, not the page this batch started on.
+            *page = None;
         }
         Action::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms).min(MAX_PAUSE)).await,
+        Action::OnPage { what } => {
+            if page.is_none() {
+                let browser = browser
+                    .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
+
+                *page = browser.visible_page().await?;
+            }
+
+            let page = page
+                .as_mut()
+                .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
+
+            apply(page, what.clone()).await?;
+        }
         Action::Launch { app, args } => {
             let screen =
                 screen.ok_or_else(|| ApiError::bad_request("this screen cannot start an app"))?;
@@ -882,7 +915,15 @@ async fn replay_onto(
 
                 let acted = match target {
                     Ok(target) => {
-                        run(target.as_desktop(), target.as_screen(), action, &entry.spec).await
+                        run(
+                            target.as_desktop(),
+                            target.as_screen(),
+                            action,
+                            &entry.spec,
+                            None,
+                            &mut None,
+                        )
+                        .await
                     }
                     Err(error) => Err(error),
                 };
@@ -1098,7 +1139,15 @@ async fn on_element(
 ) -> ApiResult<Json<ElementResult>> {
     let mut page = visible(&state, &id).await?;
 
-    Ok(Json(match body {
+    Ok(Json(apply(&mut page, body).await?))
+}
+
+/// One element operation against a page already in hand.
+///
+/// Shared with the action batch, so a form is one round trip rather than one
+/// per field and the screen lock is held across the whole of it.
+async fn apply(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementResult> {
+    Ok(match what {
         OnElement::Click { query } => ElementResult {
             element: Some(element_out(page.click_on(&query).await?)),
             ..ElementResult::default()
@@ -1161,7 +1210,7 @@ async fn on_element(
                 ..ElementResult::default()
             }
         }
-    }))
+    })
 }
 
 /// The page the screen is showing.
