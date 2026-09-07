@@ -62,5 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("  forward to   {}", page.url().await?);
 
+    page.close().await.ok();
+
     Ok(())
 }

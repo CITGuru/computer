@@ -124,6 +124,11 @@ The page is resolved when the first `on_page` asks rather than up front, and
 dropped again whenever `open_url` runs: that raises a new tab, so a handle
 taken earlier would address the one it replaced.
 
+Tabs beyond the newest twelve are closed as new ones open — never the one on
+screen. A person opening a link expects a new tab, but a program doing it fifty
+times leaves fifty behind and a browser holding them all gets slower at
+everything.
+
 ## Open an app
 
 An app is named, not commanded: a caller who could post an argv to a driving

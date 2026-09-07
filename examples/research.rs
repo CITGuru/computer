@@ -47,6 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     println!("{} results to open\n", links.len());
+    page.close().await.ok();
 
     for link in links {
         println!("=== {link}");
@@ -71,6 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             true => println!("  body:  (nothing readable)\n"),
             false => println!("  body:  {}\n", read.text.trim()),
         }
+
+        // Whoever opened it closes it. A page per result and none of them shut
+        // is a browser with a hundred tabs by the end of a search.
+        page.close().await.ok();
     }
 
     Ok(())

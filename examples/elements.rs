@@ -77,5 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         read.text.trim()
     );
 
+    page.close().await.ok();
+
     Ok(())
 }

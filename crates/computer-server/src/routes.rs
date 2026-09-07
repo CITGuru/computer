@@ -49,6 +49,10 @@ const PAGE_TEXT: usize = 20_000;
 const LINKS: usize = 100;
 /// The most matches one find answers with.
 const FOUND: usize = 50;
+/// How many tabs a box keeps. Enough that a caller can come back to what it
+/// opened a few steps ago, few enough that a long run does not bury the
+/// browser.
+const TABS: usize = 12;
 /// How long a wait runs by default, and the longest one it can be asked for:
 /// a request holds a connection while it waits.
 const WAIT_MS: u64 = 10_000;
@@ -364,6 +368,13 @@ async fn run(
             // A new tab, raised in front of the last one. Whatever page action
             // follows wants that one, not the page this batch started on.
             *page = None;
+
+            // And the ones before it do not accumulate. Best effort: a browser
+            // that would not say what it holds is not a reason to refuse the
+            // page that just opened.
+            if let Some(browser) = browser {
+                let _ = browser.tidy(TABS).await;
+            }
         }
         Action::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms).min(MAX_PAUSE)).await,
         Action::OnPage { what } => {

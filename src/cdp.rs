@@ -172,6 +172,41 @@ impl Devtools {
     }
 
     /// Attach to the first page, opening one if the browser has none.
+    /// Close pages beyond the newest `keep`, and answer how many went.
+    ///
+    /// `open_url` raises a new tab every time, by design — a person opening a
+    /// link expects one. A program doing it fifty times leaves fifty behind,
+    /// and a browser holding them all gets slower at everything.
+    ///
+    /// Never the visible one, whatever its age: it is the page the screen is
+    /// showing and a caller is probably reading it.
+    pub async fn tidy(&self, keep: usize) -> Result<usize> {
+        let pages = self.pages().await?;
+        if pages.len() <= keep {
+            return Ok(0);
+        }
+
+        let showing = match self.visible_page().await {
+            Ok(Some(mut page)) => page.url().await.ok(),
+            _ => None,
+        };
+
+        let mut closed = 0;
+        // Newest first, as the debugger lists them, so the tail is what has
+        // been sitting there longest.
+        for target in pages.into_iter().skip(keep) {
+            if showing.as_deref() == Some(target.url.as_str()) {
+                continue;
+            }
+
+            if self.close(&target.id).await.is_ok() {
+                closed += 1;
+            }
+        }
+
+        Ok(closed)
+    }
+
     pub async fn visible_page(&self) -> Result<Option<Page>> {
         for target in self.pages().await? {
             let mut page = self.attach(&target).await?;
@@ -999,6 +1034,16 @@ impl Page {
 
         serde_json::from_str(read)
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    /// Close it.
+    ///
+    /// Whoever opened a page closes it. Nothing does so on drop, because a
+    /// close is a round trip and a drop cannot wait for one — so a program
+    /// that opens a page per step and never says this leaves the browser
+    /// holding every one of them.
+    pub async fn close(&mut self) -> Result<()> {
+        self.call("Page.close", json!({})).await.map(|_| ())
     }
 
     /// The current URL, asked of the page rather than read off a screenshot.
