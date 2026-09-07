@@ -384,6 +384,33 @@ Whatever you leave alone comes from the base contract, so a custom image does no
 
 `CommandScreen` keeps the command protocol and changes only the program that answers it. The three runtimes go further: `screen_runtime`, `browser_runtime` and `wallpaper_runtime` replace **how** an operation is performed, so an image with a guest agent can answer without a shell. Each has a `Command*` default, which is what the shipped images use.
 
+### Carry a login between boxes
+
+A box is thrown away, and everything it was logged into goes with it. A session
+is what a login leaves behind — cookies and local storage — and it can be taken
+out of one box and put into another:
+
+```rust
+let session = browser.export_session(&["https://example.com".to_string()]).await?;
+
+// … a new box, later, somewhere else …
+browser.import_session(&session).await?;
+```
+
+Named origins only. What comes out belongs to one of them, and what goes back
+in is checked against the list it came with, so a session for one site can
+never be put into another.
+
+The profile directory is deliberately not what moves: it is about a third of a
+gigabyte, tied to the Chromium build that wrote it, and carries a browser's
+whole history besides.
+
+**A session is the account.** A password may sit behind a second factor; a
+session has already passed one, so whoever holds this is the user. `Session`
+has no `Display`, and its `Debug` prints counts rather than contents, so it
+does not reach a log by accident — but where it is kept, and what encrypts it,
+is the caller's to decide.
+
 ### Attach to a running desktop
 
 Give a desktop a name if you want to use it from another process:
