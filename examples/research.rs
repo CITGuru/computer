@@ -8,7 +8,7 @@
 //! picture of text is not text, and a page that answered with a login wall
 //! says so in its own words.
 
-use computer::{Computer, Reading};
+use computer::{Computer, Reading, SearchProvider};
 use std::time::Duration;
 
 #[tokio::main]
@@ -22,11 +22,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .browser()
         .ok_or("this box publishes no DevTools port")?;
 
-    let search = format!(
-        "https://duckduckgo.com/html/?q=%22{}%22",
-        subject.replace(' ', "+")
-    );
-    let mut page = browser.open_page(&search, Duration::from_secs(30)).await?;
+    let mut page = browser
+        .search(
+            &format!("\"{subject}\""),
+            SearchProvider::default(),
+            Duration::from_secs(30),
+        )
+        .await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let links = page
@@ -57,7 +59,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  did not load\n");
             continue;
         };
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        // These are redirect URLs, so the load that `open_page` waited for is
+        // the redirector's. Wait for the page it lands on to put something on
+        // screen, rather than guessing at a sleep.
+        page.wait_for("body", false, Duration::from_secs(10))
+            .await
+            .ok();
+        tokio::time::sleep(Duration::from_millis(600)).await;
 
         let read = match page.read(Reading::Markdown, Some(1400), None).await {
             Ok(read) => read,

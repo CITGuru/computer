@@ -172,6 +172,20 @@ impl Devtools {
     }
 
     /// Attach to the first page, opening one if the browser has none.
+    /// Put a query to a search engine, and hand back the results page.
+    ///
+    /// The URL is built rather than written by a caller: a query with `&` or
+    /// `#` in it, pasted into a template, searches for something other than
+    /// what was asked for.
+    pub async fn search(
+        &self,
+        query: &str,
+        provider: SearchProvider,
+        within: Duration,
+    ) -> Result<Page> {
+        self.open_page(&provider.url_for(query), within).await
+    }
+
     /// Close pages beyond the newest `keep`, and answer how many went.
     ///
     /// `open_url` raises a new tab every time, by design — a person opening a
@@ -621,6 +635,67 @@ impl Drop for Connection {
             let _ = self.socket.try_write(&close_frame());
         }
     }
+}
+
+/// Which search engine a query is put to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SearchProvider {
+    /// Its plain endpoint, which renders results as ordinary HTML.
+    ///
+    /// The default because it is the one a reader gets anything from. It also
+    /// refuses a shell that asks too often — a browser it serves, `curl` it
+    /// answers with a puzzle about ducks.
+    #[default]
+    DuckDuckGo,
+    /// Answers, but as an application rather than a document: results arrive
+    /// after script runs, behind a consent page in much of the world.
+    Google,
+    /// Answers, and sometimes to a different question. A quoted name here
+    /// returned land records for an Indian state.
+    Bing,
+}
+
+impl SearchProvider {
+    /// Where to send this query.
+    pub fn url_for(&self, query: &str) -> String {
+        let query = encode(query);
+
+        match self {
+            Self::DuckDuckGo => format!("https://duckduckgo.com/html/?q={query}"),
+            Self::Google => format!("https://www.google.com/search?q={query}"),
+            Self::Bing => format!("https://www.bing.com/search?q={query}"),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Google => "google",
+            Self::Bing => "bing",
+        }
+    }
+}
+
+/// Percent-encode one query.
+///
+/// By hand because the crate carries no URL library, and wrongly by hand is
+/// how a search for a quoted phrase becomes a search for something else: `&`
+/// starts another parameter, `#` ends the URL, and a space is not a `+`
+/// everywhere it is written as one.
+fn encode(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+
+    for byte in query.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(char::from(*byte))
+            }
+            b' ' => out.push('+'),
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+
+    out
 }
 
 /// One attached target.
@@ -1818,6 +1893,59 @@ fn escape(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_a_space_is_not_left_in_a_url() {
+        assert_eq!(
+            SearchProvider::DuckDuckGo.url_for("chinasa onyenkpa"),
+            "https://duckduckgo.com/html/?q=chinasa+onyenkpa"
+        );
+    }
+
+    #[test]
+    fn test_a_quoted_phrase_survives_being_sent() {
+        let url = SearchProvider::DuckDuckGo.url_for("\"exact words\"");
+
+        assert!(url.ends_with("q=%22exact+words%22"), "{url}");
+    }
+
+    #[test]
+    fn test_a_query_cannot_start_another_parameter() {
+        // The failure this exists to prevent: `&` unescaped turns the rest of
+        // the query into somebody else's parameter, and the search runs on
+        // half of what was asked for.
+        let url = SearchProvider::Google.url_for("cats & dogs");
+
+        assert!(url.ends_with("q=cats+%26+dogs"), "{url}");
+        assert_eq!(url.matches('&').count(), 0);
+    }
+
+    #[test]
+    fn test_a_fragment_cannot_cut_the_url_short() {
+        let url = SearchProvider::Bing.url_for("c# tutorial");
+
+        assert!(url.ends_with("q=c%23+tutorial"), "{url}");
+    }
+
+    #[test]
+    fn test_every_provider_puts_the_query_in_the_url() {
+        for provider in [
+            SearchProvider::DuckDuckGo,
+            SearchProvider::Google,
+            SearchProvider::Bing,
+        ] {
+            let url = provider.url_for("rust");
+
+            assert!(url.starts_with("https://"), "{provider:?}: {url}");
+            assert!(url.ends_with("q=rust"), "{provider:?}: {url}");
+        }
+    }
+
+    #[test]
+    fn test_the_default_is_the_one_a_reader_gets_results_from() {
+        assert_eq!(SearchProvider::default(), SearchProvider::DuckDuckGo);
+    }
+
     use super::*;
 
     #[test]
