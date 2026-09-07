@@ -4,7 +4,7 @@
 //! cargo test --test live_session -- --ignored --nocapture
 //! ```
 
-use computer::{Computer, Reading, Session};
+use computer::{Carry, Computer, Reading, Session};
 use std::time::Duration;
 
 /// The whole promise: log in, take the box away, and be logged in again.
@@ -19,11 +19,22 @@ async fn a_session_outlives_the_box_it_was_made_in() {
     let taken = sign_in_and_export(&first).await.expect("a session");
 
     println!(
-        "  exported {} cookie(s) and storage for {} origin(s)",
+        "  exported {} cookie(s), local {}, session {}, {} database(s)",
         taken.cookies.len(),
-        taken.storage.len()
+        taken.storage.len(),
+        taken.session_storage.len(),
+        taken.databases.values().map(Vec::len).sum::<usize>(),
     );
+    for why in &taken.incomplete {
+        println!("  incomplete: {why}");
+    }
+
     assert!(!taken.cookies.is_empty(), "the login set no cookie");
+    assert!(
+        !taken.session_storage.is_empty(),
+        "session storage was asked for"
+    );
+    assert!(!taken.databases.is_empty(), "the database was asked for");
 
     // The box, and everything in it, is gone.
     first.shutdown().await.expect("it goes away");
@@ -48,9 +59,32 @@ async fn sign_in_and_export(computer: &Computer) -> computer::Result<Session> {
         .await?;
     page.evaluate("localStorage.setItem('token', 'also-who-i-am')")
         .await?;
-    page.close().await.ok();
+    page.evaluate("sessionStorage.setItem('tab', 'this-tab-only')")
+        .await?;
 
-    browser.export_session(&[ORIGIN.to_string()]).await
+    // And a database, which is where Firebase would have put it.
+    page.evaluate(
+        r#"new Promise((ok, no) => {
+             const r = indexedDB.open('auth', 1);
+             r.onupgradeneeded = () => r.result.createObjectStore('users', { keyPath: 'id' });
+             r.onsuccess = () => {
+               const tx = r.result.transaction('users', 'readwrite');
+               tx.objectStore('users').put({ id: 'me', refresh: 'a-refresh-token' });
+               tx.oncomplete = () => { r.result.close(); ok('ok'); };
+             };
+             r.onerror = () => no(r.error);
+           })"#,
+    )
+    .await?;
+
+    // Left open on purpose: session storage belongs to this tab, and an export
+    // that opened its own would find none of it.
+    let taken = browser
+        .export_session(&[ORIGIN.to_string()], Carry::all())
+        .await;
+
+    page.close().await.ok();
+    taken
 }
 
 async fn restored(computer: &Computer, session: &Session) -> computer::Result<()> {
@@ -69,9 +103,12 @@ async fn restored(computer: &Computer, session: &Session) -> computer::Result<()
     );
     fresh.close().await.ok();
 
-    browser.import_session(session).await?;
-
-    let mut page = browser.open_page(ORIGIN, Duration::from_secs(30)).await?;
+    // The tabs it left open, because session storage only exists in one.
+    let mut held = browser.import_session(session).await?;
+    let mut page = match held.pop() {
+        Some(page) => page,
+        None => browser.open_page(ORIGIN, Duration::from_secs(30)).await?,
+    };
     let cookie = page.evaluate("document.cookie").await?;
     let token = page.evaluate("localStorage.getItem('token')").await?;
 
@@ -86,6 +123,35 @@ async fn restored(computer: &Computer, session: &Session) -> computer::Result<()
         token.as_str(),
         Some("also-who-i-am"),
         "storage did not come back"
+    );
+
+    let tab = page.evaluate("sessionStorage.getItem('tab')").await?;
+    println!("  session:     {:?}", tab.as_str().unwrap_or_default());
+    assert_eq!(
+        tab.as_str(),
+        Some("this-tab-only"),
+        "session storage did not come back"
+    );
+
+    let refresh = page
+        .evaluate(
+            r#"new Promise(ok => {
+                 const r = indexedDB.open('auth');
+                 r.onsuccess = () => {
+                   const tx = r.result.transaction('users', 'readonly');
+                   const g = tx.objectStore('users').get('me');
+                   g.onsuccess = () => { r.result.close(); ok(g.result ? g.result.refresh : ''); };
+                   g.onerror = () => { r.result.close(); ok(''); };
+                 };
+                 r.onerror = () => ok('');
+               })"#,
+        )
+        .await?;
+    println!("  database:    {:?}", refresh.as_str().unwrap_or_default());
+    assert_eq!(
+        refresh.as_str(),
+        Some("a-refresh-token"),
+        "the database did not come back"
     );
 
     let read = page.read(Reading::Text, Some(80), None).await?;

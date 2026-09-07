@@ -391,15 +391,37 @@ is what a login leaves behind — cookies and local storage — and it can be ta
 out of one box and put into another:
 
 ```rust
-let session = browser.export_session(&["https://example.com".to_string()]).await?;
+let origins = ["https://example.com".to_string()];
+let session = browser.export_session(&origins, Carry::default()).await?;
 
 // … a new box, later, somewhere else …
-browser.import_session(&session).await?;
+let tabs = browser.import_session(&session).await?;
 ```
 
 Named origins only. What comes out belongs to one of them, and what goes back
 in is checked against the list it came with, so a session for one site can
 never be put into another.
+
+`Carry` says what to take. Cookies and local storage by default, because that
+is where a login normally is:
+
+```rust
+Carry::default()                                     // cookies + local storage
+Carry { indexed_db: true, ..Carry::default() }       // and databases
+Carry { local_storage: false, ..Carry::default() }   // cookies alone
+Carry::all()
+```
+
+`indexed_db` is where Firebase keeps a login, so without it those sites come
+back signed out. It carries only what survives being written as JSON — a value
+holding a blob is left, and named in `session.incomplete` rather than lost
+quietly.
+
+`session_storage` belongs to a **tab**, not to a browser. It is read from a tab
+already open on that origin, and `import_session` hands back the tabs it put it
+into, because one restored into a tab nobody keeps is one nobody has. A site
+that uses it has also decided the login should die with the tab, which is why
+it is asked for rather than assumed.
 
 The profile directory is deliberately not what moves: it is about a third of a
 gigabyte, tied to the Chromium build that wrote it, and carries a browser's

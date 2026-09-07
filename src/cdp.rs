@@ -177,45 +177,110 @@ impl Devtools {
     /// An origin is `https://example.com` — scheme and host, no path. Only
     /// what belongs to one of them comes out, so a session for one site never
     /// carries another site's cookies along with it.
-    pub async fn export_session(&self, origins: &[String]) -> Result<Session> {
-        let all = self.browser_call("Storage.getCookies", json!({})).await?;
+    ///
+    /// [`Carry`] says what to take. What could not be taken is named in
+    /// [`Session::incomplete`] rather than left to be discovered by a box that
+    /// comes up signed out.
+    pub async fn export_session(&self, origins: &[String], carry: Carry) -> Result<Session> {
+        let mut session = Session {
+            origins: origins.to_vec(),
+            cookies: Vec::new(),
+            storage: BTreeMap::new(),
+            session_storage: BTreeMap::new(),
+            databases: BTreeMap::new(),
+            carried: carry,
+            incomplete: Vec::new(),
+        };
 
-        let cookies = all
-            .get("cookies")
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or_default()
-            .iter()
-            .filter_map(cookie_in)
-            .filter(|cookie| origins.iter().any(|origin| covers(origin, &cookie.domain)))
-            .collect();
+        if carry.cookies {
+            let all = self.browser_call("Storage.getCookies", json!({})).await?;
 
-        // Local storage is per origin and only reachable from a page on it, so
-        // each one is visited. Cheap: nothing is rendered, the page is closed
-        // straight after, and a site that will not load contributes nothing
-        // rather than failing the export.
-        let mut storage = BTreeMap::new();
-        for origin in origins {
-            let Ok(mut page) = self.open_page(origin, TIMEOUT).await else {
-                continue;
-            };
-
-            if let Ok(read) = page.evaluate(LOCAL_STORAGE).await
-                && let Some(text) = read.as_str()
-                && let Ok(items) = serde_json::from_str::<BTreeMap<String, String>>(text)
-                && !items.is_empty()
-            {
-                storage.insert(origin.clone(), items);
-            }
-
-            page.close().await.ok();
+            session.cookies = all
+                .get("cookies")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(cookie_in)
+                .filter(|cookie| origins.iter().any(|origin| covers(origin, &cookie.domain)))
+                .collect();
         }
 
-        Ok(Session {
-            origins: origins.to_vec(),
-            cookies,
-            storage,
-        })
+        if !carry.needs_a_page() {
+            return Ok(session);
+        }
+
+        // Storage is per origin and only reachable from a page on it, so each
+        // one is visited. A site that will not load is said so rather than
+        // silently contributing nothing.
+        for origin in origins {
+            // A tab already on this origin if there is one, because session
+            // storage belongs to a tab: a fresh one carries none of what the
+            // first one holds.
+            let (mut page, ours) = match self.page_on(origin).await {
+                Some(page) => (page, false),
+                None => {
+                    let Ok(page) = self.open_page(origin, TIMEOUT).await else {
+                        session.incomplete.push(format!(
+                            "{origin}: would not load, so nothing was taken from it"
+                        ));
+                        continue;
+                    };
+
+                    if carry.session_storage {
+                        session.incomplete.push(format!(
+                            "{origin}: no tab was open on it, and session storage lives in a tab"
+                        ));
+                    }
+
+                    (page, true)
+                }
+            };
+
+            if carry.local_storage
+                && let Some(items) = read_items(&mut page, "localStorage").await
+            {
+                session.storage.insert(origin.clone(), items);
+            }
+
+            if carry.session_storage
+                && let Some(items) = read_items(&mut page, "sessionStorage").await
+            {
+                session.session_storage.insert(origin.clone(), items);
+            }
+
+            if carry.indexed_db {
+                match page.evaluate(IDB_EXPORT).await {
+                    Ok(read) => {
+                        match serde_json::from_str::<IdbRead>(read.as_str().unwrap_or("")) {
+                            Ok(read) => {
+                                if !read.databases.is_empty() {
+                                    session.databases.insert(origin.clone(), read.databases);
+                                }
+                                session.incomplete.extend(
+                                    read.skipped
+                                        .into_iter()
+                                        .map(|why| format!("{origin}: {why}")),
+                                );
+                            }
+                            Err(error) => session
+                                .incomplete
+                                .push(format!("{origin}: its databases would not parse: {error}")),
+                        }
+                    }
+                    Err(error) => session.incomplete.push(format!(
+                        "{origin}: its databases could not be read: {error}"
+                    )),
+                }
+            }
+
+            // Only what this opened: a tab the caller was using is left alone.
+            if ours {
+                page.close().await.ok();
+            }
+        }
+
+        Ok(session)
     }
 
     /// Put one back.
@@ -224,7 +289,10 @@ impl Devtools {
     /// listed origin covers, and storage for an origin that is not in it.
     /// Without that check a vault entry is a way to hand any site's cookies to
     /// any other.
-    pub async fn import_session(&self, session: &Session) -> Result<()> {
+    /// Hands back the tabs it left open. Session storage belongs to a tab, so
+    /// one restored into a tab nobody keeps is one nobody has: a caller that
+    /// asked for it should go on working in these.
+    pub async fn import_session(&self, session: &Session) -> Result<Vec<Page>> {
         let cookies: Vec<Value> = session
             .cookies
             .iter()
@@ -242,29 +310,63 @@ impl Devtools {
                 .await?;
         }
 
-        for (origin, items) in &session.storage {
-            if !session.origins.contains(origin) {
+        let mut held = Vec::new();
+        for origin in &session.origins {
+            let local = session.storage.get(origin);
+            let temporary = session.session_storage.get(origin);
+            let databases = session.databases.get(origin);
+
+            if local.is_none() && temporary.is_none() && databases.is_none() {
                 continue;
             }
 
-            let Ok(mut page) = self.open_page(origin, TIMEOUT).await else {
-                continue;
+            let (mut page, ours) = match self.page_on(origin).await {
+                Some(page) => (page, false),
+                None => match self.open_page(origin, TIMEOUT).await {
+                    // Left open where session storage went into it: closing
+                    // the tab would throw away what was just put there.
+                    Ok(page) => (page, temporary.is_none()),
+                    Err(_) => continue,
+                },
             };
 
-            let items = serde_json::to_string(items).map_err(|error| {
-                Error::denied(format!("the session would not serialise: {error}"))
-            })?;
+            if let Some(items) = local {
+                write_items(&mut page, "localStorage", items).await;
+            }
+            if let Some(items) = temporary {
+                write_items(&mut page, "sessionStorage", items).await;
+            }
 
-            page.evaluate(&format!(
-                "Object.entries({items}).forEach(([k, v]) => localStorage.setItem(k, v))"
-            ))
-            .await
-            .ok();
+            if let Some(databases) = databases
+                && let Ok(written) = serde_json::to_string(databases)
+            {
+                page.evaluate(&format!("({IDB_IMPORT})({written})"))
+                    .await
+                    .ok();
+            }
 
-            page.close().await.ok();
+            match ours {
+                true => {
+                    page.close().await.ok();
+                }
+                // Either the caller's own tab or one holding session storage,
+                // and both are theirs to use.
+                false => held.push(page),
+            }
         }
 
-        Ok(())
+        Ok(held)
+    }
+
+    /// A tab already showing this origin, if one is.
+    async fn page_on(&self, origin: &str) -> Option<Page> {
+        for target in self.pages().await.ok()? {
+            if target.url.starts_with(origin) {
+                return self.attach(&target).await.ok();
+            }
+        }
+
+        None
     }
 
     /// Put a query to a search engine, and hand back the results page.
@@ -732,6 +834,65 @@ impl Drop for Connection {
     }
 }
 
+/// What a session should carry.
+///
+/// Cookies and local storage by default, because that is where a login
+/// normally is. The other two are asked for: one because the site said it
+/// should not outlive a tab, the other because it is expensive and imperfect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Carry {
+    pub cookies: bool,
+    pub local_storage: bool,
+    /// A site putting a token here has chosen that the login dies with the
+    /// tab. Carrying it overrides that, so it is named rather than assumed —
+    /// and it also holds the throwaway state of a redirect part-way through,
+    /// which is worth nothing once restored.
+    pub session_storage: bool,
+    /// Where Firebase keeps a login, so without it those sites come back
+    /// signed out. Only what survives being written as JSON: a value holding
+    /// a blob or a key that cannot be cloned is left, and named in
+    /// [`Session::incomplete`].
+    pub indexed_db: bool,
+}
+
+impl Default for Carry {
+    fn default() -> Self {
+        Self {
+            cookies: true,
+            local_storage: true,
+            session_storage: false,
+            indexed_db: false,
+        }
+    }
+}
+
+impl Carry {
+    /// Nothing, to add to.
+    pub fn none() -> Self {
+        Self {
+            cookies: false,
+            local_storage: false,
+            session_storage: false,
+            indexed_db: false,
+        }
+    }
+
+    /// Everything this can take. Not everything a browser holds — see
+    /// [`Session::incomplete`].
+    pub fn all() -> Self {
+        Self {
+            cookies: true,
+            local_storage: true,
+            session_storage: true,
+            indexed_db: true,
+        }
+    }
+
+    fn needs_a_page(&self) -> bool {
+        self.local_storage || self.session_storage || self.indexed_db
+    }
+}
+
 /// A logged-in state, taken out of one box so another can be given it.
 ///
 /// Cookies and local storage, which is where a session actually lives. Not the
@@ -750,6 +911,43 @@ pub struct Session {
     pub cookies: Vec<Cookie>,
     /// Local storage, per origin. Where most applications keep their token.
     pub storage: BTreeMap<String, BTreeMap<String, String>>,
+    /// Session storage, per origin, where it was asked for.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub session_storage: BTreeMap<String, BTreeMap<String, String>>,
+    /// Databases, per origin, where they were asked for.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub databases: BTreeMap<String, Vec<Database>>,
+    /// What was asked for, so an import puts back the same kinds.
+    #[serde(default)]
+    pub carried: Carry,
+    /// What could not be taken, and why.
+    ///
+    /// A session that is quietly short of what a site needs is worse than one
+    /// that fails: the box comes up looking signed in and is not. Anything
+    /// left behind says so here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incomplete: Vec<String>,
+}
+
+/// One database, as much of it as JSON can hold.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Database {
+    pub name: String,
+    pub version: u64,
+    pub stores: Vec<Store>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Store {
+    pub name: String,
+    /// The path a record's key is read from, where the store has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_path: Option<Value>,
+    #[serde(default)]
+    pub auto_increment: bool,
+    /// Records as `[key, value]`. The key is carried separately because a
+    /// store without a key path does not keep one inside its value.
+    pub records: Vec<Value>,
 }
 
 impl std::fmt::Debug for Session {
@@ -760,6 +958,9 @@ impl std::fmt::Debug for Session {
             .field("origins", &self.origins)
             .field("cookies", &self.cookies.len())
             .field("storage", &self.storage.len())
+            .field("session_storage", &self.session_storage.len())
+            .field("databases", &self.databases.len())
+            .field("incomplete", &self.incomplete)
             .finish()
     }
 }
@@ -2039,10 +2240,149 @@ fn escape(url: &str) -> String {
     out
 }
 
-/// Everything in one origin's local storage, as JSON.
-const LOCAL_STORAGE: &str = r#"JSON.stringify(Object.fromEntries(
-  Object.keys(localStorage).map(k => [k, localStorage.getItem(k)])
-))"#;
+/// What a page answers when its databases are read.
+#[derive(Deserialize)]
+struct IdbRead {
+    databases: Vec<Database>,
+    /// What the page could not hand over, in its own words.
+    #[serde(default)]
+    skipped: Vec<String>,
+}
+
+/// Everything in one kind of web storage, as JSON.
+async fn read_items(page: &mut Page, which: &str) -> Option<BTreeMap<String, String>> {
+    let read = page
+        .evaluate(&format!(
+            "JSON.stringify(Object.fromEntries(Object.keys({which}).map(k => [k, {which}.getItem(k)])))"
+        ))
+        .await
+        .ok()?;
+
+    let items: BTreeMap<String, String> = serde_json::from_str(read.as_str()?).ok()?;
+    (!items.is_empty()).then_some(items)
+}
+
+async fn write_items(page: &mut Page, which: &str, items: &BTreeMap<String, String>) {
+    let Ok(items) = serde_json::to_string(items) else {
+        return;
+    };
+
+    page.evaluate(&format!(
+        "Object.entries({items}).forEach(([k, v]) => {which}.setItem(k, v))"
+    ))
+    .await
+    .ok();
+}
+
+/// Read every database an origin holds.
+///
+/// Through the page rather than the protocol: the debugger can read a database
+/// but has no way to write one, so a restore has to run here anyway — and a
+/// reader that took a different route would carry what the writer cannot put
+/// back.
+///
+/// Only what JSON holds. A value carrying a blob, a stream or a key that
+/// cannot be cloned is left behind and named, because a login that comes back
+/// short is worse when nothing says so.
+const IDB_EXPORT: &str = r#"(async () => {
+  const skipped = [];
+  const databases = [];
+
+  if (!indexedDB.databases) return JSON.stringify({ databases, skipped: ['this browser will not list its databases'] });
+
+  for (const { name, version } of await indexedDB.databases()) {
+    if (!name) continue;
+    let db;
+    try {
+      db = await new Promise((ok, no) => {
+        const r = indexedDB.open(name);
+        r.onsuccess = () => ok(r.result);
+        r.onerror = () => no(r.error);
+        // Something else holding it open at an older version blocks this.
+        r.onblocked = () => no(new Error('blocked'));
+      });
+    } catch (e) {
+      skipped.push(`database ${name}: ${e}`);
+      continue;
+    }
+
+    const stores = [];
+    for (const store of Array.from(db.objectStoreNames)) {
+      try {
+        const tx = db.transaction(store, 'readonly');
+        const os = tx.objectStore(store);
+        const [values, keys] = await Promise.all([
+          new Promise((ok, no) => { const r = os.getAll(); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }),
+          new Promise((ok, no) => { const r = os.getAllKeys(); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }),
+        ]);
+
+        const records = [];
+        for (let i = 0; i < values.length; i++) {
+          try {
+            // The round trip a restore will make, made here: a value that
+            // cannot survive it is found now rather than lost silently.
+            JSON.stringify(values[i]);
+            records.push([keys[i], values[i]]);
+          } catch (e) {
+            skipped.push(`${name}/${store}: a record could not be written as JSON`);
+          }
+        }
+
+        stores.push({
+          name: store,
+          key_path: os.keyPath === null ? undefined : os.keyPath,
+          auto_increment: os.autoIncrement,
+          records,
+        });
+      } catch (e) {
+        skipped.push(`${name}/${store}: ${e}`);
+      }
+    }
+
+    databases.push({ name, version: version || db.version, stores });
+    db.close();
+  }
+
+  return JSON.stringify({ databases, skipped });
+})()"#;
+
+/// Put them back, creating the stores an upgrade needs.
+const IDB_IMPORT: &str = r#"(async (databases) => {
+  for (const wanted of databases) {
+    const db = await new Promise((ok, no) => {
+      const r = indexedDB.open(wanted.name, wanted.version);
+      // Stores can only be made here, which is why the version comes with the
+      // session: opening at a lower one would never reach this.
+      r.onupgradeneeded = () => {
+        for (const store of wanted.stores) {
+          if (r.result.objectStoreNames.contains(store.name)) continue;
+          r.result.createObjectStore(store.name, {
+            keyPath: store.key_path ?? null,
+            autoIncrement: !!store.auto_increment,
+          });
+        }
+      };
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => no(r.error);
+      r.onblocked = () => no(new Error('blocked'));
+    });
+
+    for (const store of wanted.stores) {
+      if (!db.objectStoreNames.contains(store.name)) continue;
+      const tx = db.transaction(store.name, 'readwrite');
+      const os = tx.objectStore(store.name);
+      for (const [key, value] of store.records) {
+        // A store with a key path keeps the key inside the value, and putting
+        // one alongside is an error rather than an override.
+        os.keyPath === null ? os.put(value, key) : os.put(value);
+      }
+      await new Promise(ok => { tx.oncomplete = ok; tx.onerror = ok; tx.onabort = ok; });
+    }
+
+    db.close();
+  }
+  return 'ok';
+})"#;
 
 /// Whether a cookie domain belongs to an origin.
 ///
@@ -2160,11 +2500,51 @@ mod tests {
                 same_site: None,
             }],
             storage: BTreeMap::new(),
+            session_storage: BTreeMap::new(),
+            databases: BTreeMap::new(),
+            carried: Carry::default(),
+            incomplete: Vec::new(),
         };
 
         let shown = format!("{session:?}");
         assert!(!shown.contains("the-secret-itself"), "{shown}");
         assert!(shown.contains("cookies: 1"), "{shown}");
+    }
+
+    #[test]
+    fn test_the_default_carries_where_a_login_normally_is() {
+        let carry = Carry::default();
+
+        assert!(carry.cookies && carry.local_storage);
+        // Both are asked for: one overrides what a site decided, the other is
+        // expensive and imperfect.
+        assert!(!carry.session_storage && !carry.indexed_db);
+    }
+
+    #[test]
+    fn test_a_set_can_be_built_up_or_cut_down() {
+        let only_cookies = Carry {
+            local_storage: false,
+            ..Carry::default()
+        };
+        assert!(only_cookies.cookies && !only_cookies.local_storage);
+        assert!(!only_cookies.needs_a_page(), "nothing has to be visited");
+
+        let with_databases = Carry {
+            indexed_db: true,
+            ..Carry::default()
+        };
+        assert!(with_databases.needs_a_page());
+
+        assert_eq!(
+            Carry::none(),
+            Carry {
+                cookies: false,
+                local_storage: false,
+                session_storage: false,
+                indexed_db: false,
+            }
+        );
     }
 
     #[test]
