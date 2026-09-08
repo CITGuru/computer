@@ -365,6 +365,12 @@ Computer::builder().image_dir("images/ubuntu")
 
 `examples/custom_image.rs` builds one and drives a box in it, and `examples/images/acme/` is the whole Dockerfile: an image that keeps the X11 contract adds to the base rather than reimplementing it, which is why that file is a dozen lines. `images/ubuntu/` is the other way round — a contract built from a bare distribution, which is what a genuinely different base needs.
 
+`images/tiny/` is a lightweight desktop image you can take for a run:
+
+```rust
+Computer::builder().image_dir("images/tiny")
+```
+
 The directory can be anywhere and must contain a `Dockerfile` that implements the selected profile. Its tag follows the context contents, extra packages and host architecture, so an edit builds a new image instead of reusing stale bytes. Extra packages are passed as the `EXTRA_PACKAGES` build argument.
 
 An image you name yourself is always fetched, never built:
@@ -714,7 +720,7 @@ let computer = Computer::builder()
 let frame = computer.screenshot().await?;
 ```
 
-Driving is the same code. Three things are not:
+Driving is the same code. These are not:
 
 
 | Behavior | Container or microVM              | E2B                                       |
@@ -736,9 +742,53 @@ Computer::builder().machine(Arc::new(machine.public_viewer(true)))
 
 `public_viewer(true)` hands out an address the internet can reach, so it goes through the same gate as `publish_on(Bind::Any)`: set `auth` or the launch is refused. Do not rely on E2B's own proxy for this. Every sandbox is created with `secure: true`, and where the API answers with a `trafficAccessToken` its proxy refuses anything without an `e2b-traffic-access-token` header — which this crate sends and a browser cannot. Where it answers without one, nothing is refused. Measured on a live sandbox, a viewer URL answered `200` with no token.
 
-DevTools does not travel. An endpoint out here would be `wss` on a public host and this crate's DevTools client speaks plain TCP, so `E2bProfile` drops the bridge port and clears the `cdp` claim. `devtools()` returns `None` and `audit` skips the browser check rather than failing it. Synthetic input, screenshots, the clipboard, the viewer and the takeover are untouched.
+DevTools does not travel. An endpoint out here would be `wss` on a public host and this crate's DevTools client speaks plain TCP, so `RemoteProfile` drops the bridge port and clears the `cdp` claim. `devtools()` returns `None` and `audit` skips the browser check rather than failing it. Synthetic input, screenshots, the clipboard, the viewer and the takeover are untouched.
 
-`E2bApi` is the seam and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. [`docs/runtimes/e2b-machine.md`](docs/runtimes/e2b-machine.md) records the design.
+`E2bApi` is the seam onto E2B and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. Everything above it is shared with every other cloud vendor, which the next section is about.
+
+## Run in another cloud sandbox
+
+E2B is one vendor. Modal, Daytona and the rest have the same shape: create a sandbox, run a command in it, move a file, kill it, and publish its ports at an address of the vendor's own. `sandboxes::remote` is that shape as a trait, so a new vendor is eight calls and no crate feature:
+
+```rust
+use computer::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
+
+#[async_trait]
+impl RemoteApi for Daytona {
+    fn vendor(&self) -> &str { "daytona" }
+    async fn available(&self) -> Result<()> { … }
+    async fn create(&self, plan: &SandboxPlan) -> Result<Sandbox> { … }
+    async fn find(&self, name: &str) -> Result<Option<Sandbox>> { … }
+    async fn kill(&self, id: &str) -> Result<()> { … }
+    async fn exec(&self, sandbox: &Sandbox, argv: &[String],
+                  env: &BTreeMap<String, String>) -> Result<ExecResult> { … }
+    async fn read(&self, sandbox: &Sandbox, path: &str) -> Result<Vec<u8>> { … }
+    async fn write(&self, sandbox: &Sandbox, path: &str, bytes: &[u8]) -> Result<()> { … }
+}
+
+let (machine, profile) = remote::pair(Arc::new(Daytona::new()?), Arc::new(X11Profile));
+
+let computer = Computer::builder()
+    .machine(Arc::new(machine))
+    .profile(profile)
+    .image("your-snapshot")
+    .launch()
+    .await?;
+```
+
+`RemoteMachine` supplies what every vendor does the same way: holding what this process started, pushing a deadline out lazily rather than once per click, joining the name you gave a box to the ID the vendor gave it so a sweep can find it. `RemoteProfile` rewrites the viewer URL and withdraws the DevTools claim. Five more calls — `keep_alive`, `logs`, `carrying`, `reaper`, `ensure_image` — have defaults, and each default is the honest answer for a vendor without the thing.
+
+Ports are the part to get right. These vendors do not forward a port to a host port; each publishes it at an address of its own, so `Sandbox::endpoints` carries a URL per port and a port missing from it has no URL at all. `published_as` formats the `<port>-<id>.<domain>` shape that E2B and Daytona use; Modal hands back a tunnel per port, which goes into the map directly.
+
+```bash
+cargo run --example custom_sandbox
+```
+
+That example is a whole vendor in one file, backed by `docker` on this host so every call can be watched working before you write the same one against an API you cannot see. `computer::testing::ScriptedRemote` tests an adapter with no account and no network.
+
+Modal is the awkward one worth naming: its sandbox control plane is gRPC behind a Python API, so the calls go to a small Modal web endpoint of your own that creates the sandbox and returns its ID and tunnel URLs. The `RemoteApi` above it is then ordinary HTTP.
+
+`sandboxes::e2b` is the worked reference: E2B goes through this seam, and everything that is E2B's own — a port that is a subdomain, two tokens where the seam carries one, an image that is a template — is one short file beside its HTTP client.
 
 ## Remove desktops that outlived their program
 
@@ -812,6 +862,7 @@ cargo run --example demo -- media/demo.gif
 cargo run --example live_desktop
 cargo run --example custom_image
 cargo run --example microvm
+cargo run --example custom_sandbox
 cargo run --features e2b --example e2b -- <template-id>
 cargo run --features e2b --example e2b_takeover -- <template-id>
 ```
@@ -834,6 +885,7 @@ cargo run --features e2b --example e2b_takeover -- <template-id>
 | `live_desktop` | Test the image with a real container                 |
 | `custom_image` | Build your own image and drive a box in it           |
 | `microvm`      | Run the desktop with microsandbox                    |
+| `custom_sandbox` | Write a sandbox vendor of your own                 |
 | `e2b`          | Run the desktop in an E2B cloud sandbox              |
 | `e2b_takeover` | Give an E2B desktop to a person                       |
 

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Computer</title>
+    <style>
+      html,
+      body,
+      #screen {
+        margin: 0;
+        height: 100%;
+        width: 100%;
+        background: #0e0e10;
+        overflow: hidden;
+      }
+      .failed {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem;
+        color: #e8e8ea;
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-align: center;
+      }
+    </style>
+    <script type="module">
+      import RFB from "./core/rfb.js";
+
+      function query(name, fallback) {
+        const match = `${document.location.href}${window.location.hash}`.match(
+          new RegExp(`.*[?&]${name}=([^&#]*)`),
+        );
+        return match ? decodeURIComponent(match[1]) : fallback;
+      }
+
+      function flag(name) {
+        const value = String(query(name, "false")).toLowerCase();
+        return value === "1" || value === "true" || value === "yes";
+      }
+
+      function fail(text) {
+        const screen = document.getElementById("screen");
+        screen.textContent = text;
+        screen.className = "failed";
+      }
+
+      const path = String(query("path", "websockify")).replace(/^\//, "");
+      const prefix = window.location.pathname.replace(/[^/]+$/, "");
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      const url = `${protocol}://${window.location.host}${prefix}${path}`;
+      const rfb = new RFB(document.getElementById("screen"), url);
+
+      // **This is a courtesy, not a lock.** The page decides it, so a page
+      // opened differently decides otherwise. Read-only is enforced by the
+      // server on the view port — `x11vnc -viewonly`, `wayvnc -d` — and the
+      // control port accepts input whatever is set here.
+      rfb.viewOnly = flag("view_only");
+      rfb.scaleViewport = true;
+      rfb.clipViewport = false;
+
+      // Without these, a wrong path, a viewer that never came up and a refused
+      // credential all render as the same black rectangle — indistinguishable
+      // from a desktop with nothing on it.
+      rfb.addEventListener("securityfailure", (event) =>
+        fail(`The screen refused the connection: ${event.detail.reason}`),
+      );
+      rfb.addEventListener("disconnect", (event) => {
+        if (!event.detail.clean) {
+          fail(`Lost the screen at ${url}`);
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <div id="screen"></div>
+  </body>
+</html>

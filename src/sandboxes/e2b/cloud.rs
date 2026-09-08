@@ -431,9 +431,12 @@ impl E2bApi for Cloud {
 /// The whole wiring for the common case: `E2B_API_KEY`, the built-in X11
 /// image, and a sandbox that is secure — so the desktop is driveable from here
 /// and has no viewer URL. Call
-/// [`public_viewer`](super::machine::E2bMachine::public_viewer) on the machine
-/// to trade that.
-pub fn pair_from_env() -> Result<(super::E2bMachine, std::sync::Arc<super::E2bProfile>)> {
+/// [`public_viewer`](crate::sandboxes::remote::RemoteMachine::public_viewer)
+/// on the machine to trade that.
+pub fn pair_from_env() -> Result<(
+    crate::sandboxes::remote::RemoteMachine,
+    std::sync::Arc<crate::sandboxes::remote::RemoteProfile>,
+)> {
     Ok(super::pair(
         std::sync::Arc::new(Cloud::from_env()?),
         std::sync::Arc::new(crate::X11Profile),

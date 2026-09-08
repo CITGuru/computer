@@ -1,26 +1,26 @@
 //! The same image, reached over the internet instead of over loopback.
 //!
-//! Two claims stop being true when the box moves off this host, and a profile
-//! is where an image's claims live. The viewer is not on `127.0.0.1` any more,
-//! and DevTools is not reachable at all.
+//! A profile is where an image's claims live, and two of them stop being true
+//! when the box moves off this host: the viewer is not on `127.0.0.1`, and
+//! DevTools is not reachable at all.
 
 use super::api::Sandbox;
-use crate::profile::{BrowserRuntime, PortLayout, Profile, ScreenRuntime, WallpaperRuntime};
+use crate::profile::{
+    AppRuntime, BrowserRuntime, PortLayout, Profile, ScreenRuntime, WallpaperRuntime,
+};
 use crate::{DesktopFactory, DesktopSupport, ImageSource, ScreenAction, ScreenId};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 /// Where the sandbox turned out to be.
 ///
-/// A container's ports are known once `docker port` answers, and a profile can
-/// be built before either. A sandbox's host contains an ID the control plane
-/// assigns, so it is not known until the sandbox exists — and the profile that
-/// formats the viewer URL is built before that. The machine and the profile
-/// hold one of these between them.
+/// Its address contains an ID the vendor assigns, so it is not known until the
+/// sandbox exists — and the profile that formats the viewer URL is built
+/// before that. The machine and the profile hold one of these between them.
 #[derive(Debug, Default)]
-pub struct Reachable(Mutex<Option<Sandbox>>);
+pub struct Remote(Mutex<Option<Sandbox>>);
 
-impl Reachable {
+impl Remote {
     pub fn new() -> Self {
         Self::default()
     }
@@ -44,16 +44,15 @@ impl Reachable {
 
 /// An image's contract, with the two claims that do not survive the move.
 ///
-/// Everything else delegates, so a caller who wrote their own profile keeps it
-/// — this wraps one rather than replacing it.
-pub struct E2bProfile {
+/// Everything else delegates: this wraps a profile rather than replacing it.
+pub struct RemoteProfile {
     inner: Arc<dyn Profile>,
-    reachable: Arc<Reachable>,
+    remote: Arc<Remote>,
 }
 
-impl E2bProfile {
-    pub fn new(inner: Arc<dyn Profile>, reachable: Arc<Reachable>) -> Self {
-        Self { inner, reachable }
+impl RemoteProfile {
+    pub fn new(inner: Arc<dyn Profile>, remote: Arc<Remote>) -> Self {
+        Self { inner, remote }
     }
 
     pub fn inner(&self) -> &Arc<dyn Profile> {
@@ -61,7 +60,7 @@ impl E2bProfile {
     }
 }
 
-impl Profile for E2bProfile {
+impl Profile for RemoteProfile {
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -72,12 +71,9 @@ impl Profile for E2bProfile {
 
     /// The image's ports, minus the DevTools bridge.
     ///
-    /// **Withdrawn rather than published to nowhere.** An E2B endpoint is
+    /// Withdrawn rather than published to nowhere: an endpoint out here is
     /// `wss` on a public host and [`crate::cdp`] connects with a plain
-    /// `TcpStream`, so neither the URL nor the transport survives. Dropping it
-    /// here takes it out of what is published, makes
-    /// [`crate::Computer::devtools`] answer `None`, and is why `support_at`
-    /// below stops claiming it.
+    /// `TcpStream`, so neither the URL nor the transport survives.
     fn ports(&self) -> PortLayout {
         PortLayout {
             devtools_bridge: None,
@@ -93,10 +89,8 @@ impl Profile for E2bProfile {
         let mut support = self.inner.support_at(width, height);
 
         if let Some(browser) = support.browser.as_mut() {
-            // The browser is still there and still headed; nothing out here
-            // can reach its debugger. `audit` skips the check rather than
-            // failing it, which is the difference between a claim withdrawn
-            // and a claim broken.
+            // A claim withdrawn rather than one broken, so `audit` skips the
+            // check instead of failing it.
             browser.cdp = false;
         }
         support
@@ -116,6 +110,10 @@ impl Profile for E2bProfile {
 
     fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
         self.inner.wallpaper_runtime()
+    }
+
+    fn app_runtime(&self) -> Arc<dyn AppRuntime> {
+        self.inner.app_runtime()
     }
 
     fn screen_command(
@@ -143,26 +141,25 @@ impl Profile for E2bProfile {
         self.inner.geometry_from(environment)
     }
 
-    /// The sandbox's own host, which is a subdomain and not a host port.
+    /// The address the vendor published this port at, not a host port.
     ///
-    /// Falls back to the inner profile before a sandbox exists. Nothing calls
-    /// this that early — a screen has no URL until the box it is on was
-    /// started — and answering with loopback beats formatting a host out of an
-    /// ID nobody has yet.
+    /// Falls back to the inner profile before the sandbox exists, and for a
+    /// port that was never published: answering with loopback beats formatting
+    /// a host out of an ID nobody has yet.
     fn viewer_url(&self, at: &crate::Address, ticket: Option<&crate::Secret>) -> String {
-        match self.reachable.get() {
-            Some(sandbox) => {
-                let mut url = format!(
-                    "{}/vnc.html?autoconnect=1&resize=scale",
-                    sandbox.url(at.port)
-                );
-                if let Some(ticket) = ticket {
-                    url.push_str(&crate::profile::viewer_path(ticket));
-                }
-                url
-            }
-            None => self.inner.viewer_url(at, ticket),
+        let Some(base) = self
+            .remote
+            .get()
+            .and_then(|sandbox| sandbox.url(at.port).map(str::to_string))
+        else {
+            return self.inner.viewer_url(at, ticket);
+        };
+
+        let mut url = format!("{base}/vnc.html?autoconnect=1&resize=scale");
+        if let Some(ticket) = ticket {
+            url.push_str(&crate::profile::viewer_path(ticket));
         }
+        url
     }
 }
 
@@ -171,33 +168,50 @@ mod tests {
     use super::*;
     use crate::X11Profile;
 
-    fn profile() -> (Arc<Reachable>, E2bProfile) {
-        let reachable = Arc::new(Reachable::new());
-        let profile = E2bProfile::new(Arc::new(X11Profile), Arc::clone(&reachable));
-        (reachable, profile)
+    fn profile() -> (Arc<Remote>, RemoteProfile) {
+        let remote = Arc::new(Remote::new());
+        let profile = RemoteProfile::new(Arc::new(X11Profile), Arc::clone(&remote));
+        (remote, profile)
+    }
+
+    fn sandbox() -> Sandbox {
+        Sandbox::new("i7q3").published_as([6080, 6081], |port, id| format!("{port}-{id}.x.dev"))
     }
 
     #[test]
-    fn test_the_viewer_url_is_the_sandbox_host() {
-        let (reachable, profile) = profile();
-        reachable.set(Sandbox::new("i7q3"));
+    fn test_the_viewer_url_is_the_address_the_vendor_published() {
+        let (remote, profile) = profile();
+        remote.set(sandbox());
 
         assert_eq!(
             profile.viewer_url(&crate::Address::loopback(6080), None),
-            "https://6080-i7q3.e2b.app/vnc.html?autoconnect=1&resize=scale"
+            "https://6080-i7q3.x.dev/vnc.html?autoconnect=1&resize=scale"
         );
     }
 
     #[test]
-    fn test_the_control_port_gets_its_own_host() {
-        let (reachable, profile) = profile();
-        reachable.set(Sandbox::new("i7q3"));
+    fn test_the_control_port_gets_its_own_address() {
+        let (remote, profile) = profile();
+        remote.set(sandbox());
 
         assert!(
             profile
                 .viewer_url(&crate::Address::loopback(6081), None)
                 .starts_with("https://6081-i7q3."),
-            "takeover is a second server, so it is a second host"
+            "takeover is a second server, so it is a second address"
+        );
+    }
+
+    #[test]
+    fn test_a_port_the_vendor_never_published_falls_back() {
+        let (remote, profile) = profile();
+        remote.set(sandbox());
+
+        assert!(
+            profile
+                .viewer_url(&crate::Address::loopback(6090), None)
+                .starts_with("http://127.0.0.1:6090"),
+            "inventing a host for an unpublished port would be a URL to nowhere"
         );
     }
 
@@ -235,5 +249,9 @@ mod tests {
             inner.screen_env(ScreenId(1))
         );
         assert_eq!(profile.ports().max_screens, inner.ports().max_screens);
+        assert!(
+            profile.app_runtime().supported().is_ok(),
+            "an image's apps do not stop existing because the box moved"
+        );
     }
 }
