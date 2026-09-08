@@ -15,12 +15,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub use primitives::{
-    AppRuntime, BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
-    CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, GeometrySpec, Launch,
-    ProfileBuilder, ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedAppRuntime,
-    UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime, WaylandAppRuntime,
-    WaylandEnvironment, WaylandWallpaperRuntime, Window, X11AppRuntime, X11Environment,
-    X11WallpaperRuntime,
+    AppRuntime, Arrange, BrowserRuntime, CommandBrowserRuntime, CommandScreen,
+    CommandScreenRuntime, CommandWallpaperRuntime, ConfiguredProfile, DesktopContract,
+    GeometrySpec, Launch, ProfileBuilder, ScreenCommands, ScreenEnvironment, ScreenRuntime,
+    UnsupportedAppRuntime, UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime,
+    WaylandAppRuntime, WaylandEnvironment, WaylandWallpaperRuntime, Window, X11AppRuntime,
+    X11Environment, X11WallpaperRuntime,
 };
 
 /// Where an image declares which contract it implements.

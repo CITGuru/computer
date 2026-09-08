@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n=== fill, by the words next to it ===");
-    page.fill("custname", "Chinasa").await?;
+    page.fill("custname", "Toby").await?;
     let filled = page.find("custname", Some(1), None).await?;
     println!(
         "  custname now {:?}",

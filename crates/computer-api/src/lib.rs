@@ -74,6 +74,11 @@ pub enum Action {
         at: Option<Point>,
         #[serde(default)]
         button: Button,
+        /// Modifiers held down around it: shift to extend a selection, ctrl
+        /// to add to one. A `key` action first does not do this — the press
+        /// ends with the command that made it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        held: Vec<Held>,
     },
     DoubleClick {
         #[serde(default)]
@@ -86,6 +91,8 @@ pub enum Action {
         to: Point,
         #[serde(default)]
         button: Button,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        held: Vec<Held>,
     },
     Type {
         text: String,
@@ -93,6 +100,9 @@ pub enum Action {
     Key {
         chord: String,
     },
+    /// In notches: positive `dy` down, positive `dx` right. Whatever sits
+    /// under the point is what moves, so this reaches a list or a sidebar
+    /// without focusing it first.
     Scroll {
         at: Point,
         #[serde(default)]
@@ -105,6 +115,14 @@ pub enum Action {
     },
     Wait {
         ms: u64,
+    },
+    /// A screen with something animating on it never holds still and reaches
+    /// the deadline, which is why one is asked for.
+    WaitStill {
+        #[serde(default)]
+        settle_ms: Option<u64>,
+        #[serde(default)]
+        within_ms: Option<u64>,
     },
     /// Act on the element a query names, in the page the screen is showing.
     ///
@@ -256,7 +274,44 @@ pub enum Reading {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Window {
     pub id: String,
+    /// What the title bar says, which moves with the open document.
     pub title: String,
+    /// What the program calls itself, which does not.
+    #[serde(default)]
+    pub class: String,
+    /// Its top-left corner, not its middle.
+    #[serde(default)]
+    pub at: Point,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "how", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Arrange {
+    /// Put its top-left corner here.
+    At {
+        to: Point,
+    },
+    Size {
+        width: u32,
+        height: u32,
+    },
+    Maximise,
+    /// Out of the way without closing it, which `restore` undoes.
+    Minimise,
+    Restore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AwaitWindow {
+    /// What the program calls itself, as `windows` reports it.
+    pub class: String,
+    #[serde(default)]
+    pub within_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -304,6 +359,48 @@ pub struct ActionResult {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorBody>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Held {
+    Shift,
+    Ctrl,
+    Alt,
+    Super,
+}
+
+/// The default is the whole screen at full size, which is what `frame`
+/// answered before any of this existed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Shot {
+    /// One window, by the id `windows` reports. Looked up at capture time, so
+    /// a window that has moved is still captured where it is now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
+    /// Ignored when a window is named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<Region>,
+    /// A percentage of full size, 1 to 400. A picture of a desktop is a
+    /// megabyte a caller pays for on every step, and most of what it needs to
+    /// read survives being halved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Region {
+    pub at: Point,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Shot {
+    pub fn is_whole(&self) -> bool {
+        self.window.is_none() && self.region.is_none() && self.scale.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

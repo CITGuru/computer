@@ -356,12 +356,9 @@ Frame entries are written only when the screen actually moved, so polling a
 still screen adds nothing — and no frame entry between a takeover's two ends
 means nothing visible happened while it was held.
 
-## Not here yet
+## Current limits
 
-`spec.apps` parses and is **refused**, because there is no catalog behind it
-and a box handed back without the apps it named would look like the one that
-was asked for. Snapshot fork is refused, because nothing here can freeze a
-running desktop.
+Snapshot fork is refused because nothing here can freeze a running desktop.
 
 Traces are held in memory and bounded — 10,000 entries and 256 distinct frames
 per box, 256 boxes — so this is a record rather than an archive, and a restart

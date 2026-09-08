@@ -13,9 +13,17 @@
 //! One box for the whole test: opening one costs a build the first time and
 //! seconds after that, and every step below is independent of the others.
 
-use computer::{Button, Computer, Delta, Point, ScreenId, WaylandProfile};
+use computer::{Button, Computer, Delta, Point, Rect, ScreenId, Shot, WaylandProfile};
 use std::sync::Arc;
 use std::time::Duration;
+
+/// The width and height a PNG declares in its own header.
+fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    let width = u32::from_be_bytes(png.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(png.get(20..24)?.try_into().ok()?);
+
+    Some((width, height))
+}
 
 #[tokio::test]
 #[ignore = "needs a container runtime, and builds the Wayland image"]
@@ -54,6 +62,26 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
         "grim did not return a PNG"
     );
     println!("  screenshot: {} bytes", frame.len());
+
+    // Cropping and scaling are grim's own flags here: this image carries no
+    // ImageMagick, so nothing else could do either.
+    let region = screen
+        .capture(&Shot::region(Rect::new(Point::new(100, 80), 400, 300)))
+        .await?;
+    assert_eq!(png_size(&region), Some((400, 300)), "grim ignored -g");
+
+    let quarter = screen.capture(&Shot::default().scaled(25)).await?;
+    assert_eq!(
+        png_size(&quarter),
+        Some((320, 200)),
+        "grim takes a factor, and a percentage handed to it asks for a \
+         picture many times the screen"
+    );
+    println!(
+        "  cropped to {} bytes, quartered to {}",
+        region.len(),
+        quarter.len()
+    );
 
     screen.set_wallpaper(&frame).await?;
     println!("  wallpaper changed from uploaded image bytes");
@@ -120,7 +148,7 @@ async fn browser(computer: &Computer) -> computer::Result<()> {
 /// is wrong produces a page that loads and quietly records nothing.
 const PROBE: &str = "data:text/html,\
 <input%20autofocus%20style=\"width:90%25;font-size:40px\">\
-<div%20style=\"height:4000px\"></div>";
+<div%20style=\"width:4000px;height:4000px\"></div>";
 
 /// What the page writes down about the input it receives.
 ///
@@ -225,6 +253,40 @@ async fn input(computer: &Computer) -> computer::Result<()> {
         "the page did not move, so the wheel notches never arrived"
     );
     println!("  the wheel scrolled the page to {scrolled}");
+
+    // Modifiers are the X11 image's: holding a key across a click needs a
+    // virtual keyboard this compositor's pointer does not make.
+    computer
+        .primary()
+        .wait_until_still(Duration::from_millis(300), Duration::from_secs(15))
+        .await?;
+    println!("  the screen settled rather than being slept on");
+
+    let refused = computer
+        .primary()
+        .click_with(Point::new(10, 10), Button::Left, &[computer::Held::Shift])
+        .await;
+    assert!(
+        refused.is_err(),
+        "a modifier this compositor cannot hold has to be refused, not dropped"
+    );
+
+    // A second axis on the same device, not a second pair of buttons.
+    computer
+        .scroll(Point::new(640, 500), Delta::right(5))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let sideways = page.evaluate("window.scrollX").await?;
+    let still = page.evaluate("window.scrollY").await?;
+    assert!(
+        sideways.as_f64().unwrap_or(0.0) > 0.0,
+        "the horizontal axis never arrived"
+    );
+    assert_eq!(
+        still, scrolled,
+        "a sideways scroll also moved the page down"
+    );
+    println!("  and sideways to {sideways}");
 
     // A drag: pressed at one point, moved *while pressed*, released at
     // another. The motion is the part worth checking — an application that

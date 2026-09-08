@@ -361,3 +361,69 @@ async fn test_launching_an_app_no_catalog_holds_is_refused() {
     // The box is missing first: a name is checked against a box's own spec.
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
+
+#[tokio::test]
+async fn test_the_windows_that_are_not_ids_are_routes_of_their_own() {
+    // `active` and `wait` sit where a window id sits. A route that matched
+    // them as ids would look for a window called "active" and find none.
+    for request in [
+        get("/v1/boxes/box_nope/screens/0/windows/active"),
+        post(
+            "/v1/boxes/box_nope/screens/0/windows/wait",
+            r#"{"class":"xterm"}"#,
+        ),
+    ] {
+        let (status, body) = send(request).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["code"], "not_found", "the handler answered: {body}");
+    }
+}
+
+#[tokio::test]
+async fn test_an_arrangement_this_api_does_not_have_is_refused() {
+    let (status, _) = send(post(
+        "/v1/boxes/box_nope/screens/0/windows/42/arrange",
+        r#"{"how":"teleport"}"#,
+    ))
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_half_a_rectangle_is_refused_rather_than_guessed_at() {
+    let (status, body) = send(get(
+        "/v1/boxes/box_nope/screens/0/frame?x=10&y=20&width=400",
+    ))
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("together"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn test_a_capture_is_of_a_window_or_a_region_and_not_both() {
+    let (status, _) = send(get(
+        "/v1/boxes/box_nope/screens/0/frame?window=42&x=1&y=2&width=3&height=4",
+    ))
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_a_plain_frame_still_asks_for_nothing() {
+    // The box is missing, not the query: a shot naming nothing has to reach
+    // the handler the way it always did.
+    let (status, body) = send(get("/v1/boxes/box_nope/screens/0/frame")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}

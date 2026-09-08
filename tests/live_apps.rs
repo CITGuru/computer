@@ -1,6 +1,6 @@
 //! Launching real apps in a real box. Ignored by default.
 
-use computer::{Computer, Launch, WaylandProfile};
+use computer::{Arrange, Computer, Launch, Point, WaylandProfile};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -114,6 +114,47 @@ async fn wayland_exercise(computer: &Computer) -> computer::Result<()> {
     );
 
     screen.focus(&window.id).await?;
+
+    let active = screen.active_window().await?;
+    println!("  active: {active:?}");
+    assert_eq!(
+        active.map(|one| one.id),
+        Some(window.id.clone()),
+        "the window that was focused is the one holding the keyboard"
+    );
+
+    let sized = screen
+        .arrange(
+            &window.id,
+            Arrange::Size {
+                width: 600,
+                height: 400,
+            },
+        )
+        .await?;
+    println!("  sized: {}x{}", sized.width, sized.height);
+    assert_eq!((sized.width, sized.height), (600, 400));
+
+    let moved = screen
+        .arrange(&window.id, Arrange::At(Point::new(80, 60)))
+        .await?;
+    println!("  moved: {},{}", moved.at.x, moved.at.y);
+    assert_eq!(moved.at, Point::new(80, 60));
+
+    let big = screen.arrange(&window.id, Arrange::Maximise).await?;
+    println!("  maximised: {}x{}", big.width, big.height);
+    assert!(big.width > sized.width, "full screen is wider than 600");
+
+    screen.arrange(&window.id, Arrange::Minimise).await?;
+    let back = screen.arrange(&window.id, Arrange::Restore).await?;
+    println!("  back: {}x{}", back.width, back.height);
+    assert_eq!(back.id, window.id);
+
+    let again = screen
+        .wait_for_window("foot", Duration::from_secs(10))
+        .await?;
+    assert_eq!(again.class, "foot");
+
     screen.close_window(&window.id).await?;
     Ok(())
 }

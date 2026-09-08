@@ -2578,8 +2578,8 @@ mod tests {
     #[test]
     fn test_a_space_is_not_left_in_a_url() {
         assert_eq!(
-            SearchProvider::DuckDuckGo.url_for("chinasa onyenkpa"),
-            "https://duckduckgo.com/html/?q=chinasa+onyenkpa"
+            SearchProvider::DuckDuckGo.url_for("toby oyetoke"),
+            "https://duckduckgo.com/html/?q=toby+oyetoke"
         );
     }
 

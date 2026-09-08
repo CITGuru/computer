@@ -15,7 +15,7 @@ auth    = "token"
 ```
 
 And `Point`, `Button` and `Selection` are the values every caller names once it
-has one. A server, a client, a CLI and eventually the engine all need both, and
+has one. A server, a client, a CLI and the engine all need both, and
 none of them should be redefining a coordinate.
 
 A spec says nothing about *where* it runs, which is what lets one travel
@@ -38,8 +38,8 @@ travels to an image that has its own idea of a screen; the other insists.
 ## Deliberately dependency-free
 
 Serde and a digest. Everything that reads these depends on this crate — a
-server, a client, a CLI, and eventually the engine itself, once
-`Builder::from_spec` exists — so anything heavier is paid for by all of them.
+server, a client, a CLI, and the engine through `Builder::from_spec` — so
+anything heavier is paid for by all of them.
 
 In particular this crate must never depend on `computer`, because that edge is
 going to run the other way. The name is the rule: if it is not a plain data

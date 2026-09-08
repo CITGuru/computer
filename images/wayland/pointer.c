@@ -132,12 +132,25 @@ static void button(uint32_t code, uint32_t pressed) {
 	zwlr_virtual_pointer_v1_frame(pointer);
 }
 
-static void wheel(int down) {
+// One notch on one axis. Forward is down on the vertical axis and right on
+// the horizontal one, which is the sign the protocol uses for both.
+static void wheel(uint32_t axis, int forward) {
 	zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
-	zwlr_virtual_pointer_v1_axis_discrete(pointer, now_ms(), WL_POINTER_AXIS_VERTICAL_SCROLL,
-	                                      wl_fixed_from_int(down ? NOTCH : -NOTCH),
-	                                      down ? 1 : -1);
+	zwlr_virtual_pointer_v1_axis_discrete(pointer, now_ms(), axis,
+	                                      wl_fixed_from_int(forward ? NOTCH : -NOTCH),
+	                                      forward ? 1 : -1);
 	zwlr_virtual_pointer_v1_frame(pointer);
+}
+
+// A signed count of notches on one axis. Zero sends nothing, so an axis the
+// caller did not ask for does not move.
+static void wheel_by(uint32_t axis, long notches) {
+	long count = notches < 0 ? -notches : notches;
+
+	for (long sent = 0; sent < count; sent++) {
+		wheel(axis, notches > 0);
+		settle(10);
+	}
 }
 
 static uint32_t button_code(const char *name) {
@@ -169,7 +182,7 @@ static const char *USAGE =
     "                        click X Y BUTTON\n"
     "                        dblclick X Y BUTTON\n"
     "                        drag X1 Y1 X2 Y2 BUTTON\n"
-    "                        scroll X Y NOTCHES   (negative scrolls up)\n";
+    "                        scroll X Y DOWN [RIGHT]   (negative goes up and left)\n";
 
 int main(int argc, char **argv) {
 	if (argc < 2) {
@@ -252,17 +265,16 @@ int main(int argc, char **argv) {
 		move_to(x2, y2);
 		settle(20);
 		button(code, 0);
-	} else if (strcmp(verb, "scroll") == 0 && rest == 3) {
-		long notches = number(argv[4]);
-		int down = notches > 0;
-		long count = notches < 0 ? -notches : notches;
+	} else if (strcmp(verb, "scroll") == 0 && (rest == 3 || rest == 4)) {
+		long down = number(argv[4]);
+		// Optional, so a caller that only ever scrolled down still works.
+		long right = rest == 4 ? number(argv[5]) : 0;
 
 		move_to(number(argv[2]), number(argv[3]));
 		settle(20);
-		for (long sent = 0; sent < count; sent++) {
-			wheel(down);
-			settle(10);
-		}
+		// One device for both, so a diagonal reads as one gesture.
+		wheel_by(WL_POINTER_AXIS_VERTICAL_SCROLL, down);
+		wheel_by(WL_POINTER_AXIS_HORIZONTAL_SCROLL, right);
 	} else {
 		fputs(USAGE, stderr);
 		return 2;

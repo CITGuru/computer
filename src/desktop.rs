@@ -15,7 +15,7 @@ use crate::screens::ControlGate;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -250,7 +250,12 @@ pub enum Button {
     Middle,
 }
 
-/// A wheel movement. Positive `dy` scrolls down.
+/// A wheel movement, in notches. Positive `dy` scrolls down and positive `dx`
+/// scrolls right.
+///
+/// Both axes at once is one gesture, not two: a trackpad swiped diagonally
+/// sends both, and splitting it into two calls moves the page in a corner
+/// rather than across it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delta {
     pub dx: i32,
@@ -270,6 +275,106 @@ impl Delta {
             dx: 0,
             dy: -notches.abs(),
         }
+    }
+
+    pub const fn right(notches: i32) -> Self {
+        Self {
+            dx: notches.abs(),
+            dy: 0,
+        }
+    }
+
+    pub const fn left(notches: i32) -> Self {
+        Self {
+            dx: -notches.abs(),
+            dy: 0,
+        }
+    }
+}
+
+/// Shift-click extends a selection, ctrl-click adds to one, alt-drag moves a
+/// window. No amount of pressing the key first fakes one: the press ends with
+/// the command that made it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Held {
+    Shift,
+    Ctrl,
+    Alt,
+    Super,
+}
+
+impl Held {
+    /// The same spellings the chord parser takes, so a caller does not learn
+    /// two vocabularies for one key.
+    pub fn named(word: &str) -> Option<Self> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "shift" => Some(Self::Shift),
+            "ctrl" | "control" => Some(Self::Ctrl),
+            "alt" | "option" => Some(Self::Alt),
+            "meta" | "cmd" | "command" | "super" | "win" => Some(Self::Super),
+            _ => None,
+        }
+    }
+
+    pub fn keysym(self) -> &'static str {
+        match self {
+            Self::Shift => "shift",
+            Self::Ctrl => "ctrl",
+            Self::Alt => "alt",
+            Self::Super => "super",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rect {
+    pub at: Point,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Rect {
+    pub const fn new(at: Point, width: u32, height: u32) -> Self {
+        Self { at, width, height }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Shot {
+    pub of: Of,
+    /// A percentage of full size, or `None` for all of it. A picture of a
+    /// desktop is a megabyte an agent pays for on every step, and most of what
+    /// it needs to read survives being halved.
+    pub scale: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Of {
+    #[default]
+    Screen,
+    /// One window, by the id `windows()` reports. Looked up before the
+    /// capture, because a window is a rectangle once it has been found.
+    Window(String),
+    Region(Rect),
+}
+
+impl Shot {
+    pub fn of(of: Of) -> Self {
+        Self { of, scale: None }
+    }
+
+    pub fn window(id: impl Into<String>) -> Self {
+        Self::of(Of::Window(id.into()))
+    }
+
+    pub fn region(area: Rect) -> Self {
+        Self::of(Of::Region(area))
+    }
+
+    pub fn scaled(mut self, percent: u32) -> Self {
+        self.scale = Some(percent);
+        self
     }
 }
 
@@ -339,6 +444,19 @@ pub trait Desktop: Send + Sync {
     /// PNG bytes of the whole screen.
     async fn screenshot(&self) -> Result<Vec<u8>>;
 
+    /// `area` of `None` is the whole screen and `scale` of `None` its full
+    /// size, which is what the default answers. An implementation that cannot
+    /// crop or resize refuses the rest rather than quietly returning the whole
+    /// screen at full size, which a caller would read as an empty region.
+    async fn capture(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        match (area, scale) {
+            (None, None) => self.screenshot().await,
+            _ => Err(Error::Unsupported {
+                gaps: vec!["capture"],
+            }),
+        }
+    }
+
     /// Move the pointer without pressing anything.
     ///
     /// Hovering is its own action: a menu highlights, a tooltip appears, a
@@ -346,6 +464,18 @@ pub trait Desktop: Send + Sync {
     async fn move_to(&self, at: Point) -> Result<()>;
 
     async fn click(&self, at: Point, button: Button) -> Result<()>;
+
+    /// Defaulted to the plain click when nothing is held, so a display server
+    /// that cannot hold a key still answers the common case, and refuses the
+    /// rest rather than dropping the modifier and clicking anyway.
+    async fn click_with(&self, at: Point, button: Button, held: &[Held]) -> Result<()> {
+        match held.is_empty() {
+            true => self.click(at, button).await,
+            false => Err(Error::Unsupported {
+                gaps: vec!["modifiers"],
+            }),
+        }
+    }
 
     /// Press twice close enough together to count as one gesture.
     ///
@@ -359,9 +489,30 @@ pub trait Desktop: Send + Sync {
     /// be released when the first call's process exits.
     async fn drag(&self, from: Point, to: Point, button: Button) -> Result<()>;
 
+    async fn drag_with(&self, from: Point, to: Point, button: Button, held: &[Held]) -> Result<()> {
+        match held.is_empty() {
+            true => self.drag(from, to, button).await,
+            false => Err(Error::Unsupported {
+                gaps: vec!["modifiers"],
+            }),
+        }
+    }
+
     async fn type_text(&self, text: &str) -> Result<()>;
     async fn key(&self, chord: &str) -> Result<()>;
     async fn scroll(&self, at: Point, by: Delta) -> Result<()>;
+
+    /// The alternative is a sleep, which is either short enough to read the
+    /// screen mid-repaint or long enough to be paid on every step. Waited
+    /// inside the box, because a poll from out here costs a round trip per
+    /// probe.
+    async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
+        let _ = (settle, within);
+
+        Err(Error::Unsupported {
+            gaps: vec!["waiting"],
+        })
+    }
 
     /// Where the pointer is.
     ///

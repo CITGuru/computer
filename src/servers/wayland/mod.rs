@@ -27,12 +27,14 @@ use crate::error::{Error, Result};
 use crate::machine::MachineHost;
 use crate::machine::ScreenHost;
 use crate::screens::ControlGate;
+use crate::servers::{settled, still_argv};
 use crate::{
-    Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Point, ScreenId,
-    Selection,
+    Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Point, Rect,
+    ScreenId, Selection,
 };
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// The command the image installs for every input it accepts.
 pub const INPUT_COMMAND: &str = "computer-input";
@@ -131,13 +133,52 @@ fn point_parts(at: Point) -> Vec<String> {
 ///
 /// The protocol takes a direction and a distance, so there is no button 4
 /// and 5 here.
-fn scroll_argv(at: Point, by: Delta) -> Vec<String> {
-    let notches = by.dy.unsigned_abs().clamp(1, 20) as i32;
-    let signed = if by.dy < 0 { -notches } else { notches };
+/// Down then right, as one run: `computer-pointer` sends both axes from one
+/// virtual device, and two runs are two devices far enough apart to read as
+/// two gestures.
+/// `grim`, cropped and scaled as it captures. This image carries no
+/// ImageMagick, so these flags are the only way to ask for either.
+fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
+    let mut args = argv(&["grim", "-t", "png"]);
 
+    if let Some(area) = area {
+        args.push("-g".to_string());
+        args.push(format!(
+            "{},{} {}x{}",
+            area.at.x, area.at.y, area.width, area.height
+        ));
+    }
+    if let Some(scale) = scale {
+        // grim takes a factor where the rest of this takes a percentage, and
+        // its default is the output's own scale rather than 1.
+        args.push("-s".to_string());
+        args.push(format!("{:.4}", f64::from(scale) / 100.0));
+    }
+
+    // PNG bytes straight out of stdout, as with the X11 image's `import`.
+    args.push("-".to_string());
+    args
+}
+
+fn scroll_argv(at: Point, by: Delta) -> Vec<String> {
     let mut parts = point_parts(at);
-    parts.push(signed.to_string());
+    // A delta with no distance in it is still a scroll: one notch down, which
+    // is the only thing a caller that named neither axis can have meant.
+    parts.push(notches(by.dy, by.dx == 0).to_string());
+    parts.push(notches(by.dx, false).to_string());
     input_argv("scroll", &parts)
+}
+
+fn notches(delta: i32, floor: bool) -> i32 {
+    if delta == 0 {
+        return i32::from(floor);
+    }
+
+    let size = delta.unsigned_abs().clamp(1, 20) as i32;
+    match delta < 0 {
+        true => -size,
+        false => size,
+    }
 }
 
 /// Where the pointer was last put, and which takeover that was true under.
@@ -193,6 +234,17 @@ impl WaylandDesktop {
         Ok(result)
     }
 
+    /// A capture, refused rather than returned empty: a zero-byte PNG reaches
+    /// a caller as a picture of nothing rather than as a failure.
+    async fn grim(&self, args: Vec<String>) -> Result<Vec<u8>> {
+        let result = self.run(args).await?;
+
+        if result.stdout.is_empty() {
+            return Err(Error::denied("the screen capture returned no image"));
+        }
+        Ok(result.stdout)
+    }
+
     /// Every input path, and the only place the takeover rule is applied here.
     ///
     /// Reads do not come through it: a run may watch and may not act.
@@ -215,13 +267,11 @@ impl WaylandDesktop {
 #[async_trait]
 impl Desktop for WaylandDesktop {
     async fn screenshot(&self) -> Result<Vec<u8>> {
-        // PNG bytes straight out of stdout, as with the X11 image's `import`.
-        let result = self.run(argv(&["grim", "-t", "png", "-"])).await?;
+        self.grim(capture_argv(None, None)).await
+    }
 
-        if result.stdout.is_empty() {
-            return Err(Error::denied("the screen capture returned no image"));
-        }
-        Ok(result.stdout)
+    async fn capture(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        self.grim(capture_argv(area, scale)).await
     }
 
     async fn move_to(&self, at: Point) -> Result<()> {
@@ -273,6 +323,16 @@ impl Desktop for WaylandDesktop {
     ///
     /// Wayland reports no global pointer position to any client, so this is
     /// remembered rather than read, and refused once a person has driven.
+    /// Bounded by the box's own command timeout, so a `within` longer than
+    /// that ends as a transport failure rather than as this one's answer.
+    async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
+        let watched = self
+            .run(still_argv("grim -t png - 2>/dev/null", settle, within))
+            .await?;
+
+        settled(watched, within)
+    }
+
     async fn cursor(&self) -> Result<Point> {
         let tracked = self
             .pointer
@@ -504,17 +564,55 @@ mod tests {
     }
 
     #[test]
+    fn test_a_plain_capture_is_the_whole_screen_at_full_size() {
+        assert_eq!(capture_argv(None, None), argv(&["grim", "-t", "png", "-"]));
+    }
+
+    #[test]
+    fn test_a_capture_carries_its_rectangle_in_grims_own_spelling() {
+        let args = capture_argv(Some(Rect::new(Point::new(10, 20), 400, 300)), None);
+
+        assert!(args.contains(&"10,20 400x300".to_string()), "{args:?}");
+    }
+
+    #[test]
+    fn test_a_scale_reaches_grim_as_a_factor() {
+        let args = capture_argv(None, Some(50));
+
+        assert!(args.contains(&"0.5000".to_string()), "{args:?}");
+    }
+
+    #[test]
     fn test_scrolling_up_is_a_negative_count_and_down_a_positive_one() {
-        assert_eq!(
-            scroll_argv(Point::new(5, 5), Delta::up(3)).last().cloned(),
-            Some("-3".to_string())
-        );
-        assert_eq!(
-            scroll_argv(Point::new(5, 5), Delta::down(3))
-                .last()
-                .cloned(),
-            Some("3".to_string())
-        );
+        // The two counts come last, down before right.
+        assert_eq!(tail(Delta::up(3)), ["-3", "0"]);
+        assert_eq!(tail(Delta::down(3)), ["3", "0"]);
+    }
+
+    #[test]
+    fn test_scrolling_left_is_a_negative_count_and_right_a_positive_one() {
+        assert_eq!(tail(Delta::left(3)), ["0", "-3"]);
+        assert_eq!(tail(Delta::right(3)), ["0", "3"]);
+    }
+
+    #[test]
+    fn test_a_sideways_scroll_does_not_also_go_down() {
+        assert_eq!(tail(Delta::right(2))[0], "0");
+    }
+
+    #[test]
+    fn test_both_axes_travel_as_one_run() {
+        assert_eq!(tail(Delta { dx: 2, dy: 3 }), ["3", "2"]);
+    }
+
+    /// The two notch counts a scroll ends with.
+    fn tail(by: Delta) -> [String; 2] {
+        let args = scroll_argv(Point::new(5, 5), by);
+        let mut last = args.iter().rev().take(2);
+        let right = last.next().cloned().expect("a horizontal count");
+        let down = last.next().cloned().expect("a vertical count");
+
+        [down, right]
     }
 
     #[test]

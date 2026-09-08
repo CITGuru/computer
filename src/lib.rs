@@ -90,23 +90,30 @@ pub use cdp::{
 };
 pub use desktop::{
     Browser, BrowserEndpoint, Button, Clipboard, Control, Delta, Desktop, DesktopFactory,
-    DesktopNeed, DesktopPresence, DesktopSupport, Display, DisplayServer, Point, Selection, Viewer,
-    ViewerKind, Viewers,
+    DesktopNeed, DesktopPresence, DesktopSupport, Display, DisplayServer, Held, Of, Point, Rect,
+    Selection, Shot, Viewer, ViewerKind, Viewers,
 };
 pub use error::{Error, Result};
+
+/// The largest a capture may be asked to grow.
+///
+/// Scaling up is not what this is for, but refusing it outright would make a
+/// caller crop and enlarge by hand. The ceiling is here so a mistyped
+/// percentage cannot ask the box for a picture it has no memory for.
+pub const MAGNIFY: u32 = 400;
 pub use exec::ExecResult;
 pub use image::{ScreenAction, ScreenPorts};
 pub use machine::ScreenHost;
 pub use machine::{DockerMachine, Machine, MachineHost, PortMap};
 pub use microvm::MicroVm;
 pub use profile::{
-    AppRuntime, BrowserRuntime, CommandBrowserRuntime, CommandScreen, CommandScreenRuntime,
-    CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, FORCE, GeometrySpec, ImageSource,
-    Launch, PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile, ProfileBuilder, SHARED,
-    ScreenCommands, ScreenEnvironment, ScreenRuntime, UnsupportedAppRuntime,
-    UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime, WaylandAppRuntime,
-    WaylandEnvironment, WaylandWallpaperRuntime, Window, X11AppRuntime, X11Environment,
-    X11WallpaperRuntime,
+    AppRuntime, Arrange, BrowserRuntime, CommandBrowserRuntime, CommandScreen,
+    CommandScreenRuntime, CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, FORCE,
+    GeometrySpec, ImageSource, Launch, PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile,
+    ProfileBuilder, SHARED, ScreenCommands, ScreenEnvironment, ScreenRuntime,
+    UnsupportedAppRuntime, UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime,
+    WaylandAppRuntime, WaylandEnvironment, WaylandWallpaperRuntime, Window, X11AppRuntime,
+    X11Environment, X11WallpaperRuntime,
 };
 pub use reach::{Address, Bind, Reach, Scheme};
 pub use runtime::{Config, ContainerCli, SystemDocker};
@@ -1417,12 +1424,25 @@ impl Computer {
         self.primary.screenshot().await
     }
 
+    pub async fn capture(&self, shot: &Shot) -> Result<Vec<u8>> {
+        self.primary.capture(shot).await
+    }
+
     pub async fn move_to(&self, at: impl Into<Point>) -> Result<()> {
         self.primary.move_to(at).await
     }
 
     pub async fn click(&self, at: impl Into<Point>, button: Button) -> Result<()> {
         self.primary.click(at, button).await
+    }
+
+    pub async fn click_with(
+        &self,
+        at: impl Into<Point>,
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        self.primary.click_with(at, button, held).await
     }
 
     pub async fn double_click(&self, at: impl Into<Point>, button: Button) -> Result<()> {
@@ -1436,6 +1456,20 @@ impl Computer {
         button: Button,
     ) -> Result<()> {
         self.primary.drag(from, to, button).await
+    }
+
+    pub async fn drag_with(
+        &self,
+        from: impl Into<Point>,
+        to: impl Into<Point>,
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        self.primary.drag_with(from, to, button, held).await
+    }
+
+    pub async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
+        self.primary.wait_until_still(settle, within).await
     }
 
     pub async fn type_text(&self, text: &str) -> Result<()> {
@@ -1501,6 +1535,10 @@ impl Desktop for Computer {
         Desktop::screenshot(&self.primary).await
     }
 
+    async fn capture(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        Desktop::capture(&self.primary, area, scale).await
+    }
+
     async fn move_to(&self, at: Point) -> Result<()> {
         Desktop::move_to(&self.primary, at).await
     }
@@ -1509,12 +1547,24 @@ impl Desktop for Computer {
         Desktop::click(&self.primary, at, button).await
     }
 
+    async fn click_with(&self, at: Point, button: Button, held: &[Held]) -> Result<()> {
+        Desktop::click_with(&self.primary, at, button, held).await
+    }
+
     async fn double_click(&self, at: Point, button: Button) -> Result<()> {
         Desktop::double_click(&self.primary, at, button).await
     }
 
     async fn drag(&self, from: Point, to: Point, button: Button) -> Result<()> {
         Desktop::drag(&self.primary, from, to, button).await
+    }
+
+    async fn drag_with(&self, from: Point, to: Point, button: Button, held: &[Held]) -> Result<()> {
+        Desktop::drag_with(&self.primary, from, to, button, held).await
+    }
+
+    async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
+        Desktop::wait_until_still(&self.primary, settle, within).await
     }
 
     async fn type_text(&self, text: &str) -> Result<()> {
@@ -1704,6 +1754,51 @@ impl Screen {
         self.runtimes
             .app
             .close(self.host.as_ref(), self.profile.as_ref(), self.id, window)
+            .await
+    }
+
+    /// Answers with the window as it ended up, which is not always what was
+    /// asked for: a window manager clamps a move to the screen, and honours a
+    /// resize only within the size hints the program gave it.
+    pub async fn arrange(&self, window: &str, how: Arrange) -> Result<Window> {
+        self.runtimes.app.supported()?;
+        self.runtimes
+            .app
+            .arrange(
+                self.host.as_ref(),
+                self.profile.as_ref(),
+                self.id,
+                window,
+                how,
+            )
+            .await
+    }
+
+    pub async fn active_window(&self) -> Result<Option<Window>> {
+        self.runtimes.app.supported()?;
+        self.runtimes
+            .app
+            .active(self.host.as_ref(), self.profile.as_ref(), self.id)
+            .await
+    }
+
+    /// For the windows nothing here started: a dialog a click raised, or a
+    /// second window a program opened for itself.
+    ///
+    /// Held still means placed, not painted: a dialog with a caret blinking in
+    /// it never stops drawing, and `launch` is the one that waits for paint.
+    pub async fn wait_for_window(&self, class: &str, within: Duration) -> Result<Window> {
+        self.runtimes.app.supported()?;
+        self.runtimes
+            .app
+            .wait_for_window(
+                self.host.as_ref(),
+                self.profile.as_ref(),
+                self.id,
+                class,
+                Duration::from_millis(apps::SETTLE_MS),
+                within,
+            )
             .await
     }
 
@@ -1995,12 +2090,65 @@ impl Screen {
         self.driver.screenshot().await
     }
 
+    /// A window is looked up here rather than in the display server, because
+    /// a window is a rectangle once it has been found and both servers can
+    /// already crop to one.
+    pub async fn capture(&self, shot: &Shot) -> Result<Vec<u8>> {
+        if let Some(percent) = shot.scale {
+            if percent == 0 || percent > MAGNIFY {
+                return Err(Error::invalid(format!(
+                    "a scale is a percentage of full size, between 1 and {MAGNIFY}: {percent}"
+                )));
+            }
+        }
+
+        let area = match &shot.of {
+            Of::Screen => None,
+            Of::Region(area) => Some(*area),
+            // Looked up now rather than trusted from an earlier listing: a
+            // window moves, and a capture of where it used to be is a picture
+            // of whatever took its place.
+            Of::Window(id) => Some(self.window_rect(id).await?),
+        };
+
+        if let Some(area) = area {
+            if area.width == 0 || area.height == 0 {
+                return Err(Error::invalid(
+                    "a region with no width or height is nothing",
+                ));
+            }
+        }
+
+        self.driver.capture(area, shot.scale).await
+    }
+
+    async fn window_rect(&self, id: &str) -> Result<Rect> {
+        self.windows()
+            .await?
+            .into_iter()
+            .find(|window| window.id == id)
+            .map(|window| Rect::new(window.at, window.width, window.height))
+            .ok_or_else(|| Error::invalid(format!("there is no window {id} on this screen")))
+    }
+
     pub async fn move_to(&self, at: impl Into<Point>) -> Result<()> {
         self.driver.move_to(at.into()).await
     }
 
     pub async fn click(&self, at: impl Into<Point>, button: Button) -> Result<()> {
         self.driver.click(at.into(), button).await
+    }
+
+    /// Shift-click extends a selection and ctrl-click adds to one. Pressing
+    /// the key first does not: the press ends with the command that made it,
+    /// so the click which follows arrives unmodified.
+    pub async fn click_with(
+        &self,
+        at: impl Into<Point>,
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        self.driver.click_with(at.into(), button, held).await
     }
 
     pub async fn double_click(&self, at: impl Into<Point>, button: Button) -> Result<()> {
@@ -2014,6 +2162,28 @@ impl Screen {
         button: Button,
     ) -> Result<()> {
         self.driver.drag(from.into(), to.into(), button).await
+    }
+
+    pub async fn drag_with(
+        &self,
+        from: impl Into<Point>,
+        to: impl Into<Point>,
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        self.driver
+            .drag_with(from.into(), to.into(), button, held)
+            .await
+    }
+
+    /// What to do instead of guessing at a sleep: a menu opening, a dialog
+    /// drawing, a page painting. The watch runs inside the box, so it costs
+    /// one round trip however long it waits.
+    ///
+    /// A screen with something animating on it never holds still, and reaches
+    /// the deadline instead.
+    pub async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
+        self.driver.wait_until_still(settle, within).await
     }
 
     pub async fn type_text(&self, text: &str) -> Result<()> {
@@ -2049,6 +2219,10 @@ impl Desktop for Screen {
         self.driver.screenshot().await
     }
 
+    async fn capture(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        self.driver.capture(area, scale).await
+    }
+
     async fn move_to(&self, at: Point) -> Result<()> {
         self.driver.move_to(at).await
     }
@@ -2057,12 +2231,24 @@ impl Desktop for Screen {
         self.driver.click(at, button).await
     }
 
+    async fn click_with(&self, at: Point, button: Button, held: &[Held]) -> Result<()> {
+        self.driver.click_with(at, button, held).await
+    }
+
     async fn double_click(&self, at: Point, button: Button) -> Result<()> {
         self.driver.double_click(at, button).await
     }
 
     async fn drag(&self, from: Point, to: Point, button: Button) -> Result<()> {
         self.driver.drag(from, to, button).await
+    }
+
+    async fn drag_with(&self, from: Point, to: Point, button: Button, held: &[Held]) -> Result<()> {
+        self.driver.drag_with(from, to, button, held).await
+    }
+
+    async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
+        self.driver.wait_until_still(settle, within).await
     }
 
     async fn type_text(&self, text: &str) -> Result<()> {

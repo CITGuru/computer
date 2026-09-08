@@ -256,7 +256,7 @@ mod tests {
 
 /// Top-left origin, device pixels, and the same coordinates the frame came
 /// back in — a click against a scaled screenshot lands somewhere else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Point {
     pub x: u32,
     pub y: u32,

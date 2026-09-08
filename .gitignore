@@ -3,7 +3,7 @@ Cargo.lock
 *.gif
 *.mp4
 .env
-/docs/
+/docs/internal/
 .claude
 *.png
 

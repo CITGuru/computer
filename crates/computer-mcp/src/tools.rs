@@ -8,7 +8,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, ForkMode, ForkRequest, OnElement, Reading, ScrollTo, Want, Where,
+    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, OnElement, Reading, Region,
+    ScrollTo, Shot, Want, Where,
 };
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
@@ -82,9 +83,31 @@ pub fn catalogue() -> Value {
         ),
         tool(
             "screenshot",
-            "Look at the screen. Coordinates for clicking come from this picture: its \
-             top-left is (0, 0) and they are device pixels. The pointer is not drawn in it.",
-            box_only()
+            "Look at the screen, or at one window or rectangle of it. Coordinates for \
+             clicking come from this picture: its top-left is (0, 0) and they are device \
+             pixels, so a cropped or scaled picture is for reading rather than for aiming. \
+             The pointer is not drawn in it.",
+            with_box(
+                json!({
+                    "window": {
+                        "type": "string",
+                        "description": "A window id, as the `window` tool's `list` reports \
+                                        it. Captured where the window is now."
+                    },
+                    "x": { "type": "integer", "description": "With y, width and height, a \
+                                                              rectangle of the screen." },
+                    "y": { "type": "integer" },
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" },
+                    "scale": {
+                        "type": "integer",
+                        "description": "A percentage of full size, 1 to 400. Halving a \
+                                        screen leaves most text readable and costs a \
+                                        fraction of the bytes."
+                    }
+                }),
+                &[]
+            )
         ),
         tool(
             "open_url",
@@ -268,7 +291,14 @@ pub fn catalogue() -> Value {
                     "x": { "type": "integer" },
                     "y": { "type": "integer" },
                     "button": { "type": "string", "enum": ["left", "right", "middle"] },
-                    "double": { "type": "boolean", "description": "Double click instead of single." }
+                    "double": { "type": "boolean", "description": "Double click instead of single." },
+                    "held": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["shift", "ctrl", "alt", "super"] },
+                        "description": "Modifiers held down around it: shift to extend a \
+                                        selection, ctrl to add to one. press_key first does \
+                                        not do this — that press ends before this arrives."
+                    }
                 }),
                 &["x", "y"]
             )
@@ -285,14 +315,37 @@ pub fn catalogue() -> Value {
         ),
         tool(
             "scroll",
-            "Scroll at a point. Positive `dy` scrolls down.",
+            "Turn the wheel at a point, in notches. Positive `dy` scrolls down and positive \
+             `dx` scrolls right. Whatever sits under the point is what moves, so this reaches \
+             a list or a sidebar without focusing it first.",
             with_box(
                 json!({
                     "x": { "type": "integer" },
                     "y": { "type": "integer" },
-                    "dy": { "type": "integer" }
+                    "dy": { "type": "integer" },
+                    "dx": { "type": "integer", "description": "Notches right. Defaults to 0." }
                 }),
                 &["x", "y", "dy"]
+            )
+        ),
+        tool(
+            "wait_until_still",
+            "Wait until the screen stops changing, instead of guessing at a pause. Use it \
+             after anything that draws — a menu opening, a dialog appearing, a page \
+             painting — so the picture you read is the finished one. A screen with \
+             something animating on it never settles and reaches the deadline instead.",
+            with_box(
+                json!({
+                    "settle_ms": {
+                        "type": "integer",
+                        "description": "How long it has to hold still. Defaults to 400."
+                    },
+                    "within_ms": {
+                        "type": "integer",
+                        "description": "How long to go on waiting. Defaults to 10000."
+                    }
+                }),
+                &[]
             )
         ),
         tool(
@@ -301,9 +354,56 @@ pub fn catalogue() -> Value {
             with_box(
                 json!({
                     "from_x": { "type": "integer" }, "from_y": { "type": "integer" },
-                    "to_x": { "type": "integer" }, "to_y": { "type": "integer" }
+                    "to_x": { "type": "integer" }, "to_y": { "type": "integer" },
+                    "held": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["shift", "ctrl", "alt", "super"] },
+                        "description": "Modifiers held down around it: shift to extend a \
+                                        selection, ctrl to add to one. press_key first does \
+                                        not do this — that press ends before this arrives."
+                    }
                 }),
                 &["from_x", "from_y", "to_x", "to_y"]
+            )
+        ),
+        tool(
+            "window",
+            "Work with the windows on the desktop rather than with the pixels they drew. \
+             `op` is one of: `list` for what is open, with the id, class, position and size \
+             of each; `active` for the one typing would reach; `focus` or `close` for the \
+             window an id names; `arrange` to move it, resize it or maximise it; `wait` to \
+             return once a window of a class has appeared and held still. Wait for a dialog \
+             rather than sleeping and hoping — a sleep is either too short to be right or \
+             too long to be paid on every step.",
+            with_box(
+                json!({
+                    "op": {
+                        "type": "string",
+                        "enum": ["list", "active", "focus", "close", "arrange", "wait"]
+                    },
+                    "window": {
+                        "type": "string",
+                        "description": "The window id, as `list` reports it. Needed by \
+                                        focus, close and arrange."
+                    },
+                    "how": {
+                        "type": "string",
+                        "enum": ["move", "size", "max", "min", "restore"],
+                        "description": "For arrange. `move` takes x and y; `size` takes \
+                                        width and height."
+                    },
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" },
+                    "width": { "type": "integer" },
+                    "height": { "type": "integer" },
+                    "class": {
+                        "type": "string",
+                        "description": "For wait: what the program calls itself, as `list` \
+                                        reports it."
+                    },
+                    "within_ms": { "type": "integer", "description": "For wait." }
+                }),
+                &["op"]
             )
         ),
         tool(
@@ -375,7 +475,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
         "screenshot" => {
             let id = text(arguments, "box_id")?;
             let frame = client
-                .frame(&id, 0, None)
+                .capture(&id, 0, &framing(arguments)?, None)
                 .await
                 .map_err(|e| e.to_string())?;
             let png = frame_png(&frame)
@@ -597,6 +697,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             };
             element(client, arguments, what, "done").await
         }
+        "window" => window(client, arguments).await,
         "list_apps" => {
             let names = client.catalog().await.map_err(|e| e.to_string())?;
 
@@ -611,7 +712,11 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             let action = if flag(arguments, "double") {
                 Action::DoubleClick { at, button }
             } else {
-                Action::Click { at, button }
+                Action::Click {
+                    at,
+                    button,
+                    held: held(arguments)?,
+                }
             };
             act(client, arguments, action, 600).await
         }
@@ -640,7 +745,12 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
         "scroll" => {
             let at = point(arguments, "x", "y")?;
             let dy = number(arguments, "dy")? as i32;
-            act(client, arguments, Action::Scroll { at, dx: 0, dy }, 400).await
+            let dx = arguments
+                .get("dx")
+                .and_then(Value::as_i64)
+                .unwrap_or_default() as i32;
+
+            act(client, arguments, Action::Scroll { at, dx, dy }, 400).await
         }
         "drag" => {
             let from = point(arguments, "from_x", "from_y")?;
@@ -652,8 +762,23 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                     from,
                     to,
                     button: Button::Left,
+                    held: held(arguments)?,
                 },
                 400,
+            )
+            .await
+        }
+        "wait_until_still" => {
+            let ms = |name| arguments.get(name).and_then(Value::as_u64);
+
+            act(
+                client,
+                arguments,
+                Action::WaitStill {
+                    settle_ms: ms("settle_ms"),
+                    within_ms: ms("within_ms"),
+                },
+                0,
             )
             .await
         }
@@ -801,6 +926,111 @@ async fn run(client: &Client, arguments: &Value) -> Result<Answer, String> {
 
 /// Do the thing, let the screen settle, and hand back what it looks like now.
 /// One element operation, and a screenshot of what it did.
+async fn window(client: &Client, arguments: &Value) -> Result<Answer, String> {
+    let id = text(arguments, "box_id")?;
+    let named = |name| text(arguments, name);
+    let size = |name| Ok::<u32, String>(number(arguments, name)?.max(0) as u32);
+    let fail = |error: computer_client::Error| error.to_string();
+
+    let one = match text(arguments, "op")?.as_str() {
+        "list" => {
+            let open = client.windows(&id, 0).await.map_err(fail)?;
+
+            return Ok(Answer::Text(match open.is_empty() {
+                true => "nothing is open on this screen".to_string(),
+                false => open.iter().map(said).collect::<Vec<_>>().join("\n"),
+            }));
+        }
+        "active" => match client.active_window(&id, 0).await.map_err(fail)? {
+            Some(window) => window,
+            None => return Ok(Answer::Text("nothing has the keyboard".to_string())),
+        },
+        "focus" => {
+            client
+                .focus_window(&id, 0, &named("window")?)
+                .await
+                .map_err(fail)?;
+
+            return shot(client, &id, "raised").await;
+        }
+        "close" => {
+            client
+                .close_window(&id, 0, &named("window")?)
+                .await
+                .map_err(fail)?;
+
+            return shot(client, &id, "closed").await;
+        }
+        "arrange" => {
+            let how = match named("how")?.as_str() {
+                "move" => Arrange::At {
+                    to: Point {
+                        x: size("x")?,
+                        y: size("y")?,
+                    },
+                },
+                "size" => Arrange::Size {
+                    width: size("width")?,
+                    height: size("height")?,
+                },
+                "max" => Arrange::Maximise,
+                "min" => Arrange::Minimise,
+                "restore" => Arrange::Restore,
+                other => return Err(format!("no such arrangement: {other}")),
+            };
+
+            client
+                .arrange_window(&id, 0, &named("window")?, how)
+                .await
+                .map_err(fail)?
+        }
+        "wait" => {
+            let within = arguments
+                .get("within_ms")
+                .and_then(Value::as_u64)
+                .map(std::time::Duration::from_millis);
+
+            client
+                .wait_for_window(&id, 0, &named("class")?, within)
+                .await
+                .map_err(fail)?
+        }
+        other => return Err(format!("no such op: {other}")),
+    };
+
+    shot(client, &id, &said(&one)).await
+}
+
+fn said(window: &computer_api::Window) -> String {
+    format!(
+        "{}\t{}\t{}x{}+{}+{}\t{}",
+        window.id,
+        window.class,
+        window.width,
+        window.height,
+        window.at.x,
+        window.at.y,
+        window.title
+    )
+}
+
+async fn shot(client: &Client, id: &str, said: &str) -> Result<Answer, String> {
+    let png = client
+        .frame(id, 0, None)
+        .await
+        .ok()
+        .and_then(|frame| frame_png(&frame).ok().flatten())
+        .unwrap_or_default();
+
+    match png.is_empty() {
+        true => Ok(Answer::Text(said.to_string())),
+        false => Ok(Answer::Shot {
+            text: said.to_string(),
+            png,
+        }),
+    }
+}
+
 async fn element(
     client: &Client,
     arguments: &Value,
@@ -884,6 +1114,53 @@ async fn act(
     Ok(Answer::Shot {
         text: "done; the screen now".to_string(),
         png,
+    })
+}
+
+fn held(arguments: &Value) -> Result<Vec<Held>, String> {
+    let Some(given) = arguments.get("held").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+
+    given
+        .iter()
+        .map(|one| match one.as_str().unwrap_or_default() {
+            "shift" => Ok(Held::Shift),
+            "ctrl" | "control" => Ok(Held::Ctrl),
+            "alt" | "option" => Ok(Held::Alt),
+            "super" | "cmd" | "command" | "meta" | "win" => Ok(Held::Super),
+            other => Err(format!("no such modifier: {other}")),
+        })
+        .collect()
+}
+
+fn framing(arguments: &Value) -> Result<Shot, String> {
+    let whole = |name| {
+        arguments
+            .get(name)
+            .and_then(Value::as_u64)
+            .map(|n| n as u32)
+    };
+
+    let region = match (whole("x"), whole("y"), whole("width"), whole("height")) {
+        (None, None, None, None) => None,
+        (Some(x), Some(y), Some(width), Some(height)) => Some(Region {
+            at: Point { x, y },
+            width,
+            height,
+        }),
+        // Half a rectangle would be read as a corner and a guess, and
+        // answered with a picture of the wrong thing.
+        _ => return Err("a rectangle takes x, y, width and height together".to_string()),
+    };
+
+    Ok(Shot {
+        window: arguments
+            .get("window")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        region,
+        scale: whole("scale"),
     })
 }
 
