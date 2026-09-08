@@ -11,6 +11,9 @@ use crate::microvm::{MicroVmApi, Plan};
 use crate::profile::{CommandScreen, ImageSource, PortLayout, Profile, ScreenCommands};
 use crate::runtime::ContainerCli;
 use crate::sandboxes::e2b::{self, E2bApi, Sandbox, SandboxPlan};
+use crate::sandboxes::remote::{
+    self, RemoteApi, Sandbox as RemoteSandbox, SandboxPlan as RemotePlan,
+};
 use crate::screens::ControlGate;
 use crate::{
     Button, Delta, Desktop, DesktopFactory, DesktopSupport, Display, DisplayServer, ExecResult,
@@ -787,6 +790,251 @@ impl E2bApi for ScriptedE2b {
                 bytes.len().to_string(),
             ],
         );
+        Ok(())
+    }
+}
+
+/// A [`RemoteApi`] with no cloud behind it.
+///
+/// A vendor adapter is mostly a request body and a response shape, and both
+/// are testable with no account: point the machine at this and every decision
+/// above it — the boot, the lazy deadline, the sweep — is checked in
+/// milliseconds.
+pub struct ScriptedRemote {
+    inner: ScriptedHost,
+    plans: Mutex<Vec<RemotePlan>>,
+    /// Name to sandbox, for both what was created here and what was said to
+    /// exist already.
+    known: Mutex<BTreeMap<String, RemoteSandbox>>,
+    /// Sandbox ID to its metadata, which is what a sweep reads.
+    metadata: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    commands: Mutex<Vec<Vec<String>>>,
+    files: Mutex<BTreeMap<String, Vec<u8>>>,
+    killed: Mutex<Vec<String>>,
+    refreshed: Mutex<Vec<String>>,
+    found: Mutex<Vec<String>>,
+    listable: bool,
+    next: AtomicU64,
+}
+
+impl Default for ScriptedRemote {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScriptedRemote {
+    pub fn new() -> Self {
+        Self {
+            inner: ScriptedHost::new(),
+            plans: Mutex::new(Vec::new()),
+            known: Mutex::new(BTreeMap::new()),
+            metadata: Mutex::new(BTreeMap::new()),
+            commands: Mutex::new(Vec::new()),
+            files: Mutex::new(BTreeMap::new()),
+            killed: Mutex::new(Vec::new()),
+            refreshed: Mutex::new(Vec::new()),
+            found: Mutex::new(Vec::new()),
+            listable: true,
+            next: AtomicU64::new(0),
+        }
+    }
+
+    pub fn replying(mut self, result: ExecResult) -> Self {
+        self.inner = self.inner.replying(result);
+        self
+    }
+
+    pub fn saying(mut self, stdout: impl Into<String>) -> Self {
+        self.inner = self.inner.saying(stdout);
+        self
+    }
+
+    pub fn failing(mut self, code: i32, stderr: impl Into<String>) -> Self {
+        self.inner = self.inner.failing(code, stderr);
+        self
+    }
+
+    /// A vendor whose control plane cannot be listed, which is the half of the
+    /// seam that decides whether a sweep is offered at all.
+    pub fn unlistable(mut self) -> Self {
+        self.listable = false;
+        self
+    }
+
+    /// Say a sandbox of this name is already running, as one left by another
+    /// process would be.
+    pub fn holding(self, name: impl Into<String>, id: impl Into<String>) -> Self {
+        let name = name.into();
+        let sandbox = Self::sandbox(id.into(), [6080, 6081]);
+
+        if let Ok(mut known) = self.known.lock() {
+            known.insert(name.clone(), sandbox.clone());
+        }
+        self.metadata(&sandbox.id, remote::NAME_KEY, name);
+        self
+    }
+
+    /// Put a key on a sandbox, as a caller's label travels.
+    pub fn metadata(&self, id: &str, key: impl Into<String>, value: impl Into<String>) {
+        if let Ok(mut all) = self.metadata.lock() {
+            all.entry(id.to_string())
+                .or_default()
+                .insert(key.into(), value.into());
+        }
+    }
+
+    fn sandbox(id: String, ports: impl IntoIterator<Item = u16>) -> RemoteSandbox {
+        RemoteSandbox::new(id)
+            .published_as(ports, |port, id| format!("{port}-{id}.sandbox.test"))
+            .with_token("scripted")
+    }
+
+    /// What was asked for, in order.
+    pub fn plans(&self) -> Vec<RemotePlan> {
+        self.plans
+            .lock()
+            .map(|plans| plans.clone())
+            .unwrap_or_default()
+    }
+
+    /// Every command run in a sandbox, in order.
+    pub fn commands(&self) -> Vec<Vec<String>> {
+        self.commands
+            .lock()
+            .map(|commands| commands.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn killed(&self) -> Vec<String> {
+        self.killed
+            .lock()
+            .map(|ids| ids.clone())
+            .unwrap_or_default()
+    }
+
+    /// Every deadline pushed out, which is what a lazy refresh is measured by.
+    pub fn refreshes(&self) -> Vec<String> {
+        self.refreshed
+            .lock()
+            .map(|ids| ids.clone())
+            .unwrap_or_default()
+    }
+
+    /// Every name looked up through the control plane.
+    pub fn found(&self) -> Vec<String> {
+        self.found
+            .lock()
+            .map(|names| names.clone())
+            .unwrap_or_default()
+    }
+
+    /// What a write left at this path.
+    pub fn written(&self, path: &str) -> Option<Vec<u8>> {
+        self.files.lock().ok()?.get(path).cloned()
+    }
+}
+
+#[async_trait]
+impl RemoteApi for ScriptedRemote {
+    fn vendor(&self) -> &str {
+        "scripted"
+    }
+
+    async fn available(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn create(&self, plan: &RemotePlan) -> Result<RemoteSandbox> {
+        let sandbox = Self::sandbox(
+            format!("sbx-{}", self.next.fetch_add(1, Ordering::Relaxed)),
+            plan.publish.clone(),
+        );
+
+        if let Ok(mut plans) = self.plans.lock() {
+            plans.push(plan.clone());
+        }
+        if let Ok(mut known) = self.known.lock() {
+            known.insert(plan.name.clone(), sandbox.clone());
+        }
+        if let Ok(mut all) = self.metadata.lock() {
+            all.insert(sandbox.id.clone(), plan.metadata.clone());
+        }
+        Ok(sandbox)
+    }
+
+    async fn find(&self, name: &str) -> Result<Option<RemoteSandbox>> {
+        if let Ok(mut found) = self.found.lock() {
+            found.push(name.to_string());
+        }
+        Ok(self
+            .known
+            .lock()
+            .ok()
+            .and_then(|known| known.get(name).cloned()))
+    }
+
+    async fn kill(&self, id: &str) -> Result<()> {
+        if let Ok(mut killed) = self.killed.lock() {
+            killed.push(id.to_string());
+        }
+        Ok(())
+    }
+
+    async fn keep_alive(&self, id: &str, _ttl: Duration) -> Result<()> {
+        if let Ok(mut refreshed) = self.refreshed.lock() {
+            refreshed.push(id.to_string());
+        }
+        Ok(())
+    }
+
+    async fn carrying(&self, key: &str) -> Result<Vec<(String, String)>> {
+        Ok(self
+            .metadata
+            .lock()
+            .map(|all| {
+                all.iter()
+                    .filter_map(|(id, metadata)| Some((id.clone(), metadata.get(key)?.clone())))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    fn sweepable(&self) -> bool {
+        self.listable
+    }
+
+    async fn exec(
+        &self,
+        _sandbox: &RemoteSandbox,
+        argv: &[String],
+        env: &BTreeMap<String, String>,
+    ) -> Result<ExecResult> {
+        if let Ok(mut commands) = self.commands.lock() {
+            commands.push(argv.to_vec());
+        }
+
+        // The screen travels in the environment, so it is recorded where a
+        // test can see it.
+        let mut recorded = argv.to_vec();
+        if let Some(display) = env.get("DISPLAY") {
+            recorded.push(format!("DISPLAY={display}"));
+        }
+        Ok(self.inner.record(ScreenId(0), &recorded))
+    }
+
+    async fn read(&self, _sandbox: &RemoteSandbox, path: &str) -> Result<Vec<u8>> {
+        self.files
+            .lock()
+            .ok()
+            .and_then(|files| files.get(path).cloned())
+            .ok_or_else(|| Error::denied(format!("{path}: no such file")))
+    }
+
+    async fn write(&self, _sandbox: &RemoteSandbox, path: &str, bytes: &[u8]) -> Result<()> {
+        if let Ok(mut files) = self.files.lock() {
+            files.insert(path.to_string(), bytes.to_vec());
+        }
         Ok(())
     }
 }

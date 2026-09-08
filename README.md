@@ -740,6 +740,50 @@ DevTools does not travel. An endpoint out here would be `wss` on a public host a
 
 `E2bApi` is the seam and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. [`docs/runtimes/e2b-machine.md`](docs/runtimes/e2b-machine.md) records the design.
 
+## Run in another cloud sandbox
+
+E2B is one vendor. Modal, Daytona and the rest have the same shape: create a sandbox, run a command in it, move a file, kill it, and publish its ports at an address of the vendor's own. `sandboxes::remote` is that shape as a trait, so a new vendor is seven calls and no crate feature:
+
+```rust
+use computer::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
+
+#[async_trait]
+impl RemoteApi for Daytona {
+    fn vendor(&self) -> &str { "daytona" }
+    async fn available(&self) -> Result<()> { … }
+    async fn create(&self, plan: &SandboxPlan) -> Result<Sandbox> { … }
+    async fn find(&self, name: &str) -> Result<Option<Sandbox>> { … }
+    async fn kill(&self, id: &str) -> Result<()> { … }
+    async fn exec(&self, sandbox: &Sandbox, argv: &[String],
+                  env: &BTreeMap<String, String>) -> Result<ExecResult> { … }
+    async fn read(&self, sandbox: &Sandbox, path: &str) -> Result<Vec<u8>> { … }
+    async fn write(&self, sandbox: &Sandbox, path: &str, bytes: &[u8]) -> Result<()> { … }
+}
+
+let (machine, profile) = remote::pair(Arc::new(Daytona::new()?), Arc::new(X11Profile));
+
+let computer = Computer::builder()
+    .machine(Arc::new(machine))
+    .profile(profile)
+    .image("your-snapshot")
+    .launch()
+    .await?;
+```
+
+`RemoteMachine` supplies what every vendor does the same way: holding what this process started, pushing a deadline out lazily rather than once per click, joining the name you gave a box to the ID the vendor gave it so a sweep can find it. `RemoteProfile` rewrites the viewer URL and withdraws the DevTools claim. Five more calls — `keep_alive`, `logs`, `carrying`, `reaper`, `ensure_image` — have defaults, and each default is the honest answer for a vendor without the thing.
+
+Ports are the part to get right. These vendors do not forward a port to a host port; each publishes it at an address of its own, so `Sandbox::endpoints` carries a URL per port and a port missing from it has no URL at all. `published_as` formats the `<port>-<id>.<domain>` shape that E2B and Daytona use; Modal hands back a tunnel per port, which goes into the map directly.
+
+```bash
+cargo run --example custom_sandbox
+```
+
+That example is a whole vendor in one file, backed by `docker` on this host so every call can be watched working before you write the same one against an API you cannot see. `computer::testing::ScriptedRemote` tests an adapter with no account and no network.
+
+Modal is the awkward one worth naming: its sandbox control plane is gRPC behind a Python API, so the calls go to a small Modal web endpoint of your own that creates the sandbox and returns its ID and tunnel URLs. The `RemoteApi` above it is then ordinary HTTP.
+
+[`docs/runtimes/other-sandboxes.md`](docs/runtimes/other-sandboxes.md) is the guide, and `sandboxes::e2b` is the worked reference — it predates the seam and implements `Machine` directly.
+
 ## Remove desktops that outlived their program
 
 A desktop given a deadline records it on itself as a label, so a sweeper can find one whose program stopped before it could clean up:
@@ -812,6 +856,7 @@ cargo run --example demo -- media/demo.gif
 cargo run --example live_desktop
 cargo run --example custom_image
 cargo run --example microvm
+cargo run --example custom_sandbox
 cargo run --features e2b --example e2b -- <template-id>
 cargo run --features e2b --example e2b_takeover -- <template-id>
 ```
@@ -834,6 +879,7 @@ cargo run --features e2b --example e2b_takeover -- <template-id>
 | `live_desktop` | Test the image with a real container                 |
 | `custom_image` | Build your own image and drive a box in it           |
 | `microvm`      | Run the desktop with microsandbox                    |
+| `custom_sandbox` | Write a sandbox vendor of your own                 |
 | `e2b`          | Run the desktop in an E2B cloud sandbox              |
 | `e2b_takeover` | Give an E2B desktop to a person                       |
 
