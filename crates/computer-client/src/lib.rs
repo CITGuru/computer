@@ -8,6 +8,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::*;
 use computer_types::{Placement, Point, Selection, Spec};
+use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -172,7 +173,6 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// Act on the element a query names.
     pub async fn on_element(&self, id: &str, what: &OnElement) -> Result<ElementResult> {
         self.send(
             reqwest::Method::POST,
@@ -216,6 +216,56 @@ impl Client {
         .await
     }
 
+    pub async fn arrange_window(
+        &self,
+        id: &str,
+        screen: u32,
+        window: &str,
+        how: Arrange,
+    ) -> Result<Window> {
+        self.send(
+            reqwest::Method::POST,
+            &format!(
+                "/v1/boxes/{id}/screens/{screen}/windows/{}/arrange",
+                query_value(window)
+            ),
+            Some(serde_json::to_value(how).map_err(|error| Error::Transport(error.to_string()))?),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn active_window(&self, id: &str, screen: u32) -> Result<Option<Window>> {
+        self.send(
+            reqwest::Method::GET,
+            &format!("/v1/boxes/{id}/screens/{screen}/windows/active"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn wait_for_window(
+        &self,
+        id: &str,
+        screen: u32,
+        class: &str,
+        within: Option<Duration>,
+    ) -> Result<Window> {
+        let body = AwaitWindow {
+            class: class.to_string(),
+            within_ms: within.map(|within| within.as_millis() as u64),
+        };
+
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/screens/{screen}/windows/wait"),
+            Some(serde_json::to_value(body).map_err(|error| Error::Transport(error.to_string()))?),
+            &[],
+        )
+        .await
+    }
+
     pub async fn close_window(&self, id: &str, screen: u32, window: &str) -> Result<()> {
         self.nothing(
             reqwest::Method::DELETE,
@@ -245,10 +295,41 @@ impl Client {
     }
 
     pub async fn frame(&self, id: &str, screen: u32, have: Option<&str>) -> Result<Frame> {
-        let path = match have {
-            Some(hash) => format!("/v1/boxes/{id}/screens/{screen}/frame?have={hash}"),
-            None => format!("/v1/boxes/{id}/screens/{screen}/frame"),
+        self.capture(id, screen, &Shot::default(), have).await
+    }
+
+    /// A `Shot` naming nothing is the whole screen at full size, which is what
+    /// `frame` asks for.
+    pub async fn capture(
+        &self,
+        id: &str,
+        screen: u32,
+        shot: &Shot,
+        have: Option<&str>,
+    ) -> Result<Frame> {
+        let mut asked: Vec<String> = Vec::new();
+
+        if let Some(hash) = have {
+            asked.push(format!("have={}", query_value(hash)));
+        }
+        if let Some(window) = &shot.window {
+            asked.push(format!("window={}", query_value(window)));
+        }
+        if let Some(area) = &shot.region {
+            asked.push(format!(
+                "x={}&y={}&width={}&height={}",
+                area.at.x, area.at.y, area.width, area.height
+            ));
+        }
+        if let Some(scale) = shot.scale {
+            asked.push(format!("scale={scale}"));
+        }
+
+        let path = match asked.is_empty() {
+            true => format!("/v1/boxes/{id}/screens/{screen}/frame"),
+            false => format!("/v1/boxes/{id}/screens/{screen}/frame?{}", asked.join("&")),
         };
+
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 

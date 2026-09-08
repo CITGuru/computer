@@ -5,8 +5,8 @@
 //! a server to remember anything — a trace, and the fork built on one — are not
 //! here.
 
-use crate::{flag, positional, present};
-use computer::{Button, Computer, Point};
+use crate::{flag, framing, positional, present, wheel};
+use computer::{Button, Computer, Delta, Point};
 use std::time::Duration;
 
 pub async fn attach(args: &[String]) -> computer::Result<Computer> {
@@ -79,9 +79,9 @@ pub async fn list() -> computer::Result<()> {
 
 pub async fn shot(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
-    let out = args.get(1).map(String::as_str).unwrap_or("screen.png");
+    let out = crate::remote::named(args).unwrap_or("screen.png");
 
-    let frame = computer.screenshot().await?;
+    let frame = computer.capture(&framing(args)?).await?;
     tokio::fs::write(out, &frame)
         .await
         .map_err(|error| computer::Error::denied(format!("{out}: {error}")))?;
@@ -121,7 +121,65 @@ pub async fn click(args: &[String]) -> computer::Result<()> {
         _ => Button::Left,
     };
 
-    computer.click(Point::new(x, y), button).await
+    computer
+        .click_with(Point::new(x, y), button, &modifiers(args)?)
+        .await
+}
+
+/// `--held shift,ctrl`, in the same spellings a chord takes.
+fn modifiers(args: &[String]) -> computer::Result<Vec<computer::Held>> {
+    let Some(given) = flag(args, "--held") else {
+        return Ok(Vec::new());
+    };
+
+    given
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            computer::Held::named(word)
+                .ok_or_else(|| computer::Error::denied(format!("no such modifier: {word}")))
+        })
+        .collect()
+}
+
+pub async fn scroll(args: &[String]) -> computer::Result<()> {
+    let computer = attach(args).await?;
+    let turn = wheel(args.get(1..).unwrap_or_default())?;
+
+    let at = match turn.at {
+        Some((x, y)) => Point::new(x, y),
+        None => {
+            let (width, height) = computer.primary().geometry().await?;
+            Point::new(width / 2, height / 2)
+        }
+    };
+
+    computer
+        .scroll(
+            at,
+            Delta {
+                dx: turn.dx,
+                dy: turn.dy,
+            },
+        )
+        .await
+}
+
+pub async fn still(args: &[String]) -> computer::Result<()> {
+    let computer = attach(args).await?;
+    let ms = |name, fallback| -> computer::Result<Duration> {
+        match flag(args, name) {
+            None => Ok(Duration::from_millis(fallback)),
+            Some(given) => given.parse().map(Duration::from_millis).map_err(|_| {
+                computer::Error::denied(format!("{name} takes milliseconds: {given}"))
+            }),
+        }
+    };
+
+    computer
+        .wait_until_still(ms("--settle", 400)?, ms("--within", 10_000)?)
+        .await
 }
 
 pub async fn clip(args: &[String]) -> computer::Result<()> {

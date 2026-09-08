@@ -14,7 +14,6 @@ use std::time::Duration;
 
 const FRAMES: &str = "/tmp/demo";
 
-/// One step of the drive: what to call it, and what it does.
 struct Step {
     caption: &'static str,
     settle: u64,

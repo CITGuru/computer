@@ -256,7 +256,7 @@ mod tests {
 
 /// Top-left origin, device pixels, and the same coordinates the frame came
 /// back in — a click against a scaled screenshot lands somewhere else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Point {
     pub x: u32,
     pub y: u32,
@@ -293,4 +293,101 @@ pub enum Selection {
     #[default]
     Clipboard,
     Primary,
+}
+
+impl Selection {
+    /// The name `xclip` takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Clipboard => "clipboard",
+            Self::Primary => "primary",
+        }
+    }
+}
+
+/// Shift-click extends a selection, ctrl-click adds to one, alt-drag moves a
+/// window. No amount of pressing the key first fakes one: the press ends with
+/// the command that made it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Held {
+    Shift,
+    Ctrl,
+    Alt,
+    Super,
+}
+
+impl Held {
+    /// The same spellings the chord parser takes, so a caller does not learn
+    /// two vocabularies for one key.
+    pub fn named(word: &str) -> Option<Self> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "shift" => Some(Self::Shift),
+            "ctrl" | "control" => Some(Self::Ctrl),
+            "alt" | "option" => Some(Self::Alt),
+            "meta" | "cmd" | "command" | "super" | "win" => Some(Self::Super),
+            _ => None,
+        }
+    }
+
+    pub fn keysym(self) -> &'static str {
+        match self {
+            Self::Shift => "shift",
+            Self::Ctrl => "ctrl",
+            Self::Alt => "alt",
+            Self::Super => "super",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rect {
+    pub at: Point,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Rect {
+    pub const fn new(at: Point, width: u32, height: u32) -> Self {
+        Self { at, width, height }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Window {
+    /// An X11 window id, or a sway container id.
+    pub id: String,
+    /// What the title bar says, which moves: a text editor's becomes the name
+    /// of the file the moment one is saved.
+    pub title: String,
+    /// What the program calls itself, which does not. The thing to match on
+    /// when looking for an application rather than for a document.
+    #[serde(default)]
+    pub class: String,
+    /// Its top-left corner, not its middle.
+    #[serde(default)]
+    pub at: Point,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "how", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Arrange {
+    /// Put its top-left corner here.
+    At {
+        to: Point,
+    },
+    Size {
+        width: u32,
+        height: u32,
+    },
+    Maximise,
+    /// Out of the way without closing it. Sway has no such state, so there it
+    /// is the scratchpad, which `Restore` brings it back from.
+    Minimise,
+    Restore,
 }

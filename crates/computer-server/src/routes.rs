@@ -20,10 +20,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use computer::{
-    Button as EngineButton, Delta, Desktop as EngineDesktop, Point as EnginePoint,
-    Selection as EngineSelection,
-};
+use computer::{Delta, Desktop as EngineDesktop};
 use computer_api::*;
 use computer_types::Spec;
 use serde::Deserialize;
@@ -64,6 +61,12 @@ const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
 /// across a settle and across a wait, so an uncapped one from a single caller
 /// is a screen no other request can reach again.
 const MAX_PAUSE: Duration = Duration::from_secs(30);
+
+/// How long a screen has to hold still before a `wait_still` calls it settled,
+/// and how long it may go on waiting. Both are clamped by [`MAX_PAUSE`], so a
+/// caller cannot hold the screen lock for the length of a lease.
+const SETTLE: u64 = 400;
+const STILL: u64 = 10_000;
 /// A ceiling on a command's own limit, above the engine's two-minute default
 /// but short of holding a connection open indefinitely.
 const MAX_EXEC: Duration = Duration::from_secs(600);
@@ -92,8 +95,20 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/screens/{screen}/viewers", get(viewers))
         .route("/v1/boxes/{id}/screens/{screen}/windows", get(list_windows))
         .route(
+            "/v1/boxes/{id}/screens/{screen}/windows/active",
+            get(active_window),
+        )
+        .route(
+            "/v1/boxes/{id}/screens/{screen}/windows/wait",
+            post(await_window),
+        )
+        .route(
             "/v1/boxes/{id}/screens/{screen}/windows/{window}/focus",
             post(focus_window),
+        )
+        .route(
+            "/v1/boxes/{id}/screens/{screen}/windows/{window}/arrange",
+            post(arrange_window),
         )
         .route(
             "/v1/boxes/{id}/screens/{screen}/windows/{window}",
@@ -311,7 +326,7 @@ async fn actions(
     };
 
     let cursor = if batch.want.contains(&Want::Cursor) {
-        desktop.cursor().await.ok().map(point_out)
+        desktop.cursor().await.ok()
     } else {
         None
     };
@@ -338,27 +353,30 @@ async fn run(
     page: &mut Option<computer::Page>,
 ) -> ApiResult<Option<Window>> {
     match action {
-        Action::Move { to } => desktop.move_to(point_in(*to)).await?,
-        Action::Click { at, button } => {
-            let at = at.map(point_in).unwrap_or(desktop.cursor().await?);
-            desktop.click(at, button_in(*button)).await?;
+        Action::Move { to } => desktop.move_to(*to).await?,
+        Action::Click { at, button, held } => {
+            let at = match at {
+                Some(at) => *at,
+                None => desktop.cursor().await?,
+            };
+            desktop.click_with(at, *button, held).await?;
         }
         Action::DoubleClick { at, button } => {
-            let at = at.map(point_in).unwrap_or(desktop.cursor().await?);
-            desktop.double_click(at, button_in(*button)).await?;
+            let at = match at {
+                Some(at) => *at,
+                None => desktop.cursor().await?,
+            };
+            desktop.double_click(at, *button).await?;
         }
-        Action::Drag { from, to, button } => {
-            desktop
-                .drag(point_in(*from), point_in(*to), button_in(*button))
-                .await?
-        }
+        Action::Drag {
+            from,
+            to,
+            button,
+            held,
+        } => desktop.drag_with(*from, *to, *button, held).await?,
         Action::Type { text } => desktop.type_text(text).await?,
         Action::Key { chord } => desktop.key(chord).await?,
-        Action::Scroll { at, dx, dy } => {
-            desktop
-                .scroll(point_in(*at), Delta { dx: *dx, dy: *dy })
-                .await?
-        }
+        Action::Scroll { at, dx, dy } => desktop.scroll(*at, Delta { dx: *dx, dy: *dy }).await?,
         Action::OpenUrl { url } => {
             let screen = screen.ok_or_else(|| {
                 ApiError::bad_request("this screen has no browser to open a page in")
@@ -377,6 +395,15 @@ async fn run(
             }
         }
         Action::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms).min(MAX_PAUSE)).await,
+        Action::WaitStill {
+            settle_ms,
+            within_ms,
+        } => {
+            let settle = Duration::from_millis(settle_ms.unwrap_or(SETTLE)).min(MAX_PAUSE);
+            let within = Duration::from_millis(within_ms.unwrap_or(STILL)).min(MAX_PAUSE);
+
+            desktop.wait_until_still(settle, within).await?
+        }
         Action::OnPage { what } => {
             if page.is_none() {
                 let browser = browser
@@ -417,20 +444,63 @@ async fn run(
                 })
                 .await?;
 
-            return Ok(Some(Window {
-                id: window.id,
-                title: window.title,
-            }));
+            return Ok(Some(window));
         }
     }
 
     Ok(None)
 }
 
+/// Flat rather than nested, because this is a GET and a query string has no
+/// shape: `?window=42&scale=50`.
 #[derive(Debug, Deserialize)]
 struct FrameQuery {
     #[serde(default)]
     have: Option<String>,
+    #[serde(default)]
+    window: Option<String>,
+    #[serde(default)]
+    x: Option<u32>,
+    #[serde(default)]
+    y: Option<u32>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
+    #[serde(default)]
+    scale: Option<u32>,
+}
+
+impl FrameQuery {
+    fn shot(&self) -> ApiResult<Shot> {
+        let region = match (self.x, self.y, self.width, self.height) {
+            (None, None, None, None) => None,
+            (Some(x), Some(y), Some(width), Some(height)) => Some(Rect {
+                at: Point { x, y },
+                width,
+                height,
+            }),
+            // Half a rectangle would otherwise be read as a corner and a
+            // guess, and answered with a picture of the wrong thing.
+            _ => {
+                return Err(ApiError::bad_request(
+                    "a region takes x, y, width and height together",
+                ));
+            }
+        };
+
+        if region.is_some() && self.window.is_some() {
+            return Err(ApiError::bad_request(
+                "a capture is of a window or of a region, not both",
+            ));
+        }
+
+        Ok(Shot {
+            window: self.window.clone(),
+            region,
+            scale: self.scale,
+        })
+    }
 }
 
 async fn frame(
@@ -438,20 +508,50 @@ async fn frame(
     ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiQuery(query): ApiQuery<FrameQuery>,
 ) -> ApiResult<Json<Frame>> {
+    // Before the box is looked up: a query that does not make sense is a bad
+    // request whether or not the box behind it is there.
+    let shot = query.shot()?;
+
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
 
+    let png = match shot.is_whole() {
+        true => target.as_desktop().screenshot().await?,
+        // Everything narrower goes through the screen, which is where a
+        // window becomes a rectangle and where the sizes are checked.
+        false => {
+            let held = target
+                .as_screen()
+                .ok_or_else(|| ApiError::bad_request("this screen cannot be captured in part"))?;
+
+            held.capture(&shot_in(&shot)).await?
+        }
+    };
+
     let trace = state.traces.of(&id);
-    let frame = capture(
+
+    Ok(Json(recorded(
         &trace,
         Actor::Agent,
         screen,
-        target.as_desktop(),
+        png,
         query.have.as_deref(),
-    )
-    .await?;
+    )))
+}
 
-    Ok(Json(frame))
+fn shot_in(shot: &Shot) -> computer::Shot {
+    let of = match (&shot.window, &shot.region) {
+        (Some(window), _) => computer::Of::Window(window.clone()),
+        (None, Some(area)) => {
+            computer::Of::Region(computer::Rect::new(area.at, area.width, area.height))
+        }
+        _ => computer::Of::Screen,
+    };
+
+    computer::Shot {
+        of,
+        scale: shot.scale,
+    }
 }
 
 /// A desktop is mostly still between steps, so a caller already holding this
@@ -465,6 +565,11 @@ async fn capture(
 ) -> ApiResult<Frame> {
     let png = desktop.screenshot().await?;
 
+    Ok(recorded(trace, actor, screen, png, have))
+}
+
+/// Left out altogether when the caller already holds it.
+fn recorded(trace: &Trace, actor: Actor, screen: u32, png: Vec<u8>, have: Option<&str>) -> Frame {
     let mut hasher = Sha256::new();
     hasher.update(&png);
     let hash = format!("{:x}", hasher.finalize());
@@ -472,18 +577,18 @@ async fn capture(
     trace.note_frame(actor, screen, &hash, &png);
 
     if have == Some(hash.as_str()) {
-        return Ok(Frame {
+        return Frame {
             hash,
             unchanged: true,
             png_base64: None,
-        });
+        };
     }
 
-    Ok(Frame {
+    Frame {
         hash,
         unchanged: false,
         png_base64: Some(BASE64.encode(&png)),
-    })
+    }
 }
 
 async fn cursor(
@@ -493,7 +598,7 @@ async fn cursor(
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
 
-    Ok(Json(point_out(target.as_desktop().cursor().await?)))
+    Ok(Json(target.as_desktop().cursor().await?))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -513,7 +618,7 @@ async fn get_clipboard(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen has no clipboard"))?;
 
-    let text = held.selection(selection_in(query.selection)).await?;
+    let text = held.selection(query.selection).await?;
 
     state.traces.of(&id).record(
         Actor::Agent,
@@ -537,8 +642,7 @@ async fn set_clipboard(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen has no clipboard"))?;
 
-    held.set_selection(selection_in(body.selection), &body.text)
-        .await?;
+    held.set_selection(body.selection, &body.text).await?;
 
     state.traces.of(&id).record(
         Actor::Agent,
@@ -1264,17 +1368,7 @@ async fn list_windows(
         .as_screen()
         .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
 
-    Ok(Json(
-        screen
-            .windows()
-            .await?
-            .into_iter()
-            .map(|window| Window {
-                id: window.id,
-                title: window.title,
-            })
-            .collect(),
-    ))
+    Ok(Json(screen.windows().await?.into_iter().collect()))
 }
 
 /// Untraced: a replay against a fork whose windows opened in another order
@@ -1305,6 +1399,49 @@ async fn close_window(
 
     screen.close_window(&window).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn arrange_window(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen, window)): ApiPath<(String, u32, String)>,
+    ApiJson(how): ApiJson<Arrange>,
+) -> ApiResult<Json<Window>> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let screen = target
+        .as_screen()
+        .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
+
+    Ok(Json(screen.arrange(&window, how).await?))
+}
+
+async fn active_window(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+) -> ApiResult<Json<Option<Window>>> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let screen = target
+        .as_screen()
+        .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
+
+    Ok(Json(screen.active_window().await?))
+}
+
+async fn await_window(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+    ApiJson(body): ApiJson<AwaitWindow>,
+) -> ApiResult<Json<Window>> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let screen = target
+        .as_screen()
+        .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
+
+    let within = Duration::from_millis(body.within_ms.unwrap_or(computer::apps::READY_MS));
+
+    Ok(Json(screen.wait_for_window(&body.class, within).await?))
 }
 
 /// So an agent reads the names rather than guessing one and meeting a 400.
@@ -1437,30 +1574,4 @@ fn new_id() -> String {
         id.push_str(&format!("{byte:02x}"));
     }
     id
-}
-
-fn point_in(point: Point) -> EnginePoint {
-    EnginePoint::new(point.x, point.y)
-}
-
-fn point_out(point: EnginePoint) -> Point {
-    Point {
-        x: point.x,
-        y: point.y,
-    }
-}
-
-fn button_in(button: Button) -> EngineButton {
-    match button {
-        Button::Left => EngineButton::Left,
-        Button::Right => EngineButton::Right,
-        Button::Middle => EngineButton::Middle,
-    }
-}
-
-fn selection_in(selection: Selection) -> EngineSelection {
-    match selection {
-        Selection::Clipboard => EngineSelection::Clipboard,
-        Selection::Primary => EngineSelection::Primary,
-    }
 }

@@ -6,8 +6,7 @@
 
 ## Documentation
 
-Read the [public guide](https://citguru.github.io/computer/) for the full
-documentation. Its source is in [`docs/`](docs/index.md).
+Read the [public guide](https://citguru.github.io/computer/) for the full documentation. Its source is in [`docs/`](docs/index.md).
 
 - [get started](docs/getting-started/rust.md);
 - [control the desktop](docs/guides/desktop.md);
@@ -101,10 +100,22 @@ computer.drag((100, 100), (400, 300), Button::Left).await?;
 computer.type_text("hello").await?;
 computer.key("ctrl+shift+p").await?;
 computer.scroll((640, 400), Delta::down(3)).await?;
+computer.scroll((640, 400), Delta::right(3)).await?;
 let pointer = computer.cursor().await?;
 ```
 
 Common key names work as expected. For example, the crate converts `enter` to `Return`, `cmd` to `super`, and `pageup` to `Prior`. Other names pass directly to `xdotool`.
+
+`scroll` turns the wheel at a point, in notches, so whatever sits under that point moves rather than whatever holds focus. Positive `dy` goes down and positive `dx` goes right; a `Delta` carrying both is one diagonal gesture and not two.
+
+From the command line the same gesture has a shorter spelling, and the point is optional:
+
+```bash
+computer scroll <box> down            # three notches, at the middle of the screen
+computer scroll <box> right 6
+computer scroll <box> 640 400 up 2    # at a point
+computer scroll <box> 640 400 -2 -2   # both axes at once
+```
 
 ### Important coordinate rules
 
@@ -371,9 +382,7 @@ LABEL computer.profile="computer-desktop"
 ```
 
 ```
-Denied: computer-local:905f378b… implements the computer-wayland contract and
-this box is driven by computer-desktop: the commands would go in and the screen
-would not move
+Denied: computer-local:905f378b… implements the computer-wayland contract and this box is driven by computer-desktop: the commands would go in and the screen would not move
 ```
 
 An image that declares nothing is not refused — your own image owes this crate no label. Without one, a mismatch surfaces ninety seconds later as a display that never came up, which points at the display server rather than at the pairing.
@@ -405,9 +414,7 @@ Whatever you leave alone comes from the base contract, so a custom image does no
 
 ### Carry a login between boxes
 
-A box is thrown away, and everything it was logged into goes with it. A session
-is what a login leaves behind — cookies and local storage — and it can be taken
-out of one box and put into another:
+A box is thrown away, and everything it was logged into goes with it. A session is what a login leaves behind — cookies and local storage — and it can be taken out of one box and put into another:
 
 ```rust
 let origins = ["https://example.com".to_string()];
@@ -417,12 +424,9 @@ let session = browser.export_session(&origins, Carry::default()).await?;
 let tabs = browser.import_session(&session).await?;
 ```
 
-Named origins only. What comes out belongs to one of them, and what goes back
-in is checked against the list it came with, so a session for one site can
-never be put into another.
+Named origins only. What comes out belongs to one of them, and what goes back in is checked against the list it came with, so a session for one site can never be put into another.
 
-`Carry` says what to take. Cookies and local storage by default, because that
-is where a login normally is:
+`Carry` says what to take. Cookies and local storage by default, because that is where a login normally is:
 
 ```rust
 Carry::default()                                     // cookies + local storage
@@ -431,43 +435,25 @@ Carry { local_storage: false, ..Carry::default() }   // cookies alone
 Carry::all()
 ```
 
-`indexed_db` is where Firebase keeps a login, so without it those sites come
-back signed out. It carries only what survives being written as JSON — a value
-holding a blob is left, and named in `session.incomplete` rather than lost
-quietly.
+`indexed_db` is where Firebase keeps a login, so without it those sites come back signed out. It carries only what survives being written as JSON — a value holding a blob is left, and named in `session.incomplete` rather than lost quietly.
 
-`session_storage` belongs to a **tab**, not to a browser. It is read from a tab
-already open on that origin, and `import_session` hands back the tabs it put it
-into, because one restored into a tab nobody keeps is one nobody has. A site
-that uses it has also decided the login should die with the tab, which is why
-it is asked for rather than assumed.
+`session_storage` belongs to a **tab**, not to a browser. It is read from a tab already open on that origin, and `import_session` hands back the tabs it put it into, because one restored into a tab nobody keeps is one nobody has. A site that uses it has also decided the login should die with the tab, which is why it is asked for rather than assumed.
 
-The profile directory is deliberately not what moves: it is about a third of a
-gigabyte, tied to the Chromium build that wrote it, and carries a browser's
-whole history besides.
+The profile directory is deliberately not what moves: it is about a third of a gigabyte, tied to the Chromium build that wrote it, and carries a browser's whole history besides.
 
 ### Keep the whole browser instead
 
-Where a session is not enough — a database too large to write as JSON, a key a
-page will not hand over — keep the profile itself:
+Where a session is not enough — a database too large to write as JSON, a key a page will not hand over — keep the profile itself:
 
 ```rust
-Computer::builder().profiles("chinasa-work").launch().await?;
+Computer::builder().profiles("toby-work").launch().await?;
 ```
 
-A named volume, which Docker keeps when a box is removed, so two boxes given
-the same name are the same browser. Everything comes with it: logins, history,
-extensions, and whatever a session cannot carry.
+A named volume, which Docker keeps when a box is removed, so two boxes given the same name are the same browser. Everything comes with it: logins, history, extensions, and whatever a session cannot carry.
 
-The trade against a session is where it can go. A session is data a caller can
-put anywhere; a volume never leaves this host. And one box at a time per name,
-because two browsers sharing a profile directory is how one gets corrupted.
+The trade against a session is where it can go. A session is data a caller can put anywhere; a volume never leaves this host. And one box at a time per name, because two browsers sharing a profile directory is how one gets corrupted.
 
-**A session is the account.** A password may sit behind a second factor; a
-session has already passed one, so whoever holds this is the user. `Session`
-has no `Display`, and its `Debug` prints counts rather than contents, so it
-does not reach a log by accident — but where it is kept, and what encrypts it,
-is the caller's to decide.
+**A session is the account.** A password may sit behind a second factor; a session has already passed one, so whoever holds this is the user.
 
 ### Attach to a running desktop
 
@@ -501,6 +487,95 @@ Control port:  6081 + 2N    accepts input
 The crate does not use display `:0`. On a host with a physical display, `:0` usually belongs to that display.
 
 Each screen has separate view and control servers. Opening a read-only viewer does not give that viewer control.
+
+## See what is on the screen
+
+A window says what it is and where, so a caller does not have to work either
+out of a screenshot:
+
+```rust
+for window in computer.primary().windows().await? {
+    println!("{} {}x{} at {},{}", window.class, window.width, window.height,
+             window.at.x, window.at.y);
+}
+```
+
+```text
+Chromium   1280x800 at 0,0
+XTerm      484x316 at 1,55
+Thunar     640x480 at 1,404
+```
+
+**Match on the class, not the title.** A title moves with the open document — Untitled 1 - Mousepad` becomes `notes.txt - Mousepad` the moment one is saved.
+
+## Move a window, and wait for one
+
+A window can be put where it is wanted, and each call answers with the window as it ended up:
+
+```rust
+let screen = computer.primary();
+
+screen.arrange(&window.id, Arrange::Size { width: 800, height: 600 }).await?;
+screen.arrange(&window.id, Arrange::At(Point::new(120, 90))).await?;
+
+let full = screen.arrange(&window.id, Arrange::Maximise).await?;
+println!("{}x{}", full.width, full.height);
+```
+
+The answer is the truth rather than the request: a window manager clamps a move to the screen, honours a resize only within the size hints the program gave it, and ignores both on a window whose place it owns.
+
+`active_window()` says which window typing would reach. `wait_for_window()` waits for one to appear and stop moving, which is what to do about the dialog a click raised:
+
+```rust
+let dialog = screen.wait_for_window("Mousepad", Duration::from_secs(10)).await?;
+```
+
+It waits for the window to settle where it is, not for it to finish drawing: a dialog with a caret blinking in it never stops drawing. `launch` is the one that waits for paint.
+
+## Capture part of a screen
+
+A screenshot is the whole screen at full size. `capture` narrows it to one window or one rectangle, and shrinks what comes back:
+
+```rust
+let screen = computer.primary();
+
+let region = screen.capture(&Shot::region(Rect::new(Point::new(100, 80), 400, 300))).await?;
+let one    = screen.capture(&Shot::window(&window.id)).await?;
+let small  = screen.capture(&Shot::window(&window.id).scaled(50)).await?;
+```
+
+A window is looked up when the capture is taken, not when it was listed — a window moves, and a picture of where it used to be is a picture of whatever took its place.
+
+`scaled` is a percentage of full size. It is what stops an agent paying for a megabyte on every step: a 1280×800 desktop halves to about two thirds of the bytes with the text still readable, and quarters to a third of them. On X11 the reduction averages pixels rather than interpolating, because blurring flat colours into gradients makes a *larger* PNG than the full-size picture it was meant to save.
+
+```bash
+computer shot <box> out.png --window 42 --scale 50
+computer shot <box> out.png --at 100,80 --size 400x300
+```
+
+## Hold a modifier, and wait for the drawing to stop
+
+Shift-click extends a selection, ctrl-click adds to one. Pressing the key first does not do it — that press ends with the command that made it, so the click which follows arrives unmodified:
+
+```rust
+screen.click_with(at, Button::Left, &[Held::Shift]).await?;
+screen.drag_with(from, to, Button::Left, &[Held::Ctrl]).await?;
+```
+
+`wait_until_still` is what to do instead of guessing at a sleep — after a menu opens, a dialog draws, or a page paints:
+
+```rust
+screen.wait_until_still(Duration::from_millis(400), Duration::from_secs(10)).await?;
+```
+
+The watch runs inside the box, so it costs one round trip however long it waits. A screen with something animating on it never settles and reaches the deadline instead, which is why one is asked for.
+
+```bash
+computer click <box> 640 400 left --held shift,ctrl
+computer still <box> --settle 400 --within 10000
+```
+
+Modifiers are X11 only. Holding a key across a click on Wayland needs a virtual keyboard that this image's pointer does not make, so the Wayland driver refuses rather than dropping the modifier and clicking anyway.
 
 ## Give control to a person
 

@@ -88,7 +88,6 @@ pub trait MicroVmApi: Send + Sync {
         self.write(name, to, &bytes).await
     }
 
-    /// Move a whole file out the same way.
     async fn copy_out(&self, name: &str, from: &str, to: &Path) -> Result<()> {
         let bytes = self.read(name, from).await?;
         tokio::fs::write(to, bytes)

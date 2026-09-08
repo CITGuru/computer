@@ -2,10 +2,11 @@ use super::{ImageSource, Profile};
 use crate::image;
 use crate::machine::MachineHost;
 use crate::{
-    Address, DesktopFactory, DesktopSupport, Error, ExecResult, PortLayout, Result, ScreenAction,
-    ScreenId, Secret, Viewers,
+    Address, DesktopFactory, DesktopSupport, Error, ExecResult, Point, PortLayout, Result,
+    ScreenAction, ScreenId, Secret, Viewers,
 };
 use async_trait::async_trait;
+pub use computer_types::{Arrange, Window};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -98,7 +99,6 @@ impl BrowserRuntime for CommandBrowserRuntime {
     }
 }
 
-/// Change one running screen's wallpaper.
 #[async_trait]
 pub trait WallpaperRuntime: Send + Sync {
     async fn set(
@@ -161,7 +161,6 @@ impl WallpaperRuntime for CommandWallpaperRuntime {
     }
 }
 
-/// The built-in X11 wallpaper setter.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct X11WallpaperRuntime;
 
@@ -180,7 +179,6 @@ impl WallpaperRuntime for X11WallpaperRuntime {
     }
 }
 
-/// The built-in Wayland wallpaper setter.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WaylandWallpaperRuntime;
 
@@ -246,13 +244,6 @@ impl WallpaperRuntime for UnsupportedWallpaperRuntime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Window {
-    /// An X11 window id, or a sway container id.
-    pub id: String,
-    pub title: String,
-}
-
 /// Starting programs on a screen, and finding what they drew.
 ///
 /// A mapped window is not a drawn one: GIMP maps a splash carrying its own
@@ -300,6 +291,38 @@ pub trait AppRuntime: Send + Sync {
         screen: ScreenId,
         window: &str,
     ) -> Result<()>;
+
+    /// Answers with the window as it ended up, which is not always what was
+    /// asked for: a window manager clamps a move to the screen, and honours a
+    /// resize only within the size hints the program gave it.
+    async fn arrange(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+        how: Arrange,
+    ) -> Result<Window>;
+
+    async fn active(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Option<Window>>;
+
+    /// Waits for the window to stop moving rather than to stop drawing: what
+    /// a caller waits for here usually has a caret blinking in it, and that
+    /// never holds still.
+    async fn wait_for_window(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        class: &str,
+        settle: Duration,
+        within: Duration,
+    ) -> Result<Window>;
 
     fn supported(&self) -> Result<()> {
         Ok(())
@@ -350,6 +373,38 @@ impl AppRuntime for UnsupportedAppRuntime {
         self.supported()
     }
 
+    async fn arrange(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _window: &str,
+        _how: Arrange,
+    ) -> Result<Window> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn active(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+    ) -> Result<Option<Window>> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn wait_for_window(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _class: &str,
+        _settle: Duration,
+        _within: Duration,
+    ) -> Result<Window> {
+        Err(self.supported().unwrap_err())
+    }
+
     fn supported(&self) -> Result<()> {
         Err(Error::Unsupported { gaps: vec!["apps"] })
     }
@@ -359,16 +414,30 @@ impl AppRuntime for UnsupportedAppRuntime {
 pub struct X11AppRuntime;
 
 impl X11AppRuntime {
+    /// The picture the window is showing, which separates a drawn window from
+    /// an empty one: VS Code maps its real window and paints a second later.
+    const DRAWN: &'static str =
+        r#"$(import -window $id png:- 2>/dev/null | cksum | cut -d' ' -f1)"#;
+
+    /// Where the window is and how big, which is all that can be asked of a
+    /// window that draws forever: a caret blinking in a dialog never lets its
+    /// picture hold still.
+    const PLACED: &'static str =
+        r#"$(xdotool getwindowgeometry --shell $id 2>/dev/null | tr '\n' ' ')"#;
+
     /// The whole wait, as one command in the box: a loop out here would pay a
     /// container exec per probe.
     ///
-    /// The window type separates a program from its splash, and the hash a
-    /// drawn window from an empty one. A window declaring no type is taken as
-    /// ordinary — `xterm` sets none, and requiring it would hide every program
-    /// older than the hint.
-    fn wait_for(class: &str, settle: Duration, within: Duration) -> Vec<String> {
+    /// The window type separates a program from its splash. A window declaring
+    /// no type is taken as ordinary — `xterm` sets none, and requiring it
+    /// would hide every program older than the hint.
+    ///
+    /// `sample` is what has to stop changing, and the two callers want
+    /// different things of it: see [`Self::DRAWN`] and [`Self::PLACED`].
+    fn wait_for(class: &str, settle: Duration, within: Duration, sample: &str) -> Vec<String> {
         let settle_ms = settle.as_millis();
         let within_ms = within.as_millis();
+        let window = x11_window("exit 0");
 
         vec![
             "sh".to_string(),
@@ -384,11 +453,14 @@ while [ $(( $(date +%s%N) / 1000000 )) -lt $end ]; do
   done
   now=$(( $(date +%s%N) / 1000000 ))
   if [ -n "$id" ]; then
-    h=$(import -window $id png:- 2>/dev/null | cksum | cut -d' ' -f1)
+    h={sample}
     if [ "$h" = "$last" ] && [ -n "$h" ]; then
       [ $since -eq 0 ] && since=$now
       if [ $(( now - since )) -ge {settle_ms} ]; then
-        echo "drawn $id $(xdotool getwindowname $id 2>/dev/null)"
+        w=$id
+        line=$({window})
+        [ -n "$line" ] || continue
+        printf 'drawn\t%s\n' "$line"
         exit 0
       fi
     else
@@ -398,6 +470,66 @@ while [ $(( $(date +%s%N) / 1000000 )) -lt $end ]; do
   sleep 0.1
 done
 echo waited"#
+            ),
+        ]
+    }
+
+    /// The pause is fluxbox's: it applies the change on its own event loop,
+    /// and reading straight back answers with the geometry from before it.
+    ///
+    /// A window whose place the manager owns does not move — this image pins
+    /// the browser maximised — and the answer says so by carrying the
+    /// geometry the window kept.
+    fn arranging(window: &str, how: Arrange) -> Vec<String> {
+        // wmctrl rather than xdotool for the two states: the xdotool these
+        // images carry has no `windowstate` verb. It remembers the geometry a
+        // window had before it spread, which is what makes `Restore` mean
+        // something.
+        const SPREAD: &str = "wmctrl -i -r $w -b add,maximized_vert,maximized_horz";
+        const GATHER: &str = "wmctrl -i -r $w -b remove,maximized_vert,maximized_horz";
+
+        let verbs: Vec<String> = match how {
+            // A maximised window is the size the manager gives it, and ignores
+            // a move or a resize until it is not one.
+            Arrange::At { to } => vec![
+                GATHER.to_string(),
+                format!("xdotool windowmove $w {} {}", to.x, to.y),
+            ],
+            Arrange::Size { width, height } => vec![
+                GATHER.to_string(),
+                format!("xdotool windowsize $w {width} {height}"),
+            ],
+            Arrange::Maximise => vec![SPREAD.to_string()],
+            Arrange::Minimise => vec!["xdotool windowminimize $w".to_string()],
+            // Mapping it is how ICCCM says to come back from iconified, and it
+            // leaves the keyboard where it is. Activating would take it.
+            Arrange::Restore => vec!["xdotool windowmap $w".to_string(), GATHER.to_string()],
+        };
+
+        let script: Vec<String> = verbs
+            .iter()
+            .map(|verb| format!("{verb} 2>/dev/null"))
+            .collect();
+
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "w={}\n{}\nsleep 0.15\n{}",
+                shell_word(window),
+                script.join("\n"),
+                x11_window(NO_WINDOW)
+            ),
+        ]
+    }
+
+    fn focused() -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "w=$(xdotool getactivewindow 2>/dev/null) || exit 0\n{}",
+                x11_window("exit 0")
             ),
         ]
     }
@@ -436,17 +568,18 @@ impl AppRuntime for X11AppRuntime {
         CommandScreenRuntime::succeeded(started)?;
 
         let waited = host
-            .run_within(&Self::wait_for(class, settle, within), &env, within + SLACK)
+            .run_within(
+                &Self::wait_for(class, settle, within, Self::DRAWN),
+                &env,
+                within + SLACK,
+            )
             .await?;
 
         let answer = waited.stdout_utf8();
-        let mut words = answer.trim().splitn(3, ' ');
+        let line = answer.trim().strip_prefix("drawn\t");
 
-        match (words.next(), words.next()) {
-            (Some("drawn"), Some(id)) => Ok(Window {
-                id: id.to_string(),
-                title: words.next().unwrap_or_default().to_string(),
-            }),
+        match line.and_then(window_line) {
+            Some(window) => Ok(window),
             _ => Err(Error::Timeout {
                 after: within,
                 detail: format!(
@@ -463,12 +596,7 @@ impl AppRuntime for X11AppRuntime {
         profile: &dyn Profile,
         screen: ScreenId,
     ) -> Result<Vec<Window>> {
-        let argv = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            r#"for w in $(xdotool search --onlyvisible --name . 2>/dev/null); do echo "$w $(xdotool getwindowname $w 2>/dev/null)"; done"#
-                .to_string(),
-        ];
+        let argv = vec!["sh".to_string(), "-c".to_string(), x11_windows()];
         let result = host
             .run_within(&argv, &profile.screen_env(screen), host.timeout())
             .await?;
@@ -476,11 +604,7 @@ impl AppRuntime for X11AppRuntime {
         Ok(result
             .stdout_utf8()
             .lines()
-            .filter_map(|line| line.split_once(' '))
-            .map(|(id, title)| Window {
-                id: id.to_string(),
-                title: title.to_string(),
-            })
+            .filter_map(window_line)
             .collect())
     }
 
@@ -521,6 +645,72 @@ impl AppRuntime for X11AppRuntime {
                 .await?,
         )
     }
+
+    async fn arrange(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+        how: Arrange,
+    ) -> Result<Window> {
+        let argv = Self::arranging(window, how);
+        let result = host
+            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        let answer = result.stdout_utf8();
+        CommandScreenRuntime::succeeded(result)?;
+
+        window_line(answer.trim())
+            .ok_or_else(|| Error::invalid(format!("window {window} said nothing back")))
+    }
+
+    async fn active(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Option<Window>> {
+        let result = host
+            .run_within(
+                &Self::focused(),
+                &profile.screen_env(screen),
+                host.timeout(),
+            )
+            .await?;
+
+        Ok(window_line(result.stdout_utf8().trim()))
+    }
+
+    async fn wait_for_window(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        class: &str,
+        settle: Duration,
+        within: Duration,
+    ) -> Result<Window> {
+        let waited = host
+            .run_within(
+                &Self::wait_for(class, settle, within, Self::PLACED),
+                &profile.screen_env(screen),
+                within + SLACK,
+            )
+            .await?;
+
+        let answer = waited.stdout_utf8();
+
+        answer
+            .trim()
+            .strip_prefix("drawn\t")
+            .and_then(window_line)
+            .ok_or_else(|| Error::Timeout {
+                after: within,
+                detail: format!("no window of class {class} came up"),
+            })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -558,12 +748,25 @@ for n in walk(json.load(sys.stdin)):
     if w<1 or h<1:
         continue
     if best is None or w*h>best[0]:
-        best=(w*h,n['id'],r.get('x') or 0,r.get('y') or 0,w,h)
+        cls = n.get('app_id') or props.get('class') or ''
+        best=(w*h,n['id'],r.get('x') or 0,r.get('y') or 0,w,h,cls,n.get('name') or '')
 if best:
-    print(best[1],best[2],best[3],best[4],best[5])
+    print('\t'.join(str(f) for f in best[1:]))
 "#;
 
-    fn wait_for(screen: ScreenId, class: &str, settle: Duration, within: Duration) -> Vec<String> {
+    /// The picture the window is showing: a mapped window is not a drawn one.
+    const DRAWN: &'static str = r#"$(grim -g "$2,$3 $4x$5" - 2>/dev/null | cksum | cut -d' ' -f1)"#;
+
+    /// All that can be asked of a window that draws forever.
+    const PLACED: &'static str = r#""$2 $3 $4 $5""#;
+
+    fn wait_for(
+        screen: ScreenId,
+        class: &str,
+        settle: Duration,
+        within: Duration,
+        sample: &str,
+    ) -> Vec<String> {
         let settle_ms = settle.as_millis();
         let within_ms = within.as_millis();
         let socket = Self::socket(screen);
@@ -580,11 +783,11 @@ while [ $(( $(date +%s%N) / 1000000 )) -lt $end ]; do
   now=$(( $(date +%s%N) / 1000000 ))
   if [ -n "$found" ]; then
     set -- $found
-    h=$(grim -g "$2,$3 $4x$5" - 2>/dev/null | cksum | cut -d' ' -f1)
+    h={sample}
     if [ "$h" = "$last" ] && [ -n "$h" ]; then
       [ $since -eq 0 ] && since=$now
       if [ $(( now - since )) -ge {settle_ms} ]; then
-        echo "drawn $1"
+        printf 'drawn\t%s\n' "$found"
         exit 0
       fi
     else
@@ -598,12 +801,89 @@ echo waited"#
         ]
     }
 
+    /// The tree walked once and filtered: every window, the focused one, or
+    /// one by container id. Containers that hold no window are skipped, so a
+    /// workspace does not answer as a window of its own.
+    const NODES: &'static str = r#"
+import json,sys
+def walk(n):
+    yield n
+    for k in ('nodes','floating_nodes'):
+        for c in n.get(k) or []:
+            yield from walk(c)
+want=sys.argv[1]
+for n in walk(json.load(sys.stdin)):
+    props=n.get('window_properties') or {}
+    if not n.get('id') or not (n.get('app_id') or props):
+        continue
+    if want=='focused' and not n.get('focused'):
+        continue
+    if want not in ('all','focused') and str(n['id'])!=want:
+        continue
+    r=n.get('rect') or {}
+    print('\t'.join(str(f) for f in (
+        n['id'], r.get('x') or 0, r.get('y') or 0, r.get('width') or 0, r.get('height') or 0,
+        n.get('app_id') or props.get('class') or '', n.get('name') or '',
+    )))
+    if want!='all':
+        break
+"#;
+
     fn tell(screen: ScreenId, words: &str) -> Vec<String> {
         vec![
             "sh".to_string(),
             "-c".to_string(),
             format!("swaymsg -s {} {words}", Self::socket(screen)),
         ]
+    }
+
+    fn reading(screen: ScreenId, want: &str) -> String {
+        format!(
+            "swaymsg -s {} -t get_tree 2>/dev/null | python3 -c {} {}",
+            Self::socket(screen),
+            shell_word(Self::NODES),
+            shell_word(want)
+        )
+    }
+
+    fn read(screen: ScreenId, want: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            Self::reading(screen, want),
+        ]
+    }
+
+    /// A tiled window has no position or size of its own — the layout owns
+    /// both — so asking for either is taken as asking for it to float. The
+    /// state verbs leave the tiling alone.
+    fn arranging(screen: ScreenId, window: &str, how: Arrange) -> Vec<String> {
+        let verb: Vec<String> = match how {
+            Arrange::At { to } => vec![format!(
+                "floating enable, move absolute position {} {}",
+                to.x, to.y
+            )],
+            Arrange::Size { width, height } => {
+                vec![format!("floating enable, resize set {width} {height}")]
+            }
+            Arrange::Maximise => vec!["fullscreen enable".to_string()],
+            Arrange::Minimise => vec!["move scratchpad".to_string()],
+            // Sway keeps the two apart and the caller does not, so both are
+            // asked and whichever does not apply fails quietly.
+            Arrange::Restore => vec![
+                "fullscreen disable".to_string(),
+                "scratchpad show".to_string(),
+            ],
+        };
+
+        let socket = Self::socket(screen);
+        let mut script: Vec<String> = verb
+            .iter()
+            .map(|words| format!("swaymsg -s {socket} '[con_id={window}] {words}' >/dev/null 2>&1"))
+            .collect();
+        script.push(Self::reading(screen, window));
+
+        vec!["sh".to_string(), "-c".to_string(), script.join("\n")]
     }
 }
 
@@ -640,20 +920,17 @@ impl AppRuntime for WaylandAppRuntime {
 
         let waited = host
             .run_within(
-                &Self::wait_for(screen, class, settle, within),
+                &Self::wait_for(screen, class, settle, within, Self::DRAWN),
                 &env,
                 within + SLACK,
             )
             .await?;
 
         let answer = waited.stdout_utf8();
-        let mut words = answer.split_whitespace();
+        let line = answer.trim().strip_prefix("drawn\t");
 
-        match (words.next(), words.next()) {
-            (Some("drawn"), Some(id)) => Ok(Window {
-                id: id.to_string(),
-                title: String::new(),
-            }),
+        match line.and_then(window_line) {
+            Some(window) => Ok(window),
             _ => Err(Error::Timeout {
                 after: within,
                 detail: format!(
@@ -670,38 +947,18 @@ impl AppRuntime for WaylandAppRuntime {
         profile: &dyn Profile,
         screen: ScreenId,
     ) -> Result<Vec<Window>> {
-        let listing = r#"
-import json,sys
-def walk(n):
-    yield n
-    for k in ('nodes','floating_nodes'):
-        for c in n.get(k) or []:
-            yield from walk(c)
-for n in walk(json.load(sys.stdin)):
-    if n.get('id') and (n.get('app_id') or n.get('window_properties')):
-        print(n['id'], n.get('name') or '')
-"#;
-        let argv = vec![
-            "sh".to_string(),
-            "-c".to_string(),
-            format!(
-                "swaymsg -s {} -t get_tree 2>/dev/null | python3 -c {}",
-                Self::socket(screen),
-                shell_word(listing)
-            ),
-        ];
         let result = host
-            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .run_within(
+                &Self::read(screen, "all"),
+                &profile.screen_env(screen),
+                host.timeout(),
+            )
             .await?;
 
         Ok(result
             .stdout_utf8()
             .lines()
-            .filter_map(|line| line.split_once(' '))
-            .map(|(id, title)| Window {
-                id: id.to_string(),
-                title: title.to_string(),
-            })
+            .filter_map(window_line)
             .collect())
     }
 
@@ -734,11 +991,125 @@ for n in walk(json.load(sys.stdin)):
                 .await?,
         )
     }
+
+    async fn arrange(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+        how: Arrange,
+    ) -> Result<Window> {
+        let argv = Self::arranging(screen, window, how);
+        let result = host
+            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        window_line(result.stdout_utf8().trim())
+            .ok_or_else(|| Error::invalid(format!("there is no window {window} on this screen")))
+    }
+
+    async fn active(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Option<Window>> {
+        let result = host
+            .run_within(
+                &Self::read(screen, "focused"),
+                &profile.screen_env(screen),
+                host.timeout(),
+            )
+            .await?;
+
+        Ok(window_line(result.stdout_utf8().trim()))
+    }
+
+    async fn wait_for_window(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        class: &str,
+        settle: Duration,
+        within: Duration,
+    ) -> Result<Window> {
+        let waited = host
+            .run_within(
+                &Self::wait_for(screen, class, settle, within, Self::PLACED),
+                &profile.screen_env(screen),
+                within + SLACK,
+            )
+            .await?;
+
+        let answer = waited.stdout_utf8();
+
+        answer
+            .trim()
+            .strip_prefix("drawn\t")
+            .and_then(window_line)
+            .ok_or_else(|| Error::Timeout {
+                after: within,
+                detail: format!("no window of app id {class} came up"),
+            })
+    }
 }
 
 /// Slack over the wait's own deadline, so a slow exec does not turn its
 /// report into a transport timeout.
 const SLACK: Duration = Duration::from_secs(5);
+
+/// What the window in `$w` is and where, as one line. `missing` is what to do
+/// when the window has gone between the question and the asking.
+///
+/// Tab separated with the title last, because a title is the one field that
+/// can hold anything — a tab in one would otherwise put a window's name in its
+/// class.
+fn x11_window(missing: &str) -> String {
+    format!(
+        r#"unset X Y WIDTH HEIGHT
+eval "$(xdotool getwindowgeometry --shell $w 2>/dev/null)"
+[ -n "$WIDTH" ] || {missing}
+class=$(xprop -id $w WM_CLASS 2>/dev/null | sed 's/.*, "//; s/"$//')
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$w" "$X" "$Y" "$WIDTH" "$HEIGHT" "${{class:-}}" "$(xdotool getwindowname $w 2>/dev/null)""#
+    )
+}
+
+/// Every visible window, one line each, so the shell does the walking: a call
+/// per window per field would be four container round trips for a desktop
+/// with one thing on it.
+fn x11_windows() -> String {
+    format!(
+        "for w in $(xdotool search --onlyvisible --name . 2>/dev/null); do\n{}\ndone",
+        x11_window("continue")
+    )
+}
+
+const NO_WINDOW: &str = r#"{ echo "there is no window $w on this screen" >&2; exit 1; }"#;
+
+/// A line short of its fields is skipped rather than guessed at: a window that
+/// went away between the search and the questions leaves a partial one.
+fn window_line(line: &str) -> Option<Window> {
+    let mut fields = line.splitn(7, '\t');
+    let id = fields.next()?.trim();
+    let x = fields.next()?.trim().parse().ok()?;
+    let y = fields.next()?.trim().parse().ok()?;
+    let width = fields.next()?.trim().parse().ok()?;
+    let height = fields.next()?.trim().parse().ok()?;
+    let class = fields.next()?.trim().to_string();
+    let title = fields.next().unwrap_or_default().trim().to_string();
+
+    (!id.is_empty()).then(|| Window {
+        id: id.to_string(),
+        title,
+        class,
+        at: Point::new(x, y),
+        width,
+        height,
+    })
+}
 
 /// Detached, because a GUI program does not exit — which is also why its own
 /// exit code reaches nobody, and why the command is checked first.
@@ -1290,7 +1661,6 @@ impl ProfileBuilder {
         self
     }
 
-    /// The variables one screen's commands run with.
     pub fn screen_environment<E>(mut self, environment: E) -> Self
     where
         E: ScreenEnvironment + 'static,
@@ -1430,8 +1800,128 @@ impl Profile for ConfiguredProfile {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn test_a_window_carries_where_it_is_and_what_it_is() {
+        let window = window_line("25165836\t10\t40\t520\t400\txterm\txterm").expect("a window");
+
+        assert_eq!(window.id, "25165836");
+        assert_eq!(window.class, "xterm");
+        assert_eq!(window.at, Point::new(10, 40));
+        assert_eq!((window.width, window.height), (520, 400));
+    }
+
+    #[test]
+    fn test_a_title_may_hold_anything_and_still_be_the_title() {
+        let window = window_line("7\t0\t0\t100\t50\tMousepad\tnotes\ttabbed.txt - Mousepad")
+            .expect("a window");
+
+        assert_eq!(window.class, "Mousepad");
+        assert_eq!(window.title, "notes\ttabbed.txt - Mousepad");
+    }
+
+    #[test]
+    fn test_a_window_that_went_away_is_skipped_rather_than_guessed_at() {
+        assert!(window_line("25165836\t10").is_none());
+        assert!(window_line("").is_none());
+        assert!(
+            window_line("\t1\t2\t3\t4\tx\ty").is_none(),
+            "an empty id is no window"
+        );
+    }
+
+    #[test]
+    fn test_every_x11_arrangement_names_its_own_verb() {
+        let verb = |how| X11AppRuntime::arranging("42", how).remove(2);
+
+        let placed = verb(Arrange::At {
+            to: Point::new(10, 20),
+        });
+        assert!(placed.contains("windowmove $w 10 20"), "{placed}");
+        assert!(placed.contains("remove,maximized_vert"), "{placed}");
+
+        assert!(
+            verb(Arrange::Size {
+                width: 800,
+                height: 600
+            })
+            .contains("windowsize $w 800 600")
+        );
+        assert!(verb(Arrange::Maximise).contains("add,maximized_vert"));
+        assert!(verb(Arrange::Minimise).contains("windowminimize"));
+        assert!(verb(Arrange::Restore).contains("remove,maximized_vert"));
+    }
+
+    #[test]
+    fn test_an_arrangement_answers_with_the_window_it_left_behind() {
+        let script = X11AppRuntime::arranging("42", Arrange::Maximise).remove(2);
+
+        assert!(script.contains("getwindowgeometry"), "{script}");
+        assert!(script.contains("WM_CLASS"), "{script}");
+    }
+
+    #[test]
+    fn test_a_window_id_reaches_the_shell_as_one_word() {
+        let script = X11AppRuntime::arranging("4 2; rm -rf /", Arrange::Minimise).remove(2);
+
+        assert!(script.contains(r"w='4 2; rm -rf /'"), "{script}");
+    }
+
+    #[test]
+    fn test_a_launch_waits_for_paint_and_a_wait_only_for_a_place() {
+        let painted =
+            X11AppRuntime::wait_for("gimp", SETTLE, SETTLE, X11AppRuntime::DRAWN).remove(2);
+        let placed =
+            X11AppRuntime::wait_for("gimp", SETTLE, SETTLE, X11AppRuntime::PLACED).remove(2);
+
+        assert!(painted.contains("import -window"), "{painted}");
+        assert!(!placed.contains("import -window"), "{placed}");
+        assert!(placed.contains("getwindowgeometry"), "{placed}");
+    }
+
+    #[test]
+    fn test_no_active_window_is_an_answer_rather_than_a_failure() {
+        let script = X11AppRuntime::focused().remove(2);
+
+        assert!(script.contains("getactivewindow"), "{script}");
+        assert!(script.contains("|| exit 0"), "{script}");
+    }
+
+    #[test]
+    fn test_sway_floats_a_window_before_it_is_given_a_place() {
+        let place = WaylandAppRuntime::arranging(
+            ScreenId(0),
+            "7",
+            Arrange::At {
+                to: Point::new(5, 6),
+            },
+        );
+        let script = place.last().expect("a script");
+
+        assert!(script.contains("floating enable, move absolute position 5 6"));
+        assert!(script.contains("[con_id=7]"));
+    }
+
+    #[test]
+    fn test_a_sway_restore_asks_both_ways_back() {
+        let script = WaylandAppRuntime::arranging(ScreenId(0), "7", Arrange::Restore).remove(2);
+
+        assert!(script.contains("fullscreen disable"), "{script}");
+        assert!(script.contains("scratchpad show"), "{script}");
+    }
+
+    #[test]
+    fn test_a_window_with_no_class_is_still_a_window() {
+        let window = window_line("9\t0\t0\t10\t10\t\tsomething").expect("a window");
+
+        assert!(window.class.is_empty());
+        assert_eq!(window.title, "something");
+    }
+
     use super::*;
     use crate::testing::{ScriptedCli, ScriptedProfile};
+
+    const SETTLE: Duration = Duration::from_millis(600);
+
     use crate::{DisplayServer, WaylandProfile, X11Profile};
     use std::sync::Mutex;
 
@@ -1664,6 +2154,65 @@ mod tests {
             .expect_err("the token was replaced");
 
         assert!(matches!(error, Error::Denied { .. }));
+    }
+
+    /// `Screen` and `Computer` implement `Desktop` by forwarding one method at
+    /// a time, so a method with a default that nobody forwarded is refused by
+    /// a box that supports it perfectly well.
+    #[tokio::test]
+    async fn test_every_desktop_method_reaches_the_driver_through_a_screen() {
+        let cli = Arc::new(ScriptedCli::new());
+        let computer = crate::Computer::builder()
+            .cli(cli as Arc<dyn crate::ContainerCli>)
+            .wait_for_ready(None)
+            .keep_on_drop(true)
+            .launch()
+            .await
+            .expect("a box");
+
+        let screen = computer.primary();
+        let short = Duration::from_millis(1);
+
+        for (what, outcome) in [
+            (
+                "capture",
+                crate::Desktop::capture(screen, None, Some(50)).await.err(),
+            ),
+            (
+                "click_with",
+                crate::Desktop::click_with(
+                    screen,
+                    Point::new(1, 1),
+                    crate::Button::Left,
+                    &[crate::Held::Shift],
+                )
+                .await
+                .err(),
+            ),
+            (
+                "drag_with",
+                crate::Desktop::drag_with(
+                    screen,
+                    Point::new(1, 1),
+                    Point::new(2, 2),
+                    crate::Button::Left,
+                    &[crate::Held::Shift],
+                )
+                .await
+                .err(),
+            ),
+            (
+                "wait_until_still",
+                crate::Desktop::wait_until_still(screen, short, short)
+                    .await
+                    .err(),
+            ),
+        ] {
+            assert!(
+                !matches!(outcome, Some(Error::Unsupported { .. })),
+                "{what} stopped at the forwarding impl instead of reaching the driver"
+            );
+        }
     }
 
     #[tokio::test]

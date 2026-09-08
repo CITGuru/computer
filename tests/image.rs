@@ -143,6 +143,7 @@ fn the_image_carries_every_binary_the_driver_calls() {
     // broken tool rather than a missing package.
     for binary in [
         "xdotool",
+        "wmctrl",
         "imagemagick",
         "xvfb",
         "x11vnc",

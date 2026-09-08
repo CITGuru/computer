@@ -13,7 +13,9 @@
 //! One box for the whole test, because opening one costs seconds and every
 //! step below is independent of the others.
 
-use computer::{Button, Computer, Delta, Point, ProfileBuilder, ScreenId, X11Profile};
+use computer::{
+    Arrange, Button, Computer, Delta, Held, Point, ProfileBuilder, Rect, ScreenId, Shot, X11Profile,
+};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +29,6 @@ async fn a_real_box_does_everything_the_readme_claims() {
 
     let outcome = exercise(&computer).await;
 
-    // Taken away whatever happened above.
     computer.shutdown().await.expect("it goes away");
     outcome.expect("every step");
 }
@@ -71,6 +72,348 @@ async fn a_local_image_directory_can_be_driven() {
     let outcome = exercise(&computer).await;
     computer.shutdown().await.expect("it goes away");
     outcome.expect("every step");
+}
+
+#[tokio::test]
+#[ignore = "needs a container runtime"]
+async fn a_window_knows_what_it_is_and_where() {
+    let computer = Computer::launch().await.expect("a box");
+    let outcome = window_facts(&computer).await;
+    computer.shutdown().await.expect("it goes away");
+    outcome.expect("every step");
+}
+
+async fn window_facts(computer: &Computer) -> computer::Result<()> {
+    let screen = computer.primary();
+    let (width, height) = screen.geometry().await?;
+
+    let windows = screen.windows().await?;
+    for window in &windows {
+        println!(
+            "  {:<12} {}x{} at {},{}  {:?}",
+            window.class, window.width, window.height, window.at.x, window.at.y, window.title
+        );
+    }
+
+    let browser = windows
+        .iter()
+        .find(|window| window.class.eq_ignore_ascii_case("chromium"))
+        .expect("the browser is on the screen and says which it is");
+
+    assert!(
+        browser.width > 0 && browser.height > 0,
+        "a window has a size"
+    );
+    assert!(
+        browser.width <= width && browser.height <= height,
+        "a window is not larger than the screen it is on: {}x{} against {width}x{height}",
+        browser.width,
+        browser.height
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs a container runtime"]
+async fn a_capture_can_be_cropped_and_shrunk() {
+    let computer = Computer::launch().await.expect("a box");
+    let outcome = captures(&computer).await;
+    computer.shutdown().await.expect("it goes away");
+    outcome.expect("every step");
+}
+
+async fn captures(computer: &Computer) -> computer::Result<()> {
+    let screen = computer.primary();
+    let (width, height) = screen.geometry().await?;
+
+    let whole = screen.screenshot().await?;
+    assert_eq!(png_size(&whole), Some((width, height)));
+
+    let region = screen
+        .capture(&Shot::region(Rect::new(Point::new(100, 80), 400, 300)))
+        .await?;
+    assert_eq!(
+        png_size(&region),
+        Some((400, 300)),
+        "a crop answers with the rectangle that was asked for"
+    );
+
+    let quarter = screen.capture(&Shot::default().scaled(25)).await?;
+    assert_eq!(png_size(&quarter), Some((width / 4, height / 4)));
+    assert!(
+        quarter.len() < whole.len(),
+        "a smaller picture that costs more bytes is not a saving: {} against {}",
+        quarter.len(),
+        whole.len()
+    );
+
+    let browser = screen
+        .windows()
+        .await?
+        .into_iter()
+        .find(|window| window.class.eq_ignore_ascii_case("chromium"))
+        .expect("the browser is on screen");
+
+    let one = screen.capture(&Shot::window(&browser.id)).await?;
+    assert_eq!(
+        png_size(&one),
+        Some((browser.width, browser.height)),
+        "a window is captured at the size it reports"
+    );
+
+    let small = screen
+        .capture(&Shot::window(&browser.id).scaled(50))
+        .await?;
+    assert_eq!(
+        png_size(&small),
+        Some((browser.width / 2, browser.height / 2))
+    );
+
+    println!(
+        "  whole {} bytes, quarter {}, window {} at {}x{}",
+        whole.len(),
+        quarter.len(),
+        one.len(),
+        browser.width,
+        browser.height
+    );
+
+    assert!(screen.capture(&Shot::window("999")).await.is_err());
+    assert!(screen.capture(&Shot::default().scaled(0)).await.is_err());
+    assert!(
+        screen
+            .capture(&Shot::region(Rect::new(Point::new(0, 0), 0, 10)))
+            .await
+            .is_err()
+    );
+
+    Ok(())
+}
+
+/// The width and height a PNG declares in its own header.
+fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    let width = u32::from_be_bytes(png.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(png.get(20..24)?.try_into().ok()?);
+
+    Some((width, height))
+}
+
+#[tokio::test]
+#[ignore = "needs a container runtime"]
+async fn a_click_can_hold_a_modifier_and_a_wait_can_end_itself() {
+    let computer = Computer::launch().await.expect("a box");
+    let outcome = held_and_still(&computer).await;
+    computer.shutdown().await.expect("it goes away");
+    outcome.expect("every step");
+}
+
+/// A page that writes down which modifiers each click arrived with.
+const WITNESS: &str = "data:text/html,\
+<body%20style=\"margin:0\"><div%20id=\"pad\"%20style=\"width:100%25;height:100vh\"></div>";
+
+const WATCH: &str = r#"
+    window.seen = [];
+    document.getElementById('pad').onclick = e => {
+        seen.push([e.shiftKey && 'shift', e.ctrlKey && 'ctrl', e.altKey && 'alt',
+                   e.metaKey && 'super'].filter(Boolean).join('+') || 'none');
+    };
+    "installed"
+"#;
+
+async fn held_and_still(computer: &Computer) -> computer::Result<()> {
+    let screen = computer.primary();
+    let devtools = computer.browser().expect("a published DevTools port");
+
+    let mut page = devtools.open_page(WITNESS, Duration::from_secs(30)).await?;
+    page.wait_for_load(Duration::from_secs(20)).await?;
+    page.bring_to_front().await?;
+
+    // Both the thing being tested and the thing needed to test it.
+    screen
+        .wait_until_still(Duration::from_millis(400), Duration::from_secs(15))
+        .await?;
+    page.evaluate(WATCH).await?;
+
+    let at = Point::new(640, 500);
+    screen.click(at, Button::Left).await?;
+    screen.click_with(at, Button::Left, &[Held::Shift]).await?;
+    screen
+        .click_with(at, Button::Left, &[Held::Ctrl, Held::Shift])
+        .await?;
+    screen.click(at, Button::Left).await?;
+
+    let seen = page.evaluate("seen.join(' ')").await?;
+    println!("  clicks arrived as: {seen}");
+    assert_eq!(
+        seen.as_str(),
+        // The page names them in its own order, not the order they were asked
+        // for, so this says both arrived rather than which came first.
+        Some("none shift shift+ctrl none"),
+        "a modifier did not reach the page, or one was left held afterwards"
+    );
+
+    let never = screen
+        .wait_until_still(Duration::from_secs(30), Duration::from_secs(2))
+        .await;
+    assert!(never.is_err(), "a settle longer than the wait cannot pass");
+
+    page.close().await.ok();
+    Ok(())
+}
+
+/// A page wide enough and tall enough to move on either axis.
+const WIDE: &str = "data:text/html,<div%20style=\"width:4000px;height:4000px\"></div>";
+
+#[tokio::test]
+#[ignore = "needs a container runtime"]
+async fn the_wheel_turns_on_both_axes() {
+    let computer = Computer::launch().await.expect("a box");
+    let outcome = wheel(&computer).await;
+    computer.shutdown().await.expect("it goes away");
+    outcome.expect("every step");
+}
+
+async fn wheel(computer: &Computer) -> computer::Result<()> {
+    let devtools = computer.browser().expect("a published DevTools port");
+    let mut page = devtools.open_page(WIDE, Duration::from_secs(30)).await?;
+    page.wait_for_load(Duration::from_secs(20)).await?;
+
+    // A coordinate addresses the page in front, and opening this put one
+    // behind it.
+    page.bring_to_front().await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let screen = computer.primary();
+    let at = Point::new(640, 400);
+    screen.scroll(at, Delta::down(5)).await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (x, y) = scrolled(&mut page).await?;
+    println!("  after down(5):  {x},{y}");
+    assert!(y > 0.0, "the wheel notches never arrived");
+    assert_eq!(x, 0.0, "a scroll down also went sideways");
+
+    screen.scroll(at, Delta::right(5)).await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (sideways, still) = scrolled(&mut page).await?;
+    println!("  after right(5): {sideways},{still}");
+    assert!(
+        sideways > 0.0,
+        "buttons 6 and 7 never reached the page, so a sideways scroll is \
+         accepted and does nothing"
+    );
+    assert_eq!(still, y, "a sideways scroll also moved the page down");
+
+    screen.scroll(at, Delta { dx: -2, dy: -2 }).await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (back_x, back_y) = scrolled(&mut page).await?;
+    println!("  after -2,-2:    {back_x},{back_y}");
+    assert!(
+        back_x < sideways && back_y < still,
+        "one axis did not come back"
+    );
+
+    page.close().await.ok();
+    Ok(())
+}
+
+async fn scrolled(page: &mut computer::Page) -> computer::Result<(f64, f64)> {
+    let x = page
+        .evaluate("window.scrollX")
+        .await?
+        .as_f64()
+        .unwrap_or(0.0);
+    let y = page
+        .evaluate("window.scrollY")
+        .await?
+        .as_f64()
+        .unwrap_or(0.0);
+
+    Ok((x, y))
+}
+
+#[tokio::test]
+#[ignore = "needs a container runtime"]
+async fn a_window_goes_where_it_is_put() {
+    let computer = Computer::launch().await.expect("a box");
+    let outcome = window_control(&computer).await;
+    computer.shutdown().await.expect("it goes away");
+    outcome.expect("every step");
+}
+
+async fn window_control(computer: &Computer) -> computer::Result<()> {
+    let screen = computer.primary();
+
+    // Already on screen, so this returns at once. The wait is for the windows
+    // nothing here started, and this proves it finds one either way.
+    let browser = screen
+        .wait_for_window("chromium", Duration::from_secs(20))
+        .await?;
+    println!("  waited for {} ({})", browser.class, browser.id);
+
+    screen.focus(&browser.id).await?;
+    let active = screen.active_window().await?;
+    println!("  active: {active:?}");
+    assert_eq!(
+        active.as_ref().map(|window| window.id.clone()),
+        Some(browser.id.clone()),
+        "the window that was raised is the one holding the keyboard"
+    );
+
+    let sized = screen
+        .arrange(
+            &browser.id,
+            Arrange::Size {
+                width: 800,
+                height: 600,
+            },
+        )
+        .await?;
+    println!("  sized: {}x{}", sized.width, sized.height);
+    assert_eq!((sized.width, sized.height), (800, 600));
+
+    let moved = screen
+        .arrange(
+            &browser.id,
+            Arrange::At {
+                to: Point::new(120, 90),
+            },
+        )
+        .await?;
+    println!("  moved: {},{}", moved.at.x, moved.at.y);
+    assert!(
+        near(moved.at.x, 120) && near(moved.at.y, 90),
+        "a window ends up where it was put, allowing for its own frame: {:?}",
+        moved.at
+    );
+
+    let big = screen.arrange(&browser.id, Arrange::Maximise).await?;
+    println!("  maximised: {}x{}", big.width, big.height);
+    assert!(
+        big.width > sized.width,
+        "maximising makes it wider than 800: {}",
+        big.width
+    );
+
+    screen.arrange(&browser.id, Arrange::Minimise).await?;
+    let back = screen.arrange(&browser.id, Arrange::Restore).await?;
+    println!(
+        "  back: {}x{} at {},{}",
+        back.width, back.height, back.at.x, back.at.y
+    );
+
+    assert_eq!(back.id, browser.id);
+
+    let gone = screen.arrange("1", Arrange::Maximise).await;
+    assert!(gone.is_err(), "a window id nothing answers to is a failure");
+
+    Ok(())
+}
+
+/// A decorated window is placed by its frame, and its contents land a title
+/// bar below where the move asked for.
+fn near(got: u32, wanted: u32) -> bool {
+    got.abs_diff(wanted) <= 64
 }
 
 async fn exercise(computer: &Computer) -> computer::Result<()> {

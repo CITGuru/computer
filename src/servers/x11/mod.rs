@@ -18,12 +18,14 @@ pub use profile::X11Profile;
 use crate::error::{Error, Result};
 use crate::machine::{MachineHost, ScreenHost};
 use crate::screens::ControlGate;
+use crate::servers::{settled, still_argv};
 use crate::{
-    Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Point, ScreenId,
-    Selection,
+    Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Held, Point,
+    Rect, ScreenId, Selection,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Screen *i* is display `:i+1`.
 ///
@@ -111,16 +113,89 @@ fn point_argv(command: &[&str], at: Point) -> Vec<String> {
     args
 }
 
-/// A wheel notch is button 4 up and button 5 down. `xdotool` has no scroll
-/// distance, so a delta becomes a repeat count, bounded at twenty.
-fn scroll_argv(at: Point, by: Delta) -> Vec<String> {
-    let button = if by.dy < 0 { "4" } else { "5" };
-    let notches = by.dy.unsigned_abs().clamp(1, 20).to_string();
+/// The modifiers pressed, as the first words of a chained `xdotool` command.
+///
+/// One command, because a press held across separate calls is released when
+/// the first call's process exits — and `--clearmodifiers`, which the typing
+/// path uses, would undo it even within one.
+fn holding(held: &[Held]) -> Vec<String> {
+    let mut args = argv(&["xdotool"]);
 
+    for one in held {
+        args.push("keydown".to_string());
+        args.push(one.keysym().to_string());
+    }
+    args
+}
+
+/// The same modifiers released, last one first.
+fn letting_go(held: &[Held]) -> Vec<String> {
+    let mut args = Vec::new();
+
+    for one in held.iter().rev() {
+        args.push("keyup".to_string());
+        args.push(one.keysym().to_string());
+    }
+    args
+}
+
+/// `+repage` after a crop, or the PNG carries the offset it was cut from and
+/// a viewer honours it by drawing the picture in the wrong place.
+fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
+    let mut args = argv(&["import", "-window", "root"]);
+
+    if let Some(area) = area {
+        args.push("-crop".to_string());
+        args.push(format!(
+            "{}x{}+{}+{}",
+            area.width, area.height, area.at.x, area.at.y
+        ));
+        args.push("+repage".to_string());
+    }
+    if let Some(scale) = scale {
+        // Area averaging, not the default Lanczos. Blurring a desktop's flat
+        // colours into gradients is what a smaller picture is meant to avoid:
+        // halved, the default costs 67KB against the full screen's 36KB, and
+        // this costs 24KB with the text still readable.
+        args.push("-filter".to_string());
+        args.push("box".to_string());
+        args.push("-resize".to_string());
+        args.push(format!("{scale}%"));
+    }
+
+    // PNG bytes straight out of stdout: encoding them would need a decoder
+    // whose flags differ between coreutils and BusyBox.
+    args.push("png:-".to_string());
+    args
+}
+
+/// A wheel notch is button 4 up, 5 down, 6 left and 7 right. `xdotool` has no
+/// scroll distance, so a delta becomes a repeat count, bounded at twenty.
+///
+/// Both axes travel as one chained command, because two commands are two
+/// round trips into the box with the pointer sitting still between them.
+fn scroll_argv(at: Point, by: Delta) -> Vec<String> {
     let mut args = point_argv(&["xdotool", "mousemove", "--"], at);
-    args.extend(argv(&["click", "--repeat"]));
-    args.push(notches);
-    args.push(button.to_string());
+
+    // A delta with no distance in it is still a scroll: one notch down, which
+    // is the only thing a caller that named neither axis can have meant.
+    if by.dy != 0 || by.dx == 0 {
+        args.extend(wheel_argv(by.dy, "4", "5"));
+    }
+    if by.dx != 0 {
+        args.extend(wheel_argv(by.dx, "6", "7"));
+    }
+
+    args
+}
+
+fn wheel_argv(delta: i32, back: &str, forward: &str) -> Vec<String> {
+    let mut args = argv(&["click", "--repeat"]);
+    args.push(delta.unsigned_abs().clamp(1, 20).to_string());
+    args.push(match delta < 0 {
+        true => back.to_string(),
+        false => forward.to_string(),
+    });
     args
 }
 
@@ -186,6 +261,17 @@ impl X11Desktop {
     ///
     /// Reads do not come through here. A run is not paused while a person
     /// drives; it may watch and may not act.
+    /// A capture, refused rather than returned empty: a zero-byte PNG reaches
+    /// a caller as a picture of nothing rather than as a failure.
+    async fn import(&self, args: Vec<String>) -> Result<Vec<u8>> {
+        let result = self.run(args).await?;
+
+        if result.stdout.is_empty() {
+            return Err(Error::denied("the screen capture returned no image"));
+        }
+        Ok(result.stdout)
+    }
+
     async fn act(&self, args: Vec<String>) -> Result<()> {
         self.control.may_act()?;
         self.run(args).await.map(|_| ())
@@ -195,16 +281,11 @@ impl X11Desktop {
 #[async_trait]
 impl Desktop for X11Desktop {
     async fn screenshot(&self) -> Result<Vec<u8>> {
-        // PNG bytes straight out of stdout: encoding them would need a
-        // decoder whose flags differ between coreutils and BusyBox.
-        let result = self
-            .run(argv(&["import", "-window", "root", "png:-"]))
-            .await?;
+        self.import(capture_argv(None, None)).await
+    }
 
-        if result.stdout.is_empty() {
-            return Err(Error::denied("the screen capture returned no image"));
-        }
-        Ok(result.stdout)
+    async fn capture(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        self.import(capture_argv(area, scale)).await
     }
 
     async fn move_to(&self, at: Point) -> Result<()> {
@@ -213,9 +294,16 @@ impl Desktop for X11Desktop {
     }
 
     async fn click(&self, at: Point, button: Button) -> Result<()> {
-        let mut args = point_argv(&["xdotool", "mousemove", "--"], at);
+        self.click_with(at, button, &[]).await
+    }
+
+    async fn click_with(&self, at: Point, button: Button, held: &[Held]) -> Result<()> {
+        let mut args = holding(held);
+        args.extend(point_argv(&["mousemove", "--"], at));
         args.push("click".to_string());
         args.push(button_number(button).to_string());
+        args.extend(letting_go(held));
+
         self.act(args).await
     }
 
@@ -232,8 +320,13 @@ impl Desktop for X11Desktop {
     /// One command: a press held across separate calls may be released when
     /// the first call's process exits.
     async fn drag(&self, from: Point, to: Point, button: Button) -> Result<()> {
+        self.drag_with(from, to, button, &[]).await
+    }
+
+    async fn drag_with(&self, from: Point, to: Point, button: Button, held: &[Held]) -> Result<()> {
         let number = button_number(button);
-        let mut args = point_argv(&["xdotool", "mousemove", "--"], from);
+        let mut args = holding(held);
+        args.extend(point_argv(&["mousemove", "--"], from));
         args.extend(argv(&["mousedown", number]));
         // Through the middle, because an application that tracks motion sees
         // nothing in a drag that teleports.
@@ -244,7 +337,23 @@ impl Desktop for X11Desktop {
         args.extend(point_argv(&["mousemove", "--"], middle));
         args.extend(point_argv(&["mousemove", "--"], to));
         args.extend(argv(&["mouseup", number]));
+        args.extend(letting_go(held));
+
         self.act(args).await
+    }
+
+    /// Bounded by the box's own command timeout, so a `within` longer than
+    /// that ends as a transport failure rather than as this one's answer.
+    async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
+        let watched = self
+            .run(still_argv(
+                "import -window root png:- 2>/dev/null",
+                settle,
+                within,
+            ))
+            .await?;
+
+        settled(watched, within)
     }
 
     async fn type_text(&self, text: &str) -> Result<()> {
@@ -451,6 +560,60 @@ mod tests {
         assert_eq!(parse_cursor(""), None);
     }
 
+    const SETTLE: Duration = Duration::from_millis(400);
+
+    #[test]
+    fn test_a_held_modifier_is_pressed_before_and_released_after() {
+        let args = holding(&[Held::Ctrl, Held::Shift]);
+        let back = letting_go(&[Held::Ctrl, Held::Shift]);
+
+        assert_eq!(
+            args,
+            argv(&["xdotool", "keydown", "ctrl", "keydown", "shift"])
+        );
+        assert_eq!(back, argv(&["keyup", "shift", "keyup", "ctrl"]));
+    }
+
+    #[test]
+    fn test_holding_nothing_is_the_command_that_was_always_sent() {
+        assert_eq!(holding(&[]), argv(&["xdotool"]));
+        assert!(letting_go(&[]).is_empty());
+    }
+
+    #[test]
+    fn test_a_watch_stops_on_stillness_and_says_so() {
+        let args = still_argv("import -window root png:-", SETTLE, SETTLE);
+        let script = args.last().expect("a script");
+
+        assert!(script.contains("cksum"), "{script}");
+        assert!(script.contains("echo still"), "{script}");
+        assert!(script.contains("echo moving"), "{script}");
+    }
+
+    #[test]
+    fn test_a_plain_capture_is_the_whole_screen_at_full_size() {
+        assert_eq!(
+            capture_argv(None, None),
+            argv(&["import", "-window", "root", "png:-"])
+        );
+    }
+
+    #[test]
+    fn test_a_cropped_capture_forgets_where_it_was_cut_from() {
+        let args = capture_argv(Some(Rect::new(Point::new(10, 20), 400, 300)), None);
+
+        assert!(args.contains(&"400x300+10+20".to_string()), "{args:?}");
+        assert!(args.contains(&"+repage".to_string()), "{args:?}");
+    }
+
+    #[test]
+    fn test_a_scaled_capture_averages_rather_than_blurs() {
+        let args = capture_argv(None, Some(50));
+
+        assert!(args.contains(&"box".to_string()), "{args:?}");
+        assert!(args.contains(&"50%".to_string()), "{args:?}");
+    }
+
     #[test]
     fn test_scrolling_up_is_button_four_and_down_is_five() {
         let up = scroll_argv(Point::new(5, 5), Delta::up(3));
@@ -458,6 +621,38 @@ mod tests {
 
         let down = scroll_argv(Point::new(5, 5), Delta::down(3));
         assert_eq!(down.last().map(String::as_str), Some("5"));
+    }
+
+    #[test]
+    fn test_scrolling_left_is_button_six_and_right_is_seven() {
+        let left = scroll_argv(Point::new(5, 5), Delta::left(3));
+        assert_eq!(left.last().map(String::as_str), Some("6"));
+
+        let right = scroll_argv(Point::new(5, 5), Delta::right(3));
+        assert_eq!(right.last().map(String::as_str), Some("7"));
+    }
+
+    #[test]
+    fn test_a_sideways_scroll_does_not_also_go_down() {
+        // `dy` is zero here and means zero, not the default: a caller asking
+        // to go right and landing lower is a page in the wrong place.
+        let args = scroll_argv(Point::new(0, 0), Delta::right(2));
+        let buttons: Vec<&String> = args.iter().skip(4).collect();
+
+        assert!(!buttons.contains(&&"4".to_string()), "{args:?}");
+        assert!(!buttons.contains(&&"5".to_string()), "{args:?}");
+    }
+
+    #[test]
+    fn test_both_axes_travel_as_one_command() {
+        let args = scroll_argv(Point::new(5, 5), Delta { dx: 2, dy: 3 });
+
+        assert_eq!(args.first().map(String::as_str), Some("xdotool"));
+        assert_eq!(
+            args.iter().filter(|word| *word == "click").count(),
+            2,
+            "one xdotool, two chained clicks: {args:?}"
+        );
     }
 
     #[test]

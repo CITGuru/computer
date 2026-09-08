@@ -13,10 +13,8 @@ use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// Everything this crate asks a container runtime to do.
 #[async_trait]
 pub trait ContainerCli: Send + Sync {
-    /// Run the runtime with these arguments and wait for it.
     async fn run(&self, args: &[String]) -> Result<ExecResult>;
 
     /// The program being run, for the message when it is missing.

@@ -31,7 +31,6 @@ async fn connect(name: &str) -> Result<Sandbox> {
         .map_err(from_vendor)
 }
 
-/// microsandbox on this host.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Microsandbox;
 

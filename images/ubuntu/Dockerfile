@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       x11vnc \
       fluxbox \
       xdotool \
+      wmctrl \
       x11-utils \
       x11-xserver-utils \
       xterm \
