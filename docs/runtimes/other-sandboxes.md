@@ -6,7 +6,7 @@ runtime and no `/dev/kvm` of its own. The boundary is still a kernel the box
 does not share.
 
 `computer` ships one such integration — E2B, in `sandboxes::e2b` — and the seam
-it is built on. `sandboxes::remote` is that seam. Implement seven calls against
+it is built on. `sandboxes::remote` is that seam. Implement eight calls against
 Modal, Daytona, Fly, or whatever you already pay for, and the driver, the
 screens, the takeover gate and the descriptor above them are the same code a
 container runs.
@@ -53,7 +53,7 @@ profile was built, and building the two apart gets that wrong quietly.
 Nothing here needs a crate feature. The seam is a trait, and your HTTP client
 is your own.
 
-## The seven calls
+## The eight calls
 
 | Call | What it must do |
 | --- | --- |

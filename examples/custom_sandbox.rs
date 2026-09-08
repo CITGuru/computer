@@ -5,16 +5,13 @@
 //! ```
 //!
 //! `sandboxes::remote` is the seam for a box in somebody else's cloud: Modal,
-//! Daytona, Fly, whatever you already pay for. Implement seven calls and the
-//! driver, the screens, the takeover gate and the descriptor above them are
-//! the same code a container runs.
+//! Daytona, Fly, whatever you already pay for. Implement eight calls and
+//! everything above them is the code a container runs.
 //!
-//! The vendor below is `docker` on this host, wearing a control plane. That is
-//! not how to run on Docker — `DockerMachine` is, and it is better at it —
-//! but it is a vendor you can actually run, so every call here is one you can
-//! watch work before you write the same call against an API you cannot see.
-//!
-//! Read it as the map. Each method is one request to your vendor:
+//! The vendor below is `docker` on this host wearing a control plane. That is
+//! not how to run on Docker — `DockerMachine` is — but it is a vendor you can
+//! run, so every call here is one you can watch work before writing the same
+//! call against an API you cannot see. Each method is one request to yours:
 //!
 //! | Call | This example | Modal | Daytona |
 //! | --- | --- | --- | --- |
@@ -25,10 +22,9 @@
 //! | `kill` | `docker rm -f` | `sandbox.terminate` | delete the sandbox |
 //! | endpoints | `docker port` | `Tunnel.url` | `{port}-{id}.proxy.daytona.work` |
 //!
-//! The last row is the one to get right. These vendors publish a port at an
-//! address of their own rather than forwarding it to a host port, so
-//! `Sandbox::endpoints` is what the viewer URL is built from and a port
-//! missing from it has no URL at all.
+//! The last row is the one to get right: a vendor publishes a port at an
+//! address of its own rather than forwarding it, so `Sandbox::endpoints` is
+//! what the viewer URL is built from and a port missing from it has none.
 
 use async_trait::async_trait;
 use computer::sandboxes::remote::{self, NAME_KEY, RemoteApi, Sandbox, SandboxPlan};
@@ -71,10 +67,8 @@ impl Fleet {
         }
     }
 
-    /// Where each of the box's ports answers, which only the vendor knows.
-    ///
-    /// Here it is a host port picked by the daemon. In a cloud it is a
-    /// hostname per port, or a tunnel URL handed back at creation.
+    /// Where each of the box's ports answers: a host port picked by the
+    /// daemon here, a hostname or a tunnel URL in a cloud.
     async fn endpoints(&self, id: &str) -> Result<BTreeMap<u16, String>> {
         let printed = self.control(&["port", id]).await?;
 
@@ -109,9 +103,8 @@ impl RemoteApi for Fleet {
         let mut args = vec![
             "run".to_string(),
             "--detach".to_string(),
-            // A real sandbox has no entrypoint and comes up empty, so this one
-            // must not start a screen either: `RemoteMachine` boots the box
-            // itself, and a screen already running would refuse the second.
+            // A real sandbox comes up empty and `RemoteMachine` boots it, so
+            // this one must not start a screen of its own.
             "--entrypoint".to_string(),
             "sleep".to_string(),
         ];
@@ -142,10 +135,8 @@ impl RemoteApi for Fleet {
         self.sandbox(&id).await
     }
 
-    /// The name this crate gave the box, not the ID the vendor did.
-    ///
-    /// Every vendor assigns its own ID, so the name travels as metadata and
-    /// this is the lookup that turns one back into the other.
+    /// A vendor assigns its own ID, so the name travels as metadata and this
+    /// is the lookup that turns one back into the other.
     async fn find(&self, name: &str) -> Result<Option<Sandbox>> {
         let filter = format!("label={NAME_KEY}={name}");
         let found = self
@@ -255,8 +246,7 @@ impl RemoteApi for Fleet {
     }
 
     /// This vendor runs container images, so the default refusal is wrong for
-    /// it. Modal and Daytona want their own thing built first; leave it out
-    /// and a caller is told so before anything starts.
+    /// it. Leave it out where yours wants a template built first.
     async fn ensure_image(&self, config: &computer::Config) -> Result<()> {
         DockerMachine::new(Arc::clone(&self.docker) as Arc<dyn ContainerCli>)
             .ensure_image(config)

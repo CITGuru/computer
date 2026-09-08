@@ -9,39 +9,13 @@
 //! Every such vendor answers the same shape: create a sandbox, run a command
 //! in it, move a file, kill it, and publish its ports at an address of the
 //! vendor's own. [`RemoteApi`] is that shape. Implement it and
-//! [`RemoteMachine`] gives you a [`Machine`](crate::Machine) — with the parts
-//! that are nobody's vendor-specific business already written: what this
-//! process started, the lazy deadline, the name-to-ID join a sweep needs.
+//! [`RemoteMachine`] gives you a [`Machine`](crate::Machine), with what this
+//! process started, the lazy deadline and the name-to-ID join a sweep needs
+//! already written.
 //!
-//! [`e2b`](super::e2b) is the worked example: everything E2B does that nobody
-//! else does — a port that is a subdomain, two tokens where this carries one,
-//! an image that is a template — is one short file beside its HTTP client.
-//!
-//! # Seven methods
-//!
-//! [`RemoteApi::vendor`], [`available`](RemoteApi::available),
-//! [`create`](RemoteApi::create), [`find`](RemoteApi::find),
-//! [`kill`](RemoteApi::kill), [`exec`](RemoteApi::exec),
-//! [`read`](RemoteApi::read) and [`write`](RemoteApi::write). The rest have
-//! defaults, and each default is the honest answer for a vendor that lacks the
-//! thing: no deadline to push out, no listing to sweep, no way to kill a
-//! sandbox from a signal handler.
-//!
-//! # What changes when the box leaves this host
-//!
-//! - **Driving is identical.** A screen command is a command, and a sandbox
-//!   runs one.
-//! - **A port is an address the vendor chose**, so [`RemoteProfile`] rewrites
-//!   the viewer URL from [`Sandbox::endpoints`] and the machine reports an
-//!   identity port map.
-//! - **DevTools does not reach.** An endpoint out here is `wss` on a public
-//!   host and [`crate::cdp`] speaks plain TCP, so the profile withdraws the
-//!   claim rather than publishing a port to nowhere.
-//! - **The image is the vendor's.** This crate builds container images; a
-//!   vendor runs a template or a snapshot it built itself, and
-//!   [`RemoteApi::ensure_image`] refuses the mismatch with the way across.
-//! - **The viewer URL is withheld** unless you ask for it. See
-//!   [`RemoteMachine::public_viewer`], which explains why that is not privacy.
+//! Driving is identical. Three claims are not: a port is an address the vendor
+//! chose, DevTools does not reach, and the image is one the vendor built.
+//! [`e2b`](super::e2b) is the worked example of all three.
 //!
 //! # Writing one
 //!
@@ -79,7 +53,7 @@
 //! # computer.shutdown().await }
 //! ```
 //!
-//! [`crate::testing::ScriptedRemote`] tests all of that with no account and no
+//! [`crate::testing::ScriptedRemote`] tests one with no account and no
 //! network. `examples/custom_sandbox.rs` is a whole vendor in one file.
 
 pub mod api;
@@ -96,9 +70,8 @@ use std::sync::Arc;
 /// A machine and the profile that goes with it.
 ///
 /// They share the cell the sandbox lands in, which is what lets a profile
-/// built before the box exists format a URL containing an ID the vendor had
-/// not assigned yet. Building them apart is possible and gets the pairing
-/// wrong quietly, so this is the door.
+/// built before the box exists format a URL containing an ID nobody had yet.
+/// Building them apart gets that wrong quietly, so this is the door.
 pub fn pair(
     api: Arc<dyn RemoteApi>,
     image: Arc<dyn Profile>,

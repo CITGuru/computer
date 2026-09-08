@@ -1,16 +1,6 @@
-//! E2B as [`crate::sandboxes::remote`] sees it.
-//!
-//! That module already holds what every cloud vendor does the
-//! same way: what this process started, the deadline pushed out lazily, the
-//! join from the name a caller gave a box to the ID the vendor gave it. This
-//! is the rest — the part that is E2B's and nobody else's.
-//!
-//! Three things are that part. A port becomes a subdomain of the sandbox, so
-//! the endpoints are formatted rather than handed back. A data-plane call
-//! needs two tokens and a domain where the seam carries one token, so the rest
-//! of the description is held here and keyed by ID. And an image is a template
-//! E2B builds, so a container tag this crate built is refused with the way
-//! across.
+//! E2B as [`crate::sandboxes::remote`] sees it: the part that is E2B's and
+//! nobody else's, which is a port that becomes a subdomain, a second token the
+//! seam has nowhere to put, and an image that is a template.
 
 use super::api::{E2bApi, Sandbox, SandboxPlan};
 use crate::error::{Error, Result};
@@ -26,10 +16,8 @@ pub struct E2bVendor {
     api: Arc<dyn E2bApi>,
     /// ID to the sandbox as the control plane described it.
     ///
-    /// [`remote::Sandbox`] carries an ID, its endpoints and one token. E2B
-    /// needs two — envd for the data plane, the traffic token for the proxy in
-    /// front of every published port — and a domain that is not always
-    /// `e2b.app`, so what does not fit lives here.
+    /// [`remote::Sandbox`] carries one token; E2B needs two and a domain that
+    /// is not always `e2b.app`, so what does not fit lives here.
     known: Mutex<BTreeMap<String, Sandbox>>,
 }
 
@@ -53,11 +41,9 @@ impl E2bVendor {
 
     /// The whole description behind an ID.
     ///
-    /// Every [`remote::Sandbox`] reaching a data-plane call came from
-    /// [`RemoteApi::create`] or [`RemoteApi::find`], and both record what they
-    /// answered. An ID this has never seen is one no credential here can
-    /// drive, which is [`Error::Gone`] rather than a call that would be
-    /// refused for a reason nobody could act on.
+    /// `create` and `find` record what they answered, so an ID this has never
+    /// seen is one no credential here can drive — [`Error::Gone`], rather than
+    /// a call refused for a reason nobody could act on.
     fn described(&self, sandbox: &remote::Sandbox) -> Result<Sandbox> {
         self.known
             .lock()
@@ -66,8 +52,7 @@ impl E2bVendor {
             .ok_or_else(|| Error::Gone(sandbox.id.clone()))
     }
 
-    /// A sandbox as the seam carries it: an ID, a URL per published port, and
-    /// the token that proves a call to the agent inside.
+    /// A sandbox as the seam carries it.
     fn published(sandbox: &Sandbox, ports: &[u16]) -> remote::Sandbox {
         remote::Sandbox {
             id: sandbox.id.clone(),
@@ -122,8 +107,8 @@ impl RemoteApi for E2bVendor {
     /// A sandbox somebody else started, with the credentials that drive it.
     ///
     /// No endpoints: which ports the box serves is the image's answer, and
-    /// nothing out here has been told which image it was. The box drives; it
-    /// hands out no viewer URL, the same as before this seam existed.
+    /// nothing here was told which image it was. It drives; it hands out no
+    /// viewer URL.
     async fn find(&self, name: &str) -> Result<Option<remote::Sandbox>> {
         let Some(sandbox) = self.api.find(name).await? else {
             return Ok(None);

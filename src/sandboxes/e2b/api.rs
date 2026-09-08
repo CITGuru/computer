@@ -1,9 +1,4 @@
-//! What the machine needs from E2B, and nothing more.
-//!
-//! The seam sits here rather than on [`crate::microvm::MicroVmApi`] because a
-//! hypervisor forwards host-to-guest port pairs and E2B forwards none: it
-//! publishes a hostname per port, and every port field on a
-//! [`Plan`](crate::microvm::Plan) would be dead.
+//! What [`E2bVendor`](super::E2bVendor) needs from E2B, and nothing more.
 
 use crate::error::Result;
 use crate::exec::ExecResult;
@@ -42,9 +37,9 @@ pub const DEFAULT_USER: &str = "user";
 
 /// What a sandbox gets when the caller names no deadline.
 ///
-/// E2B's own default is 15 seconds, which is shorter than one image pull and
-/// far shorter than a desktop session.
-pub const DEFAULT_TTL: Duration = Duration::from_secs(5 * 60);
+/// The seam's, not E2B's: E2B defaults to 15 seconds, which is shorter than
+/// one image pull and far shorter than a desktop session.
+pub use crate::sandboxes::remote::DEFAULT_TTL;
 
 /// One sandbox, as the control plane described it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -84,9 +79,8 @@ impl Sandbox {
 
     /// The host one of the box's ports is published on.
     ///
-    /// A subdomain label rather than a translation, which is why the machine
-    /// reports an identity port map: the number out here really is the number
-    /// inside.
+    /// A subdomain label rather than a translation, which is why the port map
+    /// is an identity: the number out here really is the number inside.
     pub fn host(&self, port: u16) -> String {
         format!("{port}-{}.{}", self.id, self.domain())
     }

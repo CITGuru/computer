@@ -3,14 +3,6 @@
 //! [`Machine`] is the only thing that knows where a box is, so the driver, the
 //! screens, the takeover gate and the descriptor above this are the same code
 //! a container runs.
-//!
-//! Four things are this module's own rather than any vendor's. A sandbox is
-//! found by metadata, because the vendor assigns the ID. The screen is brought
-//! up with an explicit boot command, because a sandbox has no entrypoint. The
-//! deadline is pushed out lazily from [`Machine::exec`], because every call
-//! reaches the box through there and refreshing on each one would put a round
-//! trip in front of every click. And the viewer URL is withheld by default,
-//! for the reason [`RemoteMachine::public_viewer`] gives.
 
 use super::api::{DEFAULT_TTL, NAME_KEY, RemoteApi, Sandbox, SandboxPlan};
 use super::profile::Remote;
@@ -39,8 +31,8 @@ struct Held {
 /// viewer URL.
 pub struct RemoteMachine {
     api: Arc<dyn RemoteApi>,
-    /// Shared with that profile: a sandbox's host contains an ID assigned
-    /// after the profile was built.
+    /// Shared with that profile: the address contains an ID assigned after
+    /// the profile was built.
     remote: Arc<Remote>,
     held: Mutex<BTreeMap<String, Held>>,
     ttl: Duration,
@@ -58,10 +50,8 @@ impl RemoteMachine {
         }
     }
 
-    /// How long a sandbox lives with nothing asked of it.
-    ///
-    /// Pushed out from [`Machine::exec`] while work is arriving, so this is
-    /// how long a box survives silence rather than how long it survives.
+    /// How long a sandbox survives silence, rather than how long it lives:
+    /// the deadline is pushed out while work is arriving.
     pub fn expiring_after(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
         self
@@ -69,21 +59,12 @@ impl RemoteMachine {
 
     /// Hand out the sandbox's own URL as the viewer.
     ///
-    /// **Off is not privacy, and saying so matters.** Every [`Machine`] on
-    /// this host publishes on loopback, where the bind is the whole
-    /// authentication story. A sandbox's ports are published by the vendor, at
-    /// an address the vendor chose, so that address answers whether or not
-    /// anything here prints it.
-    ///
-    /// What this setting decides is only whether the URL is handed to a
-    /// caller. Off, the viewer ports are left out of the port map and
-    /// [`crate::Computer::viewer_url`] answers `None`; the desktop is still
-    /// driveable from here, and the URL still exists.
-    ///
-    /// On, [`Machine::reach`] says [`Routable`](crate::Reach::Routable), so a
-    /// launch with an open viewer is refused the same way `Bind::Any` is.
-    /// Whether the vendor's own proxy gates that URL is the vendor's decision
-    /// and not this one — check it rather than assume it.
+    /// **Off is not privacy.** The vendor publishes those ports at an address
+    /// it chose, and that address answers whether or not this crate prints it.
+    /// Off withholds the URL and nothing else: the port map stays empty,
+    /// [`crate::Computer::viewer_url`] answers `None`, and the box still
+    /// drives. On, [`Machine::reach`] says [`Routable`](crate::Reach::Routable),
+    /// so an open viewer is refused the way `Bind::Any` is.
     pub fn public_viewer(mut self, public: bool) -> Self {
         self.public_viewer = public;
         self
@@ -95,9 +76,6 @@ impl RemoteMachine {
 
     fn plan_for(&self, name: &str, config: &Config) -> SandboxPlan {
         let mut metadata = config.labels.clone();
-        // The vendor assigns the ID, so the caller's name has to be somewhere
-        // a listing can be filtered by or `running` and a sweep have nothing
-        // to match on.
         metadata.insert(NAME_KEY.to_string(), name.to_string());
 
         SandboxPlan {
@@ -129,10 +107,10 @@ impl RemoteMachine {
         self.held.lock().ok()?.get(name).cloned()
     }
 
-    /// The sandbox behind a name, from this process or from the control plane.
+    /// The sandbox behind a name, from memory or from the control plane.
     ///
-    /// A box this process did not start has to be asked about, and asking
-    /// costs a round trip — so what was started here is answered from memory.
+    /// Asking costs a round trip, so what this process started is not asked
+    /// about.
     async fn sandbox(&self, name: &str) -> Result<Sandbox> {
         if let Some(held) = self.recall(name) {
             return Ok(held.sandbox);
@@ -151,8 +129,8 @@ impl RemoteMachine {
 
     /// Push the deadline out, but only once it is worth a round trip.
     ///
-    /// Half the deadline, so a box in use never comes within half a lifetime
-    /// of expiring and a busy screen does not spend a call per click saying so.
+    /// Half the deadline: a box in use never comes within half a lifetime of
+    /// expiring, and a busy screen spends no call per click saying so.
     async fn keep_alive(&self, name: &str) {
         let Some(held) = self.recall(name) else {
             return;
@@ -183,13 +161,11 @@ impl RemoteMachine {
         }
     }
 
-    /// What is reachable from out here, as the port map everything above
-    /// builds URLs from.
+    /// The port map everything above builds URLs from.
     ///
-    /// Identity, and not a fudge: these vendors publish a port at an address
-    /// of their own rather than translating it, so the number out here is the
-    /// number inside. Empty where the viewer is withheld, because a URL the
-    /// caller is not meant to have is worse than no URL.
+    /// Identity, and not a fudge: a vendor publishes a port at an address of
+    /// its own rather than translating it, so the number out here is the
+    /// number inside.
     fn published(&self, sandbox: &Sandbox) -> PortMap {
         match self.public_viewer {
             true => sandbox
@@ -212,13 +188,10 @@ impl Machine for RemoteMachine {
         self.api.available().await
     }
 
-    /// A bind address means nothing here: the vendor publishes a port at an
-    /// address of its own, so [`Config::bind`] is never consulted and a rule
-    /// phrased as "loopback or not" would miss this machine entirely.
-    ///
-    /// `public_viewer` is the whole of the question, and it lines up with what
-    /// [`crate::Reach`] claims — not that nobody else can connect, but that
-    /// this crate did not hand out the address.
+    /// A bind address means nothing here, so `public_viewer` is the whole of
+    /// the question. It lines up with what [`crate::Reach`] claims: not that
+    /// nobody else can connect, but that this crate did not hand out the
+    /// address.
     fn reach(&self, _config: &Config) -> crate::Reach {
         match self.public_viewer {
             true => crate::Reach::Routable,
@@ -286,8 +259,7 @@ impl Machine for RemoteMachine {
     }
 
     async fn env(&self, name: &str) -> BTreeMap<String, String> {
-        // What this process asked for, where it was this process that asked. A
-        // sandbox somebody else started answers with nothing rather than a
+        // A sandbox somebody else started answers with nothing rather than a
         // guess, and the descriptor falls back to what the profile claims.
         self.recall(name).map(|held| held.env).unwrap_or_default()
     }
@@ -346,10 +318,8 @@ impl Machine for RemoteMachine {
         Ok(())
     }
 
-    /// Sandboxes carrying this metadata key, keyed by the name this crate gave
-    /// them rather than by the ID the vendor did.
-    ///
-    /// A sweeper works from names, and an ID means nothing to it.
+    /// Keyed by the name this crate gave a box, because a sweeper works from
+    /// names and an ID means nothing to it.
     async fn labelled(&self, label: &str) -> Result<Vec<(String, String)>> {
         let named: BTreeMap<String, String> =
             self.api.carrying(NAME_KEY).await?.into_iter().collect();

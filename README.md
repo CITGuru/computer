@@ -714,7 +714,7 @@ let computer = Computer::builder()
 let frame = computer.screenshot().await?;
 ```
 
-Driving is the same code. Three things are not:
+Driving is the same code. These are not:
 
 
 | Behavior | Container or microVM              | E2B                                       |
@@ -738,11 +738,11 @@ Computer::builder().machine(Arc::new(machine.public_viewer(true)))
 
 DevTools does not travel. An endpoint out here would be `wss` on a public host and this crate's DevTools client speaks plain TCP, so `RemoteProfile` drops the bridge port and clears the `cdp` claim. `devtools()` returns `None` and `audit` skips the browser check rather than failing it. Synthetic input, screenshots, the clipboard, the viewer and the takeover are untouched.
 
-`E2bApi` is the seam and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. [`docs/runtimes/e2b-machine.md`](docs/runtimes/e2b-machine.md) records the design.
+`E2bApi` is the seam onto E2B and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. Everything above it is shared with every other cloud vendor, which the next section is about.
 
 ## Run in another cloud sandbox
 
-E2B is one vendor. Modal, Daytona and the rest have the same shape: create a sandbox, run a command in it, move a file, kill it, and publish its ports at an address of the vendor's own. `sandboxes::remote` is that shape as a trait, so a new vendor is seven calls and no crate feature:
+E2B is one vendor. Modal, Daytona and the rest have the same shape: create a sandbox, run a command in it, move a file, kill it, and publish its ports at an address of the vendor's own. `sandboxes::remote` is that shape as a trait, so a new vendor is eight calls and no crate feature:
 
 ```rust
 use computer::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};

@@ -12,7 +12,7 @@
 //!
 //! [`remote`] is where the cloud vendors' own overlap went: holding what this
 //! process started, pushing a deadline out, joining a name to the ID a sweep
-//! needs. A vendor there implements seven calls and nothing else.
+//! needs. A vendor there implements eight calls and nothing else.
 
 pub mod e2b;
 pub mod microsandbox;

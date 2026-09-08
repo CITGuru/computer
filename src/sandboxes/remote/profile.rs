@@ -1,8 +1,8 @@
 //! The same image, reached over the internet instead of over loopback.
 //!
-//! Two of an image's claims stop being true when the box moves off this host,
-//! and a profile is where an image's claims live. The viewer is not on
-//! `127.0.0.1` any more, and DevTools is not reachable at all.
+//! A profile is where an image's claims live, and two of them stop being true
+//! when the box moves off this host: the viewer is not on `127.0.0.1`, and
+//! DevTools is not reachable at all.
 
 use super::api::Sandbox;
 use crate::profile::{
@@ -14,11 +14,9 @@ use std::sync::{Arc, Mutex};
 
 /// Where the sandbox turned out to be.
 ///
-/// A container's ports are known once `docker port` answers, and a profile can
-/// be built before either. A sandbox's address contains an ID the vendor
-/// assigns, so it is not known until the sandbox exists — and the profile that
-/// formats the viewer URL is built before that. The machine and the profile
-/// hold one of these between them.
+/// Its address contains an ID the vendor assigns, so it is not known until the
+/// sandbox exists — and the profile that formats the viewer URL is built
+/// before that. The machine and the profile hold one of these between them.
 #[derive(Debug, Default)]
 pub struct Remote(Mutex<Option<Sandbox>>);
 
@@ -46,8 +44,7 @@ impl Remote {
 
 /// An image's contract, with the two claims that do not survive the move.
 ///
-/// Everything else delegates, so a caller who wrote their own profile keeps it
-/// — this wraps one rather than replacing it.
+/// Everything else delegates: this wraps a profile rather than replacing it.
 pub struct RemoteProfile {
     inner: Arc<dyn Profile>,
     remote: Arc<Remote>,
@@ -74,12 +71,9 @@ impl Profile for RemoteProfile {
 
     /// The image's ports, minus the DevTools bridge.
     ///
-    /// **Withdrawn rather than published to nowhere.** An endpoint out here is
+    /// Withdrawn rather than published to nowhere: an endpoint out here is
     /// `wss` on a public host and [`crate::cdp`] connects with a plain
-    /// `TcpStream`, so neither the URL nor the transport survives. Dropping it
-    /// here takes it out of what is published, makes
-    /// [`crate::Computer::devtools`] answer `None`, and is why `support_at`
-    /// below stops claiming it.
+    /// `TcpStream`, so neither the URL nor the transport survives.
     fn ports(&self) -> PortLayout {
         PortLayout {
             devtools_bridge: None,
@@ -95,10 +89,8 @@ impl Profile for RemoteProfile {
         let mut support = self.inner.support_at(width, height);
 
         if let Some(browser) = support.browser.as_mut() {
-            // The browser is still there and still headed; nothing out here
-            // can reach its debugger. `audit` skips the check rather than
-            // failing it, which is the difference between a claim withdrawn
-            // and a claim broken.
+            // A claim withdrawn rather than one broken, so `audit` skips the
+            // check instead of failing it.
             browser.cdp = false;
         }
         support
@@ -149,12 +141,11 @@ impl Profile for RemoteProfile {
         self.inner.geometry_from(environment)
     }
 
-    /// The address the vendor published this port at, which is not a host port.
+    /// The address the vendor published this port at, not a host port.
     ///
-    /// Falls back to the inner profile where there is no sandbox yet, and
-    /// where the port was never published. Nothing calls this that early — a
-    /// screen has no URL until the box it is on was started — and answering
-    /// with loopback beats formatting a host out of an ID nobody has yet.
+    /// Falls back to the inner profile before the sandbox exists, and for a
+    /// port that was never published: answering with loopback beats formatting
+    /// a host out of an ID nobody has yet.
     fn viewer_url(&self, at: &crate::Address, ticket: Option<&crate::Secret>) -> String {
         let Some(base) = self
             .remote

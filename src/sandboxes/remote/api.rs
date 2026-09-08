@@ -14,15 +14,14 @@ use std::time::Duration;
 
 /// The metadata key carrying the name this crate gave a box.
 ///
-/// A vendor assigns the sandbox ID, so a caller's name has to live somewhere
-/// the control plane can be filtered by, or [`Machine::running`](crate::Machine)
-/// has nothing to ask about and a sweep reports IDs nothing recognises.
+/// A vendor assigns the ID, so the name has to live somewhere a listing can be
+/// filtered by, or a sweep reports IDs nothing recognises.
 pub const NAME_KEY: &str = "computer.name";
 
 /// What a sandbox gets when the caller names no deadline.
 ///
-/// Long enough for an image pull and a desktop session, which the vendors'
-/// own defaults are not.
+/// Long enough for an image pull and a desktop session, which the vendors' own
+/// defaults are not.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// One sandbox, as the control plane described it.
@@ -32,17 +31,14 @@ pub struct Sandbox {
 
     /// Where each published port answers from out here, as a base URL.
     ///
-    /// A map rather than a pattern: E2B and Daytona format a host per port
-    /// and Modal hands back a tunnel URL that no template produces. Empty
-    /// means nothing out here reaches the box, which is the answer a vendor
-    /// gets by saying nothing.
+    /// A map rather than a pattern, because Modal hands back a tunnel URL that
+    /// no pattern produces. Empty means nothing out here reaches the box.
     pub endpoints: BTreeMap<u16, String>,
 
-    /// What a later data-plane call has to prove.
+    /// What a later data-plane call has to prove, carried back untouched.
     ///
-    /// Opaque to this crate, which only carries it back to
-    /// [`RemoteApi::exec`] and its neighbours. A vendor needing more than one
-    /// keeps the rest inside its own implementation, keyed by [`Sandbox::id`].
+    /// A vendor needing more than one keeps the rest inside its own
+    /// implementation, keyed by [`Sandbox::id`].
     pub token: Option<String>,
 }
 
@@ -69,8 +65,8 @@ impl Sandbox {
 
     /// Publish every port at `host`, formatted from the port and the ID.
     ///
-    /// The shape both E2B and Daytona use: `6080-<id>.<domain>`. A vendor
-    /// that names its own URLs fills [`Sandbox::endpoints`] directly instead.
+    /// The `6080-<id>.<domain>` shape E2B and Daytona use. A vendor that names
+    /// its own URLs fills [`Sandbox::endpoints`] directly.
     pub fn published_as(
         mut self,
         ports: impl IntoIterator<Item = u16>,
@@ -88,7 +84,6 @@ impl Sandbox {
         self
     }
 
-    /// Where one port answers, or `None` where it was never published.
     pub fn url(&self, port: u16) -> Option<&str> {
         self.endpoints.get(&port).map(String::as_str)
     }
@@ -108,8 +103,7 @@ pub struct SandboxPlan {
     pub image: String,
 
     /// The ports the box serves, so [`RemoteApi::create`] can answer with the
-    /// address of each. Known before anything is created because the profile
-    /// says which ports its image has.
+    /// address of each.
     pub publish: Vec<u16>,
 
     pub env: BTreeMap<String, String>,
@@ -137,14 +131,9 @@ impl Default for SandboxPlan {
 
 /// One sandbox vendor, as everything above it needs to see one.
 ///
-/// Seven methods have no default, and they are the ones only the vendor can
-/// answer. The rest describe what a vendor may not have — a deadline to push
-/// out, a listing to sweep, a way to kill a sandbox from a signal handler —
-/// and their defaults are the honest answers rather than placeholders.
-///
-/// Nothing here needs a crate feature. A caller with their own HTTP client
-/// implements this and gets [`RemoteMachine`](super::RemoteMachine),
-/// [`RemoteProfile`](super::RemoteProfile) and every driver above them.
+/// The methods with defaults are the ones a vendor may not have: a deadline to
+/// push out, a listing to sweep, a way to kill a sandbox from a signal
+/// handler. Leaving one is an answer, not a gap.
 #[async_trait]
 pub trait RemoteApi: Send + Sync {
     /// What to call this vendor in an error message.
@@ -160,8 +149,8 @@ pub trait RemoteApi: Send + Sync {
 
     /// The sandbox carrying this name, with its endpoints and its token.
     ///
-    /// A listing alone is not enough where it reports IDs and metadata and no
-    /// credentials: nothing found that way could be driven.
+    /// A listing alone is not enough where it reports no credentials: nothing
+    /// found that way could be driven.
     async fn find(&self, name: &str) -> Result<Option<Sandbox>>;
 
     async fn kill(&self, id: &str) -> Result<()>;
@@ -179,43 +168,36 @@ pub trait RemoteApi: Send + Sync {
 
     /// Push the deadline out to `ttl` from now.
     ///
-    /// The default is for a vendor whose sandboxes have no deadline. It is
-    /// called while work is arriving, so an implementation costs a round trip
-    /// per half-lifetime and no more.
+    /// Called while work is arriving, so it costs a round trip per
+    /// half-lifetime and no more.
     async fn keep_alive(&self, _id: &str, _ttl: Duration) -> Result<()> {
         Ok(())
     }
 
-    /// What the box itself has said, which is where a screen that never came
-    /// up explains itself.
+    /// What the box itself has said, where a screen that never came up
+    /// explains itself.
     async fn logs(&self, _id: &str) -> Result<String> {
         Ok(String::new())
     }
 
-    /// Every sandbox carrying this metadata key, and its value.
-    ///
-    /// Sandbox ID to value. [`RemoteMachine`](super::RemoteMachine) turns
-    /// those into the names this crate gave them, because a sweeper works
-    /// from names.
+    /// Sandbox ID to the value it carries under this key.
     async fn carrying(&self, _key: &str) -> Result<Vec<(String, String)>> {
         Ok(Vec::new())
     }
 
     /// Whether this vendor can be asked what it holds.
     ///
-    /// Off unless [`RemoteApi::carrying`] is implemented; a sweep over a
-    /// vendor that lists nothing would report every box as already gone.
+    /// A sweep over a vendor that lists nothing reports every box as gone.
     fn sweepable(&self) -> bool {
         false
     }
 
     /// Make sure the image exists, or refuse it with the way across.
     ///
-    /// The default refuses a container image this crate built, because these
-    /// vendors run their own thing — a template, a snapshot — and the failure
-    /// otherwise arrives much later as an unknown image, which sends the
-    /// caller looking for a typo. A vendor that pulls an OCI reference
-    /// overrides this with `Ok(())`.
+    /// The default refuses a container image this crate built: the failure
+    /// otherwise arrives later as an unknown image, which sends the caller
+    /// looking for a typo. A vendor that pulls an OCI reference overrides this
+    /// with `Ok(())`.
     async fn ensure_image(&self, config: &Config) -> Result<()> {
         let Some(bundle) = config.bundle.as_ref().filter(|b| b.owns(&config.image)) else {
             return Ok(());
@@ -238,9 +220,8 @@ pub trait RemoteApi: Send + Sync {
 
     /// A command that kills a sandbox with no async runtime in the room.
     ///
-    /// `Drop` cannot await. `None` means a dropped handle leaves the sandbox
-    /// running until its deadline, which is a fact about the vendor rather
-    /// than something to hide.
+    /// `Drop` cannot await. `None` leaves a dropped handle's sandbox running
+    /// until its deadline.
     fn reaper(&self, _id: &str) -> Option<(String, Vec<String>)> {
         None
     }
