@@ -365,6 +365,12 @@ Computer::builder().image_dir("images/ubuntu")
 
 `examples/custom_image.rs` builds one and drives a box in it, and `examples/images/acme/` is the whole Dockerfile: an image that keeps the X11 contract adds to the base rather than reimplementing it, which is why that file is a dozen lines. `images/ubuntu/` is the other way round — a contract built from a bare distribution, which is what a genuinely different base needs.
 
+`images/tiny/` is a lightweight desktop image you can take for a run:
+
+```rust
+Computer::builder().image_dir("images/tiny")
+```
+
 The directory can be anywhere and must contain a `Dockerfile` that implements the selected profile. Its tag follows the context contents, extra packages and host architecture, so an edit builds a new image instead of reusing stale bytes. Extra packages are passed as the `EXTRA_PACKAGES` build argument.
 
 An image you name yourself is always fetched, never built:
@@ -782,7 +788,7 @@ That example is a whole vendor in one file, backed by `docker` on this host so e
 
 Modal is the awkward one worth naming: its sandbox control plane is gRPC behind a Python API, so the calls go to a small Modal web endpoint of your own that creates the sandbox and returns its ID and tunnel URLs. The `RemoteApi` above it is then ordinary HTTP.
 
-[`docs/runtimes/other-sandboxes.md`](docs/runtimes/other-sandboxes.md) is the guide. `sandboxes::e2b` is the worked reference: E2B goes through this seam, and everything that is E2B's own — a port that is a subdomain, two tokens where the seam carries one, an image that is a template — is one short file beside its HTTP client.
+`sandboxes::e2b` is the worked reference: E2B goes through this seam, and everything that is E2B's own — a port that is a subdomain, two tokens where the seam carries one, an image that is a template — is one short file beside its HTTP client.
 
 ## Remove desktops that outlived their program
 

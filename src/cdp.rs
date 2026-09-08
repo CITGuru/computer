@@ -932,11 +932,11 @@ pub struct Session {
 pub struct Database {
     pub name: String,
     pub version: u64,
-    pub stores: Vec<Store>,
+    pub stores: Vec<BrowserStore>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Store {
+pub struct BrowserStore {
     pub name: String,
     /// The path a record's key is read from, where the store has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
