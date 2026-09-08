@@ -173,7 +173,6 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// Act on the element a query names.
     pub async fn on_element(&self, id: &str, what: &OnElement) -> Result<ElementResult> {
         self.send(
             reqwest::Method::POST,

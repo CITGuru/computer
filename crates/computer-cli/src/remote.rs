@@ -1,9 +1,7 @@
 //! Driving boxes through a server.
 
 use crate::{USAGE, flag, framing, positional, present, wheel};
-use computer_api::{
-    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, Region, Shot, Window,
-};
+use computer_api::{Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, Rect, Shot, Window};
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Selection, Spec};
 use std::time::Duration;
@@ -126,7 +124,7 @@ fn asked(args: &[String]) -> Result<Shot, String> {
             _ => None,
         },
         region: match &shot.of {
-            computer::Of::Region(area) => Some(Region {
+            computer::Of::Region(area) => Some(Rect {
                 at: Point {
                     x: area.at.x,
                     y: area.at.y,

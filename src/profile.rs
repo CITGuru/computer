@@ -223,7 +223,6 @@ pub trait Profile: Send + Sync {
         Arc::new(CommandBrowserRuntime)
     }
 
-    /// How a running screen's wallpaper is changed.
     fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
         Arc::new(UnsupportedWallpaperRuntime)
     }
@@ -278,7 +277,6 @@ pub trait Profile: Send + Sync {
         url
     }
 
-    /// Start a screen's whole stack.
     fn start_command(&self, screen: ScreenId) -> Vec<String> {
         self.screen_command(ScreenAction::Start, screen, &[])
     }
@@ -315,7 +313,6 @@ pub trait Profile: Send + Sync {
         self.release_command(screen, FORCE)
     }
 
-    /// Open a URL in that screen's browser.
     fn open_command(&self, screen: ScreenId, url: &str) -> Vec<String> {
         self.screen_command(ScreenAction::Open, screen, &[url.to_string()])
     }

@@ -29,7 +29,6 @@ async fn a_real_box_does_everything_the_readme_claims() {
 
     let outcome = exercise(&computer).await;
 
-    // Taken away whatever happened above.
     computer.shutdown().await.expect("it goes away");
     outcome.expect("every step");
 }
@@ -374,7 +373,12 @@ async fn window_control(computer: &Computer) -> computer::Result<()> {
     assert_eq!((sized.width, sized.height), (800, 600));
 
     let moved = screen
-        .arrange(&browser.id, Arrange::At(Point::new(120, 90)))
+        .arrange(
+            &browser.id,
+            Arrange::At {
+                to: Point::new(120, 90),
+            },
+        )
         .await?;
     println!("  moved: {},{}", moved.at.x, moved.at.y);
     assert!(

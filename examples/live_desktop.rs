@@ -32,7 +32,6 @@ async fn main() {
 
     let outcome = drive(&computer).await;
 
-    // Taken away whatever happened above.
     if let Err(error) = computer.shutdown().await {
         eprintln!("could not shut down: {error}");
     }

@@ -132,7 +132,6 @@ impl Devtools {
             .collect())
     }
 
-    /// Open a new tab.
     pub async fn open(&self, url: &str) -> Result<Target> {
         // `PUT`, because Chromium stopped accepting `GET` on this endpoint.
         let value = self
@@ -149,7 +148,6 @@ impl Devtools {
             .map(|_| ())
     }
 
-    /// Attach to a target and speak the protocol to it.
     pub async fn attach(&self, target: &Target) -> Result<Page> {
         Ok(Page {
             connection: Connection::open(&self.host, self.port, &target.ws_path).await?,
@@ -986,7 +984,6 @@ pub struct Cookie {
     pub same_site: Option<String>,
 }
 
-/// Which search engine a query is put to.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SearchProvider {
     /// Its plain endpoint, which renders results as ordinary HTML.
@@ -1063,7 +1060,6 @@ const LINKS_DEFAULT: usize = 100;
 /// How often a wait asks whether the page has caught up.
 const POLL: Duration = Duration::from_millis(120);
 
-/// Where a scroll should end up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scroll {
     /// This far from where it is now. Positive `y` moves down the page.
@@ -1678,7 +1674,6 @@ impl Page {
         self.call("Page.reload", json!({})).await.map(|_| ())
     }
 
-    /// One step along the history, in whichever direction.
     async fn step_history(&mut self, by: i64) -> Result<()> {
         let history = self.call("Page.getNavigationHistory", json!({})).await?;
 

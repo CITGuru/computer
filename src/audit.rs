@@ -200,7 +200,6 @@ pub async fn audit(computer: &Computer) -> Audit {
     audit
 }
 
-/// Audit, and fail where a claim does not hold.
 pub async fn audit_strictly(computer: &Computer, within: Duration) -> Result<Audit> {
     let audit = tokio::time::timeout(within, audit(computer))
         .await

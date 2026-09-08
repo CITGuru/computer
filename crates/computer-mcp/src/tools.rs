@@ -8,8 +8,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, OnElement, Reading, Region,
-    ScrollTo, Shot, Want, Where,
+    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, OnElement, Reading, Rect, ScrollTo,
+    Shot, Want, Where,
 };
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
@@ -1144,7 +1144,7 @@ fn framing(arguments: &Value) -> Result<Shot, String> {
 
     let region = match (whole("x"), whole("y"), whole("width"), whole("height")) {
         (None, None, None, None) => None,
-        (Some(x), Some(y), Some(width), Some(height)) => Some(Region {
+        (Some(x), Some(y), Some(width), Some(height)) => Some(Rect {
             at: Point { x, y },
             width,
             height,

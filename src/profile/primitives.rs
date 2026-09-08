@@ -6,6 +6,7 @@ use crate::{
     ScreenAction, ScreenId, Secret, Viewers,
 };
 use async_trait::async_trait;
+pub use computer_types::{Arrange, Window};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -98,7 +99,6 @@ impl BrowserRuntime for CommandBrowserRuntime {
     }
 }
 
-/// Change one running screen's wallpaper.
 #[async_trait]
 pub trait WallpaperRuntime: Send + Sync {
     async fn set(
@@ -161,7 +161,6 @@ impl WallpaperRuntime for CommandWallpaperRuntime {
     }
 }
 
-/// The built-in X11 wallpaper setter.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct X11WallpaperRuntime;
 
@@ -180,7 +179,6 @@ impl WallpaperRuntime for X11WallpaperRuntime {
     }
 }
 
-/// The built-in Wayland wallpaper setter.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WaylandWallpaperRuntime;
 
@@ -246,22 +244,6 @@ impl WallpaperRuntime for UnsupportedWallpaperRuntime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Window {
-    /// An X11 window id, or a sway container id.
-    pub id: String,
-    /// What the title bar says, which moves: a text editor's becomes the name
-    /// of the file the moment one is saved.
-    pub title: String,
-    /// What the program calls itself, which does not. The thing to match on
-    /// when looking for an application rather than for a document.
-    pub class: String,
-    /// Its top-left corner, not its middle.
-    pub at: Point,
-    pub width: u32,
-    pub height: u32,
-}
-
 /// Starting programs on a screen, and finding what they drew.
 ///
 /// A mapped window is not a drawn one: GIMP maps a splash carrying its own
@@ -274,21 +256,6 @@ pub struct Launch {
     /// How long the window has to hold still before it counts as drawn.
     pub settle: Duration,
     pub within: Duration,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Arrange {
-    /// Its top-left corner.
-    At(Point),
-    Size {
-        width: u32,
-        height: u32,
-    },
-    Maximise,
-    /// Out of the way without closing it. Sway has no such state, so there it
-    /// is the scratchpad, which `Restore` brings it back from.
-    Minimise,
-    Restore,
 }
 
 #[async_trait]
@@ -524,7 +491,7 @@ echo waited"#
         let verbs: Vec<String> = match how {
             // A maximised window is the size the manager gives it, and ignores
             // a move or a resize until it is not one.
-            Arrange::At(to) => vec![
+            Arrange::At { to } => vec![
                 GATHER.to_string(),
                 format!("xdotool windowmove $w {} {}", to.x, to.y),
             ],
@@ -892,7 +859,7 @@ for n in walk(json.load(sys.stdin)):
     /// state verbs leave the tiling alone.
     fn arranging(screen: ScreenId, window: &str, how: Arrange) -> Vec<String> {
         let verb: Vec<String> = match how {
-            Arrange::At(to) => vec![format!(
+            Arrange::At { to } => vec![format!(
                 "floating enable, move absolute position {} {}",
                 to.x, to.y
             )],
@@ -1694,7 +1661,6 @@ impl ProfileBuilder {
         self
     }
 
-    /// The variables one screen's commands run with.
     pub fn screen_environment<E>(mut self, environment: E) -> Self
     where
         E: ScreenEnvironment + 'static,
@@ -1867,7 +1833,9 @@ mod tests {
     fn test_every_x11_arrangement_names_its_own_verb() {
         let verb = |how| X11AppRuntime::arranging("42", how).remove(2);
 
-        let placed = verb(Arrange::At(Point::new(10, 20)));
+        let placed = verb(Arrange::At {
+            to: Point::new(10, 20),
+        });
         assert!(placed.contains("windowmove $w 10 20"), "{placed}");
         assert!(placed.contains("remove,maximized_vert"), "{placed}");
 
@@ -1920,7 +1888,13 @@ mod tests {
 
     #[test]
     fn test_sway_floats_a_window_before_it_is_given_a_place() {
-        let place = WaylandAppRuntime::arranging(ScreenId(0), "7", Arrange::At(Point::new(5, 6)));
+        let place = WaylandAppRuntime::arranging(
+            ScreenId(0),
+            "7",
+            Arrange::At {
+                to: Point::new(5, 6),
+            },
+        );
         let script = place.last().expect("a script");
 
         assert!(script.contains("floating enable, move absolute position 5 6"));

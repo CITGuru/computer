@@ -50,7 +50,6 @@ pub trait Machine: Send + Sync {
         None
     }
 
-    /// Start a box, and report what its ports were mapped to.
     async fn start(&self, name: &str, config: &Config) -> Result<PortMap>;
 
     async fn running(&self, name: &str) -> Result<bool>;

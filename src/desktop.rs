@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::machine::MachineHost;
 use crate::screens::ControlGate;
 use async_trait::async_trait;
+pub use computer_types::{Button, Held, Point, Rect, Selection};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -112,7 +113,6 @@ pub struct Viewers {
 }
 
 impl Viewers {
-    /// Whether a person is on the input right now.
     pub fn person_present(&self) -> bool {
         self.driving > 0
     }
@@ -221,35 +221,6 @@ pub struct BrowserEndpoint {
     pub ws_url: String,
 }
 
-/// Top-left origin, device pixels, and the same coordinates the screenshot came
-/// back in — a click against a scaled frame lands somewhere else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Point {
-    pub x: u32,
-    pub y: u32,
-}
-
-impl Point {
-    pub const fn new(x: u32, y: u32) -> Self {
-        Self { x, y }
-    }
-}
-
-impl From<(u32, u32)> for Point {
-    fn from((x, y): (u32, u32)) -> Self {
-        Self { x, y }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Button {
-    #[default]
-    Left,
-    Right,
-    Middle,
-}
-
 /// A wheel movement, in notches. Positive `dy` scrolls down and positive `dx`
 /// scrolls right.
 ///
@@ -292,54 +263,6 @@ impl Delta {
     }
 }
 
-/// Shift-click extends a selection, ctrl-click adds to one, alt-drag moves a
-/// window. No amount of pressing the key first fakes one: the press ends with
-/// the command that made it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Held {
-    Shift,
-    Ctrl,
-    Alt,
-    Super,
-}
-
-impl Held {
-    /// The same spellings the chord parser takes, so a caller does not learn
-    /// two vocabularies for one key.
-    pub fn named(word: &str) -> Option<Self> {
-        match word.trim().to_ascii_lowercase().as_str() {
-            "shift" => Some(Self::Shift),
-            "ctrl" | "control" => Some(Self::Ctrl),
-            "alt" | "option" => Some(Self::Alt),
-            "meta" | "cmd" | "command" | "super" | "win" => Some(Self::Super),
-            _ => None,
-        }
-    }
-
-    pub fn keysym(self) -> &'static str {
-        match self {
-            Self::Shift => "shift",
-            Self::Ctrl => "ctrl",
-            Self::Alt => "alt",
-            Self::Super => "super",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rect {
-    pub at: Point,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl Rect {
-    pub const fn new(at: Point, width: u32, height: u32) -> Self {
-        Self { at, width, height }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Shot {
     pub of: Of,
@@ -375,30 +298,6 @@ impl Shot {
     pub fn scaled(mut self, percent: u32) -> Self {
         self.scale = Some(percent);
         self
-    }
-}
-
-/// Which X selection is meant.
-///
-/// Copy and paste uses `CLIPBOARD`. Dragging the mouse over text fills
-/// `PRIMARY`, which a middle click pastes. They hold different text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Selection {
-    /// What copy and paste uses, and what a caller means when it says nothing.
-    #[default]
-    Clipboard,
-    /// What selecting text with the mouse fills, and a middle click pastes.
-    Primary,
-}
-
-impl Selection {
-    /// The name `xclip` takes.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Clipboard => "clipboard",
-            Self::Primary => "primary",
-        }
     }
 }
 

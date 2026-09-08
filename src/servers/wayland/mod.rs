@@ -496,7 +496,6 @@ pub fn parse_png_size(output: &str) -> Option<(u32, u32)> {
     (width > 0 && height > 0).then_some((width, height))
 }
 
-/// The Wayland driver, for a box running the compositor image.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WaylandDriver;
 

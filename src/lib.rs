@@ -1134,7 +1134,6 @@ impl Computer {
         }
     }
 
-    /// Stop a screen's whole stack.
     pub async fn close_screen(&self, screen: ScreenId) -> Result<()> {
         self.runtimes
             .screen
@@ -1600,7 +1599,6 @@ impl Desktop for Computer {
     }
 }
 
-/// One screen of a box.
 pub struct Screen {
     /// Behind the trait, not the X11 type: which display server is under a
     /// screen is the image's business, and nothing above here should have to
@@ -1655,7 +1653,6 @@ impl Screen {
         self.ports
     }
 
-    /// The driver, for code that wants a `&dyn Desktop`.
     pub fn desktop(&self) -> &dyn Desktop {
         self.driver.as_ref()
     }

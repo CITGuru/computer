@@ -20,10 +20,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use computer::{
-    Button as EngineButton, Delta, Desktop as EngineDesktop, Point as EnginePoint,
-    Selection as EngineSelection,
-};
+use computer::{Delta, Desktop as EngineDesktop};
 use computer_api::*;
 use computer_types::Spec;
 use serde::Deserialize;
@@ -329,7 +326,7 @@ async fn actions(
     };
 
     let cursor = if batch.want.contains(&Want::Cursor) {
-        desktop.cursor().await.ok().map(point_out)
+        desktop.cursor().await.ok()
     } else {
         None
     };
@@ -356,39 +353,30 @@ async fn run(
     page: &mut Option<computer::Page>,
 ) -> ApiResult<Option<Window>> {
     match action {
-        Action::Move { to } => desktop.move_to(point_in(*to)).await?,
+        Action::Move { to } => desktop.move_to(*to).await?,
         Action::Click { at, button, held } => {
-            let at = at.map(point_in).unwrap_or(desktop.cursor().await?);
-            desktop
-                .click_with(at, button_in(*button), &held_in(held))
-                .await?;
+            let at = match at {
+                Some(at) => *at,
+                None => desktop.cursor().await?,
+            };
+            desktop.click_with(at, *button, held).await?;
         }
         Action::DoubleClick { at, button } => {
-            let at = at.map(point_in).unwrap_or(desktop.cursor().await?);
-            desktop.double_click(at, button_in(*button)).await?;
+            let at = match at {
+                Some(at) => *at,
+                None => desktop.cursor().await?,
+            };
+            desktop.double_click(at, *button).await?;
         }
         Action::Drag {
             from,
             to,
             button,
             held,
-        } => {
-            desktop
-                .drag_with(
-                    point_in(*from),
-                    point_in(*to),
-                    button_in(*button),
-                    &held_in(held),
-                )
-                .await?
-        }
+        } => desktop.drag_with(*from, *to, *button, held).await?,
         Action::Type { text } => desktop.type_text(text).await?,
         Action::Key { chord } => desktop.key(chord).await?,
-        Action::Scroll { at, dx, dy } => {
-            desktop
-                .scroll(point_in(*at), Delta { dx: *dx, dy: *dy })
-                .await?
-        }
+        Action::Scroll { at, dx, dy } => desktop.scroll(*at, Delta { dx: *dx, dy: *dy }).await?,
         Action::OpenUrl { url } => {
             let screen = screen.ok_or_else(|| {
                 ApiError::bad_request("this screen has no browser to open a page in")
@@ -456,7 +444,7 @@ async fn run(
                 })
                 .await?;
 
-            return Ok(Some(window_out(window)));
+            return Ok(Some(window));
         }
     }
 
@@ -487,7 +475,7 @@ impl FrameQuery {
     fn shot(&self) -> ApiResult<Shot> {
         let region = match (self.x, self.y, self.width, self.height) {
             (None, None, None, None) => None,
-            (Some(x), Some(y), Some(width), Some(height)) => Some(Region {
+            (Some(x), Some(y), Some(width), Some(height)) => Some(Rect {
                 at: Point { x, y },
                 width,
                 height,
@@ -551,25 +539,12 @@ async fn frame(
     )))
 }
 
-fn held_in(held: &[Held]) -> Vec<computer::Held> {
-    held.iter()
-        .map(|one| match one {
-            Held::Shift => computer::Held::Shift,
-            Held::Ctrl => computer::Held::Ctrl,
-            Held::Alt => computer::Held::Alt,
-            Held::Super => computer::Held::Super,
-        })
-        .collect()
-}
-
 fn shot_in(shot: &Shot) -> computer::Shot {
     let of = match (&shot.window, &shot.region) {
         (Some(window), _) => computer::Of::Window(window.clone()),
-        (None, Some(area)) => computer::Of::Region(computer::Rect::new(
-            point_in(area.at),
-            area.width,
-            area.height,
-        )),
+        (None, Some(area)) => {
+            computer::Of::Region(computer::Rect::new(area.at, area.width, area.height))
+        }
         _ => computer::Of::Screen,
     };
 
@@ -623,7 +598,7 @@ async fn cursor(
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
 
-    Ok(Json(point_out(target.as_desktop().cursor().await?)))
+    Ok(Json(target.as_desktop().cursor().await?))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -643,7 +618,7 @@ async fn get_clipboard(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen has no clipboard"))?;
 
-    let text = held.selection(selection_in(query.selection)).await?;
+    let text = held.selection(query.selection).await?;
 
     state.traces.of(&id).record(
         Actor::Agent,
@@ -667,8 +642,7 @@ async fn set_clipboard(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen has no clipboard"))?;
 
-    held.set_selection(selection_in(body.selection), &body.text)
-        .await?;
+    held.set_selection(body.selection, &body.text).await?;
 
     state.traces.of(&id).record(
         Actor::Agent,
@@ -1368,20 +1342,6 @@ async fn visible(state: &AppState, id: &str) -> ApiResult<computer::Page> {
         .ok_or_else(|| ApiError::not_found("no page is on screen"))
 }
 
-fn window_out(window: computer::Window) -> Window {
-    Window {
-        id: window.id,
-        title: window.title,
-        class: window.class,
-        at: Point {
-            x: window.at.x,
-            y: window.at.y,
-        },
-        width: window.width,
-        height: window.height,
-    }
-}
-
 fn element_out(element: computer::Element) -> Element {
     Element {
         text: element.text,
@@ -1408,14 +1368,7 @@ async fn list_windows(
         .as_screen()
         .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
 
-    Ok(Json(
-        screen
-            .windows()
-            .await?
-            .into_iter()
-            .map(window_out)
-            .collect(),
-    ))
+    Ok(Json(screen.windows().await?.into_iter().collect()))
 }
 
 /// Untraced: a replay against a fork whose windows opened in another order
@@ -1459,9 +1412,7 @@ async fn arrange_window(
         .as_screen()
         .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
 
-    Ok(Json(window_out(
-        screen.arrange(&window, arranging(how)).await?,
-    )))
+    Ok(Json(screen.arrange(&window, how).await?))
 }
 
 async fn active_window(
@@ -1474,7 +1425,7 @@ async fn active_window(
         .as_screen()
         .ok_or_else(|| ApiError::bad_request("this screen holds no windows"))?;
 
-    Ok(Json(screen.active_window().await?.map(window_out)))
+    Ok(Json(screen.active_window().await?))
 }
 
 async fn await_window(
@@ -1490,19 +1441,7 @@ async fn await_window(
 
     let within = Duration::from_millis(body.within_ms.unwrap_or(computer::apps::READY_MS));
 
-    Ok(Json(window_out(
-        screen.wait_for_window(&body.class, within).await?,
-    )))
-}
-
-fn arranging(how: Arrange) -> computer::Arrange {
-    match how {
-        Arrange::At { to } => computer::Arrange::At(computer::Point::new(to.x, to.y)),
-        Arrange::Size { width, height } => computer::Arrange::Size { width, height },
-        Arrange::Maximise => computer::Arrange::Maximise,
-        Arrange::Minimise => computer::Arrange::Minimise,
-        Arrange::Restore => computer::Arrange::Restore,
-    }
+    Ok(Json(screen.wait_for_window(&body.class, within).await?))
 }
 
 /// So an agent reads the names rather than guessing one and meeting a 400.
@@ -1635,30 +1574,4 @@ fn new_id() -> String {
         id.push_str(&format!("{byte:02x}"));
     }
     id
-}
-
-fn point_in(point: Point) -> EnginePoint {
-    EnginePoint::new(point.x, point.y)
-}
-
-fn point_out(point: EnginePoint) -> Point {
-    Point {
-        x: point.x,
-        y: point.y,
-    }
-}
-
-fn button_in(button: Button) -> EngineButton {
-    match button {
-        Button::Left => EngineButton::Left,
-        Button::Right => EngineButton::Right,
-        Button::Middle => EngineButton::Middle,
-    }
-}
-
-fn selection_in(selection: Selection) -> EngineSelection {
-    match selection {
-        Selection::Clipboard => EngineSelection::Clipboard,
-        Selection::Primary => EngineSelection::Primary,
-    }
 }

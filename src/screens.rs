@@ -253,7 +253,6 @@ impl ControlGate {
             .unwrap_or(Control::Owner)
     }
 
-    /// Hand the input to a person.
     pub fn hand_over(&self, token: impl Into<String>, since: SystemTime) {
         self.takeovers.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut held) = self.state.lock() {

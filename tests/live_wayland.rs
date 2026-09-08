@@ -37,7 +37,6 @@ async fn a_real_wayland_box_does_everything_the_x11_one_does() {
 
     let outcome = exercise(&computer).await;
 
-    // Taken away whatever happened above.
     computer.shutdown().await.expect("it goes away");
     outcome.expect("every step");
 }

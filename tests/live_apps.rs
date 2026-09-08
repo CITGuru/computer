@@ -136,7 +136,12 @@ async fn wayland_exercise(computer: &Computer) -> computer::Result<()> {
     assert_eq!((sized.width, sized.height), (600, 400));
 
     let moved = screen
-        .arrange(&window.id, Arrange::At(Point::new(80, 60)))
+        .arrange(
+            &window.id,
+            Arrange::At {
+                to: Point::new(80, 60),
+            },
+        )
         .await?;
     println!("  moved: {},{}", moved.at.x, moved.at.y);
     assert_eq!(moved.at, Point::new(80, 60));

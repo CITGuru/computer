@@ -38,7 +38,6 @@ pub fn resolve(spec: &Spec) -> Result<Resolved> {
     resolve_with(profile_for(spec.desktop.server).as_ref(), spec)
 }
 
-/// The profile that implements a display server.
 pub fn profile_for(server: spec::DisplayServer) -> Arc<dyn Profile> {
     match server {
         spec::DisplayServer::X11 => Arc::new(X11Profile),
