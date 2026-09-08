@@ -26,8 +26,10 @@ pub const ENVD_PORT: u16 = 49983;
 ///
 /// E2B assigns the sandbox ID, so a caller's name has to live somewhere the
 /// control plane can be filtered by, or [`Machine::running`](crate::Machine)
-/// has nothing to ask about.
-pub const NAME_KEY: &str = "computer.name";
+/// has nothing to ask about. One definition rather than two of the same
+/// string: a sweep joins on this key, and a wire body that wrote a different
+/// one would find nothing.
+pub use crate::sandboxes::remote::NAME_KEY;
 
 /// The user envd runs commands as.
 ///
@@ -61,7 +63,7 @@ pub struct Sandbox {
     /// `None` even after asking for a secure sandbox, which happens: the API
     /// decides. Then the proxy gates nothing and every published port answers
     /// to whoever has the URL. See
-    /// [`E2bMachine::public_viewer`](super::machine::E2bMachine::public_viewer).
+    /// [`public_viewer`](crate::sandboxes::remote::RemoteMachine::public_viewer).
     pub traffic_token: Option<String>,
 }
 
@@ -131,9 +133,10 @@ impl Default for SandboxPlan {
 
 /// The one seam between this crate and E2B.
 ///
-/// A caller with their own HTTP client implements this and gets the machine,
-/// the profile and everything above them; [`super::cloud`] is the
-/// implementation that ships, and the only part behind a feature.
+/// A caller with their own HTTP client implements this, and
+/// [`E2bVendor`](super::E2bVendor) carries it the rest of the way;
+/// [`super::cloud`] is the implementation that ships, and the only part behind
+/// a feature.
 #[async_trait]
 pub trait E2bApi: Send + Sync {
     /// Whether the control plane answers, and the key is accepted.

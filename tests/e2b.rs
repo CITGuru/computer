@@ -1,7 +1,7 @@
 //! A box in a sandbox, checked without one.
 //!
-//! What is worth testing here is the wiring: that a `Computer` built on
-//! [`E2bMachine`] drives the same way a container does, that a port becomes a
+//! What is worth testing here is the wiring: that a `Computer` on an E2B
+//! sandbox drives the same way a container does, that a port becomes a
 //! subdomain rather than a host port, and that the two claims which stop being
 //! true off this host are withdrawn rather than left standing.
 

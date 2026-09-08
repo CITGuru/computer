@@ -5,15 +5,16 @@ not, so a service on a small machine can hand out desktops with no container
 runtime and no `/dev/kvm` of its own. The boundary is still a kernel the box
 does not share.
 
-`computer` ships one such integration — E2B, in `sandboxes::e2b` — and a seam
-for the rest. `sandboxes::remote` is that seam. Implement seven calls against
+`computer` ships one such integration — E2B, in `sandboxes::e2b` — and the seam
+it is built on. `sandboxes::remote` is that seam. Implement seven calls against
 Modal, Daytona, Fly, or whatever you already pay for, and the driver, the
 screens, the takeover gate and the descriptor above them are the same code a
 container runs.
 
 `examples/custom_sandbox.rs` is a whole vendor in one file. It runs on this
 host, so you can watch every call work before writing the same call against an
-API you cannot see.
+API you cannot see. `sandboxes::e2b::remote` is the same thing against a real
+control plane, and it is worth reading beside your own.
 
 ## The shape
 

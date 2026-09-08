@@ -12,30 +12,33 @@
 //! [`MicroVm::start`](crate::MicroVm) picks free host ports before it creates
 //! the machine, because a hypervisor forwards the pairs it is given. E2B
 //! forwards none: it publishes a hostname per port and there is no host side
-//! to choose. Every port field would be dead and the map would be one nothing
-//! made. So this implements [`Machine`](crate::Machine) directly.
+//! to choose. So this goes through [`crate::sandboxes::remote`] instead, which
+//! is that shape — and which
+//! [`RemoteMachine`](crate::sandboxes::remote::RemoteMachine) implements once
+//! for every vendor of it.
 //!
-//! # What moves and what does not
+//! # What is E2B's own
 //!
-//! - **Driving is identical.** A screen command is a command, and a sandbox
-//!   runs one.
-//! - **A port is a subdomain**, `6080-<id>.e2b.app`, so [`E2bProfile`] rewrites
-//!   the viewer URL and the machine reports an identity port map.
-//! - **DevTools does not reach.** An endpoint out here is `wss` on a public
-//!   host and [`crate::cdp`] speaks plain TCP, so the profile withdraws the
-//!   claim rather than publishing a port to nowhere.
-//! - **The screen has no password**, and a sandbox URL is on the internet. See
-//!   [`E2bMachine::public_viewer`].
+//! [`E2bVendor`] is the whole of it, and it is short:
+//!
+//! - **A port is a subdomain**, `6080-<id>.e2b.app`, so the endpoints are
+//!   formatted rather than handed back by the control plane.
+//! - **A call needs two tokens**, envd for the data plane and a traffic token
+//!   for the proxy, where the seam carries one. The rest is held by ID.
 //! - **The image is a template.** E2B builds those itself; `ensure_image`
 //!   refuses a container tag with the way across.
 //!
+//! Everything else — driving, the lazy deadline, the sweep, the withdrawn
+//! DevTools claim, the viewer that is withheld until asked for — is the
+//! generic half, and is written down there.
+//!
 //! # Reaching a real one
 //!
-//! [`E2bApi`] is the whole seam, and it needs no feature: a caller with their
-//! own HTTP client implements it and gets everything above. [`cloud`] is the
-//! implementation that ships, behind `--features e2b`, because the control
-//! plane is `https` on somebody else's host and there is no command here that
-//! already knows how to reach it.
+//! [`E2bApi`] is the seam onto E2B itself, and it needs no feature: a caller
+//! with their own HTTP client implements it and gets everything above.
+//! [`cloud`] is the implementation that ships, behind `--features e2b`,
+//! because the control plane is `https` on somebody else's host and there is
+//! no command here that already knows how to reach it.
 //!
 //! ```no_run
 //! # #[cfg(feature = "e2b")]
@@ -58,18 +61,17 @@
 //! ```
 
 pub mod api;
-pub mod machine;
-pub mod profile;
+pub mod remote;
 pub mod wire;
 
 #[cfg(feature = "e2b")]
 pub mod cloud;
 
 pub use api::{E2bApi, Sandbox, SandboxPlan};
-pub use machine::E2bMachine;
-pub use profile::{E2bProfile, Reachable};
+pub use remote::E2bVendor;
 
 use crate::profile::Profile;
+use crate::sandboxes::remote::{RemoteMachine, RemoteProfile};
 use std::sync::Arc;
 
 /// A machine and the profile that goes with it.
@@ -78,11 +80,6 @@ use std::sync::Arc;
 /// built before the box exists format a URL containing an ID the control plane
 /// had not assigned yet. Building them apart is possible and gets the pairing
 /// wrong quietly, so this is the door.
-pub fn pair(api: Arc<dyn E2bApi>, image: Arc<dyn Profile>) -> (E2bMachine, Arc<E2bProfile>) {
-    let reachable = Arc::new(Reachable::new());
-
-    (
-        E2bMachine::new(api, Arc::clone(&reachable)),
-        Arc::new(E2bProfile::new(image, reachable)),
-    )
+pub fn pair(api: Arc<dyn E2bApi>, image: Arc<dyn Profile>) -> (RemoteMachine, Arc<RemoteProfile>) {
+    crate::sandboxes::remote::pair(Arc::new(E2bVendor::new(api)), image)
 }

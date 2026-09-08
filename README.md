@@ -736,7 +736,7 @@ Computer::builder().machine(Arc::new(machine.public_viewer(true)))
 
 `public_viewer(true)` hands out an address the internet can reach, so it goes through the same gate as `publish_on(Bind::Any)`: set `auth` or the launch is refused. Do not rely on E2B's own proxy for this. Every sandbox is created with `secure: true`, and where the API answers with a `trafficAccessToken` its proxy refuses anything without an `e2b-traffic-access-token` header — which this crate sends and a browser cannot. Where it answers without one, nothing is refused. Measured on a live sandbox, a viewer URL answered `200` with no token.
 
-DevTools does not travel. An endpoint out here would be `wss` on a public host and this crate's DevTools client speaks plain TCP, so `E2bProfile` drops the bridge port and clears the `cdp` claim. `devtools()` returns `None` and `audit` skips the browser check rather than failing it. Synthetic input, screenshots, the clipboard, the viewer and the takeover are untouched.
+DevTools does not travel. An endpoint out here would be `wss` on a public host and this crate's DevTools client speaks plain TCP, so `RemoteProfile` drops the bridge port and clears the `cdp` claim. `devtools()` returns `None` and `audit` skips the browser check rather than failing it. Synthetic input, screenshots, the clipboard, the viewer and the takeover are untouched.
 
 `E2bApi` is the seam and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. [`docs/runtimes/e2b-machine.md`](docs/runtimes/e2b-machine.md) records the design.
 
@@ -782,7 +782,7 @@ That example is a whole vendor in one file, backed by `docker` on this host so e
 
 Modal is the awkward one worth naming: its sandbox control plane is gRPC behind a Python API, so the calls go to a small Modal web endpoint of your own that creates the sandbox and returns its ID and tunnel URLs. The `RemoteApi` above it is then ordinary HTTP.
 
-[`docs/runtimes/other-sandboxes.md`](docs/runtimes/other-sandboxes.md) is the guide, and `sandboxes::e2b` is the worked reference — it predates the seam and implements `Machine` directly.
+[`docs/runtimes/other-sandboxes.md`](docs/runtimes/other-sandboxes.md) is the guide. `sandboxes::e2b` is the worked reference: E2B goes through this seam, and everything that is E2B's own — a port that is a subdomain, two tokens where the seam carries one, an image that is a template — is one short file beside its HTTP client.
 
 ## Remove desktops that outlived their program
 

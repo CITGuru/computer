@@ -13,9 +13,9 @@
 //! that are nobody's vendor-specific business already written: what this
 //! process started, the lazy deadline, the name-to-ID join a sweep needs.
 //!
-//! [`e2b`](super::e2b) is the worked example and predates this. It implements
-//! [`Machine`](crate::Machine) directly and is left that way, because its
-//! traffic tokens and its template rules are not the shape below.
+//! [`e2b`](super::e2b) is the worked example: everything E2B does that nobody
+//! else does — a port that is a subdomain, two tokens where this carries one,
+//! an image that is a template — is one short file beside its HTTP client.
 //!
 //! # Seven methods
 //!
