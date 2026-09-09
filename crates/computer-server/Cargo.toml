@@ -26,12 +26,11 @@ computer-api = { path = "../computer-api" }
 computer-storage = { path = "../computer-storage" }
 computer-types = { path = "../computer-types" }
 axum = "0.8"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
 # Frames are addressed by content so a screen that has not moved costs no
 # bytes. A collision would hand back a stale picture, which is the one bug

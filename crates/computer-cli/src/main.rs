@@ -7,6 +7,9 @@
 //!
 //! `--local` skips all that and drives the box from this process. Faster, and
 //! a smaller set: what a server remembers, a one-shot process does not.
+//!
+//! `computerd`, beside this, is the server that keeps running. Commands find it
+//! on its own and need no flag.
 
 mod embed;
 mod local;
@@ -65,6 +68,10 @@ computer — a desktop in a box
 
 The first `up` builds the image, which takes a few minutes. Every one after it
 starts in seconds.
+
+Without a server these commands start one for their own length. Run `computerd`
+to keep one: it holds the trace a fork reads, sweeps boxes past their deadline,
+and can be reached from off this host.
 ";
 
 #[tokio::main]

@@ -1,3 +1,14 @@
+//! `computerd`: the server that outlives a command.
+//!
+//! Here rather than in `computer-server` so one install hands over both
+//! binaries. The crate beside this is a library; what a service manager starts
+//! is this.
+//!
+//! What it adds to the server the `computer` command starts for itself is a
+//! life longer than one command: it holds the trace a fork reads, it sweeps
+//! boxes past their deadline, it prunes what has aged out, and it can be
+//! reached from off this host — which is what the token is for.
+
 use computer_server::{AppState, routes};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -7,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "computer_server=info,computer=info".into()),
+                .unwrap_or_else(|_| "computerd=info,computer_server=info,computer=info".into()),
         )
         .init();
 
@@ -20,6 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => None,
     };
 
+    // Before anything is stored or taken back: an open API beyond loopback is
+    // refused rather than served for the time it takes to notice.
     if let Err(why) = computer_server::auth::allowed(&address, token.as_ref()) {
         return Err(why.into());
     }
@@ -47,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         %address,
         gated = state.token.is_some(),
-        "computer-server is listening"
+        "computerd is listening"
     );
     axum::serve(listener, routes::router(Arc::clone(&state)))
         .with_graceful_shutdown(async {
