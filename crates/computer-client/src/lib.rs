@@ -45,6 +45,12 @@ pub struct Client {
 
 impl Client {
     /// `http://127.0.0.1:8080`, with or without a trailing slash.
+    /// Which server this talks to, for a caller that resolved one rather than
+    /// naming it and has to say which it found.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
     pub fn new(base: impl Into<String>) -> Self {
         Self {
             base: base.into().trim_end_matches('/').to_string(),

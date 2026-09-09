@@ -61,6 +61,7 @@ computer — a desktop in a box
   fork <box> [--up-to SEQ]    build another by doing again what was done
   trace <box> [--after SEQ]   what has been done to it, and by whom
   sweep                       remove every box whose deadline has passed
+  mcp [--stdio]               serve the Model Context Protocol, for an agent
 
   --server URL                a server to use, over $COMPUTER_SERVER_URL
   --local                     drive the box from here, with no server at all.
@@ -92,11 +93,16 @@ async fn main() {
         return;
     }
 
-    let outcome = match local {
-        true => here(&command, &rest).await,
-        false => match connect(named).await {
-            Ok(client) => there(&client, &command, &rest).await,
-            Err(why) => Err(why),
+    // Before anything else can reach for stdout: from here on it carries the
+    // protocol, and one printed line is a parse error at the other end.
+    let outcome = match command.as_str() {
+        "mcp" => mcp(named, &rest).await,
+        _ => match local {
+            true => here(&command, &rest).await,
+            false => match connect(named).await {
+                Ok(client) => there(&client, &command, &rest).await,
+                Err(why) => Err(why),
+            },
         },
     };
 
@@ -106,6 +112,35 @@ async fn main() {
         eprintln!("{error}");
         std::process::exit(1);
     }
+}
+
+/// Serve the Model Context Protocol on this process's own streams.
+///
+/// Uses whatever server the other commands would, so an agent given this needs
+/// no daemon: without one, a server is started here and lives as long as the
+/// session does.
+async fn mcp(named: Option<String>, args: &[String]) -> Result<(), String> {
+    if let Some(odd) = args.iter().find(|arg| *arg != "--stdio") {
+        return Err(format!("unknown option for mcp: {odd}\n\n{USAGE}"));
+    }
+
+    // Stderr, because stdout is the protocol. Set up here rather than in
+    // `main`: every other command writes its answer to stdout, and a subscriber
+    // that ever wrote there would corrupt one of them.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "computer_mcp=info,computer=info".into()),
+        )
+        .init();
+
+    let client = connect(named).await?;
+    tracing::info!(server = %client.base(), "computer mcp is serving boxes from");
+
+    computer_mcp::stdio(&client)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 /// A server to talk to: the one named, the one already listening, or one

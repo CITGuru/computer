@@ -13,13 +13,11 @@ computer-client = { path = "../computer-client" }
 computer-types = { path = "../computer-types" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util"] }
+tokio = { version = "1", features = ["io-std", "io-util"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints.clippy]
 string_slice = "deny"
 
-[[bin]]
-name = "computer-mcp"
-path = "src/main.rs"
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

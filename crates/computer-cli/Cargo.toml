@@ -21,6 +21,7 @@ axum = "0.8"
 computer = { path = "../.." }
 computer-api = { path = "../computer-api" }
 computer-client = { path = "../computer-client" }
+computer-mcp = { path = "../computer-mcp" }
 computer-server = { path = "../computer-server" }
 computer-types = { path = "../computer-types" }
 tokio = { version = "1", features = [
@@ -29,6 +30,7 @@ tokio = { version = "1", features = [
     "fs",
     "net",
     "signal",
+    "io-std",
 ] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
