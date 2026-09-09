@@ -6,9 +6,24 @@ rust-version = "1.85"
 description = "A REST API that manages and drives computer boxes"
 license = "MIT"
 
+[features]
+default = []
+# Reach E2B, so a restart takes back boxes in somebody else's cloud as well as
+# the ones on this host. Off by default: the vendor client pulls a TLS stack,
+# and most servers hand out containers.
+e2b = ["computer/e2b"]
+# Keep records in a database rather than a directory. One or both dialects; a
+# server with neither still keeps a directory or memory.
+sql = []
+sqlite = ["sql", "computer-storage/sqlite"]
+postgres = ["sql", "computer-storage/postgres"]
+# Keep records in a bucket. The same layout a directory holds.
+s3 = ["computer-storage/s3"]
+
 [dependencies]
 computer = { path = "../.." }
 computer-api = { path = "../computer-api" }
+computer-storage = { path = "../computer-storage" }
 computer-types = { path = "../computer-types" }
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "sync"] }

@@ -93,6 +93,8 @@ async fn main() {
         },
     };
 
+    embed::flush().await;
+
     if let Err(error) = outcome {
         eprintln!("{error}");
         std::process::exit(1);

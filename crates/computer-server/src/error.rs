@@ -43,6 +43,26 @@ impl ApiError {
     }
 }
 
+/// A store that could not answer is a failure of this server, not of the
+/// request: the caller asked for something reasonable and there is nothing they
+/// can change about it.
+impl From<computer_storage::Error> for ApiError {
+    fn from(error: computer_storage::Error) -> Self {
+        let code = error.code();
+        let status = match code {
+            ErrorCode::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        let mut mapped = Self::new(status, code, error.to_string());
+        // Only where waiting is the answer. A record that will not parse reads
+        // the same way however many times it is asked for.
+        mapped.body.retryable = matches!(code, ErrorCode::Unavailable);
+
+        mapped
+    }
+}
+
 impl From<computer::Error> for ApiError {
     fn from(error: computer::Error) -> Self {
         use computer::Error as E;

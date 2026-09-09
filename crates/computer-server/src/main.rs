@@ -24,13 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(why.into());
     }
 
-    let state = Arc::new(AppState {
-        token,
-        ..AppState::default()
-    });
+    let state = Arc::new(AppState::from_env().await?.gated(token));
 
     let runtimes = computer_server::recover::runtimes();
-    let taken = computer_server::recover::adopt(&state.registry, &state.traces, &runtimes).await;
+    let sandboxes = computer_server::recover::sandboxes();
+    let taken = computer_server::recover::adopt(&state, &runtimes, &sandboxes).await;
     if taken > 0 {
         tracing::info!(taken, "took back boxes left running by an earlier server");
     }
@@ -42,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(computer_server::reap::EVERY);
 
     computer_server::reap::spawn(Arc::clone(&state), runtimes, every);
+    computer_server::prune::spawn(Arc::clone(&state), computer_server::prune::every());
 
     let listener = tokio::net::TcpListener::bind(address).await?;
 
@@ -50,11 +49,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         gated = state.token.is_some(),
         "computer-server is listening"
     );
-    axum::serve(listener, routes::router(state))
+    axum::serve(listener, routes::router(Arc::clone(&state)))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
+
+    // A store that batches is holding entries a reader has already been shown.
+    // Ctrl-C is the one ending where they can still be put down.
+    if let Err(why) = state.store.flush().await {
+        tracing::warn!(%why, "what the store was still holding did not go down");
+    }
 
     Ok(())
 }

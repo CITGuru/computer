@@ -70,4 +70,5 @@ members = [
     "crates/computer-client",
     "crates/computer-server",
     "crates/computer-mcp",
+    "crates/computer-storage",
 ]
