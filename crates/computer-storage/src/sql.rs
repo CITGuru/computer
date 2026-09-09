@@ -1,25 +1,4 @@
 //! Rows in a database, in whichever of two dialects the URL names.
-//!
-//! One implementation rather than two. What differs between SQLite and
-//! Postgres is small and named here: the placeholder, and the type a blob goes
-//! in. Everything else — the upsert, the window a read takes, the primary key
-//! that makes a sequence unique — both have spoken since 2016.
-//!
-//! # Why a database at all
-//!
-//! [`crate::files`] already keeps a record across a restart, and does it
-//! without a driver or a migration. What it cannot do is answer a question
-//! nobody wrote a key for. So the columns here are the ones an operator starts
-//! from — which box, when, what kind of thing happened — and the row itself is
-//! held as JSON beside them, which is what lets a field be added later with no
-//! migration behind it.
-//!
-//! # More than one writer
-//!
-//! This is the backend that allows it. A file store reads its next sequence
-//! from the keys and holds it, which is sound only while one process writes a
-//! box. Here the sequence is taken inside a transaction and the primary key
-//! refuses a repeat, so a second writer retries rather than overwrites.
 
 use crate::{BoxRecord, Error, Frames, Result, Store, now_ms};
 use async_trait::async_trait;
@@ -29,9 +8,6 @@ use sqlx::{AnyPool, AssertSqlSafe, Row, error::DatabaseError};
 use std::sync::Arc;
 
 /// How many times a racing writer re-reads the sequence before giving up.
-///
-/// Each loss costs one round trip, and losing five in a row means far more
-/// writers on one box than a desktop has.
 const ATTEMPTS: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,9 +23,6 @@ pub struct Sql {
 
 impl Sql {
     /// Connects, and makes the tables if they are not there.
-    ///
-    /// `sqlite://…` or `postgres://…`. The scheme picks the dialect, because
-    /// the driver does not report one back.
     pub async fn open(url: &str) -> Result<Self> {
         sqlx::any::install_default_drivers();
 
@@ -107,11 +80,6 @@ impl Sql {
                      PRIMARY KEY (box_id, hash)
                  )"
             ),
-            // Every read of a trace is one box in sequence order, and every
-            // sweep of frames is one box. Without these both are a scan.
-            // The watermark, which outlives the rows it counted. Pruning a
-            // trace empty must not hand a sequence out twice: a caller polling
-            // from where it got to would read the repeat as loss.
             "CREATE TABLE IF NOT EXISTS sequences (
                  box_id TEXT PRIMARY KEY,
                  next BIGINT NOT NULL
@@ -132,18 +100,12 @@ impl Sql {
     }
 
     /// A statement in this dialect.
-    ///
-    /// Asserted safe because every one of them is a literal in this file with
-    /// no caller's bytes in it: what varies is the placeholder, and values
-    /// arrive bound.
     fn q(&self, written: &str) -> AssertSqlSafe<String> {
         AssertSqlSafe(numbered(self.dialect, written))
     }
 }
 
 /// These statements are written with `?`; Postgres counts instead.
-///
-/// Safe only because none of them holds a literal `?` inside a string.
 fn numbered(dialect: Dialect, written: &str) -> String {
     if dialect == Dialect::Sqlite {
         return written.to_string();
@@ -220,8 +182,6 @@ impl Store for Sql {
         for statement in [
             "DELETE FROM boxes WHERE id = ?",
             "DELETE FROM entries WHERE box_id = ?",
-            // Forgetting is not pruning: the box goes whole, so its watermark
-            // has nothing left to protect.
             "DELETE FROM sequences WHERE box_id = ?",
         ] {
             sqlx::query(self.q(statement))
@@ -250,8 +210,6 @@ impl Store for Sql {
                 .await
                 .map_err(|error| failed("no transaction to append in", error))?;
 
-            // From the watermark, falling back to the rows only for a database
-            // written before there was one.
             let held: Option<i64> =
                 sqlx::query_scalar(self.q("SELECT next FROM sequences WHERE box_id = ?"))
                     .bind(id)
@@ -315,8 +273,6 @@ impl Store for Sql {
 
                     return Ok(entry.seq);
                 }
-                // Somebody else took this sequence between the read and the
-                // write. Read it again rather than overwrite theirs.
                 Err(error) if taken_already(&error) => continue,
                 Err(error) => return Err(failed("an entry would not go down", error)),
             }
@@ -328,7 +284,6 @@ impl Store for Sql {
     }
 
     async fn entries(&self, id: &str, after: Option<u64>, limit: usize) -> Result<Vec<TraceEntry>> {
-        // Sequences start at zero, so "everything" is everything above -1.
         let above = after.map_or(-1, |seq| seq as i64);
 
         let rows: Vec<String> = sqlx::query_scalar(
@@ -349,8 +304,6 @@ impl Store for Sql {
             .collect()
     }
     async fn frames_before(&self, id: &str, before_ms: u64) -> Result<Vec<String>> {
-        // The rows rather than a column of their own: a frame hash is read on a
-        // sweep and never on a request, so it does not earn one.
         let rows: Vec<String> =
             sqlx::query_scalar(self.q("SELECT entry FROM entries WHERE box_id = ? AND at_ms < ?"))
                 .bind(id)
@@ -418,8 +371,6 @@ impl Frames for Sql {
     }
 
     async fn drop_frames(&self, id: &str, hashes: &[String]) -> Result<()> {
-        // One statement each rather than an `IN` list, whose placeholder count
-        // varies and would have to be built per call in two dialects.
         for hash in hashes {
             sqlx::query(self.q("DELETE FROM frames WHERE box_id = ? AND hash = ?"))
                 .bind(id)
@@ -443,8 +394,6 @@ impl Frames for Sql {
     }
 }
 
-/// The tag the event serialises under, lifted into its own column so a reader
-/// can ask for takeovers without parsing every row.
 fn kind_of(event: &TraceEvent) -> String {
     serde_json::to_value(event)
         .ok()
@@ -456,8 +405,6 @@ fn taken_already(error: &sqlx::Error) -> bool {
     matches!(error, sqlx::Error::Database(inner) if DatabaseError::is_unique_violation(&**inner))
 }
 
-/// A database that will not answer is `Unavailable`: waiting is the only thing
-/// a caller can do about it, and it is what a route turns into a 503.
 fn failed(what: &str, error: sqlx::Error) -> Error {
     Error::Unavailable(format!("{what}: {error}"))
 }
@@ -497,8 +444,6 @@ mod tests {
         }
     }
 
-    /// A Postgres to run against, where one is offered. Skipped rather than
-    /// failed: a checkout with no database is the ordinary case.
     fn postgres() -> Option<String> {
         std::env::var("COMPUTER_STORAGE_POSTGRES_URL")
             .ok()

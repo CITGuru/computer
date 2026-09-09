@@ -39,7 +39,6 @@ const TRACE_PAGE: usize = 500;
 /// HTTP request, and a box that was driven for an hour cannot take one.
 const REPLAY_BUDGET: Duration = Duration::from_secs(180);
 /// The most page text one read answers with.
-///
 /// A ceiling rather than a default a caller can raise: `limit` is there to ask
 /// for less than this, and a page is unbounded.
 const PAGE_TEXT: usize = 20_000;
@@ -875,7 +874,6 @@ async fn write_file(
 }
 
 /// Build a box again from what was done to the first one.
-///
 /// Reads the source's trace rather than the source, so a box that has been
 /// removed can still be forked: its record outlived it and carries the spec.
 async fn fork(
@@ -1188,10 +1186,6 @@ async fn read_trace(
     let limit = query.limit.unwrap_or(TRACE_PAGE).clamp(1, TRACE_PAGE);
     let entries = state.store.entries(&id, query.after, limit).await?;
 
-    // An empty page and an untraced box read the same from here, so the second
-    // read tells them apart. Paid only where the page is empty: a caller
-    // following a live trace to its end asks again and is told nothing yet, not
-    // that the box was never here.
     if entries.is_empty() && !state.traced(&id).await {
         return Err(ApiError::not_found(format!(
             "nothing was ever traced for {id}"
@@ -1235,7 +1229,6 @@ struct PageQuery {
 }
 
 /// What the page in front is showing, as text.
-///
 /// The page the screen shows, not the first one open: a caller reading what it
 /// can see is the point, and a frame and this have to agree.
 async fn read_page(
@@ -1314,7 +1307,6 @@ async fn find_elements(
 }
 
 /// Act on the element a query names.
-///
 /// By name rather than by coordinate: a point worked out from a frame is stale
 /// the moment the page moves under it, and some of these have no coordinate at
 /// all — a file chooser is the operating system's window, and a native
@@ -1330,7 +1322,6 @@ async fn on_element(
 }
 
 /// One element operation against a page already in hand.
-///
 /// Shared with the action batch, so a form is one round trip rather than one
 /// per field and the screen lock is held across the whole of it.
 async fn apply(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementResult> {
@@ -1537,7 +1528,6 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
 }
 
 /// One request's claim on an idempotency key.
-///
 /// The key is bound to the route and the body it first arrived on. A retry
 /// carries both again and is answered from the store; the same key on a
 /// different request is a client bug, and returning the first request's reply
@@ -1627,10 +1617,6 @@ fn view_of(entry: &Entry) -> BoxView {
     }
 }
 
-/// Writes what survives the box, beside the first entry about it.
-///
-/// Logged rather than failed for the same reason a trace entry is: a caller who
-/// asked for a box and got one must not be told they did not.
 async fn kept(
     state: &AppState,
     id: &str,
@@ -1646,9 +1632,6 @@ async fn kept(
         height: resolved.height,
         screens: resolved.screens,
         created_at_ms: millis(SystemTime::now()),
-        // Read off the box rather than off the placement: a runtime may hold a
-        // box past what was asked for, and the deadline that matters is the one
-        // the sweep reads.
         expires_at_ms: None,
     };
 

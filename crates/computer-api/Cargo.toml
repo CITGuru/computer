@@ -9,7 +9,7 @@ license = "MIT"
 # Serde and the shared types. A client that has to compile a web framework to
 # send a request is a client nobody uses, so nothing heavier belongs here.
 [dependencies]
-computer-types = { path = "../computer-types" }
+computer-types = { path = "../computer-types", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 
 [lints.clippy]

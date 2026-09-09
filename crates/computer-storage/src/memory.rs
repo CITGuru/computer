@@ -1,8 +1,4 @@
 //! Everything in this process, and nothing after it.
-//!
-//! The default, and what every other backend is measured against. Bounded on
-//! purpose: a daemon that never restarts must not grow until it is killed, so
-//! the oldest go. That is this implementation's policy and not the trait's.
 
 use crate::error::poisoned;
 use crate::{Blobs, BoxRecord, Frames, Result, Store, now_ms};
@@ -14,18 +10,12 @@ use std::sync::{Arc, Mutex};
 
 /// Entries kept per box.
 const MAX_ENTRIES: usize = 10_000;
-/// Distinct frames kept per box. An entry whose frame has gone still names its
-/// hash, and asking for it answers that nothing holds it.
 const MAX_FRAMES: usize = 256;
 /// Boxes whose traces are kept after they are gone.
 const MAX_TRACES: usize = 256;
 
-/// A [`Store`] and a [`Frames`] in one, because a daemon with no database
-/// configured needs both and neither costs anything.
 #[derive(Default)]
 pub struct Memory {
-    /// Ordered, so listing twice in a row answers the same way. A caller
-    /// paging a map whose order moves under it sees a box twice or not at all.
     boxes: Mutex<BTreeMap<String, BoxRecord>>,
     traces: Mutex<HashMap<String, Arc<Trace>>>,
     /// First-touch order, for the cap on traces.
@@ -46,8 +36,6 @@ struct Held {
 }
 
 impl Memory {
-    /// The trace for this box, started if this is the first thing written about
-    /// it.
     fn trace(&self, id: &str) -> Result<Arc<Trace>> {
         if let Some(trace) = self.traces.lock().map_err(poisoned)?.get(id) {
             return Ok(Arc::clone(trace));
@@ -55,9 +43,6 @@ impl Memory {
 
         let mut traces = self.traces.lock().map_err(poisoned)?;
 
-        // Two first-touches of one id race here. Whether this call is the one
-        // that inserted decides whether the id joins the eviction queue:
-        // pushing it twice would later drop a live box's trace.
         let mine = !traces.contains_key(id);
         let trace = Arc::clone(traces.entry(id.to_string()).or_default());
 
@@ -237,12 +222,8 @@ impl Frames for Memory {
     }
 }
 
-/// Keys in memory, so a file-shaped store can be exercised without a disk or a
-/// bucket under it.
 #[derive(Default)]
 pub struct Bucket {
-    /// Ordered, because [`Blobs::list`] promises lexical order and that is
-    /// where a segmented trace gets its sequence back from.
     keys: Mutex<BTreeMap<String, Vec<u8>>>,
 }
 

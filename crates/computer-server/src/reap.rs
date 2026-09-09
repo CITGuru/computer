@@ -71,10 +71,6 @@ async fn reconcile(state: &AppState) -> usize {
 async fn forget(state: &AppState, id: &str, why: &str) {
     state.registry.forget(id).await;
 
-    // Only where something is already recorded: the label sweep reaches every
-    // expired box on the host, including ones another server or `--local` made.
-    // Starting a trace for each of those would push live boxes out of a bounded
-    // store and leave them running but untraceable.
     if state.traced(id).await {
         state
             .record(

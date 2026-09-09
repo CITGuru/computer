@@ -1,19 +1,9 @@
 //! What every backend must do, asserted once.
-//!
-//! Four implementations will drift, and the drift shows up as a fork replaying
-//! in the wrong order against a customer's box rather than as a failing test.
-//! So the behaviour lives here and each backend runs it.
-//!
-//! Nothing here asserts a cap. Bounding is each implementation's own policy:
-//! [`crate::memory`] drops the oldest, and a file-shaped store keeps what it is
-//! given.
 
 use crate::now_ms;
 use crate::{Blobs, BoxRecord, Frames, Store};
 use computer_api::{Actor, Placement, Spec, TraceEvent};
 
-/// A record that differs from the next one only where the assertion needs it
-/// to.
 fn record(id: &str, width: u32) -> BoxRecord {
     BoxRecord {
         id: id.to_string(),
@@ -156,10 +146,6 @@ pub async fn store(store: &dyn Store) {
 }
 
 /// What a sweep must be able to do.
-///
-/// Kept apart from [`store`] because it needs entries with times chosen rather
-/// than taken from the clock, and a store that assigns `at_ms` itself has to be
-/// given a window either side of now instead.
 pub async fn pruning(store: &dyn Store) {
     for _ in 0..3 {
         store

@@ -1,13 +1,4 @@
 //! Boxes that outlived the server.
-//!
-//! A box outlives this process, so without this a restart forgets every box it
-//! started while they carry on running and charging for it. Each box carries its
-//! own spec in a label, so what comes back is a box this server can drive *and*
-//! fork rather than a name it has to guess about.
-//!
-//! Two kinds of place hold boxes and both are looked in. A container runtime is
-//! on this host. A sandbox vendor is not, and a box there is the one that costs
-//! money while nobody is watching it.
 
 use crate::AppState;
 use crate::spec;
@@ -51,11 +42,6 @@ pub fn runtimes() -> Vec<String> {
     listed(std::env::var("COMPUTER_SERVER_RUNTIMES").ok().as_deref())
 }
 
-/// The sandbox vendors to ask, which is nothing unless a server says so.
-///
-/// No default, unlike runtimes: asking a vendor costs a call to somebody else's
-/// control plane with somebody's credential, and a server that hands out
-/// containers has neither.
 pub fn sandboxes() -> Vec<String> {
     named(std::env::var("COMPUTER_SERVER_SANDBOXES").ok().as_deref())
 }
@@ -79,12 +65,6 @@ fn listed(given: Option<&str>) -> Vec<String> {
     found
 }
 
-/// Somewhere a box might still be, and how to take one back from it.
-///
-/// A container runtime hands out one machine for every box on it. A vendor
-/// cannot: its machine shares a cell with the profile that formats the box's
-/// address, so two boxes taken back through one machine would each answer with
-/// the other's URL. Hence a machine per box rather than per place.
 pub enum Place {
     Runtime(String),
     Vendor(Arc<dyn RemoteApi>),
@@ -98,13 +78,10 @@ impl Place {
         }
     }
 
-    /// A machine to ask what is here. Which profile it is paired with does not
-    /// reach a listing.
     fn asking(&self) -> Arc<dyn Machine> {
         self.driving(DisplayServer::default()).0
     }
 
-    /// A machine and the profile that goes with it, for one box.
     fn driving(&self, server: DisplayServer) -> (Arc<dyn Machine>, Arc<dyn Profile>) {
         let image = spec::profile_for(server);
 
@@ -123,11 +100,6 @@ impl Place {
     }
 }
 
-/// The vendors this server was built to reach, in the order named.
-///
-/// A name it cannot serve is a warning and not a failure: a server asked for a
-/// vendor it has no client or no credential for should still take back
-/// everything else.
 fn vendor(name: &str) -> Option<Arc<dyn RemoteApi>> {
     #[cfg(feature = "e2b")]
     if name == "e2b" {
@@ -163,8 +135,6 @@ pub async fn adopt(state: &AppState, runtimes: &[String], sandboxes: &[String]) 
     adopt_from(state, &places).await
 }
 
-/// The places themselves rather than their names, so a vendor that answers from
-/// a test can be handed in where one built from the environment cannot.
 pub async fn adopt_from(state: &AppState, places: &[Place]) -> usize {
     let mut taken = 0;
 
@@ -226,9 +196,6 @@ async fn adopt_one(
         )
         .await;
 
-    // The record goes down again from the label rather than being read back:
-    // the label is what the runtime still holds, and it is the only thing here
-    // that outlived whichever server wrote the record first.
     let record = BoxRecord {
         id: entry.id.clone(),
         spec: label.spec.clone(),

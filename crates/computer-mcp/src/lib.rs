@@ -1,18 +1,4 @@
 //! An MCP server that hands an agent a desktop.
-//!
-//! Speaks JSON-RPC over a pair of streams to whatever launched it, and HTTP to
-//! a box server — so the boxes can be on this machine or on a fleet somewhere
-//! else, and nothing about the tools changes.
-//!
-//! A library rather than a binary: `computer mcp` is where this is reached from,
-//! so an agent that has the command already has this and nothing else has to be
-//! installed or found on a PATH.
-//!
-//! # Stdout carries the protocol
-//!
-//! Nothing else may write there. Logs go to stderr, and a caller that has
-//! already written a line to stdout has broken the session before this starts —
-//! which is why [`serve`] takes the streams rather than reaching for them.
 
 mod jsonrpc;
 mod tools;
@@ -26,10 +12,6 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 pub const DEFAULT_PROTOCOL: &str = "2024-11-05";
 
 /// Answers requests until the reader ends.
-///
-/// Generic over the streams so the loop can be exercised without a terminal:
-/// a session is otherwise only testable by launching a process and talking to
-/// it.
 pub async fn serve<R, W>(client: &Client, input: R, output: W) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -51,8 +33,6 @@ where
             }
         };
 
-        // A notification is answered with silence, and answering one is a
-        // protocol error rather than a courtesy.
         let Some(id) = request.id.clone() else {
             continue;
         };
@@ -106,8 +86,6 @@ async fn answer(client: &Client, id: Value, request: &Request) -> Response {
             };
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-            // A tool that failed is a result the model reads and can act on,
-            // not a protocol error that hides the reason from it.
             match tools::call(client, name, &arguments).await {
                 Ok(answer) => Response::ok(id, answer.into_content()),
                 Err(why) => Response::ok(id, tools::Answer::failure(why)),
@@ -121,8 +99,6 @@ async fn answer(client: &Client, id: Value, request: &Request) -> Response {
 mod tests {
     use super::*;
 
-    /// Nothing here reaches it: `ping` and a bad line are answered without a
-    /// box, which is what makes the loop testable at all.
     fn nowhere() -> Client {
         Client::new("http://127.0.0.1:1")
     }

@@ -21,10 +21,11 @@ postgres = ["sql", "computer-storage/postgres"]
 s3 = ["computer-storage/s3"]
 
 [dependencies]
-computer = { path = "../.." }
-computer-api = { path = "../computer-api" }
-computer-storage = { path = "../computer-storage" }
-computer-types = { path = "../computer-types" }
+# Renamed at the use site, so everything below still says `computer`.
+computer = { package = "computer-core", path = "../computer-core", version = "0.1.0" }
+computer-api = { path = "../computer-api", version = "0.1.0" }
+computer-storage = { path = "../computer-storage", version = "0.1.0" }
+computer-types = { path = "../computer-types", version = "0.1.0" }
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }

@@ -6,45 +6,17 @@
 //! boxes/{id}/screens/{hash}.png            the frames
 //! ```
 //!
-//! The layout is the index. There is no query underneath, so everything a
-//! reader needs is in a key: a segment is named by the range it holds, and the
-//! numbers are zero-padded because listing is lexical and `10` sorts before
-//! `2`.
+//! The layout is the index: object storage has no append and no query, so a
+//! segment is named by the range it holds and the numbers are zero-padded
+//! because listing is lexical.
 //!
-//! # Segments rather than a log
+//! Entries buffer, and an entry saying who held the screen does not. A process
+//! that dies with a buffer loses those entries after a reader has already been
+//! shown them, so call [`Store::flush`] before one ends.
 //!
-//! Object storage has no append. A trace therefore goes down as whole objects
-//! that are never revisited, which is also what keeps the layout the same on a
-//! disk and in a bucket: a directory copied to a bucket is a store, and back
-//! again.
-//!
-//! Several entries per segment, which is why the name carries a range rather
-//! than a number. One object per click would be one round trip per click, which
-//! a disk absorbs and a bucket bills for.
-//!
-//! # What is not batched
-//!
-//! An entry saying who held the screen goes down before [`Store::append`]
-//! answers. Those are the claims that would ever have to be defended, and a
-//! crash losing the moment a person took a keyboard is not a trade worth
-//! making. Clicks, frames and reads buffer: losing the tail of what an agent
-//! did costs a reader detail and costs nobody a claim.
-//!
-//! A buffered entry is visible through [`Store::entries`] as soon as it is
-//! written, so a caller that appends and reads back does not see a hole. What
-//! it is not is durable, and the cost of that is worth stating: a process that
-//! dies with a buffer loses those entries, and a reader that had already seen
-//! their sequences will watch the next process hand the same numbers out again.
-//! The window is one batch, because a box's first entry is a custody one and
-//! every later one advances the watermark, but it is not nothing. Call
-//! [`Store::flush`] before a process ends.
-//!
-//! # One writer per box
-//!
-//! A backend has no counter, so the next sequence is read once from the highest
-//! segment and held here after. That is sound because the daemon holding a
-//! box's live handle is the only thing that writes its trace. Two processes
-//! writing one box would hand out the same number twice.
+//! One writer per box: the next sequence is read from the highest segment once
+//! and held after, which is sound only because the daemon holding a box's live
+//! handle is the only thing that writes its trace.
 
 use crate::error::poisoned;
 use crate::{Blobs, BoxRecord, Error, Frames, Result, Store, now_ms};
@@ -54,26 +26,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Digits in a sequence inside a key. Twelve holds every entry a box could be
-/// given before the padding runs out and the order goes wrong.
 const WIDTH: usize = 12;
 
 /// Entries a segment may hold before it goes down.
-///
-/// A batch is one round trip either way, so this is how much of an agent's run
-/// a crash may cost rather than how much a write can carry.
 const BATCH: usize = 64;
 
 /// How long the oldest buffered entry may wait.
-///
-/// Checked when the next entry arrives rather than on a timer, so a busy box is
-/// bounded and a quiet one holds only what it has written.
 const LINGER: Duration = Duration::from_secs(5);
 
 pub struct Files<B> {
     blobs: B,
-    /// The next sequence per box, primed from the highest segment on first
-    /// touch. See the note on writers above.
     next: Mutex<HashMap<String, u64>>,
     /// Written and not yet put down, per box.
     held: Mutex<HashMap<String, Waiting>>,
@@ -95,10 +57,6 @@ impl<B: Blobs> Files<B> {
     }
 
     /// Puts down what this box is holding, as one segment.
-    ///
-    /// The entries are taken out from under the lock before the write, so an
-    /// append arriving during it buffers behind rather than waiting. A write
-    /// that fails puts them back, in front of anything that arrived meanwhile.
     async fn put_down(&self, id: &str) -> Result<()> {
         let taken = match self.held.lock().map_err(poisoned)?.remove(id) {
             Some(waiting) => waiting.entries,
@@ -166,9 +124,6 @@ impl<B: Blobs> Files<B> {
         let primed = self.highest(id).await?;
 
         let mut held = self.next.lock().map_err(poisoned)?;
-        // A second caller may have primed this while the listing was in
-        // flight. Its answer came from the same keys, so take whichever is
-        // further on rather than handing out a sequence already given away.
         let next = held.entry(id.to_string()).or_insert(primed);
         let seq = (*next).max(primed);
         *next = seq + 1;
@@ -217,8 +172,6 @@ impl<B: Blobs + 'static> Store for Files<B> {
     }
 
     async fn list_boxes(&self) -> Result<Vec<BoxRecord>> {
-        // A listing names keys and nothing else, so each record is fetched. A
-        // delimiter would give the ids alone and still not the records.
         let mut records = Vec::new();
 
         for key in self.blobs.list("boxes/", None).await? {
@@ -276,8 +229,6 @@ impl<B: Blobs + 'static> Store for Files<B> {
                 .push(entry);
         }
 
-        // Everything buffered goes with it, so a segment's range stays whole and
-        // the order on disk is the order it happened in.
         if must_land || self.full(id)? {
             self.put_down(id).await?;
         }
@@ -309,8 +260,6 @@ impl<B: Blobs + 'static> Store for Files<B> {
             let Some((first, last)) = range(&prefix, &key) else {
                 continue;
             };
-            // A segment holding nothing past `after` is not fetched. The one
-            // that straddles it is, because its later half is wanted.
             if after.is_none_or(|seq| last > seq) {
                 keys.push((first, key));
             }
@@ -347,9 +296,6 @@ impl<B: Blobs + 'static> Store for Files<B> {
             }
         }
 
-        // What is still buffered carries the highest sequences there are, so it
-        // goes on the end and the order holds. Without this a caller that
-        // appends and reads back sees a hole where its own write was.
         for entry in self.waiting(id)? {
             if entries.len() >= limit {
                 break;
@@ -362,14 +308,11 @@ impl<B: Blobs + 'static> Store for Files<B> {
         Ok(entries)
     }
     async fn frames_before(&self, id: &str, before_ms: u64) -> Result<Vec<String>> {
-        // Put down first: a cutoff is a time, and a buffered entry has one.
         self.put_down(id).await?;
 
         let prefix = traces(id)?;
         let mut named = Vec::new();
 
-        // Every segment, because a segment's name carries sequences and not
-        // times. Bounded by a sweep's own cadence rather than by a request.
         for key in self.blobs.list(&prefix, None).await? {
             for entry in self.read(&key).await? {
                 if entry.at_ms < before_ms
@@ -389,10 +332,6 @@ impl<B: Blobs + 'static> Store for Files<B> {
         let prefix = traces(id)?;
         let keys = self.blobs.list(&prefix, None).await?;
 
-        // The highest segment's name is this box's watermark: `highest` reads
-        // the sequence out of it, and a process that starts after a trace was
-        // pruned away would otherwise begin again at zero and hand out numbers
-        // a caller has already read.
         let watermark = keys
             .iter()
             .filter_map(|key| range(&prefix, key).map(|(_, last)| (last, key.clone())))
@@ -417,17 +356,12 @@ impl<B: Blobs + 'static> Store for Files<B> {
 
             if kept.is_empty() {
                 match watermark.as_deref() == Some(key.as_str()) {
-                    // Emptied rather than removed, so the range in its name
-                    // survives as the watermark. One object per box.
                     true => self.blobs.put(&key, &[]).await?,
                     false => self.blobs.delete_prefix(&key).await?,
                 }
                 continue;
             }
 
-            // Written back under the name it had. The range in a name is what
-            // a reader filters on before it reads, and a narrower one would
-            // hide the entries still inside.
             self.blobs.put(&key, &lines(&kept)?).await?;
         }
 
@@ -440,9 +374,6 @@ impl<B: Blobs + 'static> Frames for Files<B> {
     async fn put(&self, id: &str, hash: &str, png: &[u8]) -> Result<()> {
         let key = frame(id, hash)?;
 
-        // Held by content, so a second write under one hash is the same
-        // picture. A listing rather than a fetch: the answer is whether
-        // anything is there, not what.
         if !self.blobs.list(&key, None).await?.is_empty() {
             return Ok(());
         }
@@ -454,8 +385,6 @@ impl<B: Blobs + 'static> Frames for Files<B> {
         Ok(self.blobs.get(&frame(id, hash)?).await?.map(Arc::new))
     }
 
-    /// One key at a time, through the prefix delete: a whole key is a prefix
-    /// of itself and nothing else lives under it.
     async fn drop_frames(&self, id: &str, hashes: &[String]) -> Result<()> {
         for hash in hashes {
             self.blobs.delete_prefix(&frame(id, hash)?).await?;
@@ -470,10 +399,6 @@ impl<B: Blobs + 'static> Frames for Files<B> {
 }
 
 /// Whether losing this entry would lose a claim rather than a detail.
-///
-/// Custody and lifecycle: when a box began, when it ended, and when a person
-/// held a screen. Everything else is what was done in between, which is worth
-/// having and not worth a round trip each.
 fn custody(event: &TraceEvent) -> bool {
     matches!(
         event,
@@ -551,11 +476,6 @@ fn range(prefix: &str, key: &str) -> Option<(u64, u64)> {
 }
 
 /// One path segment, refused if it could reach outside its own.
-///
-/// Ids and hashes are minted above this crate, so a bad one is a bug here
-/// rather than a caller's request — but a key that escapes its prefix would
-/// write over another box, and `delete_prefix` would then take more than it was
-/// given.
 fn part(part: &str) -> Result<&str> {
     let bad =
         part.is_empty() || part == "." || part == ".." || part.contains('/') || part.contains('\\');
@@ -579,8 +499,6 @@ mod tests {
         TraceEvent::Frame { screen: 0 }
     }
 
-    /// A backend that will not take a write, so the buffer's own promise can be
-    /// checked: what it could not put down it still holds.
     struct Refusing;
 
     #[async_trait]

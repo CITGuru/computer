@@ -1,20 +1,4 @@
 //! A bucket, addressed by key.
-//!
-//! The same four verbs [`crate::files`] is written over, so the layout that
-//! lives in a directory lives here unchanged and a state directory can be
-//! copied into a bucket and back.
-//!
-//! # Signed by hand
-//!
-//! Four verbs against one service does not pay for a vendor SDK, and the
-//! signature is a published algorithm. `hmac`, `sha2`, `hex` and `reqwest` are
-//! all this needs and all of them were already here.
-//!
-//! # Path style
-//!
-//! `{endpoint}/{bucket}/{key}` rather than a bucket in the hostname, because
-//! that is what MinIO, R2 and Ceph answer and what a caller pointing this at a
-//! container on their own laptop needs.
 
 use crate::{Blobs, Error, Result};
 use async_trait::async_trait;
@@ -22,8 +6,6 @@ use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
-/// What every key here is prefixed by in the caller's bucket, where the caller
-/// asked for one.
 pub struct S3 {
     client: reqwest::Client,
     /// No trailing slash.
@@ -71,8 +53,6 @@ impl S3 {
         self
     }
 
-    /// Credentials under their usual names, so a caller who has already set up
-    /// a shell for `aws` sets nothing else.
     pub fn from_env() -> Result<Self> {
         let need = |name: &str| {
             std::env::var(name)
@@ -132,9 +112,6 @@ impl S3 {
     }
 
     /// The headers that authorise one request.
-    ///
-    /// Only three are signed. Anything else a proxy adds on the way is then not
-    /// part of the signature and cannot break it.
     fn sign(
         &self,
         method: &str,
@@ -225,8 +202,6 @@ impl Blobs for S3 {
                 ("list-type".to_string(), "2".to_string()),
                 ("prefix".to_string(), self.at(prefix)),
             ];
-            // Both are whole keys to the bucket, so the caller's prefix goes on
-            // this the same way it goes on the keys themselves.
             if let Some(after) = start_after {
                 query.push(("start-after".to_string(), self.at(after)));
             }
@@ -245,8 +220,6 @@ impl Blobs for S3 {
             for key in tagged(&body, "Key") {
                 match key.strip_prefix(&self.prefix) {
                     Some(theirs) => keys.push(theirs.to_string()),
-                    // A key that is not under our prefix is somebody else's,
-                    // and handing it back would name something we cannot read.
                     None => continue,
                 }
             }
@@ -261,9 +234,6 @@ impl Blobs for S3 {
     }
 
     async fn delete_prefix(&self, prefix: &str) -> Result<()> {
-        // One at a time rather than the batch call, which wants an XML body and
-        // a checksum header for a request this makes when a box is forgotten
-        // and at no other time.
         for key in self.list(prefix, None).await? {
             let path = self.path_of(Some(&key));
             let answer = self
@@ -299,9 +269,6 @@ fn hmac(key: &[u8], message: &[u8]) -> Vec<u8> {
 }
 
 /// The chain the algorithm derives a per-day, per-region key with.
-///
-/// The service is a parameter only so this can be checked against the vector
-/// AWS publishes, which is written for `iam`.
 fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
     let start = hmac(format!("AWS4{secret}").as_bytes(), date.as_bytes());
     let regional = hmac(&start, region.as_bytes());
@@ -310,8 +277,6 @@ fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8>
     hmac(&scoped, b"aws4_request")
 }
 
-/// Sorted by name, and each half encoded, which is what the signature is taken
-/// over and therefore what the URL has to carry.
 fn canonical_query(query: &[(String, String)]) -> String {
     let mut pairs: Vec<String> = query
         .iter()
@@ -328,10 +293,6 @@ fn encoded_path(path: &str) -> String {
 }
 
 /// Everything outside the unreserved set, including the slash.
-///
-/// The algorithm names its own set rather than borrowing a URL library's, and
-/// the two differ over `~` and `/` — which is a signature that verifies in
-/// testing and fails on the first key with an odd character in it.
 fn encode(part: &str) -> String {
     let mut out = String::with_capacity(part.len());
 
@@ -358,9 +319,6 @@ fn host_of(endpoint: &str) -> String {
 }
 
 /// The text inside every `<tag>` in a listing.
-///
-/// A reader for two tags rather than a parser: a listing is the only XML this
-/// crate ever sees, and the alternative is a dependency for it.
 fn tagged(body: &str, tag: &str) -> Vec<String> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
@@ -376,8 +334,6 @@ fn tagged(body: &str, tag: &str) -> Vec<String> {
     found
 }
 
-/// The five entities XML defines. A key holding an `&` arrives as `&amp;` and
-/// asking for it back under that name answers 404.
 fn unescaped(text: &str) -> String {
     text.replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -393,9 +349,6 @@ mod tests {
 
     #[test]
     fn test_the_signing_key_matches_the_published_one() {
-        // The worked example in AWS's own signature documentation, which is
-        // written for `iam`. Nothing else here proves the chain is right: a
-        // wrong one signs happily and is refused by every bucket.
         assert_eq!(
             hex::encode(signing_key(
                 "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
@@ -496,8 +449,6 @@ mod tests {
         assert_eq!(store("").at("boxes/x"), "boxes/x");
     }
 
-    /// A bucket to run against, where one is offered. Skipped rather than
-    /// failed: a checkout with no MinIO is the ordinary case.
     #[tokio::test]
     async fn test_a_bucket_behaves_like_a_blob_backend() {
         let Ok(store) = S3::from_env() else {

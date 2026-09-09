@@ -248,12 +248,8 @@ impl Machine for RemoteMachine {
         Ok(self.published(&sandbox))
     }
 
-    /// Keeps what it found rather than dropping it.
-    ///
-    /// This is the round trip that resolves a box this process did not start,
-    /// and both [`Machine::ports`] and the profile's address read what it
-    /// resolved. Asking and then throwing the answer away leaves an attached
-    /// box with no port map and no URL.
+    /// Keeps what it found: this is the round trip that resolves a box this
+    /// process did not start, and `ports` and the profile's address read it.
     async fn running(&self, name: &str) -> Result<bool> {
         match self.sandbox(name).await {
             Ok(_) => Ok(true),

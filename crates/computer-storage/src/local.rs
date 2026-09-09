@@ -1,11 +1,4 @@
 //! A directory on this host, addressed by key.
-//!
-//! The layout above this is the same one a bucket holds, so a state directory
-//! can be copied into object storage and read back without a migration. What
-//! differs is only what a filesystem needs and object storage does not: a
-//! parent directory before a write, a rename to make the write whole, and a
-//! prune afterwards so an emptied prefix does not leave a tree of directories
-//! behind.
 
 use crate::{Blobs, Error, Result};
 use async_trait::async_trait;
@@ -15,8 +8,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct LocalDir {
     root: PathBuf,
-    /// Names a partial write apart from every other, so two writes in flight
-    /// cannot land on one temporary file.
     writes: AtomicU64,
 }
 
@@ -29,10 +20,6 @@ impl LocalDir {
     }
 
     /// Where a key lives, refused if it could reach outside the root.
-    ///
-    /// A key is built above this crate and should never be able to, but the
-    /// cost of being wrong is a write into somebody else's directory and a
-    /// `delete_prefix` that takes it away.
     fn path(&self, key: &str) -> Result<PathBuf> {
         let mut path = self.root.clone();
 
@@ -67,10 +54,6 @@ impl Blobs for LocalDir {
                 .map_err(|error| unreachable(key, error))?;
         }
 
-        // Written beside its own name and moved into place, because a reader
-        // that finds half a record loses the box rather than the write. A
-        // rename within one directory is the only atomic write a filesystem
-        // offers.
         let mine = self.writes.fetch_add(1, Ordering::Relaxed);
         let partial = path.with_extension(format!("partial-{mine}"));
 
@@ -79,8 +62,6 @@ impl Blobs for LocalDir {
             .map_err(|error| unreachable(key, error))?;
 
         if let Err(error) = tokio::fs::rename(&partial, &path).await {
-            // Nothing reads a partial file, but leaving one behind would have
-            // it listed as a key nobody wrote.
             tokio::fs::remove_file(&partial).await.ok();
             return Err(unreachable(key, error));
         }
@@ -89,9 +70,6 @@ impl Blobs for LocalDir {
     }
 
     async fn list(&self, prefix: &str, start_after: Option<&str>) -> Result<Vec<String>> {
-        // A prefix may stop mid-name, so the walk starts at the last directory
-        // it names and the rest is a filter. Without this, listing one box's
-        // segments would read every box on the host.
         let (under, _) = prefix.rsplit_once('/').unwrap_or(("", prefix));
         let from = match under.is_empty() {
             true => self.root.clone(),
@@ -104,7 +82,6 @@ impl Blobs for LocalDir {
         while let Some((directory, at)) = pending.pop() {
             let mut entries = match tokio::fs::read_dir(&directory).await {
                 Ok(entries) => entries,
-                // A prefix nothing has been written under is empty, not absent.
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
                 Err(error) => return Err(unreachable(prefix, error)),
             };
@@ -114,8 +91,6 @@ impl Blobs for LocalDir {
                 .await
                 .map_err(|error| unreachable(prefix, error))?
             {
-                // Built by joining rather than by stripping the root, so the
-                // separator is this crate's and not the platform's.
                 let Some(name) = entry.file_name().to_str().map(str::to_string) else {
                     continue;
                 };
@@ -162,15 +137,11 @@ impl Blobs for LocalDir {
     }
 }
 
-/// Removes directories the last file left empty, up to but not including the
-/// root, which belongs to whoever handed it over.
 async fn prune(root: &Path, mut from: Option<&Path>) {
     while let Some(directory) = from {
         if directory == root || !directory.starts_with(root) {
             return;
         }
-        // Fails while anything is still in there, which is the condition being
-        // tested for.
         if tokio::fs::remove_dir(directory).await.is_err() {
             return;
         }

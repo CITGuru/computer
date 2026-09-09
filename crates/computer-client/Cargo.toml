@@ -7,8 +7,8 @@ description = "A client for the computer box API"
 license = "MIT"
 
 [dependencies]
-computer-api = { path = "../computer-api" }
-computer-types = { path = "../computer-types" }
+computer-api = { path = "../computer-api", version = "0.1.0" }
+computer-types = { path = "../computer-types", version = "0.1.0" }
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",

@@ -25,7 +25,7 @@ use computer::{Profile, X11Profile};
 use std::path::PathBuf;
 
 fn directory() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu")
+    PathBuf::from(computer::bundle::IMAGES).join("ubuntu")
 }
 
 fn read(name: &str) -> String {

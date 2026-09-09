@@ -1,8 +1,4 @@
 //! That a record outlives the process that wrote it.
-//!
-//! The unit tests run on the in-memory store, which cannot show this: it is the
-//! same object either side of the assertion. Here two servers are given one
-//! directory, which is what a restart is.
 
 use computer_api::{Actor, TraceEvent};
 use computer_server::AppState;
@@ -18,9 +14,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Counted as well as timed: two tests starting together read the same
-    /// clock, and sharing a directory has one of them delete the other's state
-    /// halfway through.
     fn new() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
 

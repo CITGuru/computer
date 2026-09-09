@@ -1,9 +1,4 @@
 //! That a database holds what a directory does.
-//!
-//! The same assertions as `persistence.rs`, against the other backend, because
-//! the wiring is what is being checked rather than the store: `AppState::on`
-//! takes anything that is both, and a backend that cannot be handed to it is
-//! not usable however well it behaves on its own.
 
 #![cfg(feature = "sqlite")]
 

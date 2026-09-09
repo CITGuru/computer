@@ -3,10 +3,6 @@ use computer_api::ErrorCode;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// What a store could not do.
-///
-/// There is no `NotFound`: a box with no record and a hash nothing holds are
-/// both ordinary, and a reader that has to catch an error to learn a box is
-/// new will forget to. Absence is `Ok(None)`.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Not reachable, or refused. A retry may work.
@@ -20,8 +16,6 @@ pub enum Error {
 }
 
 impl Error {
-    /// Mapped onto the wire taxonomy rather than carrying one of its own, so a
-    /// route answers a storage failure without inventing a code for it.
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Unavailable(_) => ErrorCode::Unavailable,
@@ -30,9 +24,6 @@ impl Error {
     }
 }
 
-/// A lock left poisoned means an earlier holder panicked. Nothing here panics,
-/// so this is a bug elsewhere rather than a state to recover from — but it must
-/// not take the daemon with it.
 pub(crate) fn poisoned<T>(_: std::sync::PoisonError<T>) -> Error {
     Error::Internal("a store lock was left poisoned by an earlier panic".to_string())
 }

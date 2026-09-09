@@ -18,12 +18,13 @@ s3 = ["computer-server/s3"]
 
 [dependencies]
 axum = "0.8"
-computer = { path = "../.." }
-computer-api = { path = "../computer-api" }
-computer-client = { path = "../computer-client" }
-computer-mcp = { path = "../computer-mcp" }
-computer-server = { path = "../computer-server" }
-computer-types = { path = "../computer-types" }
+# Renamed at the use site, so everything below still says `computer`.
+computer = { package = "computer-core", path = "../computer-core", version = "0.1.0" }
+computer-api = { path = "../computer-api", version = "0.1.0" }
+computer-client = { path = "../computer-client", version = "0.1.0" }
+computer-mcp = { path = "../computer-mcp", version = "0.1.0" }
+computer-server = { path = "../computer-server", version = "0.1.0" }
+computer-types = { path = "../computer-types", version = "0.1.0" }
 tokio = { version = "1", features = [
     "macros",
     "rt-multi-thread",
@@ -37,11 +38,3 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints.clippy]
 string_slice = "deny"
-
-[[bin]]
-name = "computer"
-path = "src/main.rs"
-
-[[bin]]
-name = "computerd"
-path = "src/daemon.rs"

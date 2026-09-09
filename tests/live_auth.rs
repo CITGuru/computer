@@ -265,7 +265,7 @@ async fn the_wayland_image_gates_its_viewer_the_same_way() {
 #[tokio::test]
 #[ignore = "needs a container runtime, and builds the Ubuntu image"]
 async fn the_ubuntu_image_gates_its_viewer_the_same_way() {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu");
+    let directory = Path::new(computer::bundle::IMAGES).join("ubuntu");
     let computer = Computer::builder()
         .image_dir(directory)
         .auth(Auth::Token)

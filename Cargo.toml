@@ -6,48 +6,68 @@ rust-version = "1.85"
 description = "A computer in a box: an X11 desktop in a container, driven from Rust"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/CITGuru/computer"
 keywords = ["computer-use", "x11", "desktop", "container", "automation"]
 categories = ["api-bindings", "development-tools"]
 
 [features]
-default = []
-# The binding to microsandbox 0.6, so a box can run in a microVM rather than a
-# container. Off by default: the vendor crate pulls a hypervisor, an ORM and a
-# database driver behind it, and most builds run containers.
-microsandbox = ["dep:microsandbox"]
-# The HTTP client for E2B, so a box can run in somebody else's cloud rather
-# than on this host. Off by default: the seam and the machine compile without
-# it, and only the shipped client needs a TLS stack behind it.
-e2b = ["dep:reqwest"]
+# On, because `cargo install computer` builds what is on and the commands are
+# half of what this crate is. A caller who wants the API alone and none of a
+# server's dependencies takes it with `default-features = false`.
+default = ["cli"]
+cli = ["dep:computer-cli", "dep:tokio"]
+# The desktop in a microVM, and the desktop in somebody else's cloud. Forwarded
+# rather than declared: what they turn on is the API's, not this crate's.
+microsandbox = ["computer-core/microsandbox"]
+e2b = ["computer-core/e2b", "computer-cli?/e2b"]
+# What a daemon can keep its records in, forwarded the same way.
+sqlite = ["computer-cli?/sqlite"]
+postgres = ["computer-cli?/postgres"]
+s3 = ["computer-cli?/s3"]
 
+# The API, re-exported whole. Nothing else is in the library half of this crate.
 [dependencies]
+computer-core = { path = "crates/computer-core", version = "0.1.0" }
+computer-cli = { path = "crates/computer-cli", version = "0.1.0", optional = true }
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+], optional = true }
+
+# The vocabulary a spec is written in, which a test writes one with directly.
+[dev-dependencies.computer-types]
+path = "crates/computer-types"
+version = "0.1.0"
+
+# What the tests and examples reach for beyond the API itself.
+[dev-dependencies]
+# An example that implements a seam needs the same attribute the trait was
+# written with.
 async-trait = "0.1"
-# The vocabulary a spec is written in. The edge runs this way because the
-# builder takes a spec; nothing in computer-types knows this crate exists.
-computer-types = { path = "crates/computer-types", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-microsandbox = { version = "0.6", optional = true }
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-], optional = true }
-thiserror = "2"
-# The CSPRNG. Every credential this crate mints comes from here rather than
-# from the clock, which the takeover token used to use and which a second
-# caller can work out.
-getrandom = "0.3"
-# Logs. A facade, so a caller with no subscriber pays nothing — and a
-# detached task that fails has somewhere to say so.
-tracing = "0.1"
-tokio = { version = "1", features = ["fs", "process", "time", "rt", "net", "io-util"] }
-
-[dev-dependencies]
 # `test-util` for a paused clock: a reaper waits ten seconds between asks,
 # and a test that really waited would be the slowest thing in the suite.
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "test-util"] }
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "test-util",
+] }
 
 [lints.clippy]
 string_slice = "deny"
+
+[[bin]]
+name = "computer"
+path = "src/bin/computer.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "computerd"
+path = "src/bin/computerd.rs"
+required-features = ["cli"]
 
 [[example]]
 name = "e2b"
@@ -59,11 +79,11 @@ name = "e2b_takeover"
 path = "examples/e2b_takeover.rs"
 required-features = ["e2b"]
 
-
 # Listed rather than globbed: `crates/macos-vm` is an empty directory and a
 # glob would fail on it.
 [workspace]
 members = [
+    "crates/computer-core",
     "crates/computer-types",
     "crates/computer-cli",
     "crates/computer-api",

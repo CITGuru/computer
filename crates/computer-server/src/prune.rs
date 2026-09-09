@@ -1,26 +1,9 @@
 //! Records that are no longer worth their disk.
-//!
-//! Memory bounds itself, because a process that never restarts must not grow
-//! until it is killed. A directory, a bucket and a database keep what they are
-//! given, so somebody has to say when to stop — and that is a policy rather
-//! than a store's business.
-//!
-//! Two windows, because the two things age at different rates. Frames are the
-//! volume: a PNG per changed screen, and thousands per busy box. A replay does
-//! not read one — [`crate::routes`] repeats actions — so they are worth far
-//! less than the entries that name them, and go long before. Entries are a JSON
-//! line each and are what a fork needs, so they last a week.
-//!
-//! A box whose entries have all gone and whose desktop is no longer running is
-//! then forgotten outright. Nothing else decides that: the trace ageing out is
-//! what says the box is finished with.
 
 use crate::AppState;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// How often to look. Hourly, because nothing here is urgent and every pass
-/// reads every box.
 pub const EVERY: Duration = Duration::from_secs(60 * 60);
 /// How long a frame is kept. Long enough to see what just went wrong.
 pub const KEEP_FRAMES: Duration = Duration::from_secs(2 * 60 * 60);
@@ -80,11 +63,7 @@ pub fn spawn(state: Arc<AppState>, every: Duration) {
     });
 }
 
-/// Cutoffs rather than windows, so what a pass does is a function of its
-/// arguments and not of how long the clock took to answer twice.
-///
-/// Never fails: a store that will not answer for one box must not stop the
-/// sweep of the rest, and the only reader is the log.
+/// Cutoffs rather than windows, so a pass is a function of its arguments.
 pub async fn once(state: &AppState, frames_before: u64, entries_before: u64) -> Swept {
     let mut swept = Swept::default();
 
@@ -132,10 +111,6 @@ pub async fn once(state: &AppState, frames_before: u64, entries_before: u64) -> 
 }
 
 /// A box with nothing left to say and no desktop still running.
-///
-/// The registry is asked rather than the record: a box created a month ago and
-/// driven this morning has a trace, and a box whose trace has aged out entirely
-/// has not been touched in a week.
 async fn forgettable(state: &AppState, id: &str) -> bool {
     if state.registry.get(id).await.is_ok() {
         return false;
@@ -253,9 +228,6 @@ mod tests {
     async fn test_a_running_box_is_never_forgotten() {
         let state = holding("box_1").await;
 
-        // No registry entry can be made here without a container, so the
-        // reverse is asserted: a box the registry does not hold is the only
-        // kind this may forget.
         assert!(
             state.registry.get("box_1").await.is_err(),
             "the double is a box that is not running"

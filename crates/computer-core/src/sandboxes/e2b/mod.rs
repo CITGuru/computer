@@ -12,6 +12,7 @@
 //! how to reach it.
 //!
 //! ```no_run
+//! # extern crate computer_core as computer;
 //! # #[cfg(feature = "e2b")]
 //! # async fn run() -> computer::Result<()> {
 //! use computer::Computer;

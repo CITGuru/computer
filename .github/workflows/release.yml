@@ -1,0 +1,85 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: the tag to build and upload to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Say which tag this is
+        id: tag
+        run: echo "name=${{ inputs.tag || github.ref_name }}" >>"$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release --locked --features sqlite,postgres,s3,e2b
+
+      - name: Pack
+        run: |
+          set -eux
+          strip target/release/computer target/release/computerd
+          archive="computer-${{ steps.tag.outputs.name }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$archive" -C target/release computer computerd
+          shasum -a 256 "$archive" >"$archive.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            computer-*.tar.gz
+            computer-*.tar.gz.sha256
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Say which tag this is
+        id: tag
+        run: echo "name=${{ inputs.tag || github.ref_name }}" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Gather the checksums
+        run: cat dist/*.sha256 >dist/SHA256SUMS
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          tag='${{ steps.tag.outputs.name }}'
+          gh release view "$tag" >/dev/null 2>&1 ||
+            gh release create "$tag" --title "$tag" --generate-notes
+          gh release upload "$tag" dist/*.tar.gz dist/SHA256SUMS --clobber

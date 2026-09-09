@@ -11,8 +11,23 @@ cargo build --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --no-fail-fast
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 cargo deny check
 ```
+
+Nothing above turns an optional feature on, so an unused backend can stop
+compiling without any of it going red:
+
+```bash
+cargo clippy -p computer --no-default-features -- -D warnings
+cargo test -p computer-storage --features sqlite,postgres,s3
+cargo test -p computer-server --features sqlite,s3
+cargo clippy -p computer-core --features microsandbox --all-targets -- -D warnings
+```
+
+`.github/workflows/ci.yml` runs this list, with `--locked` added: the lock is
+tracked, and CI must build what was committed rather than whatever resolves
+today. A change to one belongs in both.
 
 
 ## Writing style — no AI slop

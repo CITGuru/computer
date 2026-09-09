@@ -1,10 +1,4 @@
 //! A REST API over `computer` boxes.
-//!
-//! Two halves. Lifecycle — create, list, remove — is ordinary REST. Driving
-//! is the batch at `POST /v1/boxes/{id}/screens/{n}/actions`, which takes a
-//! run of actions and hands back the frame they produced, because an agent's
-//! step is several actions and one look, and one request per click spends a
-//! round trip on each.
 
 pub mod auth;
 pub mod error;
@@ -31,27 +25,12 @@ use std::sync::{Arc, Mutex};
 pub struct AppState {
     pub registry: Registry,
     pub replies: Replies,
-    /// `None` leaves the API open, which is only allowed on loopback — see
-    /// [`auth::allowed`].
+    /// `None` leaves the API open, which only loopback allows.
     pub token: Option<computer::Secret>,
-    /// Kept beside the registry rather than on a box, because removing a box
-    /// must not remove the record of what was done in it.
     pub store: Arc<dyn Store>,
     pub frames: Arc<dyn Frames>,
-    /// The last frame written per screen, so an idle screen polled in a loop
-    /// adds nothing.
-    ///
-    /// Here rather than in a backend: it is news about this process, not about
-    /// the record, and four backends would otherwise each keep a copy. A
-    /// restart writing the first frame it sees is right — after an adoption
-    /// that frame is news.
     seen: Mutex<HashMap<(String, u32), String>>,
     /// What to reach the container runtime through.
-    ///
-    /// `None` is this host's own. A test supplies a double here, because
-    /// otherwise every request this server accepts starts a real container —
-    /// which a test asserting a refusal finds out about only when the
-    /// refusal stops happening.
     pub cli: Option<Arc<dyn ContainerCli>>,
 }
 
@@ -63,16 +42,12 @@ impl Default for AppState {
 }
 
 impl AppState {
-    /// One backend answering for both, which is the ordinary case: a record and
-    /// the frames it names belong in the same place.
     pub fn on<B: Store + Frames + 'static>(backend: Arc<B>) -> Self {
         let store = Arc::clone(&backend) as Arc<dyn Store>;
 
         Self::split(store, backend)
     }
 
-    /// Rows in one place and pictures in another, for a fleet whose frames
-    /// outgrow whatever holds its records.
     pub fn split(store: Arc<dyn Store>, frames: Arc<dyn Frames>) -> Self {
         Self {
             registry: Registry::default(),
@@ -86,23 +61,6 @@ impl AppState {
     }
 
     /// Where the environment says, or in memory.
-    ///
-    /// Whatever `COMPUTER_STORAGE_BACKEND` names, and memory where it names
-    /// nothing.
-    ///
-    /// Named rather than worked out from whichever setting happens to be in the
-    /// environment: a server with a stale `COMPUTER_STATE_DIR` beside a new
-    /// database URL should not have to be guessed about, and one asked for a
-    /// backend it was not built with should say so rather than keep records
-    /// somewhere else.
-    ///
-    /// | Named      | Reads                                            |
-    /// | ---------- | ------------------------------------------------ |
-    /// | `memory`   | nothing                                          |
-    /// | `local`    | `COMPUTER_STATE_DIR`                             |
-    /// | `sqlite`   | `COMPUTER_STATE_URL`                             |
-    /// | `postgres` | `COMPUTER_STATE_URL`                             |
-    /// | `s3`       | `COMPUTER_S3_*`, `AWS_ACCESS_KEY_ID` and its pair |
     pub async fn from_env() -> Result<Self, String> {
         let named = std::env::var("COMPUTER_STORAGE_BACKEND").unwrap_or_default();
 
@@ -140,7 +98,6 @@ impl AppState {
             .await
             .map_err(|why| format!("{dialect}: {why}"))?;
 
-        // Not the URL: it carries a password.
         tracing::info!(%dialect, "keeping box records, traces and frames in");
         Ok(Self::on(Arc::new(store)))
     }
@@ -153,8 +110,6 @@ impl AppState {
         ))
     }
 
-    /// The same layout a directory holds, so a state directory can be copied
-    /// into a bucket and read back.
     #[cfg(feature = "s3")]
     async fn on_bucket() -> Result<Self, String> {
         let store = computer_storage::s3::S3::from_env().map_err(|why| why.to_string())?;
@@ -186,18 +141,13 @@ impl AppState {
     }
 
     /// Records, and logs rather than fails.
-    ///
-    /// A trace entry that could not be written must not turn a click that
-    /// worked into an error: the record sits beside the work and is not part of
-    /// it.
     pub async fn record(&self, id: &str, actor: Actor, event: TraceEvent) {
         if let Err(why) = self.store.append(id, actor, event, None).await {
             tracing::warn!(box_ = %id, %why, "a trace entry was not written");
         }
     }
 
-    /// Records a frame only where the screen moved, and answers whether it did,
-    /// so a caller polling a still screen can tell it changed nothing.
+    /// Answers whether the screen had moved.
     pub async fn note_frame(
         &self,
         id: &str,
@@ -234,9 +184,6 @@ impl AppState {
     }
 
     /// Whether anything has been written about this box.
-    ///
-    /// A read of one entry rather than a flag, because that is the question
-    /// every backend can answer without holding a second index.
     pub async fn traced(&self, id: &str) -> bool {
         self.store
             .entries(id, None, 1)
@@ -245,8 +192,6 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// Drops what this process remembers about a box's screens. The record
-    /// stays: a fork reads it after the box has gone.
     pub fn forget_screens(&self, id: &str) {
         if let Ok(mut seen) = self.seen.lock() {
             seen.retain(|(held, _), _| held != id);
