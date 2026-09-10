@@ -6,18 +6,35 @@ rust-version = "1.85"
 description = "The computer command"
 license = "MIT"
 
+# Forwarded rather than named again: what a daemon can keep its records in and
+# where it can take boxes back from are the server's answers, and this crate is
+# only where its binary lives.
+[features]
+default = []
+e2b = ["computer-server/e2b"]
+sqlite = ["computer-server/sqlite"]
+postgres = ["computer-server/postgres"]
+s3 = ["computer-server/s3"]
+
 [dependencies]
 axum = "0.8"
-computer = { path = "../.." }
-computer-api = { path = "../computer-api" }
-computer-client = { path = "../computer-client" }
-computer-server = { path = "../computer-server" }
-computer-types = { path = "../computer-types" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "net"] }
+# Renamed at the use site, so everything below still says `computer`.
+computer = { package = "computer-core", path = "../computer-core", version = "0.1.0" }
+computer-api = { path = "../computer-api", version = "0.1.0" }
+computer-client = { path = "../computer-client", version = "0.1.0" }
+computer-mcp = { path = "../computer-mcp", version = "0.1.0" }
+computer-server = { path = "../computer-server", version = "0.1.0" }
+computer-types = { path = "../computer-types", version = "0.1.0" }
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "fs",
+    "net",
+    "signal",
+    "io-std",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints.clippy]
 string_slice = "deny"
-
-[[bin]]
-name = "computer"
-path = "src/main.rs"

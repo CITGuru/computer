@@ -43,6 +43,21 @@ impl ApiError {
     }
 }
 
+impl From<computer_storage::Error> for ApiError {
+    fn from(error: computer_storage::Error) -> Self {
+        let code = error.code();
+        let status = match code {
+            ErrorCode::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        let mut mapped = Self::new(status, code, error.to_string());
+        mapped.body.retryable = matches!(code, ErrorCode::Unavailable);
+
+        mapped
+    }
+}
+
 impl From<computer::Error> for ApiError {
     fn from(error: computer::Error) -> Self {
         use computer::Error as E;

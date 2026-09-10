@@ -42,7 +42,7 @@ async fn a_real_box_does_everything_the_readme_claims() {
 #[tokio::test]
 #[ignore = "needs a container runtime and builds the Ubuntu image"]
 async fn a_local_image_directory_can_be_driven() {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("images/ubuntu");
+    let directory = Path::new(computer::bundle::IMAGES).join("ubuntu");
     let profile = ProfileBuilder::new(X11Profile)
         .image_dir(&directory)
         .build();

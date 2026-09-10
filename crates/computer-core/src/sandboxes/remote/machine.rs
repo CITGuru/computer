@@ -248,8 +248,14 @@ impl Machine for RemoteMachine {
         Ok(self.published(&sandbox))
     }
 
+    /// Keeps what it found: this is the round trip that resolves a box this
+    /// process did not start, and `ports` and the profile's address read it.
     async fn running(&self, name: &str) -> Result<bool> {
-        Ok(self.api.find(name).await?.is_some())
+        match self.sandbox(name).await {
+            Ok(_) => Ok(true),
+            Err(Error::Gone(_)) => Ok(false),
+            Err(other) => Err(other),
+        }
     }
 
     async fn ports(&self, name: &str) -> PortMap {
@@ -544,6 +550,26 @@ mod tests {
             .expect("ran");
 
         assert_eq!(api.refreshes(), vec!["sbx-0".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_a_box_this_process_did_not_start_keeps_where_it_was_found() {
+        let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
+        let machine = machine(Arc::clone(&api)).public_viewer(true);
+
+        assert!(machine.running("desk-1").await.expect("asked"));
+        assert!(
+            !machine.ports("desk-1").await.is_empty(),
+            "asking whether a box is there is the call that resolves it, and \
+             throwing that answer away leaves an adopted box with no address"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_box_no_vendor_holds_is_not_running() {
+        let machine = machine(Arc::new(ScriptedRemote::new()));
+
+        assert!(!machine.running("desk-1").await.expect("asked"));
     }
 
     #[tokio::test]

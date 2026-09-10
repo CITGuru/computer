@@ -1,13 +1,15 @@
+//! `computerd`: the server that outlives a command.
+
 use computer_server::{AppState, routes};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Serves until Ctrl-C, then puts down whatever the store is still holding.
+pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "computer_server=info,computer=info".into()),
+                .unwrap_or_else(|_| "computerd=info,computer_server=info,computer=info".into()),
         )
         .init();
 
@@ -24,13 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(why.into());
     }
 
-    let state = Arc::new(AppState {
-        token,
-        ..AppState::default()
-    });
+    let state = Arc::new(AppState::from_env().await?.gated(token));
 
     let runtimes = computer_server::recover::runtimes();
-    let taken = computer_server::recover::adopt(&state.registry, &state.traces, &runtimes).await;
+    let sandboxes = computer_server::recover::sandboxes();
+    let taken = computer_server::recover::adopt(&state, &runtimes, &sandboxes).await;
     if taken > 0 {
         tracing::info!(taken, "took back boxes left running by an earlier server");
     }
@@ -42,19 +42,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(computer_server::reap::EVERY);
 
     computer_server::reap::spawn(Arc::clone(&state), runtimes, every);
+    computer_server::prune::spawn(Arc::clone(&state), computer_server::prune::every());
 
     let listener = tokio::net::TcpListener::bind(address).await?;
 
     tracing::info!(
         %address,
         gated = state.token.is_some(),
-        "computer-server is listening"
+        "computerd is listening"
     );
-    axum::serve(listener, routes::router(state))
+    axum::serve(listener, routes::router(Arc::clone(&state)))
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
+
+    if let Err(why) = state.store.flush().await {
+        tracing::warn!(%why, "what the store was still holding did not go down");
+    }
 
     Ok(())
 }

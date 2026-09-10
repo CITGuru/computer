@@ -1,16 +1,11 @@
 //! `computer` — a desktop in a box, from the command line.
-//!
-//! Commands go through a server, which is what lets the same ones reach a box on
-//! this machine and a box in somebody's fleet. When no server is named and none
-//! is listening, one is started here for the length of the command, so nothing
-//! has to be running first.
-//!
-//! `--local` skips all that and drives the box from this process. Faster, and
-//! a smaller set: what a server remembers, a one-shot process does not.
 
+mod daemon;
 mod embed;
 mod local;
 mod remote;
+
+pub use daemon::serve as daemon;
 
 use computer_client::Client;
 
@@ -58,6 +53,7 @@ computer — a desktop in a box
   fork <box> [--up-to SEQ]    build another by doing again what was done
   trace <box> [--after SEQ]   what has been done to it, and by whom
   sweep                       remove every box whose deadline has passed
+  mcp [--stdio]               serve the Model Context Protocol, for an agent
 
   --server URL                a server to use, over $COMPUTER_SERVER_URL
   --local                     drive the box from here, with no server at all.
@@ -65,10 +61,14 @@ computer — a desktop in a box
 
 The first `up` builds the image, which takes a few minutes. Every one after it
 starts in seconds.
+
+Without a server these commands start one for their own length. Run `computerd`
+to keep one: it holds the trace a fork reads, sweeps boxes past their deadline,
+and can be reached from off this host.
 ";
 
-#[tokio::main]
-async fn main() {
+/// Runs one command and answers with what to print if it failed.
+pub async fn run() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let local = take(&mut args, "--local");
     let named = value(&mut args, "--server").or_else(|| std::env::var("COMPUTER_SERVER_URL").ok());
@@ -82,25 +82,47 @@ async fn main() {
 
     if matches!(command.as_str(), "help" | "--help" | "-h") {
         print!("{USAGE}");
-        return;
+        return Ok(());
     }
 
-    let outcome = match local {
-        true => here(&command, &rest).await,
-        false => match connect(named).await {
-            Ok(client) => there(&client, &command, &rest).await,
-            Err(why) => Err(why),
+    let outcome = match command.as_str() {
+        "mcp" => mcp(named, &rest).await,
+        _ => match local {
+            true => here(&command, &rest).await,
+            false => match connect(named).await {
+                Ok(client) => there(&client, &command, &rest).await,
+                Err(why) => Err(why),
+            },
         },
     };
 
-    if let Err(error) = outcome {
-        eprintln!("{error}");
-        std::process::exit(1);
-    }
+    embed::flush().await;
+
+    outcome
 }
 
-/// A server to talk to: the one named, the one already listening, or one
-/// started here and thrown away with the process.
+/// Serve the Model Context Protocol on this process's own streams.
+async fn mcp(named: Option<String>, args: &[String]) -> Result<(), String> {
+    if let Some(odd) = args.iter().find(|arg| *arg != "--stdio") {
+        return Err(format!("unknown option for mcp: {odd}\n\n{USAGE}"));
+    }
+
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "computer_mcp=info,computer=info".into()),
+        )
+        .init();
+
+    let client = connect(named).await?;
+    tracing::info!(server = %client.base(), "computer mcp is serving boxes from");
+
+    computer_mcp::stdio(&client)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 async fn connect(named: Option<String>) -> Result<Client, String> {
     let token = std::env::var("COMPUTER_SERVER_TOKEN").ok();
 
@@ -145,8 +167,6 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "rm" => remote::remove(client, args).await,
         "fork" => remote::fork(client, args).await,
         "trace" => remote::trace(client, args).await,
-        // The server sweeps on its own cadence; this is the local operator's
-        // version of the same thing.
         "sweep" => local::sweep().await.map_err(|error| error.to_string()),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     }
@@ -158,8 +178,6 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "ls" => local::list().await,
         "shot" => local::shot(args).await,
         "open" => local::open(args).await,
-        // Both need a server: a name is resolved against the catalog it
-        // serves, and the box's own spec, which no local handle carries.
         "app" | "apps" | "windows" | "window" => Err(computer::Error::invalid(format!(
             "`{command}` needs a server; drop --local"
         ))),
@@ -174,8 +192,6 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "exec" => local::exec(args).await,
         "rm" => local::remove(args).await,
         "sweep" => local::sweep().await,
-        // Both are built on a trace, and a trace is something a server keeps.
-        // A process that exits when the command does has nowhere to keep one.
         "fork" | "trace" => {
             return Err(format!(
                 "{command} needs a server to remember what was done, and --local has none. \
@@ -189,10 +205,6 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
 }
 
 /// Take a flag out, so what is left is positional.
-/// Where this CLI's own arguments stop.
-///
-/// Everything after `--` belongs to the command running inside the box, so
-/// `exec BOX -- grep --local x` must not have its `--local` taken here.
 fn mine(args: &[String]) -> usize {
     args.iter()
         .position(|arg| arg == "--")
@@ -231,8 +243,6 @@ pub fn present(args: &[String], name: &str) -> bool {
     args.iter().any(|arg| arg == name)
 }
 
-/// Parsed here rather than twice, so `--local` and the server form cannot
-/// disagree about what a flag means.
 pub fn framing(args: &[String]) -> computer::Result<computer::Shot> {
     let at = pair(flag(args, "--at"), ',', "--at takes X,Y")?;
     let size = pair(flag(args, "--size"), 'x', "--size takes WIDTHxHEIGHT")?;
@@ -245,7 +255,6 @@ pub fn framing(args: &[String]) -> computer::Result<computer::Shot> {
             ));
         }
         (Some(id), None, None) => computer::Of::Window(id.to_string()),
-        // Half a rectangle would otherwise be read as a corner and a guess.
         (None, Some(at), Some((width, height))) => computer::Of::Region(computer::Rect::new(
             computer::Point::new(at.0, at.1),
             width,
@@ -281,8 +290,6 @@ fn pair(given: Option<&str>, between: char, wanted: &str) -> computer::Result<Op
         .ok_or_else(|| computer::Error::denied(format!("{wanted}: {given}")))
 }
 
-/// `at` of `None` means the caller named no point, and the middle of the
-/// screen is as good a guess as this can make.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wheel {
     pub at: Option<(u32, u32)>,
@@ -301,10 +308,6 @@ fn heading(word: &str, notches: i32) -> Option<(i32, i32)> {
 }
 
 /// What was scrolled, however it was spelled.
-///
-/// `down 5` and `0 5` are the same gesture. A direction is never a number, so
-/// the word form and the signed one cannot be confused for each other, and
-/// both may name a point first.
 pub fn wheel(args: &[String]) -> computer::Result<Wheel> {
     let word = |at: usize| args.get(at).map(String::as_str).unwrap_or_default();
     let count = |at: usize| -> computer::Result<i32> {
@@ -316,7 +319,6 @@ pub fn wheel(args: &[String]) -> computer::Result<Wheel> {
         }
     };
 
-    // A direction where a coordinate would be means no point was named.
     if let Some((dx, dy)) = heading(word(0), count(1)?) {
         return Ok(Wheel { at: None, dx, dy });
     }
@@ -422,8 +424,6 @@ mod tests {
 
     #[test]
     fn test_the_file_to_write_is_not_a_flags_value() {
-        // `shot mybox --window 42` writes to the default, and the id is not
-        // the filename.
         assert_eq!(remote::named(&args(&["mybox", "--window", "42"])), None);
         assert_eq!(
             remote::named(&args(&["mybox", "out.png", "--scale", "50"])),
@@ -497,8 +497,6 @@ mod tests {
 
     #[test]
     fn test_a_word_that_is_neither_is_refused_where_it_stands() {
-        // A misspelled direction must not be read as a missing coordinate:
-        // the failure has to name what was wrong with what was typed.
         for (given, wrong) in [
             (args(&["dwon"]), "dwon"),
             (args(&["640", "400", "sideways"]), "sideways"),

@@ -14,10 +14,7 @@ use tower::ServiceExt;
 
 /// So an accepted spec reaches the double, not the host.
 fn nowhere() -> Arc<AppState> {
-    Arc::new(AppState {
-        cli: Some(Arc::new(ScriptedCli::new())),
-        ..AppState::default()
-    })
+    Arc::new(AppState::default().through(Some(Arc::new(ScriptedCli::new()))))
 }
 
 async fn send(request: Request<Body>) -> (StatusCode, Value) {
@@ -236,10 +233,9 @@ async fn test_a_snapshot_fork_says_why_it_cannot() {
 }
 
 async fn send_gated(request: Request<Body>) -> (StatusCode, Value) {
-    let state = Arc::new(AppState {
-        token: Some(computer::Secret::new("0123456789abcdef0123").expect("a secret")),
-        ..AppState::default()
-    });
+    let state = Arc::new(AppState::default().gated(Some(
+        computer::Secret::new("0123456789abcdef0123").expect("a secret"),
+    )));
     let response = routes::router(state)
         .oneshot(request)
         .await
@@ -315,10 +311,9 @@ async fn test_an_ungated_api_on_loopback_still_opens() {
 #[tokio::test]
 async fn test_an_accepted_spec_is_built_through_the_runtime_it_was_given() {
     let cli = Arc::new(ScriptedCli::new());
-    let state = Arc::new(AppState {
-        cli: Some(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>),
-        ..AppState::default()
-    });
+    let state = Arc::new(
+        AppState::default().through(Some(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)),
+    );
 
     let response = routes::router(state)
         .oneshot(post("/v1/boxes", r#"{"spec":{"apps":{"vscode":{}}}}"#))

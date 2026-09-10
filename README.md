@@ -30,12 +30,30 @@ You do not need to download or build a desktop image. The crate contains the ima
 
 ## Quick start
 
-Add the crate and an async runtime:
+One crate holds both halves. Add it to drive a desktop from your own program:
 
 ```bash
-cargo add computer
+cargo add computer --no-default-features
 cargo add tokio --features macros,rt-multi-thread
 ```
+
+`--no-default-features` leaves out the commands and everything they need.
+
+For the commands, take a build rather than compiling one:
+
+Using Curl:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
+```
+
+Using Cargo:
+
+```bash
+cargo install computer
+```
+
+Either way you get two: `computer`, which drives a box from a shell and serves MCP to an agent, and `computerd`, the server that keeps running.
 
 From this repository, you can run the bundled example:
 
@@ -360,15 +378,15 @@ A profile also supplies `screen_env()` — the variables one screen's commands r
 A local directory can supply the Docker build context:
 
 ```rust
-Computer::builder().image_dir("images/ubuntu")
+Computer::builder().image_dir("crates/computer-core/images/ubuntu")
 ```
 
-`examples/custom_image.rs` builds one and drives a box in it, and `examples/images/acme/` is the whole Dockerfile: an image that keeps the X11 contract adds to the base rather than reimplementing it, which is why that file is a dozen lines. `images/ubuntu/` is the other way round — a contract built from a bare distribution, which is what a genuinely different base needs.
+`examples/custom_image.rs` builds one and drives a box in it, and `examples/images/acme/` is the whole Dockerfile: an image that keeps the X11 contract adds to the base rather than reimplementing it, which is why that file is a dozen lines. `crates/computer-core/images/ubuntu/` is the other way round — a contract built from a bare distribution, which is what a genuinely different base needs.
 
-`images/tiny/` is a lightweight desktop image you can take for a run:
+`crates/computer-core/images/tiny/` is a lightweight desktop image you can take for a run:
 
 ```rust
-Computer::builder().image_dir("images/tiny")
+Computer::builder().image_dir("crates/computer-core/images/tiny")
 ```
 
 The directory can be anywhere and must contain a `Dockerfile` that implements the selected profile. Its tag follows the context contents, extra packages and host architecture, so an edit builds a new image instead of reusing stale bytes. Extra packages are passed as the `EXTRA_PACKAGES` build argument.
@@ -693,10 +711,10 @@ cargo add computer --features e2b
 export E2B_API_KEY=...
 ```
 
-E2B runs templates, not container images, and builds them itself. Its builder is a Docker subset, so `images/desktop/Dockerfile` does not go over unchanged — it rejects `LABEL`, ignores `CMD`, keeps the quotes on an `ARG X=""` default, and needs the image writable by uid 1000. `images/context.py` writes a context with those things handled, from a rule set named per vendor:
+E2B runs templates, not container images, and builds them itself. Its builder is a Docker subset, so `crates/computer-core/images/desktop/Dockerfile` does not go over unchanged — it rejects `LABEL`, ignores `CMD`, keeps the quotes on an `ARG X=""` default, and needs the image writable by uid 1000. `crates/computer-core/images/context.py` writes a context with those things handled, from a rule set named per vendor:
 
 ```bash
-python3 images/context.py images/desktop /tmp/e2b-ctx --for e2b
+python3 crates/computer-core/images/context.py crates/computer-core/images/desktop /tmp/e2b-ctx --for e2b
 
 e2b template create computer-desktop -p /tmp/e2b-ctx -d Dockerfile \
   -c "/usr/local/bin/computer-desktop" --ready-cmd "true" \

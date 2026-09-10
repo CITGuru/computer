@@ -1,5 +1,7 @@
 /target
-Cargo.lock
+# Tracked, not ignored: this repository ships binaries. A release built from a
+# tree that resolved differently from the run that checked it is not the build
+# anybody tested.
 *.gif
 *.mp4
 .env

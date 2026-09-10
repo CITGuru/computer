@@ -20,6 +20,7 @@
 //! # Writing one
 //!
 //! ```no_run
+//! # extern crate computer_core as computer;
 //! use computer::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
 //! use computer::{Computer, Result, X11Profile};
 //! use std::sync::Arc;

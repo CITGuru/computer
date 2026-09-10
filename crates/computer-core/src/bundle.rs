@@ -14,6 +14,9 @@ use crate::runtime::ContainerCli;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Where this crate's image sources are, on the machine that compiled it.
+pub const IMAGES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/images");
+
 pub const DOCKERFILE: &str = include_str!("../images/desktop/Dockerfile");
 pub const START_SH: &str = include_str!("../images/desktop/start.sh");
 pub const SCREEN_SH: &str = include_str!("../images/desktop/screen.sh");

@@ -11,7 +11,6 @@ use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::idempotency::{self, Lookup, Replies};
 use crate::registry::{AsDesktop, Entry};
 use crate::spec;
-use crate::trace::Trace;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -22,6 +21,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer::{Delta, Desktop as EngineDesktop};
 use computer_api::*;
+use computer_storage::BoxRecord;
 use computer_types::Spec;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -39,7 +39,6 @@ const TRACE_PAGE: usize = 500;
 /// HTTP request, and a box that was driven for an hour cannot take one.
 const REPLAY_BUDGET: Duration = Duration::from_secs(180);
 /// The most page text one read answers with.
-///
 /// A ceiling rather than a default a caller can raise: `limit` is there to ask
 /// for less than this, and a page is unbounded.
 const PAGE_TEXT: usize = 20_000;
@@ -162,17 +161,21 @@ async fn create_box(
         )
         .await;
 
-    state.traces.of(&entry.id).record(
-        Actor::Agent,
-        TraceEvent::BoxCreated {
-            spec_digest: entry.spec_digest(),
-            spec: Box::new(body.spec.clone()),
-            placement: Box::new(body.placement.clone()),
-            width: resolved.width,
-            height: resolved.height,
-            screens: resolved.screens,
-        },
-    );
+    kept(&state, &entry.id, &body.spec, &body.placement, &resolved).await;
+    state
+        .record(
+            &entry.id,
+            Actor::Agent,
+            TraceEvent::BoxCreated {
+                spec_digest: entry.spec_digest(),
+                spec: Box::new(body.spec.clone()),
+                placement: Box::new(body.placement.clone()),
+                width: resolved.width,
+                height: resolved.height,
+                screens: resolved.screens,
+            },
+        )
+        .await;
 
     stamp.answer(&state.replies, StatusCode::CREATED, &view_of(&entry))
 }
@@ -210,9 +213,9 @@ async fn delete_box(
 
     state.registry.remove(&id).await?;
     state
-        .traces
-        .of(&id)
-        .record(Actor::Agent, TraceEvent::BoxDeleted);
+        .record(&id, Actor::Agent, TraceEvent::BoxDeleted)
+        .await;
+    state.forget_screens(&id);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -233,7 +236,6 @@ async fn actions(
     }
 
     let entry = state.registry.get(&id).await?;
-    let trace = state.traces.of(&id);
     let lock = entry.screen_lock(screen).await?;
     let _held = lock.lock().await;
 
@@ -262,24 +264,34 @@ async fn actions(
 
         // Its own event: a name and its arguments are the whole launch.
         match (&outcome, action) {
-            (Ok(Some(window)), Action::Launch { app, args }) => trace.record(
-                Actor::Agent,
-                TraceEvent::AppLaunched {
-                    screen,
-                    app: app.clone(),
-                    args: args.clone(),
-                    window: window.id.clone(),
-                },
-            ),
-            _ => trace.record(
-                Actor::Agent,
-                TraceEvent::Acted {
-                    screen,
-                    action: action.clone(),
-                    ok: outcome.is_ok(),
-                    error: outcome.as_ref().err().map(|error| error.body.clone()),
-                },
-            ),
+            (Ok(Some(window)), Action::Launch { app, args }) => {
+                state
+                    .record(
+                        &id,
+                        Actor::Agent,
+                        TraceEvent::AppLaunched {
+                            screen,
+                            app: app.clone(),
+                            args: args.clone(),
+                            window: window.id.clone(),
+                        },
+                    )
+                    .await
+            }
+            _ => {
+                state
+                    .record(
+                        &id,
+                        Actor::Agent,
+                        TraceEvent::Acted {
+                            screen,
+                            action: action.clone(),
+                            ok: outcome.is_ok(),
+                            error: outcome.as_ref().err().map(|error| error.body.clone()),
+                        },
+                    )
+                    .await
+            }
         };
 
         match outcome {
@@ -313,7 +325,8 @@ async fn actions(
     let frame = if batch.want.contains(&Want::Frame) {
         Some(
             capture(
-                &trace,
+                &state,
+                &id,
                 Actor::Agent,
                 screen,
                 desktop,
@@ -528,15 +541,17 @@ async fn frame(
         }
     };
 
-    let trace = state.traces.of(&id);
-
-    Ok(Json(recorded(
-        &trace,
-        Actor::Agent,
-        screen,
-        png,
-        query.have.as_deref(),
-    )))
+    Ok(Json(
+        recorded(
+            &state,
+            &id,
+            Actor::Agent,
+            screen,
+            png,
+            query.have.as_deref(),
+        )
+        .await,
+    ))
 }
 
 fn shot_in(shot: &Shot) -> computer::Shot {
@@ -557,7 +572,8 @@ fn shot_in(shot: &Shot) -> computer::Shot {
 /// A desktop is mostly still between steps, so a caller already holding this
 /// picture is told so rather than sent it again.
 async fn capture(
-    trace: &Trace,
+    state: &AppState,
+    id: &str,
     actor: Actor,
     screen: u32,
     desktop: &dyn EngineDesktop,
@@ -565,16 +581,23 @@ async fn capture(
 ) -> ApiResult<Frame> {
     let png = desktop.screenshot().await?;
 
-    Ok(recorded(trace, actor, screen, png, have))
+    Ok(recorded(state, id, actor, screen, png, have).await)
 }
 
 /// Left out altogether when the caller already holds it.
-fn recorded(trace: &Trace, actor: Actor, screen: u32, png: Vec<u8>, have: Option<&str>) -> Frame {
+async fn recorded(
+    state: &AppState,
+    id: &str,
+    actor: Actor,
+    screen: u32,
+    png: Vec<u8>,
+    have: Option<&str>,
+) -> Frame {
     let mut hasher = Sha256::new();
     hasher.update(&png);
     let hash = format!("{:x}", hasher.finalize());
 
-    trace.note_frame(actor, screen, &hash, &png);
+    state.note_frame(id, actor, screen, &hash, &png).await;
 
     if have == Some(hash.as_str()) {
         return Frame {
@@ -620,13 +643,16 @@ async fn get_clipboard(
 
     let text = held.selection(query.selection).await?;
 
-    state.traces.of(&id).record(
-        Actor::Agent,
-        TraceEvent::ClipboardRead {
-            screen,
-            selection: query.selection,
-        },
-    );
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::ClipboardRead {
+                screen,
+                selection: query.selection,
+            },
+        )
+        .await;
 
     Ok(Json(ClipboardView { text }))
 }
@@ -644,13 +670,16 @@ async fn set_clipboard(
 
     held.set_selection(body.selection, &body.text).await?;
 
-    state.traces.of(&id).record(
-        Actor::Agent,
-        TraceEvent::ClipboardSet {
-            screen,
-            selection: body.selection,
-        },
-    );
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::ClipboardSet {
+                screen,
+                selection: body.selection,
+            },
+        )
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -666,10 +695,9 @@ async fn start_takeover(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be handed over"))?;
 
-    let trace = state.traces.of(&id);
     // The frame the person is being given, so what they changed is the
     // difference between this and the one taken when they hand it back.
-    let _ = capture(&trace, Actor::Agent, screen, target.as_desktop(), None).await;
+    let _ = capture(&state, &id, Actor::Agent, screen, target.as_desktop(), None).await;
 
     let takeover = if body.shared {
         held.share().await?
@@ -677,13 +705,16 @@ async fn start_takeover(
         held.hand_over().await?
     };
 
-    trace.record(
-        Actor::Agent,
-        TraceEvent::TakeoverStarted {
-            screen,
-            exclusive: takeover.exclusive(),
-        },
-    );
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::TakeoverStarted {
+                screen,
+                exclusive: takeover.exclusive(),
+            },
+        )
+        .await;
 
     Ok(Json(TakeoverView {
         url: takeover.url().map(str::to_string),
@@ -705,14 +736,23 @@ async fn end_takeover(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be reclaimed"))?;
 
-    let trace = state.traces.of(&id);
     // Taken while the screen is still theirs — reading is allowed during a
     // handover — so the frame is what the person left rather than what
     // happened after they let go.
-    let _ = capture(&trace, Actor::Person, screen, target.as_desktop(), None).await;
+    let _ = capture(
+        &state,
+        &id,
+        Actor::Person,
+        screen,
+        target.as_desktop(),
+        None,
+    )
+    .await;
 
     held.reclaim().await?;
-    trace.record(Actor::Agent, TraceEvent::TakeoverEnded { screen });
+    state
+        .record(&id, Actor::Agent, TraceEvent::TakeoverEnded { screen })
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -755,14 +795,17 @@ async fn exec(
         None => entry.computer.exec(&body.argv).await?,
     };
 
-    state.traces.of(&id).record(
-        Actor::Agent,
-        TraceEvent::Executed {
-            argv: body.argv.clone(),
-            code: result.code,
-            timed_out: result.timed_out,
-        },
-    );
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::Executed {
+                argv: body.argv.clone(),
+                code: result.code,
+                timed_out: result.timed_out,
+            },
+        )
+        .await;
 
     Ok(Json(ExecResponse {
         code: result.code,
@@ -785,13 +828,16 @@ async fn read_file(
     let entry = state.registry.get(&id).await?;
     let bytes = entry.computer.read_file(&query.path).await?;
 
-    state.traces.of(&id).record(
-        Actor::Agent,
-        TraceEvent::FileRead {
-            path: query.path.clone(),
-            bytes: bytes.len(),
-        },
-    );
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::FileRead {
+                path: query.path.clone(),
+                bytes: bytes.len(),
+            },
+        )
+        .await;
 
     Ok(Json(ReadFile {
         path: query.path,
@@ -813,19 +859,21 @@ async fn write_file(
     let entry = state.registry.get(&id).await?;
     entry.computer.write_file(&body.path, &bytes).await?;
 
-    state.traces.of(&id).record(
-        Actor::Agent,
-        TraceEvent::FileWritten {
-            path: body.path.clone(),
-            bytes: bytes.len(),
-        },
-    );
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::FileWritten {
+                path: body.path.clone(),
+                bytes: bytes.len(),
+            },
+        )
+        .await;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Build a box again from what was done to the first one.
-///
 /// Reads the source's trace rather than the source, so a box that has been
 /// removed can still be forked: its record outlived it and carries the spec.
 async fn fork(
@@ -849,12 +897,12 @@ async fn fork(
         ));
     }
 
-    let source = state
-        .traces
-        .get(&id)
-        .ok_or_else(|| ApiError::not_found(format!("nothing was ever traced for {id}")))?;
-
-    let history = source.entries(None, usize::MAX);
+    let history = state.store.entries(&id, None, usize::MAX).await?;
+    if history.is_empty() {
+        return Err(ApiError::not_found(format!(
+            "nothing was ever traced for {id}"
+        )));
+    }
     let (spec, placement) = history
         .iter()
         .find_map(|entry| match &entry.event {
@@ -890,34 +938,40 @@ async fn fork(
         )
         .await;
 
-    let trace = state.traces.of(&new_id);
-    trace.record(
-        Actor::Agent,
-        TraceEvent::BoxCreated {
-            spec_digest: entry.spec_digest(),
-            spec,
-            placement,
-            width: resolved.width,
-            height: resolved.height,
-            screens: resolved.screens,
-        },
-    );
-    trace.record(
-        Actor::Agent,
-        TraceEvent::ForkedFrom {
-            source: id.clone(),
-            up_to: body.up_to,
-        },
-    );
+    kept(&state, &new_id, &spec, &placement, &resolved).await;
+    state
+        .record(
+            &new_id,
+            Actor::Agent,
+            TraceEvent::BoxCreated {
+                spec_digest: entry.spec_digest(),
+                spec,
+                placement,
+                width: resolved.width,
+                height: resolved.height,
+                screens: resolved.screens,
+            },
+        )
+        .await;
+    state
+        .record(
+            &new_id,
+            Actor::Agent,
+            TraceEvent::ForkedFrom {
+                source: id.clone(),
+                up_to: body.up_to,
+            },
+        )
+        .await;
 
-    let report = replay_onto(&entry, &trace, &history, body.up_to).await;
+    let report = replay_onto(&entry, &state, &new_id, &history, body.up_to).await;
 
     // Close with what the replay produced, so a caller can compare it against
     // the source's own last frame. They will rarely be the same bytes: a
     // desktop animates, which is why the report counts actions rather than
     // claiming the two boxes match.
     if let Ok(target) = entry.desktop(0).await {
-        let _ = capture(&trace, Actor::Agent, 0, target.as_desktop(), None).await;
+        let _ = capture(&state, &new_id, Actor::Agent, 0, target.as_desktop(), None).await;
     }
 
     stamp.answer(
@@ -934,7 +988,8 @@ async fn fork(
 /// asked to do.
 async fn replay_onto(
     entry: &Entry,
-    trace: &Trace,
+    state: &AppState,
+    id: &str,
     history: &[TraceEntry],
     up_to: Option<u64>,
 ) -> ReplayReport {
@@ -1044,24 +1099,34 @@ async fn replay_onto(
                 };
 
                 match (&acted, action) {
-                    (Ok(Some(window)), Action::Launch { app, args }) => trace.record(
-                        Actor::Agent,
-                        TraceEvent::AppLaunched {
-                            screen: *screen,
-                            app: app.clone(),
-                            args: args.clone(),
-                            window: window.id.clone(),
-                        },
-                    ),
-                    _ => trace.record(
-                        Actor::Agent,
-                        TraceEvent::Acted {
-                            screen: *screen,
-                            action: action.clone(),
-                            ok: acted.is_ok(),
-                            error: acted.as_ref().err().map(|error| error.body.clone()),
-                        },
-                    ),
+                    (Ok(Some(window)), Action::Launch { app, args }) => {
+                        state
+                            .record(
+                                id,
+                                Actor::Agent,
+                                TraceEvent::AppLaunched {
+                                    screen: *screen,
+                                    app: app.clone(),
+                                    args: args.clone(),
+                                    window: window.id.clone(),
+                                },
+                            )
+                            .await
+                    }
+                    _ => {
+                        state
+                            .record(
+                                id,
+                                Actor::Agent,
+                                TraceEvent::Acted {
+                                    screen: *screen,
+                                    action: action.clone(),
+                                    ok: acted.is_ok(),
+                                    error: acted.as_ref().err().map(|error| error.body.clone()),
+                                },
+                            )
+                            .await
+                    }
                 };
                 acted.map(|_| ())
             }
@@ -1069,14 +1134,17 @@ async fn replay_onto(
                 let ran = entry.computer.exec(argv).await.map_err(ApiError::from);
 
                 if let Ok(result) = &ran {
-                    trace.record(
-                        Actor::Agent,
-                        TraceEvent::Executed {
-                            argv: argv.clone(),
-                            code: result.code,
-                            timed_out: result.timed_out,
-                        },
-                    );
+                    state
+                        .record(
+                            id,
+                            Actor::Agent,
+                            TraceEvent::Executed {
+                                argv: argv.clone(),
+                                code: result.code,
+                                timed_out: result.timed_out,
+                            },
+                        )
+                        .await;
                 }
                 ran.map(|_| ())
             }
@@ -1115,13 +1183,15 @@ async fn read_trace(
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<TraceQuery>,
 ) -> ApiResult<Json<TraceView>> {
-    let trace = state
-        .traces
-        .get(&id)
-        .ok_or_else(|| ApiError::not_found(format!("nothing was ever traced for {id}")))?;
-
     let limit = query.limit.unwrap_or(TRACE_PAGE).clamp(1, TRACE_PAGE);
-    let entries = trace.entries(query.after, limit);
+    let entries = state.store.entries(&id, query.after, limit).await?;
+
+    if entries.is_empty() && !state.traced(&id).await {
+        return Err(ApiError::not_found(format!(
+            "nothing was ever traced for {id}"
+        )));
+    }
+
     let next = (entries.len() == limit).then(|| entries.last().map(|entry| entry.seq));
 
     Ok(Json(TraceView {
@@ -1134,16 +1204,12 @@ async fn trace_frame(
     State(state): State<Arc<AppState>>,
     ApiPath((id, hash)): ApiPath<(String, String)>,
 ) -> ApiResult<Response> {
-    let png = state
-        .traces
-        .get(&id)
-        .and_then(|trace| trace.frame(&hash))
-        .ok_or_else(|| {
-            ApiError::not_found(format!(
-                "frame {hash} is not held for {id}; a trace keeps the most recent \
+    let png = state.frames.get(&id, &hash).await?.ok_or_else(|| {
+        ApiError::not_found(format!(
+            "frame {hash} is not held for {id}; a trace keeps the most recent \
                  frames and older entries name one that has gone"
-            ))
-        })?;
+        ))
+    })?;
 
     Ok((
         [(axum::http::header::CONTENT_TYPE, "image/png")],
@@ -1163,7 +1229,6 @@ struct PageQuery {
 }
 
 /// What the page in front is showing, as text.
-///
 /// The page the screen shows, not the first one open: a caller reading what it
 /// can see is the point, and a frame and this have to agree.
 async fn read_page(
@@ -1242,7 +1307,6 @@ async fn find_elements(
 }
 
 /// Act on the element a query names.
-///
 /// By name rather than by coordinate: a point worked out from a frame is stale
 /// the moment the page moves under it, and some of these have no coordinate at
 /// all — a file chooser is the operating system's window, and a native
@@ -1258,7 +1322,6 @@ async fn on_element(
 }
 
 /// One element operation against a page already in hand.
-///
 /// Shared with the action batch, so a form is one round trip rather than one
 /// per field and the screen lock is held across the whole of it.
 async fn apply(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementResult> {
@@ -1465,7 +1528,6 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
 }
 
 /// One request's claim on an idempotency key.
-///
 /// The key is bound to the route and the body it first arrived on. A retry
 /// carries both again and is answered from the store; the same key on a
 /// different request is a client bug, and returning the first request's reply
@@ -1553,6 +1615,35 @@ fn view_of(entry: &Entry) -> BoxView {
         created_at_ms: millis(entry.created_at),
         expires_at_ms: entry.computer.expires_at().map(millis),
     }
+}
+
+async fn kept(
+    state: &AppState,
+    id: &str,
+    spec: &Spec,
+    placement: &Placement,
+    resolved: &spec::Resolved,
+) -> BoxRecord {
+    let record = BoxRecord {
+        id: id.to_string(),
+        spec: spec.clone(),
+        placement: placement.clone(),
+        width: resolved.width,
+        height: resolved.height,
+        screens: resolved.screens,
+        created_at_ms: millis(SystemTime::now()),
+        expires_at_ms: None,
+    };
+
+    if let Err(why) = state.store.put_box(&record).await {
+        tracing::warn!(box_ = %id, %why, "a box was not recorded");
+    }
+
+    record
+}
+
+pub(crate) fn ms_of(at: SystemTime) -> u64 {
+    millis(at)
 }
 
 fn millis(at: SystemTime) -> u64 {

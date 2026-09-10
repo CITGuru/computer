@@ -1,0 +1,56 @@
+[package]
+name = "computer-storage"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Where a computer daemon keeps box records, traces and frames"
+license = "MIT"
+
+[features]
+default = ["local"]
+# The local-directory backend, which is the only thing here that needs a
+# filesystem. Off without it, so a caller using memory alone compiles no
+# runtime for files it never opens.
+local = ["dep:tokio"]
+# Rows in a database. One implementation over two dialects, chosen by the
+# connection URL.
+sql = ["dep:sqlx", "dep:tokio"]
+sqlite = ["sql", "sqlx/sqlite"]
+postgres = ["sql", "sqlx/postgres", "sqlx/tls-rustls-ring"]
+# A bucket. Signed here rather than through a vendor SDK: four verbs against
+# one service, and every crate it needs was already in this workspace.
+s3 = ["dep:reqwest", "dep:hmac", "dep:sha2", "dep:hex", "dep:chrono", "dep:tokio"]
+# The behaviour suite. On for this crate's own tests, and for a backend in
+# another crate that has to prove it behaves the same.
+conformance = []
+
+# Nothing heavier than serde. A store is reached from a daemon that already
+# compiles a web framework, and from tests that must not.
+[dependencies]
+async-trait = "0.1"
+computer-api = { path = "../computer-api", version = "0.1.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["fs"], optional = true }
+# Already in this workspace's lock file behind microsandbox, so the dialects
+# cost a feature rather than a new tree.
+chrono = { version = "0.4", default-features = false, features = [
+    "clock",
+], optional = true }
+hex = { version = "0.4", optional = true }
+hmac = { version = "0.12", optional = true }
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+], optional = true }
+sha2 = { version = "0.10", optional = true }
+sqlx = { version = "0.9", default-features = false, features = [
+    "any",
+    "runtime-tokio",
+], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lints.clippy]
+string_slice = "deny"

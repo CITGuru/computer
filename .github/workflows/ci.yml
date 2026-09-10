@@ -1,0 +1,95 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  format:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  test:
+    name: test (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked --no-fail-fast
+
+  features:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: The API with nothing behind it
+        run: cargo clippy -p computer --no-default-features --locked -- -D warnings
+
+      - name: Every storage backend
+        run: |
+          cargo clippy -p computer-storage --all-targets --locked \
+            --features sqlite,postgres,s3,conformance -- -D warnings
+          cargo test -p computer-storage --locked --features sqlite,postgres,s3
+
+      - name: The commands, with everything a daemon can be built with
+        run: |
+          cargo clippy -p computer --all-targets --locked \
+            --features sqlite,postgres,s3,e2b -- -D warnings
+          cargo test -p computer-server --locked --features sqlite,s3
+
+      - name: A box in a microVM
+        run: cargo clippy -p computer-core --all-targets --locked --features microsandbox -- -D warnings
+
+  docs:
+    runs-on: ubuntu-22.04
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --workspace --no-deps --locked --all-features
+
+  deny:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  scripts:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh -n scripts/install.sh
+      - run: shellcheck -s sh scripts/install.sh
+      - name: It knows this machine
+        run: |
+          test "$(sh scripts/install.sh --print-target)" = x86_64-unknown-linux-gnu

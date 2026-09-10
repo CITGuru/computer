@@ -1,20 +1,16 @@
 //! A server for the length of one command.
-//!
-//! Works because a box carries its own spec in a label and is taken back on
-//! startup: a server that lives for one command is not amnesiac, it rediscovers
-//! what is running each time. What it cannot rediscover is a trace, which lived
-//! in the memory of whatever server was there before.
 
 use computer_server::{AppState, recover, routes};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// The state of the server this process started, if it started one.
+static SERVING: OnceLock<Arc<AppState>> = OnceLock::new();
 
 pub async fn start() -> Result<String, String> {
-    let state = Arc::new(AppState::default());
+    let state = Arc::new(AppState::from_env().await?);
 
-    // Silent: taking boxes back is how this works, not news. A command that
-    // announced it on every run would be shouting its own plumbing.
     let runtimes = recover::runtimes();
-    recover::adopt(&state.registry, &state.traces, &runtimes).await;
+    recover::adopt(&state, &runtimes, &recover::sandboxes()).await;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -24,9 +20,22 @@ pub async fn start() -> Result<String, String> {
         .map_err(|error| error.to_string())?
         .port();
 
+    let _ = SERVING.set(Arc::clone(&state));
+
     tokio::spawn(async move {
         let _ = axum::serve(listener, routes::router(state)).await;
     });
 
     Ok(format!("http://127.0.0.1:{port}"))
+}
+
+/// Puts down what the server this process started is still holding.
+pub async fn flush() {
+    let Some(state) = SERVING.get() else {
+        return;
+    };
+
+    if let Err(why) = state.store.flush().await {
+        eprintln!("what was written did not reach the store: {why}");
+    }
 }
