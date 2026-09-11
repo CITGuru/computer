@@ -4,19 +4,6 @@
 
 ![Nine frames of a desktop being driven from Rust: a page opening, a URL typed, text selected by a drag, a context menu, a paste, and a second screen](./media/demo.gif)
 
-## Documentation
-
-Read the [public guide](https://citguru.github.io/computer/) for the full documentation. Its source is in [`docs/`](docs/index.md).
-
-- [get started](docs/getting-started/rust.md);
-- [control the desktop](docs/guides/desktop.md);
-- [control the browser](docs/guides/browser.md);
-- [install and launch applications](docs/guides/apps.md);
-- [choose a runtime](docs/runtimes/containers.md);
-- [deploy securely](docs/operations/security.md).
-
-The Rust API reference is on [docs.rs](https://docs.rs/computer).
-
 ## Requirements
 
 Install Rust and one supported runtime:
@@ -30,30 +17,25 @@ You do not need to download or build a desktop image. The crate contains the ima
 
 ## Quick start
 
-One crate holds both halves. Add it to drive a desktop from your own program:
-
-```bash
-cargo add computer --no-default-features
-cargo add tokio --features macros,rt-multi-thread
-```
-
-`--no-default-features` leaves out the commands and everything they need.
+One crate holds both halves.
 
 For the commands, take a build rather than compiling one:
-
-Using Curl:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
 ```
 
-Using Cargo:
+macOS and Linux, on x86-64 and arm64. You get two: `computer`, which drives a box from a shell and serves MCP to an agent, and `computerd`, the server that keeps running. `COMPUTER_INSTALL_DIR` moves them and `COMPUTER_VERSION` pins a tag.
 
-```bash
-cargo install computer
+To drive a desktop from your own program, take the API:
+
+```toml
+[dependencies]
+computer = { git = "https://github.com/CITGuru/computer", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Either way you get two: `computer`, which drives a box from a shell and serves MCP to an agent, and `computerd`, the server that keeps running.
+`default-features = false` leaves out the commands and everything they need.
 
 From this repository, you can run the bundled example:
 
@@ -706,8 +688,11 @@ The included integration lives in `sandboxes::microsandbox`, targets `microsandb
 
 A container and a microVM both put the desktop on this host. E2B does not, so a service on a small machine can hand out desktops with no container runtime and no `/dev/kvm` of its own. The boundary is still a kernel the box does not share.
 
+```toml
+computer = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
+```
+
 ```bash
-cargo add computer --features e2b
 export E2B_API_KEY=...
 ```
 
