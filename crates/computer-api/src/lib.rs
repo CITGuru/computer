@@ -111,6 +111,10 @@ pub enum Action {
         dy: i32,
     },
     OpenUrl {
+        /// Where to put it. `blank` opens a tab, as a link with
+        /// `target="_blank"` does; `current` navigates the one on screen.
+        #[serde(default)]
+        target: OpenIn,
         url: String,
     },
     Wait {
@@ -173,8 +177,25 @@ pub struct Element {
     pub tag: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// The middle of it, in the page's own coordinates — not the screen's.
-    pub at: Point,
+    /// The shortest selector that names this element and nothing else.
+    ///
+    /// Every tool that takes a query takes one of these, and it is unambiguous
+    /// where words are not. Absent where the page offers nothing identifying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    /// What the page calls it, where that is not what it says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Whether its middle is inside the window.
+    #[serde(default)]
+    pub visible: bool,
+    /// The middle of it, in the viewport's coordinates, not the screen's.
+    ///
+    /// Absent where the middle is outside the viewport. Such an element is
+    /// still worth naming — `click_element` scrolls to it — but there is no
+    /// point on the page to press.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Point>,
     pub width: u32,
     pub height: u32,
     pub enabled: bool,
@@ -186,7 +207,11 @@ pub struct Element {
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OnElement {
     /// Bring it into view and click its middle.
-    Click { query: String },
+    Click {
+        query: String,
+        #[serde(default)]
+        button: Button,
+    },
     /// Put text in a field, as typing rather than as an assignment.
     Fill { query: String, text: String },
     /// What a dropdown offers.
@@ -205,6 +230,15 @@ pub enum OnElement {
         gone: bool,
         #[serde(default)]
         within_ms: Option<u64>,
+        /// Anything else worth stopping for, such as the text a page shows
+        /// when what was asked for is never going to arrive. Waiting the full
+        /// timeout for a success that a failure has already ruled out is the
+        /// common way to spend it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        or: Vec<String>,
+        /// Match the whole of an element's words rather than any part of them.
+        #[serde(default)]
+        exact: bool,
     },
     /// Put the pointer over something without pressing anything.
     Hover { query: String },
@@ -248,6 +282,16 @@ pub enum ScrollTo {
 pub struct ElementResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element: Option<Element>,
+    /// Where the page was afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Whether that is somewhere else. A click that did nothing and a click
+    /// that navigated read the same without this.
+    #[serde(default)]
+    pub navigated: bool,
+    /// Which query a wait stopped for, where it was given more than one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched: Option<String>,
     /// What a dropdown offered, where the operation asked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
@@ -316,6 +360,35 @@ pub struct BatchResult {
     /// What any `launch` in this batch drew, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<Window>,
+    /// What any `open_url` in this batch left open, in order.
+    ///
+    /// Empty on a box that publishes no DevTools port: the tab is opened
+    /// through the browser in the box, which never learns the id the debugger
+    /// would have given it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<Tab>,
+}
+
+/// Where an `open_url` puts the page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenIn {
+    /// A tab of its own, raised in front. Whatever coordinates a caller worked
+    /// out before this belong to a page that is no longer on screen.
+    #[default]
+    Blank,
+    /// The tab already showing, which keeps every other tab where it was.
+    Current,
+}
+
+/// One of a browser's pages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tab {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    /// Whether this is the one on screen.
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,5 +722,152 @@ impl ErrorCode {
             Self::Transport => "transport",
             Self::Internal => "internal",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_a_wait_without_an_alternative_is_still_a_wait() {
+        let sent: OnElement =
+            serde_json::from_str(r#"{"op":"wait_for","query":"Public rate"}"#).expect("parses");
+
+        assert!(
+            matches!(sent, OnElement::WaitFor { ref or, .. } if or.is_empty()),
+            "an older caller sends no `or` and means none"
+        );
+    }
+
+    #[test]
+    fn test_a_wait_can_carry_what_else_to_stop_for() {
+        let sent: OnElement = serde_json::from_str(
+            r#"{"op":"wait_for","query":"Public rate","or":["unavailable on our site"]}"#,
+        )
+        .expect("parses");
+
+        match sent {
+            OnElement::WaitFor { or, .. } => assert_eq!(or, vec!["unavailable on our site"]),
+            other => panic!("read as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_a_click_without_a_button_is_a_left_click() {
+        let sent: OnElement =
+            serde_json::from_str(r#"{"op":"click","query":"Submit"}"#).expect("parses");
+
+        assert!(
+            matches!(sent, OnElement::Click { button, .. } if button == Button::Left),
+            "an older caller names no button and means the left one"
+        );
+    }
+
+    #[test]
+    fn test_a_click_can_name_another_button() {
+        let sent: OnElement =
+            serde_json::from_str(r#"{"op":"click","query":"Row","button":"right"}"#)
+                .expect("parses");
+
+        match sent {
+            OnElement::Click { button, .. } => assert_eq!(button, Button::Right),
+            other => panic!("read as {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_a_url_opens_in_a_tab_of_its_own_unless_told_otherwise() {
+        let sent: Action =
+            serde_json::from_str(r#"{"type":"open_url","url":"https://example.com"}"#)
+                .expect("parses");
+
+        assert!(
+            matches!(
+                sent,
+                Action::OpenUrl {
+                    target: OpenIn::Blank,
+                    ..
+                }
+            ),
+            "an older caller sends no target and gets what it always got"
+        );
+
+        let here: Action = serde_json::from_str(
+            r#"{"type":"open_url","url":"https://example.com","target":"current"}"#,
+        )
+        .expect("parses");
+
+        assert!(matches!(
+            here,
+            Action::OpenUrl {
+                target: OpenIn::Current,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_a_batch_from_a_box_with_no_debugger_names_no_tabs() {
+        let answered = r#"{"results":[],"stopped_at":null,"frame":null,"cursor":null}"#;
+        let result: BatchResult = serde_json::from_str(answered).expect("parses");
+
+        assert!(result.tabs.is_empty());
+    }
+
+    #[test]
+    fn test_a_wait_matches_loosely_unless_told_otherwise() {
+        let sent: OnElement =
+            serde_json::from_str(r#"{"op":"wait_for","query":"Public rate"}"#).expect("parses");
+
+        assert!(matches!(sent, OnElement::WaitFor { exact: false, .. }));
+
+        let strict: OnElement =
+            serde_json::from_str(r#"{"op":"wait_for","query":"Public rate","exact":true}"#)
+                .expect("parses");
+
+        assert!(matches!(strict, OnElement::WaitFor { exact: true, .. }));
+    }
+
+    #[test]
+    fn test_an_element_with_no_point_goes_both_ways() {
+        let out = Element {
+            text: "Top".to_string(),
+            tag: "a".to_string(),
+            kind: None,
+            selector: None,
+            label: None,
+            visible: false,
+            at: None,
+            width: 10,
+            height: 10,
+            enabled: true,
+            value: None,
+        };
+
+        let wire = serde_json::to_string(&out).expect("serialises");
+        assert!(!wire.contains("\"at\""), "absence is left out: {wire}");
+        assert_eq!(
+            serde_json::from_str::<Element>(&wire).expect("parses").at,
+            None
+        );
+    }
+
+    #[test]
+    fn test_a_result_says_where_the_page_ended_up() {
+        let answered = r#"{"url":"https://example.com/africa","navigated":true}"#;
+        let result: ElementResult = serde_json::from_str(answered).expect("parses");
+
+        assert_eq!(result.url.as_deref(), Some("https://example.com/africa"));
+        assert!(result.navigated);
+    }
+
+    #[test]
+    fn test_a_result_from_an_older_server_still_parses() {
+        let result: ElementResult = serde_json::from_str("{}").expect("parses");
+
+        assert!(result.url.is_none());
+        assert!(!result.navigated, "and does not claim the page moved");
+        assert!(result.matched.is_none());
     }
 }

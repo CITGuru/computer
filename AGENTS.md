@@ -25,6 +25,13 @@ cargo test -p computer-server --features sqlite,s3
 cargo clippy -p computer-core --features microsandbox --all-targets -- -D warnings
 ```
 
+The scripts this crate evaluates inside a page are Rust strings that nothing
+compiles, so they are parsed separately:
+
+```bash
+python3 scripts/check-page-scripts.py
+```
+
 `.github/workflows/ci.yml` runs this list, with `--locked` added: the lock is
 tracked, and CI must build what was committed rather than whatever resolves
 today. A change to one belongs in both.

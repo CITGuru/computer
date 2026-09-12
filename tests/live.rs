@@ -262,6 +262,53 @@ async fn held_and_still(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+#[ignore = "needs a container runtime"]
+async fn an_element_can_be_clicked_with_any_button() {
+    let computer = Computer::launch().await.expect("a box");
+    let outcome = buttons_on_an_element(&computer).await;
+    computer.shutdown().await.expect("it goes away");
+    outcome.expect("every step");
+}
+
+/// A page that writes down which button each press arrived with, and whether
+/// the press it answers asked for a context menu.
+///
+/// `preventDefault` on the menu: Chromium would otherwise draw one over the
+/// pad, and the next press would land on the menu rather than on the page.
+const BUTTONS: &str = r#"
+    window.seen = [];
+    const pad = document.getElementById('pad');
+    pad.onmousedown = e => seen.push(`${e.button}/${e.buttons}`);
+    pad.oncontextmenu = e => { e.preventDefault(); seen.push('menu'); };
+    "installed"
+"#;
+
+async fn buttons_on_an_element(computer: &Computer) -> computer::Result<()> {
+    let devtools = computer.browser().expect("a published DevTools port");
+
+    let mut page = devtools.open_page(WITNESS, Duration::from_secs(30)).await?;
+    page.wait_for_load(Duration::from_secs(20)).await?;
+    page.evaluate(BUTTONS).await?;
+
+    for button in [Button::Left, Button::Right, Button::Middle] {
+        page.click_on("#pad", button).await?;
+    }
+
+    let seen = page.evaluate("seen.join(' ')").await?;
+    println!("  presses arrived as: {seen}");
+    assert_eq!(
+        seen.as_str(),
+        // `button` is the DOM's own numbering and `buttons` its mask, which do
+        // not agree: middle is 1 in one and 4 in the other.
+        Some("0/1 2/2 menu 1/4"),
+        "a button did not reach the page as itself"
+    );
+
+    page.close().await.ok();
+    Ok(())
+}
+
 /// A page wide enough and tall enough to move on either axis.
 const WIDE: &str = "data:text/html,<div%20style=\"width:4000px;height:4000px\"></div>";
 

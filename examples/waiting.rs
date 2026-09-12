@@ -1,6 +1,6 @@
 //! Waiting, history and hover.
 
-use computer::Computer;
+use computer::{Button, Computer};
 use std::time::{Duration, Instant};
 
 #[tokio::main]
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     println!("\n=== wait_for: something that arrives 1.5s after a click ===");
-    page.click_on("Start").await?;
+    page.click_on("Start", Button::Left).await?;
     let at = Instant::now();
     let late = page
         .wait_for("late", false, Duration::from_secs(10))
@@ -40,11 +40,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n=== hover: a menu that no click can open ===");
-    let before = page.find("Hidden until hovered", Some(1), None).await?;
+    let before = page
+        .find("Hidden until hovered", Some(1), None, None)
+        .await?;
     println!("  before hovering: {} matches", before.len());
     page.hover("Hover me").await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let after = page.find("Hidden until hovered", Some(1), None).await?;
+    let after = page
+        .find("Hidden until hovered", Some(1), None, None)
+        .await?;
     println!("  after hovering:  {} matches", after.len());
 
     println!("\n=== history ===");

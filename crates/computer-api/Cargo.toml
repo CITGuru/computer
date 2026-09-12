@@ -12,5 +12,8 @@ license = "MIT"
 computer-types = { path = "../computer-types", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+serde_json = "1"
+
 [lints.clippy]
 string_slice = "deny"

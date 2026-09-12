@@ -4,7 +4,7 @@
 //! cargo run --example elements -- <box>
 //! ```
 
-use computer::{Computer, Reading};
+use computer::{Button, Computer, Reading};
 use std::time::Duration;
 
 #[tokio::main]
@@ -19,13 +19,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     println!("=== find ===");
-    for element in page.find("input", Some(6), None).await? {
+    for element in page.find("input", Some(6), None, None).await? {
         println!(
-            "  {:<9} {:<10} at {},{}  {}x{}  enabled={}",
+            "  {:<9} {:<10} {:<14} {}x{}  enabled={}",
             element.tag,
             element.kind.unwrap_or_default(),
-            element.at.x,
-            element.at.y,
+            match element.at {
+                Some(at) => format!("at {},{}", at.x, at.y),
+                None => "out of view".to_string(),
+            },
             element.width,
             element.height,
             element.enabled
@@ -34,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== fill, by the words next to it ===");
     page.fill("custname", "Toby").await?;
-    let filled = page.find("custname", Some(1), None).await?;
+    let filled = page.find("custname", Some(1), None, None).await?;
     println!(
         "  custname now {:?}",
         filled.first().and_then(|e| e.value.clone())
@@ -49,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  options: {options:?}");
     if let Some(pick) = options.get(1) {
         menu.choose("select", pick).await?;
-        let now = menu.find("select", Some(1), None).await?;
+        let now = menu.find("select", Some(1), None, None).await?;
         println!(
             "  value now {:?}",
             now.first().and_then(|e| e.value.clone())
@@ -59,15 +61,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== a file input, which no click can fill ===");
     menu.upload("doc", &["/tmp/form.html".to_string()]).await?;
-    let got = menu.find("doc", Some(1), None).await?;
+    let got = menu.find("doc", Some(1), None, None).await?;
     println!("  doc now {:?}", got.first().and_then(|e| e.value.clone()));
 
     println!("\n=== click by name ===");
-    let clicked = page.click_on("Submit order").await?;
-    println!(
-        "  clicked {:?} at {},{}",
-        clicked.text, clicked.at.x, clicked.at.y
-    );
+    let clicked = page.click_on("Submit order", Button::Left).await?;
+    println!("  clicked {:?} at {:?}", clicked.text, clicked.at);
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let read = page.read(Reading::Text, Some(300), None).await?;

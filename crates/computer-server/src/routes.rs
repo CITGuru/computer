@@ -15,7 +15,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -114,6 +114,9 @@ pub fn router(state: Arc<AppState>) -> Router {
             axum::routing::delete(close_window),
         )
         .route("/v1/catalog", get(catalog))
+        .route("/v1/boxes/{id}/pages", get(list_tabs))
+        .route("/v1/boxes/{id}/pages/{tab}", delete(close_tab))
+        .route("/v1/boxes/{id}/pages/{tab}/focus", post(focus_tab))
         .route("/v1/boxes/{id}/page", get(read_page))
         .route("/v1/boxes/{id}/page/find", get(find_elements))
         .route("/v1/boxes/{id}/page/element", post(on_element))
@@ -249,6 +252,7 @@ async fn actions(
 
     let mut results = Vec::with_capacity(batch.actions.len());
     let mut windows = Vec::new();
+    let mut tabs = Vec::new();
     let mut stopped_at = None;
 
     for (index, action) in batch.actions.iter().enumerate() {
@@ -259,6 +263,7 @@ async fn actions(
             &entry.spec,
             browser.as_ref(),
             &mut page,
+            &mut tabs,
         )
         .await;
 
@@ -350,6 +355,7 @@ async fn actions(
         &BatchResult {
             results,
             windows,
+            tabs,
             stopped_at,
             frame,
             cursor,
@@ -364,6 +370,7 @@ async fn run(
     spec: &Spec,
     browser: Option<&computer::Devtools>,
     page: &mut Option<computer::Page>,
+    tabs: &mut Vec<Tab>,
 ) -> ApiResult<Option<Window>> {
     match action {
         Action::Move { to } => desktop.move_to(*to).await?,
@@ -390,21 +397,45 @@ async fn run(
         Action::Type { text } => desktop.type_text(text).await?,
         Action::Key { chord } => desktop.key(chord).await?,
         Action::Scroll { at, dx, dy } => desktop.scroll(*at, Delta { dx: *dx, dy: *dy }).await?,
-        Action::OpenUrl { url } => {
-            let screen = screen.ok_or_else(|| {
-                ApiError::bad_request("this screen has no browser to open a page in")
-            })?;
-            screen.open_url(url).await?;
-
-            // A new tab, raised in front of the last one. Whatever page action
-            // follows wants that one, not the page this batch started on.
+        Action::OpenUrl { url, target } => {
+            // Whatever page action follows wants the page this leaves on
+            // screen, not the one the batch started on.
             *page = None;
 
-            // And the ones before it do not accumulate. Best effort: a browser
-            // that would not say what it holds is not a reason to refuse the
-            // page that just opened.
-            if let Some(browser) = browser {
-                let _ = browser.tidy(TABS).await;
+            match (browser, target) {
+                // Through the debugger, which is the only way to learn the id
+                // of what was opened and the only way to reuse a tab.
+                (Some(browser), OpenIn::Blank) => {
+                    let opened = browser.open(url).await?;
+                    let mut fresh = browser.attach(&opened).await?;
+                    // `PUT /json/new` does not raise it.
+                    fresh.bring_to_front().await?;
+
+                    tabs.push(tab_out(&opened, true));
+
+                    // And the ones before it do not accumulate. Best effort: a
+                    // browser that would not say what it holds is not a reason
+                    // to refuse the page that just opened.
+                    let _ = browser.tidy(TABS).await;
+                }
+                (Some(browser), OpenIn::Current) => {
+                    let mut showing = match browser.visible_page().await? {
+                        Some(showing) => showing,
+                        None => browser.first_page().await?,
+                    };
+                    showing.navigate(url).await?;
+
+                    tabs.push(tab_out(showing.target(), true));
+                }
+                // No debugger to reach, so the browser in the box opens it and
+                // nothing here learns its id. `current` cannot be honoured at
+                // all: there is no page to navigate.
+                (None, _) => {
+                    let screen = screen.ok_or_else(|| {
+                        ApiError::bad_request("this screen has no browser to open a page in")
+                    })?;
+                    screen.open_url(url).await?;
+                }
             }
         }
         Action::Wait { ms } => tokio::time::sleep(Duration::from_millis(*ms).min(MAX_PAUSE)).await,
@@ -429,7 +460,9 @@ async fn run(
                 .as_mut()
                 .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
 
-            apply(page, what.clone()).await?;
+            // No settle of its own: the batch takes one frame after all of its
+            // actions, and pausing inside each would pay it per action.
+            apply(page, what.clone(), Duration::ZERO).await?;
         }
         Action::Launch { app, args } => {
             let screen =
@@ -1092,6 +1125,9 @@ async fn replay_onto(
                             &entry.spec,
                             None,
                             &mut None,
+                            // A replay drives a fresh box; the ids a tab had in
+                            // the source mean nothing in it.
+                            &mut Vec::new(),
                         )
                         .await
                     }
@@ -1226,6 +1262,8 @@ struct PageQuery {
     max_links: Option<usize>,
     #[serde(default)]
     format: Option<Reading>,
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 /// What the page in front is showing, as text.
@@ -1236,16 +1274,7 @@ async fn read_page(
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<PageQuery>,
 ) -> ApiResult<Json<PageText>> {
-    let entry = state.registry.get(&id).await?;
-    let browser = entry
-        .computer
-        .browser()
-        .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
-
-    let mut page = browser
-        .visible_page()
-        .await?
-        .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
+    let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
 
     let format = match query.format.unwrap_or_default() {
         Reading::Markdown => computer::Reading::Markdown,
@@ -1286,6 +1315,10 @@ struct FindQuery {
     limit: Option<usize>,
     #[serde(default)]
     scroll: Option<bool>,
+    #[serde(default)]
+    exact: Option<bool>,
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 /// What on the page matches, best first.
@@ -1294,12 +1327,13 @@ async fn find_elements(
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<FindQuery>,
 ) -> ApiResult<Json<Vec<Element>>> {
-    let mut page = visible(&state, &id).await?;
+    let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
     let found = page
         .find(
             &query.q,
             Some(query.limit.unwrap_or(FOUND).clamp(1, FOUND)),
             query.scroll,
+            query.exact,
         )
         .await?;
 
@@ -1314,20 +1348,55 @@ async fn find_elements(
 async fn on_element(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<SettleQuery>,
     ApiJson(body): ApiJson<OnElement>,
 ) -> ApiResult<Json<ElementResult>> {
-    let mut page = visible(&state, &id).await?;
+    let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
+    let settle = Duration::from_millis(query.settle_ms.unwrap_or_default()).min(MAX_PAUSE);
 
-    Ok(Json(apply(&mut page, body).await?))
+    Ok(Json(apply(&mut page, body, settle).await?))
+}
+
+/// How long to let the page stop moving before it is measured.
+///
+/// A click that opens a menu or starts a navigation has not finished when the
+/// call returns, and a URL or a frame read at that moment is the page on its
+/// way rather than the page it arrived at.
+#[derive(Debug, Deserialize)]
+struct SettleQuery {
+    #[serde(default)]
+    settle_ms: Option<u64>,
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 /// One element operation against a page already in hand.
 /// Shared with the action batch, so a form is one round trip rather than one
 /// per field and the screen lock is held across the whole of it.
-async fn apply(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementResult> {
+async fn apply(
+    page: &mut computer::Page,
+    what: OnElement,
+    settle: Duration,
+) -> ApiResult<ElementResult> {
+    let before = page.url().await.ok();
+    let mut result = applied(page, what).await?;
+
+    if !settle.is_zero() {
+        tokio::time::sleep(settle).await;
+    }
+
+    if let Ok(after) = page.url().await {
+        result.navigated = before.as_deref() != Some(after.as_str());
+        result.url = Some(after);
+    }
+
+    Ok(result)
+}
+
+async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementResult> {
     Ok(match what {
-        OnElement::Click { query } => ElementResult {
-            element: Some(element_out(page.click_on(&query).await?)),
+        OnElement::Click { query, button } => ElementResult {
+            element: Some(element_out(page.click_on(&query, button).await?)),
             ..ElementResult::default()
         },
         OnElement::Fill { query, text } => {
@@ -1350,12 +1419,15 @@ async fn apply(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementR
             query,
             gone,
             within_ms,
+            or,
+            exact,
         } => {
             let within = Duration::from_millis(within_ms.unwrap_or(WAIT_MS)).min(MAX_WAIT);
-            let found = page.wait_for(&query, gone, within).await?;
+            let (matched, found) = page.wait_for_any(&query, &or, gone, within, exact).await?;
 
             ElementResult {
                 element: found.map(element_out),
+                matched: Some(matched),
                 ..ElementResult::default()
             }
         }
@@ -1391,6 +1463,82 @@ async fn apply(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementR
     })
 }
 
+/// The pages a box has open.
+async fn list_tabs(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+) -> ApiResult<Json<Vec<Tab>>> {
+    let browser = debugger(&state, &id).await?;
+
+    // Which one is frontmost costs an attach each: the debugger lists tabs but
+    // never says which the person is looking at.
+    let showing = match browser.visible_page().await {
+        Ok(Some(page)) => Some(page.target().id.clone()),
+        _ => None,
+    };
+
+    let tabs = browser
+        .pages()
+        .await?
+        .iter()
+        .map(|target| tab_out(target, showing.as_deref() == Some(target.id.as_str())))
+        .collect();
+
+    Ok(Json(tabs))
+}
+
+async fn focus_tab(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, tab)): ApiPath<(String, String)>,
+) -> ApiResult<StatusCode> {
+    named(&state, &id, &tab).await?.bring_to_front().await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn close_tab(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, tab)): ApiPath<(String, String)>,
+) -> ApiResult<StatusCode> {
+    debugger(&state, &id).await?.close(&tab).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// This box's debugger.
+async fn debugger(state: &AppState, id: &str) -> ApiResult<computer::Devtools> {
+    let entry = state.registry.get(id).await?;
+
+    entry
+        .computer
+        .browser()
+        .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))
+}
+
+/// The page a request names, or the one on screen where it names none.
+///
+/// Naming one is also cheaper: finding the visible page means attaching to every
+/// tab and asking each whether it is frontmost.
+async fn page_for(state: &AppState, id: &str, tab: Option<&str>) -> ApiResult<computer::Page> {
+    match tab {
+        Some(tab) => named(state, id, tab).await,
+        None => visible(state, id).await,
+    }
+}
+
+async fn named(state: &AppState, id: &str, tab: &str) -> ApiResult<computer::Page> {
+    let browser = debugger(state, id).await?;
+
+    let target = browser
+        .pages()
+        .await?
+        .into_iter()
+        .find(|target| target.id == tab)
+        .ok_or_else(|| ApiError::not_found(format!("this box has no tab {tab}")))?;
+
+    Ok(browser.attach(&target).await?)
+}
+
 /// The page the screen is showing.
 async fn visible(state: &AppState, id: &str) -> ApiResult<computer::Page> {
     let entry = state.registry.get(id).await?;
@@ -1405,15 +1553,24 @@ async fn visible(state: &AppState, id: &str) -> ApiResult<computer::Page> {
         .ok_or_else(|| ApiError::not_found("no page is on screen"))
 }
 
+fn tab_out(target: &computer::cdp::Target, visible: bool) -> Tab {
+    Tab {
+        id: target.id.clone(),
+        title: target.title.clone(),
+        url: target.url.clone(),
+        visible,
+    }
+}
+
 fn element_out(element: computer::Element) -> Element {
     Element {
         text: element.text,
         tag: element.tag,
         kind: element.kind,
-        at: Point {
-            x: element.at.x,
-            y: element.at.y,
-        },
+        selector: element.selector,
+        label: element.label,
+        visible: element.visible,
+        at: element.at.map(|at| Point { x: at.x, y: at.y }),
         width: element.width,
         height: element.height,
         enabled: element.enabled,

@@ -42,6 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 actions: vec![
                     Action::OpenUrl {
                         url: "https://example.com".to_string(),
+                        target: Default::default(),
                     },
                     Action::Move {
                         to: Point { x: 640, y: 400 },

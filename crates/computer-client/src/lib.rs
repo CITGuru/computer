@@ -167,6 +167,7 @@ impl Client {
         query: &str,
         limit: Option<usize>,
         scroll: Option<bool>,
+        exact: Option<bool>,
     ) -> Result<Vec<Element>> {
         let mut path = format!("/v1/boxes/{id}/page/find?q={}", query_value(query));
         if let Some(limit) = limit {
@@ -175,15 +176,65 @@ impl Client {
         if let Some(scroll) = scroll {
             path.push_str(&format!("&scroll={scroll}"));
         }
+        if let Some(exact) = exact {
+            path.push_str(&format!("&exact={exact}"));
+        }
 
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    pub async fn on_element(&self, id: &str, what: &OnElement) -> Result<ElementResult> {
+    /// `settle_ms` is how long the page is given to stop moving before the URL
+    /// it ended on is read. Zero measures immediately.
+    ///
+    /// `tab` names which page, or the one on screen where it names none.
+    pub async fn on_element(
+        &self,
+        id: &str,
+        what: &OnElement,
+        settle_ms: u64,
+        tab: Option<&str>,
+    ) -> Result<ElementResult> {
+        let mut query = vec![("settle_ms", settle_ms.to_string())];
+        if let Some(tab) = tab {
+            query.push(("tab", tab.to_string()));
+        }
+
         self.send(
             reqwest::Method::POST,
             &format!("/v1/boxes/{id}/page/element"),
             Some(serde_json::to_value(what).map_err(|error| Error::Transport(error.to_string()))?),
+            &query,
+        )
+        .await
+    }
+
+    /// Every page this box has open, and which of them is on screen.
+    pub async fn tabs(&self, id: &str) -> Result<Vec<Tab>> {
+        self.send(
+            reqwest::Method::GET,
+            &format!("/v1/boxes/{id}/pages"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    /// Bring one to the front.
+    pub async fn focus_tab(&self, id: &str, tab: &str) -> Result<()> {
+        self.nothing(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/pages/{tab}/focus"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn close_tab(&self, id: &str, tab: &str) -> Result<()> {
+        self.nothing(
+            reqwest::Method::DELETE,
+            &format!("/v1/boxes/{id}/pages/{tab}"),
+            None,
             &[],
         )
         .await

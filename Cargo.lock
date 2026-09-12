@@ -1040,6 +1040,7 @@ version = "0.1.0"
 dependencies = [
  "computer-types",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

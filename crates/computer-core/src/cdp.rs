@@ -8,7 +8,7 @@
 //! Anything this does not wrap is reachable through [`Page::call`].
 
 use crate::error::{Error, Result};
-use crate::{BrowserEndpoint, Point};
+use crate::{BrowserEndpoint, Button, Point};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -394,8 +394,11 @@ impl Devtools {
             return Ok(0);
         }
 
+        // By id, not by URL: a run comparing two pages of one site has several
+        // tabs holding the same address, and a caller holding an id for one of
+        // them would watch it go.
         let showing = match self.visible_page().await {
-            Ok(Some(mut page)) => page.url().await.ok(),
+            Ok(Some(page)) => Some(page.target().id.clone()),
             _ => None,
         };
 
@@ -403,7 +406,7 @@ impl Devtools {
         // Newest first, as the debugger lists them, so the tail is what has
         // been sitting there longest.
         for target in pages.into_iter().skip(keep) {
-            if showing.as_deref() == Some(target.url.as_str()) {
+            if showing.as_deref() == Some(target.id.as_str()) {
                 continue;
             }
 
@@ -1093,6 +1096,16 @@ impl Scroll {
 /// How many matches a find carries when the caller names no number.
 const FOUND_DEFAULT: usize = 20;
 
+/// What the protocol calls a mouse button, and the bit a page reads out of
+/// `event.buttons` while that button is down.
+fn button_parts(button: Button) -> (&'static str, u8) {
+    match button {
+        Button::Left => ("left", 1),
+        Button::Right => ("right", 2),
+        Button::Middle => ("middle", 4),
+    }
+}
+
 /// One thing on a page a caller can act on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Element {
@@ -1103,9 +1116,29 @@ pub struct Element {
     /// An `input`'s type, where it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// The middle of it, in the page's own coordinates — which is what
-    /// [`Page::click`] takes, and is not where it sits on the screen.
-    pub at: Point,
+    /// The shortest selector that names this element and nothing else.
+    ///
+    /// Takes the place of the words a caller found it by: every method here
+    /// accepts a selector as its query, and one of these is unambiguous where
+    /// words are not. `None` where the page offers nothing that identifies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    /// What the page calls it, where that is not what it says: a field with no
+    /// words of its own still has a name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Whether its middle is inside the window.
+    #[serde(default)]
+    pub visible: bool,
+    /// The middle of it, in the viewport's coordinates, which is what
+    /// [`Page::click`] takes and is not where it sits on the screen.
+    ///
+    /// `None` where the middle is outside the viewport. A coordinate for
+    /// something scrolled out of view points somewhere else, and an unsigned
+    /// one cannot even be written down: an element above the fold has a
+    /// negative offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Point>,
     pub width: u32,
     pub height: u32,
     /// A disabled control is worth knowing about before it is clicked and
@@ -1120,7 +1153,7 @@ pub struct Element {
 /// A CSS selector where the query is one, a `name`, `id` or placeholder where
 /// it names a field, and visible words otherwise: an agent knows a button says
 /// "Sign in" and rarely knows its class.
-const MATCH: &str = r#"(q) => {
+const MATCH: &str = r#"(q, exact) => {
   const seen = new Set();
   const out = [];
   const add = el => {
@@ -1146,12 +1179,24 @@ const MATCH: &str = r#"(q) => {
                         .replace(/\s+/g, ' ').trim().toLowerCase();
   const clickable = 'a,button,input,select,textarea,[role=button],[role=link],[onclick]';
 
-  for (const pass of [
-    el => words(el) === want,
-    el => words(el).includes(want),
-  ]) {
+  const passes = exact
+    ? [el => words(el) === want]
+    : [el => words(el) === want, el => words(el).includes(want)];
+
+  for (const pass of passes) {
     for (const el of document.querySelectorAll(clickable)) if (pass(el)) add(el);
-    for (const el of document.querySelectorAll('*')) if (pass(el)) add(el);
+
+    // The innermost of them only. An ancestor's innerText holds all of its
+    // descendants', so a substring match walks out to <body> — which comes
+    // first in document order and would be the one answer a wait acts on.
+    // Clickables are swept above and already held, so a button whose label
+    // sits in a span still beats the span.
+    const hits = [];
+    for (const el of document.querySelectorAll('*')) if (pass(el)) hits.push(el);
+    for (const el of hits) {
+      if (hits.some(other => other !== el && el.contains(other))) continue;
+      add(el);
+    }
   }
 
   // Not sorted by position: the passes above are the ranking, and a form
@@ -1160,15 +1205,81 @@ const MATCH: &str = r#"(q) => {
   return out;
 }"#;
 
+/// The shortest selector that names one element and nothing else.
+///
+/// Confirmed rather than generated: a selector matching two elements looks
+/// precise and is worse than the words it replaces, because an action on it
+/// silently reaches the wrong one.
+const SELECTOR: &str = r#"(el) => {
+  const alone = q => {
+    try { return document.querySelectorAll(q).length === 1; } catch (e) { return false; }
+  };
+
+  if (el.id && alone('#' + CSS.escape(el.id))) return '#' + CSS.escape(el.id);
+
+  // What a page meant as a handle, before anything this has to invent.
+  for (const by of ['data-testid', 'data-test', 'data-qa', 'name', 'aria-label',
+                    'placeholder', 'title']) {
+    const value = el.getAttribute(by);
+    if (!value) continue;
+    const q = '[' + by + '=' + JSON.stringify(value) + ']';
+    if (alone(q)) return q;
+  }
+
+  // Outwards until it is unambiguous, so the answer is as short as the page
+  // allows rather than a path from the root every time.
+  const step = node => {
+    const tag = node.tagName.toLowerCase();
+    const parent = node.parentElement;
+    if (!parent) return tag;
+    const same = Array.from(parent.children).filter(one => one.tagName === node.tagName);
+    return same.length === 1 ? tag : tag + ':nth-of-type(' + (same.indexOf(node) + 1) + ')';
+  };
+
+  const path = [];
+  for (let node = el; node && node.nodeType === 1 && path.length < 8; node = node.parentElement) {
+    path.unshift(step(node));
+    const q = path.join(' > ');
+    if (alone(q)) return q;
+  }
+
+  return undefined;
+}"#;
+
+/// [`DESCRIBE`] with [`SELECTOR`] put in place of its call.
+///
+/// One calls the other, and a script evaluated in a page carries no imports.
+fn describe() -> String {
+    // The name alone: the parens around it in DESCRIBE are what let the
+    // function it becomes be called, and replacing them too leaves an arrow
+    // literal invoked where it stands, which does not parse.
+    DESCRIBE.replace("SELECTOR_FN", SELECTOR)
+}
+
 /// One element, as a caller sees it.
 const DESCRIBE: &str = r#"(el) => {
   const r = el.getBoundingClientRect();
+  const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+  // A coordinate is the viewport's, so one for an element off it points
+  // somewhere else — and an unsigned one cannot even hold a negative offset.
+  const inside = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
+
+  // What the page calls it, which is not always what it says: a field with no
+  // words of its own still has a name a caller can recognise.
+  const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+                el.getAttribute('title') ||
+                (el.id && (document.querySelector('label[for=' + JSON.stringify(el.id) + ']') || {}).innerText) ||
+                undefined;
+
   return {
     text: (el.innerText || el.value || el.getAttribute('aria-label') || '')
             .replace(/\s+/g, ' ').trim().slice(0, 200),
     tag: el.tagName.toLowerCase(),
     kind: el.getAttribute('type') || undefined,
-    at: { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) },
+    selector: (SELECTOR_FN)(el),
+    label: label === undefined ? undefined : String(label).replace(/\s+/g, ' ').trim().slice(0, 200),
+    at: inside ? { x, y } : undefined,
+    visible: inside,
     width: Math.round(r.width),
     height: Math.round(r.height),
     enabled: !el.disabled,
@@ -1522,15 +1633,24 @@ impl Page {
 
     /// A click in the page's own coordinates, where `0,0` is the top left of the
     /// viewport.
-    pub async fn click(&mut self, at: Point) -> Result<()> {
-        for kind in ["mousePressed", "mouseReleased"] {
+    ///
+    /// A right click opens the page's own context menu, not the browser's: a
+    /// menu the window manager draws is outside the page and no screenshot of
+    /// the viewport holds it.
+    pub async fn click(&mut self, at: Point, button: Button) -> Result<()> {
+        let (name, mask) = button_parts(button);
+
+        // The protocol does not derive `buttons` from `button`, and a page
+        // that reads `event.buttons` to tell which one is down sees none.
+        for (kind, buttons) in [("mousePressed", mask), ("mouseReleased", 0)] {
             self.call(
                 "Input.dispatchMouseEvent",
                 json!({
                     "type": kind,
                     "x": at.x,
                     "y": at.y,
-                    "button": "left",
+                    "button": name,
+                    "buttons": buttons,
                     "clickCount": 1,
                 }),
             )
@@ -1551,16 +1671,19 @@ impl Page {
     ///
     /// A CSS selector where the query is one, and visible text otherwise: an
     /// agent knows a button says "Sign in" and rarely knows its class.
+    /// `exact` matches the whole of an element's words rather than any part of
+    /// them, for a caller that knows the label it is looking for.
     pub async fn find(
         &mut self,
         query: &str,
         limit: Option<usize>,
         scroll: Option<bool>,
+        exact: Option<bool>,
     ) -> Result<Vec<Element>> {
         let found = self
             .evaluate(&format!(
                 r#"(() => {{
-                     const found = ({MATCH})({}).slice(0, {});
+                     const found = ({MATCH})({}, {exact}).slice(0, {});
                      // Scrolled before it is measured, not after: a coordinate
                      // is the viewport's, so one taken for an element below
                      // the fold points past the bottom of the window and a
@@ -1568,11 +1691,13 @@ impl Page {
                      if ({scroll} && found[0]) {{
                        found[0].scrollIntoView({{ block: 'center', inline: 'center' }});
                      }}
-                     return JSON.stringify(found.map({DESCRIBE}));
+                     return JSON.stringify(found.map({describe}));
                    }})()"#,
                 json!(query),
                 limit.unwrap_or(FOUND_DEFAULT),
-                scroll = scroll.unwrap_or(false)
+                scroll = scroll.unwrap_or(false),
+                exact = exact.unwrap_or(false),
+                describe = describe()
             ))
             .await?;
 
@@ -1591,7 +1716,7 @@ impl Page {
     /// same position twice when there is no more to load.
     pub async fn scroll(&mut self, what: Option<&str>, how: Scroll) -> Result<(i32, i32)> {
         let target = match what {
-            Some(query) => format!("({MATCH})({}).find(Boolean)", json!(query)),
+            Some(query) => format!("({MATCH})({}, false).find(Boolean)", json!(query)),
             None => "null".to_string(),
         };
 
@@ -1632,24 +1757,61 @@ impl Page {
         gone: bool,
         within: Duration,
     ) -> Result<Option<Element>> {
+        self.wait_for_any(query, &[], gone, within, false)
+            .await
+            .map(|(_, found)| found)
+    }
+
+    /// [`Self::wait_for`], stopping for any of `or` as well.
+    ///
+    /// Answers with which query matched, so a caller waiting for a price or
+    /// for "sold out" knows which arrived. Waiting out a full timeout for
+    /// something a failure has already ruled out is how the time goes.
+    pub async fn wait_for_any(
+        &mut self,
+        query: &str,
+        or: &[String],
+        gone: bool,
+        within: Duration,
+        exact: bool,
+    ) -> Result<(String, Option<Element>)> {
         let deadline = Instant::now() + within;
 
         loop {
-            let found = self.find(query, Some(1), None).await?;
+            let found = self.find(query, Some(1), None, Some(exact)).await?;
             let here = found.first().cloned();
 
             match (gone, &here) {
-                (false, Some(_)) => return Ok(here),
-                (true, None) => return Ok(None),
+                (false, Some(_)) => return Ok((query.to_string(), here)),
+                (true, None) => return Ok((query.to_string(), None)),
                 _ => {}
             }
 
+            // Only ever an arrival: a caller waiting for one thing to go and
+            // another to appear is waiting for two different shapes, and would
+            // not be able to tell which answer it had.
+            for other in or {
+                if let Some(one) = self
+                    .find(other, Some(1), None, Some(exact))
+                    .await?
+                    .first()
+                    .cloned()
+                {
+                    return Ok((other.clone(), Some(one)));
+                }
+            }
+
             if Instant::now() >= deadline {
+                let waited = match or.is_empty() {
+                    true => query.to_string(),
+                    false => format!("{query} (nor {})", or.join(", ")),
+                };
+
                 return Err(Error::Timeout {
                     after: within,
                     detail: match gone {
-                        true => format!("{query} was still on the page"),
-                        false => format!("nothing matching {query} appeared"),
+                        true => format!("{waited} was still on the page"),
+                        false => format!("nothing matching {waited} appeared"),
                     },
                 });
             }
@@ -1710,14 +1872,14 @@ impl Page {
     /// A menu that opens on hover has no click to send: the thing worth
     /// clicking does not exist until the pointer arrives.
     pub async fn hover(&mut self, query: &str) -> Result<Element> {
-        let element = self.reach(query).await?;
+        let (element, at) = self.reachable(query).await?;
 
         self.call(
             "Input.dispatchMouseEvent",
             json!({
                 "type": "mouseMoved",
-                "x": element.at.x,
-                "y": element.at.y,
+                "x": at.x,
+                "y": at.y,
             }),
         )
         .await?;
@@ -1730,9 +1892,9 @@ impl Page {
     /// Its own coordinates rather than a caller's: a point worked out from a
     /// screenshot is stale the moment the page moves under it, and a click
     /// against a stale point lands on whatever took that place.
-    pub async fn click_on(&mut self, query: &str) -> Result<Element> {
-        let element = self.reach(query).await?;
-        self.click(element.at).await?;
+    pub async fn click_on(&mut self, query: &str, button: Button) -> Result<Element> {
+        let (element, at) = self.reachable(query).await?;
+        self.click(at, button).await?;
         Ok(element)
     }
 
@@ -1741,11 +1903,11 @@ impl Page {
     /// A page watching for keystrokes — a search box filtering as you type, a
     /// form validating a field — sees nothing when a value is only assigned.
     pub async fn fill(&mut self, query: &str, text: &str) -> Result<()> {
-        let element = self.reach(query).await?;
-        self.click(element.at).await?;
+        let (_, at) = self.reachable(query).await?;
+        self.click(at, Button::Left).await?;
 
         self.evaluate(&format!(
-            "(({MATCH})({}).find(Boolean) || {{}}).value = ''",
+            "(({MATCH})({}, false).find(Boolean) || {{}}).value = ''",
             json!(query)
         ))
         .await?;
@@ -1757,7 +1919,7 @@ impl Page {
     pub async fn options(&mut self, query: &str) -> Result<Vec<String>> {
         let listed = self
             .evaluate(&format!(
-                "JSON.stringify(Array.from((({MATCH})({}).find(e => e.tagName === 'SELECT') || {{ options: [] }}).options).map(o => o.text.trim()))",
+                "JSON.stringify(Array.from((({MATCH})({}, false).find(e => e.tagName === 'SELECT') || {{ options: [] }}).options).map(o => o.text.trim()))",
                 json!(query)
             ))
             .await?;
@@ -1775,7 +1937,7 @@ impl Page {
         let chose = self
             .evaluate(&format!(
                 r#"(() => {{
-                     const el = ({MATCH})({}).find(e => e.tagName === 'SELECT');
+                     const el = ({MATCH})({}, false).find(e => e.tagName === 'SELECT');
                      if (!el) return 'no dropdown matched';
                      const want = {}.trim().toLowerCase();
                      const at = Array.from(el.options)
@@ -1812,7 +1974,7 @@ impl Page {
                 "Runtime.evaluate",
                 json!({
                     "expression": format!(
-                        "({MATCH})({}).find(e => e.tagName === 'INPUT' && e.type === 'file')",
+                        "({MATCH})({}, false).find(e => e.tagName === 'INPUT' && e.type === 'file')",
                         json!(query)
                     ),
                     "returnByValue": false,
@@ -1835,16 +1997,32 @@ impl Page {
     }
 
     /// The first match, brought into view.
+    /// [`Self::reach`], and where to press it.
+    ///
+    /// Scrolling is what usually puts a coordinate there, and a thing it
+    /// cannot reach — fixed off-screen, or collapsed to nothing — has none.
+    async fn reachable(&mut self, query: &str) -> Result<(Element, Point)> {
+        let element = self.reach(query).await?;
+
+        match element.at {
+            Some(at) => Ok((element, at)),
+            None => Err(Error::denied(format!(
+                "{query} could not be brought into view, so there is nowhere to press"
+            ))),
+        }
+    }
+
     async fn reach(&mut self, query: &str) -> Result<Element> {
         let found = self
             .evaluate(&format!(
                 r#"(() => {{
-                     const el = ({MATCH})({}).find(Boolean);
+                     const el = ({MATCH})({}, false).find(Boolean);
                      if (!el) return 'null';
                      el.scrollIntoView({{ block: 'center', inline: 'center' }});
-                     return JSON.stringify(({DESCRIBE})(el));
+                     return JSON.stringify(({describe})(el));
                    }})()"#,
-                json!(query)
+                json!(query),
+                describe = describe()
             ))
             .await?;
 
@@ -2766,6 +2944,103 @@ mod tests {
             target_ids_in_context(&json!({}), "CONTEXT-1"),
             Err(Error::Denied { .. })
         ));
+    }
+
+    #[test]
+    fn test_a_selector_is_confirmed_before_it_is_handed_out() {
+        assert!(
+            SELECTOR.contains("querySelectorAll(q).length === 1"),
+            "a selector matching two elements looks precise and reaches the wrong one"
+        );
+        assert!(
+            SELECTOR.contains("data-testid"),
+            "what a page meant as a handle comes before anything invented"
+        );
+        assert!(
+            SELECTOR.contains("nth-of-type"),
+            "and a path is the last resort rather than the first answer"
+        );
+    }
+
+    #[test]
+    fn test_describe_carries_the_selector_it_generated() {
+        let script = describe();
+
+        assert!(
+            !script.contains("SELECTOR_FN"),
+            "the placeholder was replaced: a page carries no imports"
+        );
+        assert!(script.contains("querySelectorAll(q).length === 1"));
+    }
+
+    #[test]
+    fn test_an_element_says_what_it_is_called_and_whether_it_can_be_seen() {
+        let named = r#"[{"text":"","tag":"input","selector":"[name=\"custname\"]",
+                         "label":"Your name","visible":true,"at":{"x":10,"y":20},
+                         "width":100,"height":20,"enabled":true}]"#;
+        let found: Vec<Element> = serde_json::from_str(named).expect("it parses");
+
+        assert_eq!(found[0].selector.as_deref(), Some("[name=\"custname\"]"));
+        assert_eq!(found[0].label.as_deref(), Some("Your name"));
+        assert!(found[0].visible);
+    }
+
+    #[test]
+    fn test_a_substring_match_takes_the_innermost_of_them() {
+        // What used to hand back <body>: every ancestor's innerText holds its
+        // descendants', and document order puts the outermost first.
+        assert!(
+            MATCH.contains("el.contains(other)"),
+            "an ancestor that matches only through a descendant is dropped"
+        );
+        assert!(
+            MATCH.contains("querySelectorAll(clickable)"),
+            "and clickables are still swept first, so a button beats its own span"
+        );
+    }
+
+    #[test]
+    fn test_exact_matching_runs_one_pass_only() {
+        assert!(
+            MATCH.contains("exact\n    ? [el => words(el) === want]"),
+            "exact drops the substring pass rather than reordering it"
+        );
+    }
+
+    #[test]
+    fn test_an_element_out_of_view_still_parses() {
+        // What a match above the fold used to send: `getBoundingClientRect`
+        // is the viewport's, so its middle is negative, and one such match
+        // used to fail the whole listing rather than itself.
+        let above = r#"[{"text":"Top","tag":"a","at":null,"width":10,"height":10,"enabled":true}]"#;
+        let found: Vec<Element> = serde_json::from_str(above).expect("it parses");
+
+        assert_eq!(found.len(), 1);
+        assert!(
+            found[0].at.is_none(),
+            "and says it has nowhere to be pressed"
+        );
+        assert_eq!(found[0].text, "Top", "while still being worth naming");
+    }
+
+    #[test]
+    fn test_an_element_in_view_keeps_its_point() {
+        let here = r#"[{"text":"Buy","tag":"button","at":{"x":40,"y":80},
+                        "width":10,"height":10,"enabled":true}]"#;
+        let found: Vec<Element> = serde_json::from_str(here).expect("it parses");
+
+        assert_eq!(found[0].at, Some(Point::new(40, 80)));
+    }
+
+    #[test]
+    fn test_a_coordinate_is_only_reported_from_inside_the_window() {
+        // The guard in DESCRIBE, which is what stops a negative one being
+        // written down at all.
+        assert!(
+            DESCRIBE.contains("x < innerWidth") && DESCRIBE.contains("y < innerHeight"),
+            "a coordinate is measured against the window it was taken in"
+        );
+        assert!(DESCRIBE.contains("x >= 0 && y >= 0"));
     }
 
     #[test]

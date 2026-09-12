@@ -1,7 +1,9 @@
 //! Driving boxes through a server.
 
 use crate::{USAGE, flag, framing, positional, present, wheel};
-use computer_api::{Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, Rect, Shot, Window};
+use computer_api::{
+    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, OpenIn, Rect, Shot, Window,
+};
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Selection, Spec};
 use std::time::Duration;
@@ -53,6 +55,7 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
                 0,
                 Action::OpenUrl {
                     url: url.to_string(),
+                    target: OpenIn::Blank,
                 },
             )
             .await
@@ -146,6 +149,7 @@ pub async fn open(client: &Client, args: &[String]) -> Done {
         id,
         Action::OpenUrl {
             url: url.to_string(),
+            target: OpenIn::Blank,
         },
     )
     .await
@@ -614,7 +618,7 @@ fn name_of(action: &Action) -> String {
         Action::Type { text } => format!("type {text:?}"),
         Action::Key { chord } => format!("key {chord}"),
         Action::Scroll { dy, .. } => format!("scroll {dy}"),
-        Action::OpenUrl { url } => format!("open {url}"),
+        Action::OpenUrl { url, .. } => format!("open {url}"),
         Action::OnPage { what } => format!("page {}", op_of(what)),
         Action::Launch { app, args } => match args.is_empty() {
             true => format!("open {app}"),
