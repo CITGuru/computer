@@ -238,6 +238,14 @@ pub struct Element {
     pub tag: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// The role the page declares, where it declares one. Not inferred — `tag`
+    /// already says what a `button` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// What would change whether acting does anything: `disabled`, `expanded`,
+    /// `collapsed`, `checked`, `selected`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
     /// The shortest selector that names this element and nothing else.
     ///
     /// Every tool that takes a query takes one of these, and it is unambiguous
@@ -896,6 +904,8 @@ mod tests {
             text: "Top".to_string(),
             tag: "a".to_string(),
             kind: None,
+            role: None,
+            states: Vec::new(),
             selector: None,
             label: None,
             visible: false,

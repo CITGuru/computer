@@ -1116,6 +1116,16 @@ pub struct Element {
     /// An `input`'s type, where it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// The role the page declares, where it declares one.
+    ///
+    /// Not inferred: what a `button` or an `a` is, [`Element::tag`] already
+    /// says, and saying it twice in another vocabulary helps nobody.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// What would change whether acting on it does anything: `disabled`,
+    /// `expanded`, `collapsed`, `checked`, `selected`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
     /// The shortest selector that names this element and nothing else.
     ///
     /// Takes the place of the words a caller found it by: every method here
@@ -1271,18 +1281,37 @@ const DESCRIBE: &str = r#"(el) => {
                 (el.id && (document.querySelector('label[for=' + JSON.stringify(el.id) + ']') || {}).innerText) ||
                 undefined;
 
+  const aria = name => el.getAttribute('aria-' + name);
+  // A div carries no `disabled` property, so `!el.disabled` calls an inert one
+  // enabled and a caller presses something that cannot answer.
+  const off = el.disabled === true || aria('disabled') === 'true';
+
+  // What would change whether acting does anything. `collapsed` is not the
+  // absence of `expanded`: one says there is a disclosure and it is shut, the
+  // other says there is none.
+  const states = [];
+  if (off) states.push('disabled');
+  if (aria('expanded') === 'true') states.push('expanded');
+  if (aria('expanded') === 'false') states.push('collapsed');
+  if (el.checked === true || aria('checked') === 'true') states.push('checked');
+  if (aria('selected') === 'true') states.push('selected');
+
   return {
     text: (el.innerText || el.value || el.getAttribute('aria-label') || '')
             .replace(/\s+/g, ' ').trim().slice(0, 200),
     tag: el.tagName.toLowerCase(),
     kind: el.getAttribute('type') || undefined,
+    // Only where the page sets one. What a `button` or an `a` is needs no
+    // second vocabulary: `tag` already says it.
+    role: el.getAttribute('role') || undefined,
+    states,
     selector: (SELECTOR_FN)(el),
     label: label === undefined ? undefined : String(label).replace(/\s+/g, ' ').trim().slice(0, 200),
     at: inside ? { x, y } : undefined,
     visible: inside,
     width: Math.round(r.width),
     height: Math.round(r.height),
-    enabled: !el.disabled,
+    enabled: !off,
     value: el.value === undefined ? undefined : String(el.value).slice(0, 200),
   };
 }"#;
@@ -2944,6 +2973,59 @@ mod tests {
             target_ids_in_context(&json!({}), "CONTEXT-1"),
             Err(Error::Denied { .. })
         ));
+    }
+
+    #[test]
+    fn test_an_inert_element_is_not_called_enabled() {
+        // `!el.disabled` on a div is `true`, so a caller pressed something that
+        // could not answer.
+        assert!(
+            DESCRIBE.contains("aria('disabled') === 'true'"),
+            "a div says it is disabled through aria, not through a property"
+        );
+        assert!(
+            DESCRIBE.contains("enabled: !off"),
+            "and enabled follows that rather than the property alone"
+        );
+    }
+
+    #[test]
+    fn test_a_disclosure_that_is_shut_says_so() {
+        assert!(DESCRIBE.contains("states.push('collapsed')"));
+        assert!(
+            DESCRIBE.contains("aria('expanded') === 'false'"),
+            "collapsed is not the absence of expanded: one says there is a \
+             disclosure and it is shut, the other says there is none"
+        );
+    }
+
+    #[test]
+    fn test_a_role_is_read_and_never_inferred() {
+        assert!(DESCRIBE.contains("el.getAttribute('role')"));
+        // Nothing maps a tag onto a role word: `tag` already says it.
+        assert!(!DESCRIBE.contains("'button' :"));
+    }
+
+    #[test]
+    fn test_states_come_back_as_words() {
+        let inert = r#"[{"text":"Next","tag":"div","role":"button",
+                         "states":["disabled","collapsed"],"visible":true,
+                         "width":10,"height":10,"enabled":false}]"#;
+        let found: Vec<Element> = serde_json::from_str(inert).expect("it parses");
+
+        assert_eq!(found[0].role.as_deref(), Some("button"));
+        assert_eq!(found[0].states, vec!["disabled", "collapsed"]);
+        assert!(!found[0].enabled);
+    }
+
+    #[test]
+    fn test_an_element_with_neither_still_parses() {
+        let plain = r#"[{"text":"Go","tag":"button","visible":true,
+                         "width":10,"height":10,"enabled":true}]"#;
+        let found: Vec<Element> = serde_json::from_str(plain).expect("it parses");
+
+        assert!(found[0].role.is_none());
+        assert!(found[0].states.is_empty());
     }
 
     #[test]

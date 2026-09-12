@@ -230,7 +230,9 @@ pub fn catalogue() -> Value {
              the page moves under it. Each match ends with a selector that named exactly one \
              element when it was read: pass that back as `query` rather than the words, which \
              may match more than one thing. A match outside the window is still listed, as \
-             `out of view`; the element tools scroll to it, a coordinate cannot reach it.",
+             `out of view`; the element tools scroll to it, a coordinate cannot reach it. A \
+             match also carries what the page declares it to be and what state it is in — a \
+             `collapsed` menu or a `disabled` control will not answer a click.",
             with_box(
                 json!({
                     "query": { "type": "string" },
@@ -871,7 +873,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                     .iter()
                     .map(|one| {
                         format!(
-                            "{} {}{}{} {} ({}x{}){}{}",
+                            "{} {}{}{}{} {} ({}x{}){}{}",
                             one.tag,
                             one.kind.as_deref().unwrap_or(""),
                             match one.text.is_empty() {
@@ -884,15 +886,22 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                                 Some(label) if label != one.text => format!(" [{label}]"),
                                 _ => String::new(),
                             },
+                            match one.role.as_deref() {
+                                Some(role) => format!(" role={role}"),
+                                None => String::new(),
+                            },
                             match one.at {
                                 Some(at) => format!("at {},{}", at.x, at.y),
                                 None => "out of view".to_string(),
                             },
                             one.width,
                             one.height,
-                            match one.enabled {
-                                true => "",
-                                false => "  disabled",
+                            // The states say it where there are any, so a
+                            // bare `disabled` would be said twice.
+                            match (one.enabled, one.states.is_empty()) {
+                                (false, true) => "  disabled".to_string(),
+                                (_, false) => format!("  [{}]", one.states.join(" ")),
+                                _ => String::new(),
                             },
                             // What to act by. Words can match more than one
                             // thing; this matched exactly one when it was read.

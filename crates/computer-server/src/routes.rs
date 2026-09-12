@@ -1626,6 +1626,8 @@ fn element_out(element: computer::Element) -> Element {
         text: element.text,
         tag: element.tag,
         kind: element.kind,
+        role: element.role,
+        states: element.states,
         selector: element.selector,
         label: element.label,
         visible: element.visible,
