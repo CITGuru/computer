@@ -208,6 +208,21 @@ impl Client {
         .await
     }
 
+    /// Act on the widget a query names, in a native window.
+    ///
+    /// The accessibility tree rather than the page: a file dialog, a settings
+    /// panel or an installer has no DevTools behind it, and a coordinate from a
+    /// screenshot is the only other way in.
+    pub async fn on_node(&self, id: &str, screen: u32, what: &OnNode) -> Result<NodeResult> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/screens/{screen}/desktop/node"),
+            Some(serde_json::to_value(what).map_err(|error| Error::Transport(error.to_string()))?),
+            &[],
+        )
+        .await
+    }
+
     /// Every page this box has open, and which of them is on screen.
     pub async fn tabs(&self, id: &str) -> Result<Vec<Tab>> {
         self.send(

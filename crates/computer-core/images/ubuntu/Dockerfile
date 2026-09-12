@@ -84,6 +84,17 @@ ENV DISPLAY=:1
 ENV HOME=/home/computer
 ENV COMPUTER_SCREEN_WIDTH=1280
 ENV COMPUTER_SCREEN_HEIGHT=800
+
+# Where the accessibility bus is, if the box has one. Fixed and set here rather
+# than chosen at boot, because this is the only environment a later `docker
+# exec` inherits — and an application must have found the bus before it drew
+# its first window to be in the tree at all.
+#
+# Set whether or not Feature::Accessibility installed a bus: a program handed an
+# address nothing answers on carries on without a word, and GTK needs no module
+# variable besides.
+ENV DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/computer/a11y-bus.socket
+ENV QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 WORKDIR /home/computer
 
 COPY input-guard.sh /usr/local/bin/xdotool

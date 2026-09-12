@@ -33,6 +33,10 @@ pub const TERMINAL_DESKTOP: &str = include_str!("../images/desktop/terminal.desk
 pub const BROWSER_DESKTOP: &str = include_str!("../images/desktop/browser.desktop");
 pub const INPUT_GUARD: &str = include_str!("../images/desktop/input-guard.sh");
 
+/// The accessibility reader, in both images: AT-SPI sits at the toolkit, so
+/// the tree reads the same whether X11 or Wayland drew the window.
+pub const A11Y_PY: &str = include_str!("../images/desktop/a11y.py");
+
 pub const WAYLAND_DOCKERFILE: &str = include_str!("../images/wayland/Dockerfile");
 pub const WAYLAND_START_SH: &str = include_str!("../images/wayland/start.sh");
 pub const WAYLAND_SCREEN_SH: &str = include_str!("../images/wayland/screen.sh");
@@ -79,6 +83,7 @@ pub static DESKTOP: Bundle = Bundle {
         ("terminal.desktop", TERMINAL_DESKTOP),
         ("browser.desktop", BROWSER_DESKTOP),
         ("input-guard.sh", INPUT_GUARD),
+        ("a11y.py", A11Y_PY),
     ],
 };
 
@@ -94,6 +99,7 @@ pub static WAYLAND: Bundle = Bundle {
         ("sway.config", SWAY_CONFIG),
         ("pointer.c", POINTER_C),
         ("wlr-virtual-pointer-unstable-v1.xml", VIRTUAL_POINTER_XML),
+        ("a11y.py", A11Y_PY),
     ],
 };
 
@@ -444,6 +450,17 @@ impl Extras {
     /// image, and seventy resident while it runs.
     pub fn x11_apps() -> Self {
         Self::with(["xwayland"])
+    }
+
+    /// AT-SPI, so `computer-a11y` has a tree to read.
+    ///
+    /// Three packages named and nine installed, for seven and a half
+    /// megabytes: chromium has already paid for the GTK and glib half of it.
+    /// `libatk-adaptor` is the load-bearing one — without the bridge a GTK
+    /// application publishes nothing, and the tree comes back empty rather
+    /// than absent.
+    pub fn accessibility() -> Self {
+        Self::with(["at-spi2-core", "libatk-adaptor", "python3-pyatspi"])
     }
 
     pub fn everything() -> Self {

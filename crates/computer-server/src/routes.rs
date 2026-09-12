@@ -84,6 +84,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/screens/{screen}/frame", get(frame))
         .route("/v1/boxes/{id}/screens/{screen}/cursor", get(cursor))
         .route(
+            "/v1/boxes/{id}/screens/{screen}/desktop/node",
+            post(on_node),
+        )
+        .route(
             "/v1/boxes/{id}/screens/{screen}/clipboard",
             get(get_clipboard).put(set_clipboard),
         )
@@ -464,6 +468,9 @@ async fn run(
             // actions, and pausing inside each would pay it per action.
             apply(page, what.clone(), Duration::ZERO).await?;
         }
+        Action::OnNode { what } => {
+            on_tree(desktop, what.clone()).await?;
+        }
         Action::Launch { app, args } => {
             let screen =
                 screen.ok_or_else(|| ApiError::bad_request("this screen cannot start an app"))?;
@@ -645,6 +652,58 @@ async fn recorded(
         unchanged: false,
         png_base64: Some(BASE64.encode(&png)),
     }
+}
+
+/// Act on the widget a query names, in whatever native window published it.
+///
+/// The tree rather than the pixels: a native window has no DevTools behind it,
+/// so the alternative is a coordinate worked out from a screenshot and a click
+/// that lands on whatever has since moved there.
+async fn on_node(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+    ApiJson(body): ApiJson<OnNode>,
+) -> ApiResult<Json<NodeResult>> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+
+    Ok(Json(on_tree(target.as_desktop(), body).await?))
+}
+
+/// One tree operation against a desktop already in hand.
+///
+/// Shared with the action batch, so filling a native form is one round trip
+/// and the screen lock is held across the whole of it.
+async fn on_tree(desktop: &dyn computer::Desktop, what: OnNode) -> ApiResult<NodeResult> {
+    Ok(match what {
+        OnNode::Tree { app, depth } => NodeResult {
+            nodes: desktop.nodes(app.as_deref(), depth).await?,
+            ..NodeResult::default()
+        },
+        OnNode::Find { node, limit } => NodeResult {
+            nodes: desktop
+                .find_nodes(&node, limit.map(|limit| limit.clamp(1, FOUND)))
+                .await?,
+            ..NodeResult::default()
+        },
+        OnNode::Focus { node } => NodeResult {
+            node: Some(desktop.focus_node(&node).await?),
+            ..NodeResult::default()
+        },
+        OnNode::Invoke { node, action } => {
+            let invoked = desktop.invoke_node(&node, action.as_deref()).await?;
+            NodeResult {
+                // Which action ran, since the caller may not have named one.
+                action: invoked.actions.first().cloned(),
+                node: Some(invoked),
+                ..NodeResult::default()
+            }
+        }
+        OnNode::Set { node, value } => NodeResult {
+            node: Some(desktop.set_node(&node, &value).await?),
+            ..NodeResult::default()
+        },
+    })
 }
 
 async fn cursor(

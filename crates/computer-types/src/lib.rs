@@ -80,6 +80,15 @@ pub enum Feature {
     /// Opt-in: about seventy megabytes resident, paid whether or not an X11
     /// program is ever started.
     X11Apps,
+    /// The accessibility tree, so a native window is reachable by the names of
+    /// its widgets rather than by its pixels. The browser is unaffected: a page
+    /// is read through DevTools, which answers better and costs nothing here.
+    ///
+    /// Opt-in: about twenty megabytes resident across four processes, paid
+    /// whether or not anything reads a tree. It cannot be turned on for a box
+    /// that is already running — an application joins the tree only if it
+    /// started after the bus did.
+    Accessibility,
 }
 
 /// One named program. Every field is optional, so a caller can name an app
@@ -281,6 +290,74 @@ pub enum Button {
     Left,
     Right,
     Middle,
+}
+
+/// One widget, as the toolkit that drew it describes it.
+///
+/// Not a page element: a web page is read through DevTools, which knows more
+/// about it than any accessibility tree does. This is how a *native* window is
+/// reached — a file dialog, a settings panel, an installer — where the only
+/// alternative is a coordinate worked out from a screenshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Node {
+    /// Addresses it until the tree next changes, which is all an id is for:
+    /// telling two matches apart in one answer, not holding on to one between
+    /// calls. Every call that acts takes a query instead.
+    pub id: String,
+    /// The application that published it.
+    pub app: String,
+    /// The toolkit's own word: `push button`, `text`, `label`, `menu item`.
+    pub role: String,
+    /// Often empty on a field, whose words sit in the label beside it. See
+    /// `labelled`.
+    pub name: String,
+    /// What invoking it would run, in the toolkit's own spelling: GTK writes
+    /// `click` where Qt writes `Press`. Read these rather than assuming one.
+    #[serde(default)]
+    pub actions: Vec<String>,
+    #[serde(default)]
+    pub states: Vec<String>,
+    /// The words of the label that names it, where the match came through one.
+    /// A GTK entry's own name is empty and "Street" is a separate label beside
+    /// it, so this is how a caller can tell which field it was handed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labelled: Option<String>,
+    /// Its middle, in screen coordinates — the same space a click takes, so a
+    /// node found here can be pressed by the pointer instead of invoked.
+    ///
+    /// Absent where the widget has never been drawn, which is normal for a
+    /// menu item in a menu nobody has opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<Point>,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+}
+
+/// How a call names the node it means.
+///
+/// A query rather than an id, because an id dies with the widget behind it: a
+/// caller that reads the tree and then acts on what it read is acting on
+/// whatever took that place. Finding and acting are one call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeQuery {
+    /// Matched against a widget's name and against the words of any label
+    /// beside it, best match first.
+    pub query: String,
+    /// One of the toolkit's role words, where the query alone is ambiguous:
+    /// "Street" names both a label and the field it labels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    /// Match the whole of the words rather than any part of them.
+    #[serde(default)]
+    pub exact: bool,
+    /// One application's tree rather than every application's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
 }
 
 /// Copy and paste uses the clipboard. Dragging the mouse over text fills the

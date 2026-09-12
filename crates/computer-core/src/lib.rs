@@ -95,8 +95,8 @@ pub use cdp::{
 };
 pub use desktop::{
     Browser, BrowserEndpoint, Button, Clipboard, Control, Delta, Desktop, DesktopFactory,
-    DesktopNeed, DesktopPresence, DesktopSupport, Display, DisplayServer, Held, Of, Point, Rect,
-    Selection, Shot, Viewer, ViewerKind, Viewers,
+    DesktopNeed, DesktopPresence, DesktopSupport, Display, DisplayServer, Held, Node, NodeQuery,
+    Of, Point, Rect, Selection, Shot, Viewer, ViewerKind, Viewers,
 };
 pub use error::{Error, Result};
 
@@ -305,6 +305,17 @@ impl Builder {
     /// cannot draw. About 100 MB, which is why they are opt-in.
     pub fn wide_fonts(self) -> Self {
         let wanted = bundle::Extras::wide_fonts();
+        self.packages(wanted.packages)
+    }
+
+    /// The accessibility tree, so a native window can be driven by the names of
+    /// its widgets. See [`Screen::find_nodes`].
+    ///
+    /// Nothing can turn this on later: an application publishes to the tree
+    /// only if the bus was already there when it drew its first window, and by
+    /// the time a box is up its browser is one of those applications.
+    pub fn accessibility(self) -> Self {
+        let wanted = bundle::Extras::accessibility();
         self.packages(wanted.packages)
     }
 
@@ -1491,6 +1502,38 @@ impl Computer {
     pub async fn cursor(&self) -> Result<Point> {
         self.primary.cursor().await
     }
+
+    /// What the accessibility tree says is on the screen.
+    ///
+    /// A native window only. A page is read through [`Page`], which knows
+    /// more about one than any tree does.
+    pub async fn nodes(&self, app: Option<&str>, depth: Option<u32>) -> Result<Vec<Node>> {
+        self.primary.nodes(app, depth).await
+    }
+
+    /// Widgets matching a query, best first.
+    ///
+    /// Matches a widget's own name and the words of any label beside it: a form
+    /// field usually has no name of its own, and the word a caller knows it by
+    /// is in the label next to it.
+    pub async fn find_nodes(&self, query: &NodeQuery, limit: Option<usize>) -> Result<Vec<Node>> {
+        self.primary.find_nodes(query, limit).await
+    }
+
+    pub async fn focus_node(&self, query: &NodeQuery) -> Result<Node> {
+        self.primary.focus_node(query).await
+    }
+
+    /// Run a widget's own action, which is not a click: no pointer moves, and
+    /// an application watching the pointer sees nothing. [`Node::at`] carries
+    /// the rectangle where a real click is wanted instead.
+    pub async fn invoke_node(&self, query: &NodeQuery, action: Option<&str>) -> Result<Node> {
+        self.primary.invoke_node(query, action).await
+    }
+
+    pub async fn set_node(&self, query: &NodeQuery, value: &str) -> Result<Node> {
+        self.primary.set_node(query, value).await
+    }
 }
 
 impl std::fmt::Debug for Computer {
@@ -2202,6 +2245,37 @@ impl Screen {
 
     pub async fn cursor(&self) -> Result<Point> {
         self.driver.cursor().await
+    }
+
+    /// What the accessibility tree says is on the screen.
+    ///
+    /// Every application on this screen, or one named by `app`.
+    pub async fn nodes(&self, app: Option<&str>, depth: Option<u32>) -> Result<Vec<Node>> {
+        self.driver.nodes(app, depth).await
+    }
+
+    /// Widgets matching a query, best first.
+    ///
+    /// Matches a widget's own name and the words of any label beside it: a form
+    /// field usually has no name of its own, and the word a caller knows it by
+    /// is in the label next to it.
+    pub async fn find_nodes(&self, query: &NodeQuery, limit: Option<usize>) -> Result<Vec<Node>> {
+        self.driver.find_nodes(query, limit).await
+    }
+
+    pub async fn focus_node(&self, query: &NodeQuery) -> Result<Node> {
+        self.driver.focus_node(query).await
+    }
+
+    /// Run a widget's own action, which is not a click: no pointer moves, and
+    /// an application watching the pointer sees nothing. [`Node::at`] carries
+    /// the rectangle where a real click is wanted instead.
+    pub async fn invoke_node(&self, query: &NodeQuery, action: Option<&str>) -> Result<Node> {
+        self.driver.invoke_node(query, action).await
+    }
+
+    pub async fn set_node(&self, query: &NodeQuery, value: &str) -> Result<Node> {
+        self.driver.set_node(query, value).await
     }
 }
 

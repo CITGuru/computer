@@ -8,6 +8,7 @@
 //! where synthetic input is a compositor privilege rather than anything a
 //! client may do.
 
+pub mod a11y;
 pub mod wayland;
 pub mod x11;
 

@@ -13,6 +13,9 @@ pub const USAGE: &str = "\
 computer — a desktop in a box
 
   up [--size WxH] [--url URL] [--ttl MINUTES] [--wide-fonts]
+     [--accessibility]         --accessibility reads native windows by widget
+                              name, for the widget command below. it cannot be
+                              turned on afterwards
                               open a box and print where to watch it
   ls                          boxes that are running
   shot <box> [file.png] [--window ID | --at X,Y --size WxH] [--scale PERCENT]
@@ -30,6 +33,16 @@ computer — a desktop in a box
                               raise a window, or ask it to go away
   window <box> <id> move <x> <y> | size <w> <h> | max | min | restore
                               move a window, resize it, or change its state
+  widget <box> find <query> [--role R] [--exact] [--app NAME] [--limit N]
+  widget <box> tree [--app NAME] [--depth N]
+  widget <box> press <query> [--action NAME]
+  widget <box> fill <query> <value>
+  widget <box> focus <query>
+                              drive a native window by the names of its widgets
+                              rather than by its pixels. a query matches the
+                              label beside a field as well as the widget's own
+                              name, and press sends no pointer event at all.
+                              needs a box built with accessibility
   type <box> <text>           type into the focused window
   key <box> <chord>           send a chord, such as ctrl+l or cmd+enter
   click <box> <x> <y> [button] [--held shift,ctrl]
@@ -155,6 +168,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "apps" => remote::apps(client).await,
         "windows" => remote::windows(client, args).await,
         "window" => remote::window(client, args).await,
+        "widget" => remote::widget(client, args).await,
         "type" => remote::type_text(client, args).await,
         "key" => remote::key(client, args).await,
         "click" => remote::click(client, args).await,
@@ -178,7 +192,7 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "ls" => local::list().await,
         "shot" => local::shot(args).await,
         "open" => local::open(args).await,
-        "app" | "apps" | "windows" | "window" => Err(computer::Error::invalid(format!(
+        "app" | "apps" | "windows" | "window" | "widget" => Err(computer::Error::invalid(format!(
             "`{command}` needs a server; drop --local"
         ))),
         "type" => local::type_text(args).await,

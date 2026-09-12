@@ -228,6 +228,50 @@ Groups do not create screens. Many group pages can run through CDP at the same t
 
 This API wraps CDP browser contexts, not Chrome's visual tab groups. Visual tab groups are part of the extension-only `chrome.tabGroups` API.
 
+## Drive a native window by widget name
+
+A web page has Chromium behind it, so `find` and `click_element` know what is on it. A file dialog, a settings panel or an installer has nothing but pixels, and a coordinate worked out from a screenshot is stale the moment the window moves. The accessibility tree is what the toolkit itself publishes about its widgets: their roles, their names, and what pressing one would do.
+
+Here's how to use the accessibility feature:
+
+```rust
+let computer = Computer::builder().accessibility().launch().await?;
+let screen = computer.primary();
+
+let street = NodeQuery { query: "Street".to_string(), ..NodeQuery::default() };
+
+for node in screen.find_nodes(&street, None).await? {
+    println!("{} {:?} at {:?}", node.role, node.name, node.at);
+}
+
+screen.set_node(&street, "12 Bishop Street").await?;
+screen.invoke_node(&NodeQuery { query: "OK".to_string(), ..NodeQuery::default() }, None).await?;
+```
+
+`find_nodes` answers best match first. `nodes()` reads a whole tree, `focus_node` gives one the keyboard, `set_node` assigns a value, and `invoke_node` runs the widget's own action.
+
+A query matches the words *beside* a widget as well as its own name. A GTK entry has no name of its own — "Street" is a separate label next to it — so searching names alone would find every button and no field. Where an application publishes no label relation, and most publish none at all, the pairing is geometric: the field to the right of the label, or the one below it. `Node::labelled` says when a match arrived that way, so you can tell which field you were handed.
+
+`invoke_node` is not a click. No pointer moves, which is why it reaches a widget that is covered or scrolled out of view, and why an application watching the pointer sees nothing of it. Each node carries `at`, so a real click is still one call away when the difference matters:
+
+```rust
+let found = screen.find_nodes(&street, Some(1)).await?;
+if let Some(at) = found.first().and_then(|node| node.at) {
+    screen.click(at, Button::Left).await?;
+}
+```
+
+The action name belongs to the toolkit, not to us: GTK spells it `click` where Qt spells it `Press`. `invoke_node` runs the first action unless you name one, and every node lists what it offers.
+
+From the command line:
+
+```bash
+computer up --accessibility
+computer widget <box> find "Street" --role text
+computer widget <box> fill "Street" "12 Bishop Street"
+computer widget <box> press "OK"
+```
+
 ## Configure a desktop
 
 Use the builder when you need settings other than the defaults:
@@ -286,6 +330,8 @@ Computer::builder()
 ```
 
 `Extras::audio()` adds a sound card, `Extras::video()` adds a recorder, and `Extras::everything()` adds all three sets.
+
+`Extras::accessibility()` installs AT-SPI, so a native window can be driven by the names of its widgets rather than by its pixels — `Computer::builder().accessibility()` is the same thing. See [Drive a native window by widget name](#drive-a-native-window-by-widget-name).
 
 `Extras::x11_apps()` puts Xwayland in the Wayland image, so an X11 program can run on a compositor. Opt-in, because it is a trade: about seventy megabytes resident, paid by every box that carries it whether or not an X11 program is ever started. Without it that image has no X server at all, and an X11 program fails to open a display rather than failing to draw.
 
@@ -930,6 +976,7 @@ A control port exists only while somebody has been handed the screen, and it clo
 - [ ] MacOS Desktop Box and Quartz Display Server
 - [x] Computer Rest API & MCP - Manage instances of computer boxes
 - [x] Custom Image Builder - ImageRecipe
+- [x] Accessibility Tree - drive native windows by widget name, not by pixels
 
 ## License
 

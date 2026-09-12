@@ -129,6 +129,38 @@ screen. A person opening a link expects a new tab, but a program doing it fifty
 times leaves fifty behind and a browser holding them all gets slower at
 everything.
 
+## Drive a native window
+
+A page has DevTools behind it. A file dialog, a settings panel or an installer
+has nothing, and a coordinate worked out from a screenshot is the only other way
+in. The accessibility tree is what the toolkit publishes about its own widgets.
+
+```bash
+curl -s localhost:8080/v1/boxes/$BOX/screens/0/desktop/node \
+  -H 'content-type: application/json' \
+  -d '{ "op": "find", "node": { "query": "Street" } }'
+```
+
+`find` answers with each match's role, name, actions and rectangle, best first.
+`tree` reads everything an application publishes, `focus` gives one the
+keyboard, `invoke` runs a widget's own action and `set` assigns a value. These
+are also actions, so a native form is one batch: `{ "type": "on_node", "what":
+{...} }`.
+
+A query matches the words beside a widget as well as its own name. A GTK entry
+has no name — "Street" is a separate label next to it — so a search of names
+alone would find every button and no field.
+
+`invoke` is not a click. No pointer moves, so it reaches a widget that is
+covered or scrolled out of view, and an application watching the pointer sees
+nothing of it. Each match carries `at`, so a real click is still one call away.
+The action name is the toolkit's own: GTK writes `click` where Qt writes
+`Press`, and `invoke` runs the first unless told otherwise.
+
+Only a box built with `Feature::Accessibility` has a tree. It cannot be turned
+on afterwards: an application joins the tree only if the bus was there before it
+drew its first window.
+
 ## Open an app
 
 An app is named, not commanded: a caller who could post an argv to a driving

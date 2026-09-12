@@ -13,7 +13,7 @@ use crate::error::{Error, Result};
 use crate::machine::MachineHost;
 use crate::screens::ControlGate;
 use async_trait::async_trait;
-pub use computer_types::{Button, Held, Point, Rect, Selection};
+pub use computer_types::{Button, Held, Node, NodeQuery, Point, Rect, Selection};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -410,6 +410,76 @@ pub trait Desktop: Send + Sync {
 
         Err(Error::Unsupported {
             gaps: vec!["waiting"],
+        })
+    }
+
+    /// What the accessibility tree says is on the screen, application by
+    /// application.
+    ///
+    /// A native toolkit publishes this about its own widgets: their roles,
+    /// their names, and what pressing one would do. A web page is read through
+    /// [`Page`](crate::Page) instead, which knows more about a page than any
+    /// tree does.
+    ///
+    /// `depth` bounds the read. Every node is a round trip to the application,
+    /// so a whole tree is expensive and a window's worth is usually the
+    /// question being asked.
+    async fn nodes(&self, app: Option<&str>, depth: Option<u32>) -> Result<Vec<Node>> {
+        let _ = (app, depth);
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    /// Nodes matching a query, best first.
+    ///
+    /// Matches a widget's own name and the words of any label beside it: a GTK
+    /// entry's name is empty, and "Street" is a label sitting next to it.
+    async fn find_nodes(&self, query: &NodeQuery, limit: Option<usize>) -> Result<Vec<Node>> {
+        let _ = (query, limit);
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    /// Give one the keyboard, without a click.
+    async fn focus_node(&self, query: &NodeQuery) -> Result<Node> {
+        let _ = query;
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    /// Run a widget's own action, which is not a click.
+    ///
+    /// No pointer moves and no pointer event is sent, so this reaches a widget
+    /// that is covered or scrolled out of view — and an application watching
+    /// the pointer sees nothing. Where that matters, [`Node::at`] carries the
+    /// rectangle and [`Desktop::click`] is still there.
+    ///
+    /// The first action unless one is named: GTK spells it `click` and Qt
+    /// spells it `Press`.
+    async fn invoke_node(&self, query: &NodeQuery, action: Option<&str>) -> Result<Node> {
+        let _ = (query, action);
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    /// Put a value in a widget that accepts one.
+    ///
+    /// An assignment rather than typing, so a field that filters as you type
+    /// sees one change and not a keystroke per character. Where the difference
+    /// matters, focus it and type.
+    async fn set_node(&self, query: &NodeQuery, value: &str) -> Result<Node> {
+        let _ = (query, value);
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
         })
     }
 

@@ -2,10 +2,10 @@
 
 use crate::{USAGE, flag, framing, positional, present, wheel};
 use computer_api::{
-    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, OpenIn, Rect, Shot, Window,
+    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, OnNode, OpenIn, Rect, Shot, Window,
 };
 use computer_client::{Client, frame_png};
-use computer_types::{Button, Desktop, Feature, Placement, Point, Selection, Spec};
+use computer_types::{Button, Desktop, Feature, NodeQuery, Placement, Point, Selection, Spec};
 use std::time::Duration;
 
 type Done = Result<(), String>;
@@ -27,6 +27,9 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
     }
     if present(args, "--wide-fonts") {
         desktop.features.push(Feature::WideFonts);
+    }
+    if present(args, "--accessibility") {
+        desktop.features.push(Feature::Accessibility);
     }
 
     let mut placement = Placement::default();
@@ -186,6 +189,98 @@ pub async fn windows(client: &Client, args: &[String]) -> Done {
     for window in client.windows(id, 0).await.map_err(|e| e.to_string())? {
         println!("{}", shown(&window));
     }
+    Ok(())
+}
+
+fn counted<T: std::str::FromStr>(
+    args: &[String],
+    name: &str,
+    what: &str,
+) -> Result<Option<T>, String> {
+    match flag(args, name) {
+        Some(given) => given
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("{name} takes {what}")),
+        None => Ok(None),
+    }
+}
+
+/// One line per widget, for a person reading a terminal.
+fn shown_node(node: &computer_api::Node) -> String {
+    let named = match (&node.labelled, node.name.is_empty()) {
+        (Some(label), _) => format!("labelled {label:?}"),
+        (None, false) => format!("{:?}", node.name),
+        (None, true) => "unnamed".to_string(),
+    };
+    let where_ = match node.at {
+        Some(at) => format!("{},{} {}x{}", at.x, at.y, node.width, node.height),
+        None => "not drawn".to_string(),
+    };
+    let does = match node.actions.is_empty() {
+        true => String::new(),
+        false => format!("  {}", node.actions.join("/")),
+    };
+
+    format!("{:14} {named:24} {where_:18} {}{does}", node.role, node.app)
+}
+
+pub async fn widget(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "find, tree, press, fill or focus").map_err(|e| e.to_string())?;
+
+    let query = |at: usize| -> Result<NodeQuery, String> {
+        Ok(NodeQuery {
+            query: positional(args, at, "the words on the widget")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+            role: flag(args, "--role").map(str::to_string),
+            exact: present(args, "--exact"),
+            app: flag(args, "--app").map(str::to_string),
+        })
+    };
+
+    let what = match op {
+        "find" => OnNode::Find {
+            node: query(2)?,
+            limit: counted(args, "--limit", "a number of matches")?,
+        },
+        "tree" => OnNode::Tree {
+            app: flag(args, "--app").map(str::to_string),
+            depth: counted(args, "--depth", "a number of levels")?,
+        },
+        "press" => OnNode::Invoke {
+            node: query(2)?,
+            action: flag(args, "--action").map(str::to_string),
+        },
+        "fill" => OnNode::Set {
+            node: query(2)?,
+            value: positional(args, 3, "a value")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+        },
+        "focus" => OnNode::Focus { node: query(2)? },
+        other => return Err(format!("no such op: {other}")),
+    };
+
+    let result = client
+        .on_node(id, 0, &what)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for node in &result.nodes {
+        println!("{}", shown_node(node));
+    }
+    if result.nodes.is_empty() && result.node.is_none() {
+        println!("nothing in the tree matched");
+    }
+    if let Some(node) = &result.node {
+        match &result.action {
+            Some(action) => println!("{action}: {}", shown_node(node)),
+            None => println!("{}", shown_node(node)),
+        }
+    }
+
     Ok(())
 }
 
@@ -604,6 +699,16 @@ fn op_of(what: &computer_api::OnElement) -> &'static str {
     }
 }
 
+fn node_op_of(what: &OnNode) -> &'static str {
+    match what {
+        OnNode::Tree { .. } => "tree",
+        OnNode::Find { .. } => "find",
+        OnNode::Focus { .. } => "focus",
+        OnNode::Invoke { .. } => "invoke",
+        OnNode::Set { .. } => "set",
+    }
+}
+
 fn name_of(action: &Action) -> String {
     match action {
         Action::Move { to } => format!("move to {},{}", to.x, to.y),
@@ -620,6 +725,7 @@ fn name_of(action: &Action) -> String {
         Action::Scroll { dy, .. } => format!("scroll {dy}"),
         Action::OpenUrl { url, .. } => format!("open {url}"),
         Action::OnPage { what } => format!("page {}", op_of(what)),
+        Action::OnNode { what } => format!("widget {}", node_op_of(what)),
         Action::Launch { app, args } => match args.is_empty() {
             true => format!("open {app}"),
             false => format!("open {app} {}", args.join(" ")),

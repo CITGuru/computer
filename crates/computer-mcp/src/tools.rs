@@ -8,8 +8,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Frame, Held, OnElement, OpenIn, Reading,
-    Rect, ScrollTo, Shot, Want, Where,
+    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Frame, Held, NodeQuery, OnElement, OnNode,
+    OpenIn, Reading, Rect, ScrollTo, Shot, Want, Where,
 };
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
@@ -86,6 +86,15 @@ pub fn catalogue() -> Value {
                         "description": "Install Chinese, Japanese, Korean and emoji fonts. \
                                         Without them those pages render as empty boxes and \
                                         the screenshot still looks like a working page."
+                    },
+                    "accessibility": {
+                        "type": "boolean",
+                        "description": "Let the `widget` tool read native windows by the \
+                                        names of their widgets rather than by their pixels. \
+                                        Ask for it here if the work involves anything that \
+                                        is not a web page — a file dialog, a settings \
+                                        panel, an installer. A running box cannot be given \
+                                        it afterwards."
                     }
                 }
             })
@@ -462,6 +471,55 @@ pub fn catalogue() -> Value {
             )
         ),
         tool(
+            "widget",
+            "Work with a native window by the names of its widgets rather than by its pixels: \
+             a file dialog, a settings panel, an installer. Use this for anything that is not \
+             a web page — a page has `click_element` and the rest, which know more about it \
+             than any tree does. `op` is one of: `find` for what matches a query, with each \
+             match's role, name and rectangle; `tree` for everything an application \
+             publishes; `press` to run a widget's own action; `fill` to put a value in a \
+             field; `focus` to give one the keyboard. \
+             `press` sends no pointer event at all, so it reaches a widget that is covered \
+             or scrolled out of view — and an application watching the pointer sees nothing. \
+             Where that matters, `find` answers with a rectangle and `click` is still there. \
+             A form field usually has no name of its own, so a query is matched against the \
+             label beside it too: ask for `Street` and you get the box next to the word.",
+            with_frame(
+                json!({
+                    "op": {
+                        "type": "string",
+                        "enum": ["find", "tree", "press", "fill", "focus"]
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "The words on it, or beside it. Needed by find, \
+                                        press, fill and focus."
+                    },
+                    "value": { "type": "string", "description": "For fill." },
+                    "role": {
+                        "type": "string",
+                        "description": "The toolkit's own word — `push button`, `text`, \
+                                        `label` — where the query alone is ambiguous. \
+                                        `find` reports the role of every match."
+                    },
+                    "exact": {
+                        "type": "boolean",
+                        "description": "Match the whole of the words rather than any part."
+                    },
+                    "app": { "type": "string", "description": "One application's widgets only." },
+                    "action": {
+                        "type": "string",
+                        "description": "For press, where a widget offers more than one. The \
+                                        first is used by default, and `find` lists them: GTK \
+                                        spells it `click` where Qt spells it `Press`."
+                    },
+                    "depth": { "type": "integer", "description": "For tree. Defaults to a window's worth." },
+                    "limit": { "type": "integer" }
+                }),
+                &["op"]
+            )
+        ),
+        tool(
             "window",
             "Work with the windows on the desktop rather than with the pixels they drew. \
              `op` is one of: `list` for what is open, with the id, class, position and size \
@@ -500,6 +558,13 @@ pub fn catalogue() -> Value {
                 }),
                 &["op"]
             )
+        ),
+        tool(
+            "cursor",
+            "Where the pointer is. A screenshot does not draw it, and a click given no point \
+             of its own presses wherever it already is — so this is the only way to know what \
+             such a click would hit. Every move, click, drag and scroll answers with it too.",
+            box_only(),
         ),
         tool(
             "run_command",
@@ -733,6 +798,12 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 other => Err(format!("no such op: {other}")),
             }
         }
+        "cursor" => {
+            let id = text(arguments, "box_id")?;
+            let at = client.cursor(&id, 0).await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!("the pointer is at {},{}", at.x, at.y)))
+        }
         "read_page" => {
             let id = text(arguments, "box_id")?;
             let limit = arguments
@@ -929,6 +1000,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             element(client, arguments, what, "done").await
         }
         "window" => window(client, arguments).await,
+        "widget" => widget(client, arguments).await,
         "list_apps" => {
             let names = client.catalog().await.map_err(|e| e.to_string())?;
 
@@ -1074,11 +1146,13 @@ async fn launch(client: &Client, arguments: &Value) -> Result<Answer, String> {
                 .get("height")
                 .and_then(Value::as_u64)
                 .map(|n| n as u32),
-            features: if flag(arguments, "wide_fonts") {
-                vec![Feature::WideFonts]
-            } else {
-                Vec::new()
-            },
+            features: [
+                flag(arguments, "wide_fonts").then_some(Feature::WideFonts),
+                flag(arguments, "accessibility").then_some(Feature::Accessibility),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
             ..Desktop::default()
         },
         ..Spec::default()
@@ -1157,6 +1231,114 @@ async fn run(client: &Client, arguments: &Value) -> Result<Answer, String> {
 
 /// Do the thing, let the screen settle, and hand back what it looks like now.
 /// One element operation, and a screenshot of what it did.
+/// One word per node, since an agent reads these rather than a JSON dump.
+fn said_node(node: &computer_api::Node) -> String {
+    let where_ = match node.at {
+        Some(at) => format!(" at {},{} {}x{}", at.x, at.y, node.width, node.height),
+        None => " (not drawn)".to_string(),
+    };
+    let named = match (&node.labelled, node.name.is_empty()) {
+        (Some(label), _) => format!("labelled {label:?}"),
+        (None, false) => format!("{:?}", node.name),
+        (None, true) => "unnamed".to_string(),
+    };
+    let does = match node.actions.is_empty() {
+        true => ", nothing to press".to_string(),
+        false => format!(", press runs {}", node.actions.join(" or ")),
+    };
+    let holds = match &node.value {
+        Some(value) if !value.is_empty() => format!(", holding {value:?}"),
+        _ => String::new(),
+    };
+
+    format!("{} {named}{where_}{does}{holds} [{}]", node.role, node.app)
+}
+
+async fn widget(client: &Client, arguments: &Value) -> Result<Answer, String> {
+    let id = text(arguments, "box_id")?;
+    let fail = |error: computer_client::Error| error.to_string();
+
+    let query = || -> Result<NodeQuery, String> {
+        Ok(NodeQuery {
+            query: text(arguments, "query")?,
+            role: arguments
+                .get("role")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            exact: flag(arguments, "exact"),
+            app: arguments
+                .get("app")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        })
+    };
+
+    let what = match text(arguments, "op")?.as_str() {
+        "find" => OnNode::Find {
+            node: query()?,
+            limit: arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|limit| limit as usize),
+        },
+        "tree" => OnNode::Tree {
+            app: arguments
+                .get("app")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            depth: arguments
+                .get("depth")
+                .and_then(Value::as_u64)
+                .map(|depth| depth as u32),
+        },
+        "press" => OnNode::Invoke {
+            node: query()?,
+            action: arguments
+                .get("action")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        },
+        "fill" => OnNode::Set {
+            node: query()?,
+            value: text(arguments, "value")?,
+        },
+        "focus" => OnNode::Focus { node: query()? },
+        other => return Err(format!("no such op: {other}")),
+    };
+
+    let reading = matches!(what, OnNode::Find { .. } | OnNode::Tree { .. });
+    let result = client.on_node(&id, 0, &what).await.map_err(fail)?;
+
+    if reading {
+        return Ok(Answer::Text(match result.nodes.is_empty() {
+            true => "nothing in the tree matched".to_string(),
+            false => result
+                .nodes
+                .iter()
+                .map(said_node)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }));
+    }
+
+    // A frame after acting, the same as every other tool that presses
+    // something: the caller's next move depends on what it did.
+    let did = match (&result.node, &result.action) {
+        (Some(node), Some(action)) => format!("{action} on {}", said_node(node)),
+        (Some(node), None) => said_node(node),
+        _ => "done".to_string(),
+    };
+
+    shot(
+        client,
+        &id,
+        &did,
+        have(arguments).as_deref(),
+        shots(arguments)?,
+    )
+    .await
+}
+
 async fn window(client: &Client, arguments: &Value) -> Result<Answer, String> {
     let id = text(arguments, "box_id")?;
     let named = |name| text(arguments, name);
@@ -1380,9 +1562,12 @@ async fn act(
             &ActionBatch {
                 actions: vec![action],
                 settle_ms: Some(settle_ms),
+                // Cursor either way. A screenshot does not draw the pointer,
+                // and a click with no point of its own goes wherever it is, so
+                // an agent that cannot read it is aiming blind.
                 want: match how.wanted() {
-                    true => vec![Want::Frame],
-                    false => Vec::new(),
+                    true => vec![Want::Frame, Want::Cursor],
+                    false => vec![Want::Cursor],
                 },
                 have_frame: have(arguments),
             },
@@ -1410,9 +1595,14 @@ async fn act(
         });
     }
 
+    let said = match result.cursor {
+        Some(at) => format!("done; the pointer is at {},{}", at.x, at.y),
+        None => "done".to_string(),
+    };
+
     match how.wanted() {
-        true => Ok(framed("done; the screen now", result.frame.as_ref())),
-        false => Ok(Answer::Text("done".to_string())),
+        true => Ok(framed(&said, result.frame.as_ref())),
+        false => Ok(Answer::Text(said)),
     }
 }
 
@@ -1685,6 +1875,27 @@ mod tests {
             }
             other => panic!("the picture was dropped: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_the_pointer_can_be_asked_for_on_its_own() {
+        let listed = catalogue();
+        let tool = listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|tool| tool["name"] == "cursor")
+            .expect("cursor is offered");
+
+        assert_eq!(
+            tool["inputSchema"]["properties"]["box_id"]["type"],
+            "string"
+        );
+        assert_eq!(
+            tool["inputSchema"]["required"],
+            json!(["box_id"]),
+            "a box and nothing else"
+        );
     }
 
     #[test]

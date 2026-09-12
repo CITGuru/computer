@@ -185,6 +185,7 @@ fn packages_for(feature: spec::Feature) -> Vec<String> {
         spec::Feature::Video => Extras::video().packages,
         spec::Feature::Dock => Extras::dock().packages,
         spec::Feature::X11Apps => Extras::x11_apps().packages,
+        spec::Feature::Accessibility => Extras::accessibility().packages,
     }
 }
 

@@ -18,10 +18,10 @@ pub use profile::X11Profile;
 use crate::error::{Error, Result};
 use crate::machine::{MachineHost, ScreenHost};
 use crate::screens::ControlGate;
-use crate::servers::{settled, still_argv};
+use crate::servers::{a11y, settled, still_argv};
 use crate::{
-    Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Held, Point,
-    Rect, ScreenId, Selection,
+    Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Held, Node,
+    NodeQuery, Point, Rect, ScreenId, Selection,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -371,6 +371,31 @@ impl Desktop for X11Desktop {
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {
         self.act(scroll_argv(at, by)).await
+    }
+
+    async fn nodes(&self, app: Option<&str>, depth: Option<u32>) -> Result<Vec<Node>> {
+        a11y::tree(&self.host, self.screen, app, depth).await
+    }
+
+    async fn find_nodes(&self, query: &NodeQuery, limit: Option<usize>) -> Result<Vec<Node>> {
+        a11y::find(&self.host, self.screen, query, limit).await
+    }
+
+    /// Through the takeover gate: pressing a widget is input, whatever it
+    /// travelled over to get there.
+    async fn focus_node(&self, query: &NodeQuery) -> Result<Node> {
+        self.control.may_act()?;
+        a11y::focus(&self.host, self.screen, query).await
+    }
+
+    async fn invoke_node(&self, query: &NodeQuery, action: Option<&str>) -> Result<Node> {
+        self.control.may_act()?;
+        a11y::invoke(&self.host, self.screen, query, action).await
+    }
+
+    async fn set_node(&self, query: &NodeQuery, value: &str) -> Result<Node> {
+        self.control.may_act()?;
+        a11y::set(&self.host, self.screen, query, value).await
     }
 
     async fn cursor(&self) -> Result<Point> {

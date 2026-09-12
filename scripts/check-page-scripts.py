@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Parse the scripts this crate evaluates inside a page.
+"""Parse the scripts this crate carries as text rather than as code.
 
-They are Rust string constants, so nothing compiles them: a typo in one reaches
-a caller as a failed `find` against a real browser, which is the one place
+The page scripts are Rust string constants and the accessibility reader is a
+file the image copies in, so nothing compiles either: a typo reaches a caller as
+a failed `find` against a real browser or a real box, which is the one place
 neither a test nor clippy looks.
 """
 
@@ -11,6 +12,7 @@ import subprocess
 import sys
 
 SOURCE = "crates/computer-core/src/cdp.rs"
+READER = "crates/computer-core/images/desktop/a11y.py"
 
 
 def constants(src):
@@ -42,6 +44,18 @@ def main():
         if ran.returncode != 0:
             print(ran.stderr.strip()[:800], file=sys.stderr)
             failed = True
+
+    # The reader is compiled rather than run: it connects to a bus on import,
+    # and there is none out here.
+    reader = subprocess.run(
+        [sys.executable, "-c", f"compile(open({READER!r}).read(), {READER!r}, 'exec')"],
+        capture_output=True,
+        text=True,
+    )
+    print(f"{'a11y.py':9} {'ok' if reader.returncode == 0 else 'FAILED'}")
+    if reader.returncode != 0:
+        print(reader.stderr.strip()[:800], file=sys.stderr)
+        failed = True
 
     sys.exit(1 if failed else 0)
 

@@ -9,8 +9,8 @@
 //! protocol only one end can construct is not one.
 
 pub use computer_types::{
-    App, Arrange, Auth, Bind, Button, Desktop, DisplayServer, Feature, Held, Placement, Point,
-    Policy, Rect, Selection, Spec, Window,
+    App, Arrange, Auth, Bind, Button, Desktop, DisplayServer, Feature, Held, Node, NodeQuery,
+    Placement, Point, Policy, Rect, Selection, Spec, Window,
 };
 use serde::{Deserialize, Serialize};
 
@@ -140,6 +140,12 @@ pub enum Action {
     OnPage {
         what: OnElement,
     },
+    /// One accessibility-tree operation, nested for the same reason `on_page`
+    /// is: the same operations as `POST …/desktop/node`, so a native form is
+    /// one batch rather than a call per field.
+    OnNode {
+        what: OnNode,
+    },
     /// A name, not a command: an argv posted to a driving endpoint would be
     /// `exec` in disguise.
     Launch {
@@ -147,6 +153,61 @@ pub enum Action {
         #[serde(default)]
         args: Vec<String>,
     },
+}
+
+/// One operation on the desktop's accessibility tree.
+///
+/// Every acting op names its widget with a query rather than an id. An id dies
+/// with the widget behind it, so a caller that reads the tree and then acts on
+/// what it read is acting on whatever took that place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OnNode {
+    /// Every widget on the screen, or one application's.
+    ///
+    /// `depth` bounds it. Each node is a round trip to the application that
+    /// published it, so a whole tree costs far more than the one window a
+    /// caller was asking about.
+    Tree {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depth: Option<u32>,
+    },
+    /// Widgets matching a query, best first.
+    Find {
+        node: NodeQuery,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+    },
+    /// Give one the keyboard, with no click.
+    Focus { node: NodeQuery },
+    /// Run the widget's own action. The first one unless `action` names
+    /// another: GTK spells it `click` where Qt spells it `Press`.
+    Invoke {
+        node: NodeQuery,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<String>,
+    },
+    /// Assign a value rather than type it. A field that filters as you type
+    /// sees one change instead of a keystroke per character.
+    Set { node: NodeQuery, value: String },
+}
+
+/// What a tree operation answers with.
+///
+/// Every field is left out when empty, so one shape serves a search that
+/// matched nothing and an invoke that pressed one button.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeResult {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<Node>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<Node>,
+    /// Which action ran, in the toolkit's own spelling — worth reporting
+    /// because the caller did not necessarily choose it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
 }
 
 /// What the page in front is showing.

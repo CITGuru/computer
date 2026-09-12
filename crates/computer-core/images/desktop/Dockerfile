@@ -88,6 +88,17 @@ ENV DISPLAY=:1
 ENV HOME=/home/computer
 ENV COMPUTER_SCREEN_WIDTH=1280
 ENV COMPUTER_SCREEN_HEIGHT=800
+
+# Where the accessibility bus is, if the box has one. Fixed and set here rather
+# than chosen at boot, because this is the only environment a later `docker
+# exec` inherits — and an application must have found the bus before it drew
+# its first window to be in the tree at all.
+#
+# Set whether or not Feature::Accessibility installed a bus: a program handed an
+# address nothing answers on carries on without a word, and GTK needs no module
+# variable besides.
+ENV DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/computer/a11y-bus.socket
+ENV QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 WORKDIR /home/computer
 
 COPY input-guard.sh /usr/local/bin/xdotool
@@ -101,6 +112,7 @@ COPY fluxbox.init /etc/computer/fluxbox/init
 COPY fluxbox.style /etc/computer/fluxbox/style
 COPY wallpaper.sh /usr/local/bin/computer-wallpaper
 COPY launch.sh /usr/local/bin/computer-launch
+COPY a11y.py /usr/local/bin/computer-a11y
 COPY tint2rc /etc/computer/tint2rc
 COPY terminal.desktop /usr/share/applications/computer-terminal.desktop
 COPY browser.desktop /usr/share/applications/computer-browser.desktop
@@ -120,7 +132,8 @@ RUN chmod +x /usr/local/bin/computer-desktop \
              /usr/local/bin/computer-browser \
              /usr/local/bin/xdotool \
              /usr/local/bin/computer-wallpaper \
-             /usr/local/bin/computer-launch
+             /usr/local/bin/computer-launch \
+             /usr/local/bin/computer-a11y
 
 # Which contract this image implements, so a box driven by another profile is
 # refused before it starts rather than as a display that never came up.

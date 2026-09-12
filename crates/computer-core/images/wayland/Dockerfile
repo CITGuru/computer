@@ -85,6 +85,17 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 computer \
 ENV HOME=/home/computer
 ENV COMPUTER_SCREEN_WIDTH=1280
 ENV COMPUTER_SCREEN_HEIGHT=800
+
+# Where the accessibility bus is, if the box has one. Fixed and set here rather
+# than chosen at boot, because this is the only environment a later `docker
+# exec` inherits — and an application must have found the bus before it drew
+# its first window to be in the tree at all.
+#
+# Set whether or not Feature::Accessibility installed a bus: a program handed an
+# address nothing answers on carries on without a word, and GTK needs no module
+# variable besides.
+ENV DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/computer/a11y-bus.socket
+ENV QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 WORKDIR /home/computer
 
 COPY --from=pointer /src/computer-pointer /usr/local/bin/computer-pointer
@@ -92,11 +103,13 @@ COPY start.sh   /usr/local/bin/computer-desktop
 COPY screen.sh  /usr/local/bin/computer-screen
 COPY browser.sh /usr/local/bin/computer-browser
 COPY input.sh   /usr/local/bin/computer-input
+COPY a11y.py    /usr/local/bin/computer-a11y
 COPY sway.config /etc/computer/sway.config
 RUN chmod +x /usr/local/bin/computer-desktop \
              /usr/local/bin/computer-screen \
              /usr/local/bin/computer-browser \
-             /usr/local/bin/computer-input
+             /usr/local/bin/computer-input \
+             /usr/local/bin/computer-a11y
 
 # Which contract this image implements, so a box driven by another profile is
 # refused before it starts rather than as a display that never came up.
