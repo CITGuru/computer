@@ -42,6 +42,13 @@ const REPLAY_BUDGET: Duration = Duration::from_secs(180);
 /// A ceiling rather than a default a caller can raise: `limit` is there to ask
 /// for less than this, and a page is unbounded.
 const PAGE_TEXT: usize = 20_000;
+/// Characters of an evaluated answer to return, and the most one can ask for.
+const EVALUATED: usize = 100_000;
+/// How long an expression runs by default, and the longest it can be given.
+///
+/// The screen lock is held across it, so an uncapped one is a box nobody else
+/// can reach again.
+const EVALUATE_MS: u64 = 5_000;
 const LINKS: usize = 100;
 /// The most matches one find answers with.
 const FOUND: usize = 50;
@@ -124,6 +131,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/page", get(read_page))
         .route("/v1/boxes/{id}/page/find", get(find_elements))
         .route("/v1/boxes/{id}/page/element", post(on_element))
+        .route("/v1/boxes/{id}/page/evaluate", post(evaluate))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::auth::gate,
@@ -1369,7 +1377,10 @@ async fn read_page(
 
 #[derive(Debug, Deserialize)]
 struct FindQuery {
-    q: String,
+    /// Words, a name, an id, a placeholder or a selector. Either this or
+    /// `role`.
+    #[serde(default)]
+    q: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
     #[serde(default)]
@@ -1378,6 +1389,9 @@ struct FindQuery {
     exact: Option<bool>,
     #[serde(default)]
     tab: Option<String>,
+    /// Everything built as this kind of thing, however it was built.
+    #[serde(default)]
+    role: Option<String>,
 }
 
 /// What on the page matches, best first.
@@ -1387,9 +1401,27 @@ async fn find_elements(
     ApiQuery(query): ApiQuery<FindQuery>,
 ) -> ApiResult<Json<Vec<Element>>> {
     let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
+
+    // A role becomes the selector that finds it rather than a second way of
+    // asking: everything below already takes a selector.
+    let what = match query.role.as_deref() {
+        Some(role) => computer::cdp::selector_for(role)
+            .ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "no such role: {role}. This server knows {}",
+                    computer::cdp::ROLES
+                ))
+            })?
+            .to_string(),
+        None => query
+            .q
+            .clone()
+            .ok_or_else(|| ApiError::bad_request("a find needs a query or a role"))?,
+    };
+
     let found = page
         .find(
-            &query.q,
+            &what,
             Some(query.limit.unwrap_or(FOUND).clamp(1, FOUND)),
             query.scroll,
             query.exact,
@@ -1520,6 +1552,41 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             }
         }
     })
+}
+
+/// Run javascript in a page and answer with what it evaluated to.
+///
+/// The box is the boundary, not this: an agent already has a shell here through
+/// `exec`, and page javascript reaches less than that does. What this owes is a
+/// ceiling — a deadline, because the screen lock is held across the call, and a
+/// size, because a document is megabytes.
+async fn evaluate(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<TabQuery>,
+    ApiJson(body): ApiJson<Evaluate>,
+) -> ApiResult<Json<Evaluated>> {
+    let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
+
+    let within = Duration::from_millis(body.timeout_ms.unwrap_or(EVALUATE_MS)).min(MAX_PAUSE);
+    let value = page.evaluate_within(&body.expression, Some(within)).await?;
+
+    let json = serde_json::to_string(&value)
+        .map_err(|error| ApiError::internal(format!("the answer would not serialise: {error}")))?;
+
+    let limit = body.limit.unwrap_or(EVALUATED).clamp(1, EVALUATED);
+    let truncated = json.chars().count() > limit;
+
+    Ok(Json(Evaluated {
+        json: json.chars().take(limit).collect(),
+        truncated,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct TabQuery {
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 /// The pages a box has open.

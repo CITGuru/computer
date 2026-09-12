@@ -8,8 +8,8 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Frame, Held, NodeQuery, OnElement, OnNode,
-    OpenIn, Reading, Rect, ScrollTo, Shot, Want, Where,
+    Action, ActionBatch, Arrange, Evaluate, ForkMode, ForkRequest, Frame, Held, NodeQuery,
+    OnElement, OnNode, OpenIn, Reading, Rect, ScrollTo, Shot, Want, Where,
 };
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
@@ -249,6 +249,15 @@ pub fn catalogue() -> Value {
                         "description": "Match the whole of an element's words rather than any \
                                         part of them. Use it when you know the label."
                     },
+                    "role": {
+                        "type": "string",
+                        "enum": ["button", "link", "textbox", "checkbox", "radio", "combobox",
+                                 "option", "heading", "image", "tab", "dialog"],
+                        "description": "Everything built as this kind of thing, however it was \
+                                        built: `button` finds a <div role=button> as well as a \
+                                        <button> and a submit input. Use it instead of a query \
+                                        to see what a page offers."
+                    },
                     "scroll": {
                         "type": "boolean",
                         "description": "Bring the best match into view first. A match below the \
@@ -256,7 +265,7 @@ pub fn catalogue() -> Value {
                                         looking, and its coordinates address nothing."
                     }
                 }),
-                &["query"]
+                &[]
             )
         ),
         tool(
@@ -570,6 +579,34 @@ pub fn catalogue() -> Value {
             box_only(),
         ),
         tool(
+            "evaluate",
+            "Run javascript in the page and read what it evaluated to. The box is an isolated \
+             sandbox, so anything the page can do is yours: read a value the tools do not \
+             expose, drive a widget that answers to no click, pull structured data straight out \
+             of the document rather than reading it as text. `await` works. Return what you want \
+             to read rather than the thing itself: a DOM node comes back as `{}` and anything \
+             cyclic is refused.",
+            with_tab(
+                json!({
+                    "expression": {
+                        "type": "string",
+                        "description": "Javascript. Its own value is the answer, such as \
+                                        `document.title`."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "How long it may take. The screen is held across it, so \
+                                        the server keeps a ceiling."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Characters of the answer to return."
+                    }
+                }),
+                &["expression"]
+            ),
+        ),
+        tool(
             "run_command",
             "Run a command inside the box and read its output. This is a shell in the same \
              machine as the desktop, not a way to move the pointer.",
@@ -627,6 +664,16 @@ fn with_page(mut properties: Value, required: &[&str]) -> Value {
     }
 
     with_frame(properties, required)
+}
+
+/// [`with_box`], and which page to act on, for a tool that answers with no
+/// screen of its own.
+fn with_tab(mut properties: Value, required: &[&str]) -> Value {
+    if let Some(map) = properties.as_object_mut() {
+        map.insert("tab".to_string(), tab_field());
+    }
+
+    with_box(properties, required)
 }
 
 fn tab_field() -> Value {
@@ -855,13 +902,22 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .and_then(Value::as_u64)
                 .map(|n| n as usize);
 
+            let role = arguments.get("role").and_then(Value::as_str);
+            // One or the other: a role is the query, expanded by the server.
+            let query = match arguments.get("query").and_then(Value::as_str) {
+                Some(query) => query.to_string(),
+                None if role.is_some() => String::new(),
+                None => return Err("find needs a query or a role".to_string()),
+            };
+
             let found = client
                 .find(
                     &id,
-                    &text(arguments, "query")?,
+                    &query,
                     limit,
                     arguments.get("scroll").and_then(Value::as_bool),
                     arguments.get("exact").and_then(Value::as_bool),
+                    role,
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -1094,6 +1150,27 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 0,
             )
             .await
+        }
+        "evaluate" => {
+            let id = text(arguments, "box_id")?;
+            let what = Evaluate {
+                expression: text(arguments, "expression")?,
+                timeout_ms: arguments.get("timeout_ms").and_then(Value::as_u64),
+                limit: arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize),
+            };
+
+            let answered = client
+                .evaluate(&id, &what, arguments.get("tab").and_then(Value::as_str))
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(match answered.truncated {
+                true => format!("{} … (truncated)", answered.json),
+                false => answered.json,
+            }))
         }
         "run_command" => run(client, arguments).await,
         "hand_over" => {

@@ -168,8 +168,13 @@ impl Client {
         limit: Option<usize>,
         scroll: Option<bool>,
         exact: Option<bool>,
+        role: Option<&str>,
     ) -> Result<Vec<Element>> {
         let mut path = format!("/v1/boxes/{id}/page/find?q={}", query_value(query));
+        // A role stands in for the query where the caller gave one.
+        if let Some(role) = role {
+            path.push_str(&format!("&role={}", query_value(role)));
+        }
         if let Some(limit) = limit {
             path.push_str(&format!("&limit={limit}"));
         }
@@ -219,6 +224,27 @@ impl Client {
             &format!("/v1/boxes/{id}/screens/{screen}/desktop/node"),
             Some(serde_json::to_value(what).map_err(|error| Error::Transport(error.to_string()))?),
             &[],
+        )
+        .await
+    }
+
+    /// Run javascript in a page and read what it evaluated to.
+    pub async fn evaluate(
+        &self,
+        id: &str,
+        what: &Evaluate,
+        tab: Option<&str>,
+    ) -> Result<Evaluated> {
+        let query = match tab {
+            Some(tab) => vec![("tab", tab.to_string())],
+            None => Vec::new(),
+        };
+
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/page/evaluate"),
+            Some(serde_json::to_value(what).map_err(|error| Error::Transport(error.to_string()))?),
+            &query,
         )
         .await
     }

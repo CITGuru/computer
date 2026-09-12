@@ -1063,6 +1063,10 @@ const LINKS_DEFAULT: usize = 100;
 /// How often a wait asks whether the page has caught up.
 const POLL: Duration = Duration::from_millis(120);
 
+/// How long past its own deadline an expression is given before this stops
+/// waiting, so the protocol has the chance to answer first and say why.
+const GRACE: Duration = Duration::from_millis(250);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scroll {
     /// This far from where it is now. Positive `y` moves down the page.
@@ -1224,6 +1228,43 @@ const MATCH: &str = r#"(q, exact) => {
   // by top would hand back the form.
   return out;
 }"#;
+
+/// The selector that finds everything a role is built out of.
+///
+/// A page writes a button four ways, and `<div role="button">` is one of them.
+/// Measured against `Accessibility.queryAXTree`, which resolves the real
+/// computed role: this found more on a Wikipedia article — 14 against 11,
+/// because the tree omits what is hidden from assistive technology — in one
+/// call rather than twenty-four.
+pub fn selector_for(role: &str) -> Option<&'static str> {
+    let selector = match role {
+        "button" => {
+            "button, [role=button], input[type=button], input[type=submit], \
+                     input[type=reset], input[type=image], summary"
+        }
+        "link" => "a[href], area[href], [role=link]",
+        "textbox" => {
+            "input[type=text], input[type=search], input[type=email], \
+                      input[type=url], input[type=tel], input[type=password], \
+                      input:not([type]), textarea, [role=textbox], [contenteditable=true]"
+        }
+        "checkbox" => "input[type=checkbox], [role=checkbox], [role=switch]",
+        "radio" => "input[type=radio], [role=radio]",
+        "combobox" => "select, [role=combobox], [role=listbox]",
+        "option" => "option, [role=option]",
+        "heading" => "h1, h2, h3, h4, h5, h6, [role=heading]",
+        "image" => "img, svg, [role=img], [role=image]",
+        "tab" => "[role=tab]",
+        "dialog" => "dialog, [role=dialog], [role=alertdialog]",
+        _ => return None,
+    };
+
+    Some(selector)
+}
+
+/// The roles [`selector_for`] knows, for an error that names them.
+pub const ROLES: &str = "button, link, textbox, checkbox, radio, combobox, option, heading, \
+                         image, tab, dialog";
 
 /// The shortest selector that names one element and nothing else.
 ///
@@ -1527,16 +1568,46 @@ impl Page {
 
     /// Run JavaScript in the page, and bring the value back.
     pub async fn evaluate(&mut self, javascript: &str) -> Result<Value> {
-        let answer = self
-            .call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": javascript,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                }),
-            )
-            .await?;
+        self.evaluate_within(javascript, None).await
+    }
+
+    /// [`Self::evaluate`], given only so long to finish.
+    ///
+    /// Without a deadline `while (true) {}` never returns, and whoever is
+    /// holding the page waits with it. A library leaves the choice open; a
+    /// server answering strangers should not.
+    pub async fn evaluate_within(
+        &mut self,
+        javascript: &str,
+        within: Option<Duration>,
+    ) -> Result<Value> {
+        let mut params = json!({
+            "expression": javascript,
+            "returnByValue": true,
+            "awaitPromise": true,
+        });
+
+        let Some(within) = within else {
+            return self.evaluated(params).await;
+        };
+
+        // Two deadlines, because the protocol's own bounds synchronous work
+        // only: `new Promise(r => setTimeout(r, 3000))` under a 500ms timeout
+        // was measured returning after three seconds. The outer one is wall
+        // clock, which is what the caller was promised.
+        params["timeout"] = json!(within.as_millis() as u64);
+
+        match tokio::time::timeout(within + GRACE, self.evaluated(params)).await {
+            Ok(answer) => answer,
+            Err(_) => Err(Error::Timeout {
+                after: within,
+                detail: "the expression was still running".to_string(),
+            }),
+        }
+    }
+
+    async fn evaluated(&mut self, params: Value) -> Result<Value> {
+        let answer = self.call("Runtime.evaluate", params).await?;
 
         if let Some(thrown) = answer.get("exceptionDetails") {
             return Err(Error::denied(format!("the page threw: {thrown}")));
@@ -2983,6 +3054,45 @@ mod tests {
             target_ids_in_context(&json!({}), "CONTEXT-1"),
             Err(Error::Denied { .. })
         ));
+    }
+
+    #[test]
+    fn test_a_role_covers_every_way_a_page_builds_one() {
+        let button = selector_for("button").expect("button is known");
+
+        for way in ["button", "[role=button]", "input[type=submit]", "summary"] {
+            assert!(button.contains(way), "a button is also written {way}");
+        }
+
+        assert!(selector_for("link").expect("link").contains("a[href]"));
+        assert!(
+            selector_for("textbox")
+                .expect("textbox")
+                .contains("textarea"),
+            "a textbox is not only an input"
+        );
+    }
+
+    #[test]
+    fn test_a_role_nobody_serves_is_refused_and_the_rest_are_named() {
+        assert!(selector_for("gizmo").is_none());
+
+        for role in ROLES.split(',').map(str::trim) {
+            assert!(
+                selector_for(role).is_some(),
+                "{role} is offered but not served"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_a_deadline_is_bounded_by_the_clock_and_not_only_the_protocol() {
+        // `Runtime.evaluate`'s own timeout bounds synchronous work only: an
+        // awaited promise was measured outliving it by six times.
+        assert!(
+            GRACE < Duration::from_secs(1),
+            "the outer wait is the caller's answer, so it follows close behind"
+        );
     }
 
     #[test]

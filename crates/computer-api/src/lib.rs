@@ -450,6 +450,35 @@ pub enum OpenIn {
     Current,
 }
 
+/// Javascript to run in a page.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Evaluate {
+    /// The expression's own value is the answer. `await` works: a promise is
+    /// waited on rather than handed back unresolved.
+    pub expression: String,
+    /// How long it may take. Clamped by the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Characters of the answer to return. Clamped by the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// What it answered with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Evaluated {
+    /// JSON, as text.
+    ///
+    /// Return what you want to read rather than the thing itself: a DOM node
+    /// serialises to `{}` and something cyclic is refused outright. Both were
+    /// measured; neither is null.
+    pub json: String,
+    /// Whether the answer was longer than the limit.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 /// One of a browser's pages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tab {
