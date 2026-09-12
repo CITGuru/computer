@@ -224,7 +224,8 @@ pub fn catalogue() -> Value {
         tool(
             "find",
             "Find things on the page by their words, or by a name, id, placeholder or CSS \
-             selector. Answers with what each one is, whether it is enabled, and where it sits \
+             selector. An icon button is found by what its icon says — the alt text of the \
+             image inside it, or the title of its svg. Answers with what each one is, whether it is enabled, and where it sits \
              in the page. Use it to see what is there before acting, then act by the same query \
              rather than by a coordinate — a point taken from a screenshot is wrong the moment \
              the page moves under it. Each match ends with a selector that named exactly one \

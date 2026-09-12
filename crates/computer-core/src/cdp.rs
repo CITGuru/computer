@@ -1184,8 +1184,18 @@ const MATCH: &str = r#"(q, exact) => {
   }
 
   const want = q.trim().toLowerCase();
+  // An icon button has no words of its own: its name is the alt text of the
+  // image inside it, or the title of its svg. Without these, `find` misses
+  // every close, menu and search button on a page that draws them.
+  const icon = el => {
+    const parts = [];
+    for (const img of el.querySelectorAll('img[alt], area[alt], input[alt]')) parts.push(img.alt);
+    for (const named of el.querySelectorAll('svg > title, svg > desc')) parts.push(named.textContent);
+    return parts.join(' ');
+  };
   const words = el => (el.innerText || el.value || el.getAttribute('aria-label') ||
-                       el.getAttribute('placeholder') || el.getAttribute('title') || '')
+                       el.getAttribute('placeholder') || el.getAttribute('title') ||
+                       icon(el) || '')
                         .replace(/\s+/g, ' ').trim().toLowerCase();
   const clickable = 'a,button,input,select,textarea,[role=button],[role=link],[onclick]';
 
@@ -2973,6 +2983,22 @@ mod tests {
             target_ids_in_context(&json!({}), "CONTEXT-1"),
             Err(Error::Denied { .. })
         ));
+    }
+
+    #[test]
+    fn test_an_icon_button_is_found_by_what_its_icon_says() {
+        // `<button><img alt="Close"></button>` has no words: innerText is empty
+        // and there is no aria-label, so every close and menu button on a page
+        // that draws them was unfindable.
+        assert!(MATCH.contains("img[alt], area[alt], input[alt]"));
+        assert!(
+            MATCH.contains("svg > title, svg > desc"),
+            "an svg names itself in a child element, not an attribute"
+        );
+        assert!(
+            MATCH.contains("el.getAttribute('title') ||\n                       icon(el)"),
+            "and it is the last resort, after everything the element says itself"
+        );
     }
 
     #[test]
