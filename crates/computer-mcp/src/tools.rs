@@ -585,6 +585,30 @@ pub fn catalogue() -> Value {
             box_only(),
         ),
         tool(
+            "record",
+            "Record the screen to a video file, or stop a recording and read where it landed. \
+             ffmpeg writes it inside the box, so the frames never cross the wire and the cost \
+             is the same however far away you are. Needs a box opened with video. You cannot \
+             watch the file — it is for the person who reads what you did afterwards, so say \
+             where it is when you stop.",
+            with_box(
+                json!({
+                    "op": {
+                        "type": "string",
+                        "enum": ["start", "stop", "status"],
+                        "description": "start begins one, stop ends it and names the file, \
+                                        status says whether one is running."
+                    },
+                    "fps": {
+                        "type": "integer",
+                        "description": "For start: frames a second, 1 to 60. 12 unless said, \
+                                        which is enough to follow a pointer and cheap."
+                    }
+                }),
+                &["op"]
+            )
+        ),
+        tool(
             "evaluate",
             "Run javascript in the page and read what it evaluated to. The box is an isolated \
              sandbox, so anything the page can do is yours: read a value the tools do not \
@@ -859,6 +883,50 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             let at = client.cursor(&id, 0).await.map_err(|e| e.to_string())?;
 
             Ok(Answer::Text(format!("the pointer is at {},{}", at.x, at.y)))
+        }
+        "record" => {
+            let id = text(arguments, "box_id")?;
+            let fps = arguments
+                .get("fps")
+                .and_then(Value::as_u64)
+                .map(|fps| fps as u32);
+
+            let said = match text(arguments, "op")?.as_str() {
+                "start" => {
+                    let view = client
+                        .start_recording(&id, 0, fps)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    format!(
+                        "recording to {} inside the box; stop it to finish the file",
+                        view.path.unwrap_or_default()
+                    )
+                }
+                "stop" => {
+                    let view = client
+                        .stop_recording(&id, 0)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    format!(
+                        "recorded to {} inside the box; read it out with the files route",
+                        view.path.unwrap_or_default()
+                    )
+                }
+                "status" => match client
+                    .recording(&id, 0)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .path
+                {
+                    Some(path) => format!("recording to {path}"),
+                    None => "nothing is recording".to_string(),
+                },
+                other => return Err(format!("no such op: {other}")),
+            };
+
+            Ok(Answer::Text(said))
         }
         "read_page" => {
             let id = text(arguments, "box_id")?;

@@ -632,6 +632,26 @@ pub struct ViewersView {
     pub person_driving: bool,
 }
 
+/// A screen's recording, running or finished.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingView {
+    pub recording: bool,
+    /// Where the file is inside the box. Read it with the files route, which
+    /// is the only way the bytes come out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// How to record. Frames a second, and nothing else: the encoder is chosen in
+/// the box, where it is the difference between a file that plays and one that
+/// does not.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartRecording {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardView {
     pub text: String,

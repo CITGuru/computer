@@ -284,5 +284,6 @@ case "$action" in
   control) control "$@" ;;
   release) release "$@" ;;
   open)    open_url ;;
-  *) echo "usage: computer-screen start|stop|control|release|open|viewers <screen> [url]" >&2; exit 2 ;;
+  record)  echo "recording is not available on the wayland desktop yet" >&2; exit 4 ;;
+  *) echo "usage: computer-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
 esac

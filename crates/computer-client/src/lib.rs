@@ -497,6 +497,43 @@ impl Client {
         .await
     }
 
+    /// Where this screen is recording to, or nothing if it is not.
+    pub async fn recording(&self, id: &str, screen: u32) -> Result<RecordingView> {
+        self.send(
+            reqwest::Method::GET,
+            &format!("/v1/boxes/{id}/screens/{screen}/recording"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn start_recording(
+        &self,
+        id: &str,
+        screen: u32,
+        fps: Option<u32>,
+    ) -> Result<RecordingView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/screens/{screen}/recording"),
+            Some(serde_json::json!({ "fps": fps })),
+            &[],
+        )
+        .await
+    }
+
+    /// Stop it. The file stays in the box; [`Client::read_file`] takes it out.
+    pub async fn stop_recording(&self, id: &str, screen: u32) -> Result<RecordingView> {
+        self.send(
+            reqwest::Method::DELETE,
+            &format!("/v1/boxes/{id}/screens/{screen}/recording"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     pub async fn exec(
         &self,
         id: &str,

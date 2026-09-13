@@ -307,6 +307,75 @@ open_url() {
     >>"${logs}-browser.log" 2>&1 &
 }
 
+recording_file="/tmp/computer/recording-${screen}.mp4"
+recording_pid="/tmp/computer/recording-${screen}.pid"
+
+# ffmpeg writing the framebuffer straight to a file inside the box. The frames
+# never cross the wire, so a recording costs the same whether the caller is on
+# this host or another.
+#
+# mp4/h264 because it is the one thing every player takes. It has to be ended
+# with SIGINT and waited on: killed outright, ffmpeg has written no index and
+# the file plays in nothing — measured, with fragmented mp4 flags on.
+record() {
+  what="${3:-}"
+  fps="${4:-12}"
+
+  running() {
+    pid=$(cat "$recording_pid" 2>/dev/null || true)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  }
+
+  case "$what" in
+    start)
+      command -v ffmpeg >/dev/null 2>&1 \
+        || { echo "this box has no ffmpeg; open it with the video feature" >&2; exit 4; }
+      xdpyinfo -display "$display" >/dev/null 2>&1 \
+        || { echo "screen ${screen} is not running" >&2; exit 1; }
+      running && { echo "screen ${screen} is already recording" >&2; exit 3; }
+
+      rm -f "$recording_file"
+
+      # Sound only where there is a card. ffmpeg fails on an input that is not
+      # there, and loses the video with it.
+      sound=()
+      if command -v pactl >/dev/null 2>&1 && [ -S "$pulse_socket" ]; then
+        sound=(-f pulse -i "screen${number}.monitor")
+      fi
+
+      # -draw_mouse, because where an agent clicked is most of what a
+      # recording is watched for.
+      PULSE_SERVER="unix:${pulse_socket}" ffmpeg -nostdin -loglevel error -y \
+        -f x11grab -draw_mouse 1 -framerate "$fps" -i "$display" \
+        "${sound[@]}" \
+        -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+        -movflags frag_keyframe+empty_moov \
+        "$recording_file" >>"${logs}-record.log" 2>&1 &
+      echo $! > "$recording_pid"
+      echo "$recording_file"
+      ;;
+    stop)
+      running || { echo "screen ${screen} is not recording" >&2; exit 3; }
+      pid=$(cat "$recording_pid")
+      kill -INT "$pid" 2>/dev/null || true
+      for _ in $(seq 1 100); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+      rm -f "$recording_pid"
+      echo "$recording_file"
+      ;;
+    status)
+      running && echo "recording ${recording_file}" || echo "idle"
+      ;;
+    *)
+      echo "usage: computer-screen record <screen> start|stop|status [fps]" >&2
+      exit 2
+      ;;
+  esac
+}
+
 case "$action" in
   start)   start ;;
   viewers) viewers ;;
@@ -314,5 +383,6 @@ case "$action" in
   control) control "$@" ;;
   release) release "$@" ;;
   open)    open_url ;;
-  *) echo "usage: computer-screen start|stop|control|release|open|viewers <screen> [url]" >&2; exit 2 ;;
+  record)  record "$@" ;;
+  *) echo "usage: computer-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
 esac

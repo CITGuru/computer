@@ -13,8 +13,10 @@ pub const USAGE: &str = "\
 computer — a desktop in a box
 
   up [--size WxH] [--url URL] [--ttl MINUTES] [--wide-fonts]
-     [--accessibility]         --accessibility reads native windows by widget
-                              name, for the widget command below. it cannot be
+     [--accessibility] [--video]
+                              --accessibility reads native windows by widget
+                              name, for the widget command below. --video puts
+                              ffmpeg in the box, for record. neither can be
                               turned on afterwards
                               open a box and print where to watch it
   ls                          boxes that are running
@@ -81,6 +83,12 @@ computer — a desktop in a box
                               without a point, the middle of the screen
   mouse <box> at              where the pointer is
 
+  record <box> start [--fps N]
+  record <box> stop [file.mp4]
+  record <box> status         record the screen to a file. ffmpeg writes it
+                              inside the box, so the frames never cross the
+                              wire; stop brings the file out. needs a box
+                              opened with --video
   still <box> [--settle MS] [--within MS]
                               wait until the screen stops changing
   clip <box> [text] [--primary]
@@ -197,6 +205,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "widget" => remote::widget(client, args).await,
         "mouse" => remote::mouse(client, args).await,
         "keyboard" => remote::keyboard(client, args).await,
+        "record" => remote::record(client, args).await,
         "still" => remote::still(client, args).await,
         "clip" => remote::clip(client, args).await,
         "takeover" => remote::takeover(client, args).await,
@@ -216,9 +225,9 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "ls" => local::list().await,
         "screenshot" => local::screenshot(args).await,
         "open" => local::open(args).await,
-        "app" | "apps" | "window" | "widget" | "browser" => Err(computer::Error::invalid(format!(
-            "`{command}` needs a server; drop --local"
-        ))),
+        "app" | "apps" | "window" | "widget" | "browser" | "record" => Err(
+            computer::Error::invalid(format!("`{command}` needs a server; drop --local")),
+        ),
         "mouse" => local::mouse(args).await,
         "keyboard" => local::keyboard(args).await,
         "still" => local::still(args).await,

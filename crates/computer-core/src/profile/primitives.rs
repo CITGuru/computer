@@ -1,4 +1,4 @@
-use super::{ImageSource, Profile};
+use super::{ImageSource, Profile, Recording};
 use crate::image;
 use crate::machine::MachineHost;
 use crate::{
@@ -1183,6 +1183,17 @@ pub trait ScreenRuntime: Send + Sync {
         profile: &dyn Profile,
         screen: ScreenId,
     ) -> Result<()>;
+
+    /// The path the recording is being written to inside the box, or `None`
+    /// where nothing is recording.
+    async fn record(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        what: Recording,
+        fps: Option<u32>,
+    ) -> Result<Option<String>>;
 }
 
 /// Run the command protocol supplied by a profile.
@@ -1290,6 +1301,41 @@ impl ScreenRuntime for CommandScreenRuntime {
         screen: ScreenId,
     ) -> Result<()> {
         Self::succeeded(self.run(host, profile.reclaim_command(screen)).await?)
+    }
+
+    async fn record(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        what: Recording,
+        fps: Option<u32>,
+    ) -> Result<Option<String>> {
+        let result = self
+            .run(host, profile.record_command(screen, what, fps))
+            .await?;
+
+        match result.code {
+            0 => {}
+            3 => return Err(Error::denied(result.stderr_utf8().trim().to_string())),
+            // What the box cannot do at all, apart from what it is refusing
+            // right now: no ffmpeg in the image, or a desktop with no grabber.
+            4 => return Err(Error::invalid(result.stderr_utf8().trim().to_string())),
+            code => {
+                return Err(Error::Failed {
+                    code,
+                    stderr: result.stderr_utf8().trim().to_string(),
+                });
+            }
+        }
+
+        let said = result.stdout_utf8();
+        let said = said.trim();
+
+        Ok(match said {
+            "idle" | "" => None,
+            said => Some(said.trim_start_matches("recording ").to_string()),
+        })
     }
 }
 
@@ -1931,7 +1977,7 @@ mod tests {
     }
 
     impl RecordingRuntime {
-        fn record(&self, action: &'static str) {
+        fn saw(&self, action: &'static str) {
             if let Ok(mut calls) = self.calls.lock() {
                 calls.push(action);
             }
@@ -1946,7 +1992,7 @@ mod tests {
             _profile: &dyn Profile,
             _screen: ScreenId,
         ) -> Result<()> {
-            self.record("start");
+            self.saw("start");
             Ok(())
         }
 
@@ -1956,7 +2002,7 @@ mod tests {
             _profile: &dyn Profile,
             _screen: ScreenId,
         ) -> Result<()> {
-            self.record("stop");
+            self.saw("stop");
             Ok(())
         }
 
@@ -1966,7 +2012,7 @@ mod tests {
             _profile: &dyn Profile,
             _screen: ScreenId,
         ) -> Result<Viewers> {
-            self.record("viewers");
+            self.saw("viewers");
             Ok(Viewers::default())
         }
 
@@ -1978,7 +2024,7 @@ mod tests {
             _token: &str,
             _shared: bool,
         ) -> Result<()> {
-            self.record("control");
+            self.saw("control");
             Ok(())
         }
 
@@ -1989,7 +2035,7 @@ mod tests {
             _screen: ScreenId,
             _token: &str,
         ) -> Result<()> {
-            self.record("release");
+            self.saw("release");
             Ok(())
         }
 
@@ -1999,8 +2045,20 @@ mod tests {
             _profile: &dyn Profile,
             _screen: ScreenId,
         ) -> Result<()> {
-            self.record("reclaim");
+            self.saw("reclaim");
             Ok(())
+        }
+
+        async fn record(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+            _what: Recording,
+            _fps: Option<u32>,
+        ) -> Result<Option<String>> {
+            self.saw("record");
+            Ok(None)
         }
     }
 

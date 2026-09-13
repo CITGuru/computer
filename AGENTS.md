@@ -32,6 +32,12 @@ compiles, so they are parsed separately:
 python3 scripts/check-page-scripts.py
 ```
 
+The shell that goes inside an image is not compiled either:
+
+```bash
+for script in crates/computer-core/images/*/*.sh; do bash -n "$script"; done
+```
+
 `.github/workflows/ci.yml` runs this list, with `--locked` added: the lock is
 tracked, and CI must build what was committed rather than whatever resolves
 today. A change to one belongs in both.

@@ -103,6 +103,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(start_takeover).delete(end_takeover),
         )
         .route("/v1/boxes/{id}/screens/{screen}/viewers", get(viewers))
+        .route(
+            "/v1/boxes/{id}/screens/{screen}/recording",
+            get(recording).post(start_recording).delete(stop_recording),
+        )
         .route("/v1/boxes/{id}/screens/{screen}/windows", get(list_windows))
         .route(
             "/v1/boxes/{id}/screens/{screen}/windows/active",
@@ -872,6 +876,67 @@ async fn viewers(
         watching: counts.watching,
         driving: counts.driving,
         person_driving: counts.person_present(),
+    }))
+}
+
+async fn recording(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+) -> ApiResult<Json<RecordingView>> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let held = target
+        .as_screen()
+        .ok_or_else(|| ApiError::internal("this screen cannot be recorded"))?;
+
+    let path = held.recording().await?;
+
+    Ok(Json(RecordingView {
+        recording: path.is_some(),
+        path,
+    }))
+}
+
+async fn start_recording(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+    ApiJson(body): ApiJson<StartRecording>,
+) -> ApiResult<Json<RecordingView>> {
+    if let Some(fps) = body.fps
+        && !(1..=60).contains(&fps)
+    {
+        return Err(ApiError::bad_request("fps must be between 1 and 60"));
+    }
+
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let held = target
+        .as_screen()
+        .ok_or_else(|| ApiError::internal("this screen cannot be recorded"))?;
+
+    let path = held.start_recording(body.fps).await?;
+
+    Ok(Json(RecordingView {
+        recording: true,
+        path: Some(path),
+    }))
+}
+
+async fn stop_recording(
+    State(state): State<Arc<AppState>>,
+    ApiPath((id, screen)): ApiPath<(String, u32)>,
+) -> ApiResult<Json<RecordingView>> {
+    let entry = state.registry.get(&id).await?;
+    let target = entry.desktop(screen).await?;
+    let held = target
+        .as_screen()
+        .ok_or_else(|| ApiError::internal("this screen cannot be recorded"))?;
+
+    let path = held.stop_recording().await?;
+
+    Ok(Json(RecordingView {
+        recording: false,
+        path: Some(path),
     }))
 }
 

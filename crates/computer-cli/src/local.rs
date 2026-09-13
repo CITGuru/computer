@@ -37,6 +37,9 @@ pub async fn up(args: &[String]) -> computer::Result<()> {
     if present(args, "--wide-fonts") {
         builder = builder.wide_fonts();
     }
+    if present(args, "--video") {
+        builder = builder.video();
+    }
 
     eprintln!("opening a box (the first one builds the image) …");
     let computer = builder.launch().await?;

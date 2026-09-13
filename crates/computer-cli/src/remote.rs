@@ -32,6 +32,9 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
     if present(args, "--accessibility") {
         desktop.features.push(Feature::Accessibility);
     }
+    if present(args, "--video") {
+        desktop.features.push(Feature::Video);
+    }
 
     let mut placement = Placement::default();
     if let Some(minutes) = flag(args, "--ttl") {
@@ -536,6 +539,66 @@ pub async fn scroll(client: &Client, args: &[String]) -> Done {
         },
     )
     .await
+}
+
+/// Record the screen into the box, and take the file out when it stops.
+pub async fn record(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "start, stop or status").map_err(|e| e.to_string())?;
+    let rest = bare(args, &["--fps"]);
+
+    match op {
+        "start" => {
+            let view = client
+                .start_recording(
+                    id,
+                    0,
+                    counted(args, "--fps", "a number of frames a second")?,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            eprintln!("recording; stop it with `computer record {id} stop`");
+            println!("{}", view.path.unwrap_or_default());
+            Ok(())
+        }
+        "stop" => {
+            let view = client
+                .stop_recording(id, 0)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let Some(inside) = view.path else {
+                return Err("the box did not say what it had recorded".to_string());
+            };
+
+            // Into a file out here unless told otherwise: a recording is not
+            // something to put on a terminal, and it is why anyone recorded.
+            let out = rest
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| "recording.mp4".to_string());
+
+            let bytes = client
+                .read_file(id, &inside)
+                .await
+                .map_err(|e| e.to_string())?;
+            std::fs::write(&out, &bytes).map_err(|why| format!("{out}: {why}"))?;
+
+            println!("{} bytes → {out}", bytes.len());
+            Ok(())
+        }
+        "status" => {
+            let view = client.recording(id, 0).await.map_err(|e| e.to_string())?;
+
+            match view.path {
+                Some(path) => println!("recording {path}"),
+                None => println!("idle"),
+            }
+            Ok(())
+        }
+        other => Err(format!("no such op: {other}")),
+    }
 }
 
 pub async fn still(client: &Client, args: &[String]) -> Done {

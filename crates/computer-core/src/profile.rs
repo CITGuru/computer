@@ -316,6 +316,32 @@ pub trait Profile: Send + Sync {
     fn open_command(&self, screen: ScreenId, url: &str) -> Vec<String> {
         self.screen_command(ScreenAction::Open, screen, &[url.to_string()])
     }
+
+    fn record_command(&self, screen: ScreenId, what: Recording, fps: Option<u32>) -> Vec<String> {
+        let mut extra = vec![what.verb().to_string()];
+        if let Some(fps) = fps {
+            extra.push(fps.to_string());
+        }
+        self.screen_command(ScreenAction::Record, screen, &extra)
+    }
+}
+
+/// What to do about a screen's recording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recording {
+    Start,
+    Stop,
+    Status,
+}
+
+impl Recording {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Status => "status",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -335,6 +361,23 @@ mod tests {
         assert_ne!(
             X11Profile.image().tag(&Extras::none()).ok(),
             WaylandProfile.image().tag(&Extras::none()).ok()
+        );
+    }
+
+    #[test]
+    fn test_a_recording_is_asked_for_by_verb() {
+        assert_eq!(
+            X11Profile.record_command(ScreenId(0), Recording::Start, Some(15)),
+            vec!["computer-screen", "record", "0", "start", "15"]
+        );
+        assert_eq!(
+            X11Profile.record_command(ScreenId(2), Recording::Stop, None),
+            vec!["computer-screen", "record", "2", "stop"],
+            "a rate belongs to the recording that is starting, not the one ending"
+        );
+        assert_eq!(
+            X11Profile.record_command(ScreenId(0), Recording::Status, None),
+            vec!["computer-screen", "record", "0", "status"]
         );
     }
 

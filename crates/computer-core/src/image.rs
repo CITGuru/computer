@@ -119,6 +119,8 @@ pub enum ScreenAction {
     Viewers,
     /// Point that screen's browser at a URL. Takes one the others do not.
     Open,
+    /// Start, stop or ask about a recording of that screen.
+    Record,
 }
 
 impl ScreenAction {
@@ -130,6 +132,7 @@ impl ScreenAction {
             Self::Release => "release",
             Self::Viewers => "viewers",
             Self::Open => "open",
+            Self::Record => "record",
         }
     }
 }

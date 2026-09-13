@@ -115,7 +115,7 @@ pub use profile::{
     AppRuntime, Arrange, BrowserRuntime, CommandBrowserRuntime, CommandScreen,
     CommandScreenRuntime, CommandWallpaperRuntime, ConfiguredProfile, DesktopContract, FORCE,
     GeometrySpec, ImageSource, Launch, PROFILE_ENV, PROFILE_LABEL, PortLayout, Profile,
-    ProfileBuilder, SHARED, ScreenCommands, ScreenEnvironment, ScreenRuntime,
+    ProfileBuilder, Recording, SHARED, ScreenCommands, ScreenEnvironment, ScreenRuntime,
     UnsupportedAppRuntime, UnsupportedWallpaperRuntime, ViewerUrl, WallpaperRuntime,
     WaylandAppRuntime, WaylandEnvironment, WaylandWallpaperRuntime, Window, X11AppRuntime,
     X11Environment, X11WallpaperRuntime,
@@ -316,6 +316,16 @@ impl Builder {
     /// the time a box is up its browser is one of those applications.
     pub fn accessibility(self) -> Self {
         let wanted = bundle::Extras::accessibility();
+        self.packages(wanted.packages)
+    }
+
+    /// `ffmpeg`, which plays video and is also what [`Screen::record`] records
+    /// with.
+    ///
+    /// Opt-in: about a hundred megabytes of image, paid whether or not
+    /// anything is ever recorded or played.
+    pub fn video(self) -> Self {
+        let wanted = bundle::Extras::video();
         self.packages(wanted.packages)
     }
 
@@ -1285,6 +1295,21 @@ impl Computer {
         self.primary.viewers().await
     }
 
+    /// Start recording screen 0. See [`Screen::start_recording`].
+    pub async fn start_recording(&self, fps: Option<u32>) -> Result<String> {
+        self.primary.start_recording(fps).await
+    }
+
+    /// Stop it, and answer with the path of the finished file inside the box.
+    pub async fn stop_recording(&self) -> Result<String> {
+        self.primary.stop_recording().await
+    }
+
+    /// Where screen 0 is recording to, or `None` if it is not.
+    pub async fn recording(&self) -> Result<Option<String>> {
+        self.primary.recording().await
+    }
+
     /// What is on screen 0's clipboard.
     pub async fn clipboard(&self) -> Result<String> {
         self.primary.clipboard().await
@@ -1871,6 +1896,50 @@ impl Screen {
         self.runtimes
             .screen
             .viewers(self.host.as_ref(), self.profile.as_ref(), self.id)
+            .await
+    }
+
+    /// Start recording this screen, and answer with the path inside the box
+    /// that the recording is being written to.
+    ///
+    /// Open-ended, apart from [`Screen::record`], which runs for a duration
+    /// fixed before it starts and holds the call for all of it. A caller that
+    /// does not know how long the work will take wants this one.
+    ///
+    /// Encoded in the box: the frames never cross the wire, so this costs the
+    /// same from another host as from this one. Needs a box built with
+    /// [`Builder::video`], which is where the encoder comes from.
+    pub async fn start_recording(&self, fps: Option<u32>) -> Result<String> {
+        self.recorder(Recording::Start, fps)
+            .await?
+            .ok_or_else(|| Error::denied("the box did not say where it was recording"))
+    }
+
+    /// Stop it, and answer with the path of the finished file.
+    ///
+    /// The encoder is ended rather than killed, and this waits for it: an mp4
+    /// cut off mid-write has no index and plays in nothing.
+    pub async fn stop_recording(&self) -> Result<String> {
+        self.recorder(Recording::Stop, None)
+            .await?
+            .ok_or_else(|| Error::denied("the box did not say what it had recorded"))
+    }
+
+    /// Where this screen is recording to, or `None` if it is not.
+    pub async fn recording(&self) -> Result<Option<String>> {
+        self.recorder(Recording::Status, None).await
+    }
+
+    async fn recorder(&self, what: Recording, fps: Option<u32>) -> Result<Option<String>> {
+        self.runtimes
+            .screen
+            .record(
+                self.host.as_ref(),
+                self.profile.as_ref(),
+                self.id,
+                what,
+                fps,
+            )
             .await
     }
 
