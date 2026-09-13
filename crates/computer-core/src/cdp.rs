@@ -35,6 +35,41 @@ pub struct Target {
     pub ws_path: String,
 }
 
+/// `/json/list` escapes the title for HTML, so a page called `Sea & Spa` is
+/// listed as `Sea &amp; Spa`. Agents match on what they read.
+fn unescaped(title: &str) -> String {
+    const NAMED: [(&str, char); 5] = [
+        ("amp;", '&'),
+        ("lt;", '<'),
+        ("gt;", '>'),
+        ("quot;", '"'),
+        ("#39;", '\''),
+    ];
+
+    let mut pieces = title.split('&');
+    let mut out = String::with_capacity(title.len());
+    out.push_str(pieces.next().unwrap_or_default());
+
+    for piece in pieces {
+        let named = NAMED
+            .iter()
+            .find_map(|(entity, plain)| piece.strip_prefix(entity).map(|tail| (*plain, tail)));
+
+        match named {
+            Some((plain, tail)) => {
+                out.push(plain);
+                out.push_str(tail);
+            }
+            None => {
+                out.push('&');
+                out.push_str(piece);
+            }
+        }
+    }
+
+    out
+}
+
 impl Target {
     fn from_json(value: &Value) -> Option<Self> {
         let ws = value.get("webSocketDebuggerUrl")?.as_str()?;
@@ -46,11 +81,12 @@ impl Target {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            title: value
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            title: unescaped(
+                value
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
             url: value
                 .get("url")
                 .and_then(Value::as_str)
@@ -2961,6 +2997,19 @@ mod tests {
         assert_eq!(base64_encode(b"Ma"), "TWE=");
         assert_eq!(base64_encode(b"M"), "TQ==");
         assert_eq!(base64_decode("TWFu").as_deref(), Some(&b"Man"[..]));
+    }
+
+    #[test]
+    fn test_a_listed_title_comes_back_as_the_page_wrote_it() {
+        assert_eq!(unescaped("M&#39;Diq"), "M'Diq");
+        assert_eq!(unescaped("Sea &amp; Spa"), "Sea & Spa");
+        assert_eq!(unescaped("&lt;b&gt; &quot;x&quot;"), "<b> \"x\"");
+        assert_eq!(
+            unescaped("R&D &unknown; &"),
+            "R&D &unknown; &",
+            "what is not one of the five it escapes is left alone"
+        );
+        assert_eq!(unescaped("plain"), "plain");
     }
 
     #[test]
