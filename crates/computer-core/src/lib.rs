@@ -1528,6 +1528,12 @@ impl Computer {
         self.primary.cursor().await
     }
 
+    /// Where screen 0's pointer is, putting it somewhere first if that is the
+    /// only way to find out. See [`Desktop::find_cursor`].
+    pub async fn find_cursor(&self) -> Result<Point> {
+        self.primary.find_cursor().await
+    }
+
     /// What the accessibility tree says is on the screen.
     ///
     /// A native window only. A page is read through [`Page`], which knows
@@ -2319,6 +2325,12 @@ impl Screen {
         self.driver.cursor().await
     }
 
+    /// Where the pointer is, putting it somewhere first if that is the only
+    /// way to find out. See [`Desktop::find_cursor`].
+    pub async fn find_cursor(&self) -> Result<Point> {
+        self.driver.find_cursor().await
+    }
+
     /// What the accessibility tree says is on the screen.
     ///
     /// Every application on this screen, or one named by `app`.
@@ -2413,6 +2425,12 @@ impl Desktop for Screen {
 
     async fn cursor(&self) -> Result<Point> {
         self.driver.cursor().await
+    }
+
+    /// Forwarded, or the trait default would answer here and the driver's own
+    /// would never run.
+    async fn find_cursor(&self) -> Result<Point> {
+        self.driver.find_cursor().await
     }
 
     async fn geometry(&self) -> Result<(u32, u32)> {

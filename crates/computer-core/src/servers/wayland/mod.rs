@@ -360,7 +360,7 @@ impl Desktop for WaylandDesktop {
     }
 
     async fn capture_pointing(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
-        let at = self.cursor().await?;
+        let at = self.find_cursor().await?;
         self.grim(pointing_argv(at, area, scale)).await
     }
 
@@ -465,6 +465,28 @@ impl Desktop for WaylandDesktop {
                 gaps: vec!["cursor after a person drove the screen"],
             })
         }
+    }
+
+    /// Puts the pointer in the middle and answers with that, where the tally
+    /// says nothing.
+    ///
+    /// Nothing here can read the position, so the only way to know it is to
+    /// set it. Not a nudge: a small move from an unknown place lands in
+    /// another unknown place. The middle is somewhere a caller can predict.
+    ///
+    /// Once per box, and again only after a person has driven the screen.
+    /// During one this refuses, as moving their pointer would be worse than
+    /// not answering.
+    async fn find_cursor(&self) -> Result<Point> {
+        if let Ok(at) = self.cursor().await {
+            return Ok(at);
+        }
+
+        let (width, height) = self.geometry().await?;
+        let middle = Point::new(width / 2, height / 2);
+        self.move_to(middle).await?;
+
+        Ok(middle)
     }
 
     async fn geometry(&self) -> Result<(u32, u32)> {
@@ -627,6 +649,37 @@ impl DesktopFactory for WaylandDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A host that reaches no box, so a call that needs one is told apart
+    /// from one that answered out of the driver's own state.
+    struct NoHost;
+
+    #[async_trait]
+    impl ScreenHost for NoHost {
+        async fn run(&self, _argv: &[String], _screen: ScreenId) -> Result<ExecResult> {
+            Err(Error::transport_public("no box here"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_the_pointer_is_placed_only_where_it_was_asked_about() {
+        let desktop = WaylandDesktop::new(Arc::new(NoHost) as Arc<dyn ScreenHost>, ScreenId(0));
+
+        assert!(
+            desktop.cursor().await.is_err(),
+            "reporting the pointer never moves it: a batch told to report one, \
+             and a click with no point of its own, both come through here"
+        );
+
+        // And `find_cursor` does move it, which is why the two are separate.
+        // It reaches the host, which this one refuses, so the failure it gives
+        // back is the move rather than the empty tally.
+        let reached = desktop.find_cursor().await.expect_err("no host here");
+        assert!(
+            !reached.to_string().contains("before the first move"),
+            "it went on to place the pointer rather than giving up: {reached}"
+        );
+    }
 
     #[test]
     fn test_the_pointer_is_drawn_before_the_picture_is_cut_down() {

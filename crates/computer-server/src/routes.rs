@@ -743,7 +743,10 @@ async fn cursor(
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
 
-    Ok(Json(target.as_desktop().cursor().await?))
+    // Asked about for its own sake, so a desktop that cannot read the
+    // position may put the pointer somewhere to answer. The cursor a batch
+    // reports, and a click with no point, still go through `cursor`.
+    Ok(Json(target.as_desktop().find_cursor().await?))
 }
 
 #[derive(Debug, Default, Deserialize)]

@@ -507,7 +507,22 @@ pub trait Desktop: Send + Sync {
     /// A root-window capture does not include the cursor, so no screenshot
     /// shows this. A display server that cannot read the pointer position
     /// answers [`Error::Unsupported`] rather than guessing.
+    /// Where the pointer is, reported and never moved.
+    ///
+    /// A batch that was asked to report the pointer, and a click with no point
+    /// of its own, both come through here: neither may be the thing that moves
+    /// it.
     async fn cursor(&self) -> Result<Point>;
+
+    /// Where the pointer is, putting it somewhere first if that is the only
+    /// way to find out.
+    ///
+    /// For a caller that asked about the pointer for its own sake — `cursor`
+    /// on its own, or drawing it into a capture. The default reports without
+    /// moving anything, which is every desktop that can read the position.
+    async fn find_cursor(&self) -> Result<Point> {
+        self.cursor().await
+    }
 
     /// The screen's own idea of its size.
     ///
