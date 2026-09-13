@@ -143,6 +143,7 @@ impl Client {
         format: Reading,
         limit: Option<usize>,
         max_links: Option<usize>,
+        tab: Option<&str>,
     ) -> Result<PageText> {
         let format = match format {
             Reading::Markdown => "markdown",
@@ -150,6 +151,9 @@ impl Client {
             Reading::Raw => "raw",
         };
         let mut path = format!("/v1/boxes/{id}/page?format={format}");
+        if let Some(tab) = tab {
+            path.push_str(&format!("&tab={}", query_value(tab)));
+        }
         if let Some(limit) = limit {
             path.push_str(&format!("&limit={limit}"));
         }
@@ -161,28 +165,19 @@ impl Client {
     }
 
     /// What on the page matches, best first.
-    pub async fn find(
-        &self,
-        id: &str,
-        query: &str,
-        limit: Option<usize>,
-        scroll: Option<bool>,
-        exact: Option<bool>,
-        role: Option<&str>,
-    ) -> Result<Vec<Element>> {
-        let mut path = format!("/v1/boxes/{id}/page/find?q={}", query_value(query));
-        // A role stands in for the query where the caller gave one.
-        if let Some(role) = role {
-            path.push_str(&format!("&role={}", query_value(role)));
-        }
-        if let Some(limit) = limit {
-            path.push_str(&format!("&limit={limit}"));
-        }
-        if let Some(scroll) = scroll {
-            path.push_str(&format!("&scroll={scroll}"));
-        }
-        if let Some(exact) = exact {
-            path.push_str(&format!("&exact={exact}"));
+    pub async fn find(&self, id: &str, what: &Find) -> Result<Vec<Element>> {
+        let mut path = format!("/v1/boxes/{id}/page/find?q={}", query_value(&what.query));
+
+        for (name, given) in [
+            ("limit", what.limit.map(|n| n.to_string())),
+            ("scroll", what.scroll.map(|on| on.to_string())),
+            ("exact", what.exact.map(|on| on.to_string())),
+            ("role", what.role.clone()),
+            ("tab", what.tab.clone()),
+        ] {
+            if let Some(given) = given {
+                path.push_str(&format!("&{name}={}", query_value(&given)));
+            }
         }
 
         self.send(reqwest::Method::GET, &path, None, &[]).await

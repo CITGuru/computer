@@ -1,8 +1,9 @@
 //! Driving boxes through a server.
 
-use crate::{USAGE, flag, framing, positional, present, wheel};
+use crate::{USAGE, bare, flag, framing, positional, present, wheel};
 use computer_api::{
-    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, OnNode, OpenIn, Rect, Shot, Window,
+    Action, ActionBatch, Arrange, BatchResult, Evaluate, Find, ForkMode, ForkRequest, Held,
+    OnElement, OnNode, OpenIn, Reading, Rect, Shot, Where, Window,
 };
 use computer_client::{Client, frame_png};
 use computer_types::{Button, Desktop, Feature, NodeQuery, Placement, Point, Selection, Spec};
@@ -147,15 +148,27 @@ fn asked(args: &[String]) -> Result<Shot, String> {
 pub async fn open(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let url = positional(args, 1, "a URL").map_err(|e| e.to_string())?;
-    act(
+    let target = match flag(args, "--target") {
+        Some("current") => OpenIn::Current,
+        Some("blank") | None => OpenIn::Blank,
+        Some(other) => return Err(format!("no such target: {other}")),
+    };
+
+    let result = acted(
         client,
         id,
         Action::OpenUrl {
             url: url.to_string(),
-            target: OpenIn::Blank,
+            target,
         },
     )
-    .await
+    .await?;
+
+    for tab in &result.tabs {
+        println!("{}", tab.id);
+    }
+
+    Ok(())
 }
 
 /// Open an app by name, and wait until it has drawn.
@@ -736,6 +749,10 @@ fn name_of(action: &Action) -> String {
 
 /// Do it, and say nothing when it worked.
 async fn act(client: &Client, id: &str, action: Action) -> Done {
+    acted(client, id, action).await.map(|_| ())
+}
+
+async fn acted(client: &Client, id: &str, action: Action) -> Result<BatchResult, String> {
     let result = client
         .act(
             id,
@@ -757,7 +774,7 @@ async fn act(client: &Client, id: &str, action: Action) -> Done {
             .as_ref()
             .map(|error| error.message.clone())
             .unwrap_or_else(|| "it was refused".to_string())),
-        None => Ok(()),
+        None => Ok(result),
     }
 }
 
@@ -766,4 +783,267 @@ fn number(args: &[String], at: usize, what: &str) -> Result<u32, String> {
         .map_err(|e| e.to_string())?
         .parse()
         .map_err(|_| format!("{what} must be a whole number of pixels"))
+}
+
+/// Everything a web page can be asked, which is the browser's half of a box.
+///
+/// Grouped rather than spread across the top level: a page is one thing to
+/// address, the way a window and a widget are, and `find` on its own would say
+/// nothing about what it searches.
+/// The `browser` flags that take a value, so a positional can be told apart
+/// from one wherever it stands on the line.
+const VALUED: [&str; 8] = [
+    "--tab",
+    "--button",
+    "--role",
+    "--limit",
+    "--within",
+    "--or",
+    "--format",
+    "--timeout",
+];
+
+pub async fn browser(client: &Client, args: &[String]) -> Done {
+    let rest = bare(args, &VALUED);
+    let id = positional(&rest, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(
+        &rest,
+        1,
+        "read, find, click, fill, select, options, wait, hover, eval, tabs, \
+         switch, close, back, forward or reload",
+    )
+    .map_err(|e| e.to_string())?;
+
+    let tab = flag(args, "--tab");
+    let query = |at: usize| -> Result<String, String> {
+        Ok(positional(&rest, at, "a query")
+            .map_err(|e| e.to_string())?
+            .to_string())
+    };
+
+    // The ones that are not element operations answer for themselves.
+    match op {
+        "read" => return read_page(client, id, args).await,
+        "find" => return find_on_page(client, id, args, &rest).await,
+        "eval" => return evaluate_on_page(client, id, args, &rest).await,
+        "tabs" => return list_tabs(client, id).await,
+        "switch" => {
+            let which = query(2)?;
+            client
+                .focus_tab(id, &which)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("switched to {which}");
+            return Ok(());
+        }
+        "close" => {
+            let which = query(2)?;
+            client
+                .close_tab(id, &which)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("closed {which}");
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let what = match op {
+        "click" => OnElement::Click {
+            query: query(2)?,
+            button: match flag(args, "--button") {
+                Some("right") => Button::Right,
+                Some("middle") => Button::Middle,
+                _ => Button::Left,
+            },
+            double: present(args, "--double"),
+        },
+        "fill" => OnElement::Fill {
+            query: query(2)?,
+            text: positional(&rest, 3, "a value")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+        },
+        "select" => OnElement::Choose {
+            query: query(2)?,
+            option: positional(&rest, 3, "an option")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+        },
+        "options" => OnElement::Options { query: query(2)? },
+        "wait" => OnElement::WaitFor {
+            query: query(2)?,
+            gone: present(args, "--gone"),
+            within_ms: counted(args, "--within", "a number of milliseconds")?,
+            or: flag(args, "--or")
+                .map(|given| {
+                    given
+                        .split(',')
+                        .map(str::trim)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            exact: present(args, "--exact"),
+        },
+        "hover" => OnElement::Hover { query: query(2)? },
+        "back" => OnElement::History { go: Where::Back },
+        "forward" => OnElement::History { go: Where::Forward },
+        "reload" => OnElement::History { go: Where::Reload },
+        other => return Err(format!("no such op: {other}")),
+    };
+
+    // The same settle a click through the batch takes, so what comes back is
+    // the page it reached rather than the page on its way.
+    let result = client
+        .on_element(id, &what, 600, tab)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for option in &result.options {
+        println!("{option}");
+    }
+    if let Some(element) = &result.element {
+        println!("{}", shown_element(element));
+    }
+    if let Some(matched) = &result.matched {
+        println!("matched {matched:?}");
+    }
+    // A reload lands where it started, which is not the same as not moving.
+    // Only what was about moving is worth a word when it did not move.
+    match &result.url {
+        Some(url) if result.navigated || op == "reload" => println!("{url}"),
+        Some(_) if matches!(op, "click" | "back" | "forward") => {
+            println!("the page did not move")
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+async fn read_page(client: &Client, id: &str, args: &[String]) -> Done {
+    let format = match flag(args, "--format") {
+        Some("text") => Reading::Text,
+        Some("raw") => Reading::Raw,
+        Some("markdown") | None => Reading::Markdown,
+        Some(other) => return Err(format!("no such format: {other}")),
+    };
+
+    let read = client
+        .page(
+            id,
+            format,
+            counted(args, "--limit", "a number of characters")?,
+            None,
+            flag(args, "--tab"),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!("{}", read.text);
+    if read.truncated {
+        eprintln!("(truncated)");
+    }
+
+    Ok(())
+}
+
+async fn find_on_page(client: &Client, id: &str, args: &[String], rest: &[String]) -> Done {
+    let found = client
+        .find(
+            id,
+            &Find {
+                query: rest.get(2).cloned().unwrap_or_default(),
+                limit: counted(args, "--limit", "a number of matches")?,
+                scroll: Some(present(args, "--scroll")),
+                exact: Some(present(args, "--exact")),
+                role: flag(args, "--role").map(str::to_string),
+                tab: flag(args, "--tab").map(str::to_string),
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if found.is_empty() {
+        println!("nothing in view matched");
+    }
+    for element in &found {
+        println!("{}", shown_element(element));
+    }
+
+    Ok(())
+}
+
+async fn evaluate_on_page(client: &Client, id: &str, args: &[String], rest: &[String]) -> Done {
+    let what = Evaluate {
+        expression: positional(rest, 2, "an expression")
+            .map_err(|e| e.to_string())?
+            .to_string(),
+        timeout_ms: counted(args, "--timeout", "a number of milliseconds")?,
+        limit: counted(args, "--limit", "a number of characters")?,
+    };
+
+    let answered = client
+        .evaluate(id, &what, flag(args, "--tab"))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!("{}", answered.json);
+    if answered.truncated {
+        eprintln!("(truncated)");
+    }
+
+    Ok(())
+}
+
+async fn list_tabs(client: &Client, id: &str) -> Done {
+    let tabs = client.tabs(id).await.map_err(|e| e.to_string())?;
+
+    if tabs.is_empty() {
+        println!("no pages are open");
+    }
+    for tab in &tabs {
+        println!(
+            "{}{} {:?} {}",
+            tab.id,
+            match tab.visible {
+                true => " (on screen)",
+                false => "",
+            },
+            tab.title,
+            tab.url
+        );
+    }
+
+    Ok(())
+}
+
+fn shown_element(element: &computer_api::Element) -> String {
+    let where_ = match element.at {
+        Some(at) => format!("{},{}", at.x, at.y),
+        None => "out of view".to_string(),
+    };
+
+    format!(
+        "{}{} {:?}{} {} {}x{}{}{}",
+        element.tag,
+        element.kind.as_deref().unwrap_or(""),
+        element.text,
+        match element.role.as_deref() {
+            Some(role) => format!(" role={role}"),
+            None => String::new(),
+        },
+        where_,
+        element.width,
+        element.height,
+        match element.states.is_empty() {
+            true => String::new(),
+            false => format!(" [{}]", element.states.join(" ")),
+        },
+        match element.selector.as_deref() {
+            Some(selector) => format!("  {selector}"),
+            None => String::new(),
+        }
+    )
 }

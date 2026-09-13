@@ -8,7 +8,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, Arrange, Evaluate, ForkMode, ForkRequest, Frame, Held, NodeQuery,
+    Action, ActionBatch, Arrange, Evaluate, Find, ForkMode, ForkRequest, Frame, Held, NodeQuery,
     OnElement, OnNode, OpenIn, Reading, Rect, ScrollTo, Shot, Want, Where,
 };
 use computer_client::{Client, frame_png};
@@ -879,7 +879,13 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .map(|links| links as usize);
 
             let page = client
-                .page(&id, format, limit, max_links)
+                .page(
+                    &id,
+                    format,
+                    limit,
+                    max_links,
+                    arguments.get("tab").and_then(Value::as_str),
+                )
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -919,11 +925,17 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             let found = client
                 .find(
                     &id,
-                    &query,
-                    limit,
-                    arguments.get("scroll").and_then(Value::as_bool),
-                    arguments.get("exact").and_then(Value::as_bool),
-                    role,
+                    &Find {
+                        query,
+                        limit,
+                        scroll: arguments.get("scroll").and_then(Value::as_bool),
+                        exact: arguments.get("exact").and_then(Value::as_bool),
+                        role: role.map(str::to_string),
+                        tab: arguments
+                            .get("tab")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    },
                 )
                 .await
                 .map_err(|e| e.to_string())?;

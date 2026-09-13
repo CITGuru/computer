@@ -22,7 +22,9 @@ computer — a desktop in a box
                               capture the screen, one window, or a rectangle
                               of it. --scale answers smaller, which is most of
                               a megabyte an agent would otherwise pay per step
-  open <box> <url>            open a URL in the box's browser
+  open <box> <url> [--target blank|current]
+                              open a URL in the box's browser, and say which tab
+                              it landed in. a new tab unless told `current`
   app <box> <name> [args…]    open an application, and wait until it has drawn
   apps                        the application names a box can be given
   windows <box>               what is on the screen
@@ -43,6 +45,22 @@ computer — a desktop in a box
                               label beside a field as well as the widget's own
                               name, and press sends no pointer event at all.
                               needs a box built with accessibility
+  browser <box> read [--format text|raw] [--limit N] [--tab ID]
+  browser <box> find [<query>] [--role R] [--exact] [--scroll] [--limit N]
+  browser <box> click <query> [--double] [--button right] [--tab ID]
+  browser <box> fill <query> <value>
+  browser <box> select <query> <option> | options <query>
+  browser <box> wait <query> [--gone] [--or TEXT,TEXT] [--within MS]
+  browser <box> hover <query>
+  browser <box> eval <expression> [--timeout MS] [--limit N]
+  browser <box> tabs | switch <tab> | close <tab>
+  browser <box> back | forward | reload
+                              drive the web page by what is on it rather than
+                              by its pixels: a query is words, a name, an id or
+                              a selector, and find answers with one that names
+                              exactly the element it found. eval runs javascript
+                              in the page, which a box is isolated enough for
+
   type <box> <text>           type into the focused window
   key <box> <chord>           send a chord, such as ctrl+l or cmd+enter
   click <box> <x> <y> [button] [--double] [--held shift,ctrl]
@@ -169,6 +187,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "apps" => remote::apps(client).await,
         "windows" => remote::windows(client, args).await,
         "window" => remote::window(client, args).await,
+        "browser" => remote::browser(client, args).await,
         "widget" => remote::widget(client, args).await,
         "type" => remote::type_text(client, args).await,
         "key" => remote::key(client, args).await,
@@ -193,9 +212,9 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "ls" => local::list().await,
         "shot" => local::shot(args).await,
         "open" => local::open(args).await,
-        "app" | "apps" | "windows" | "window" | "widget" => Err(computer::Error::invalid(format!(
-            "`{command}` needs a server; drop --local"
-        ))),
+        "app" | "apps" | "windows" | "window" | "widget" | "browser" => Err(
+            computer::Error::invalid(format!("`{command}` needs a server; drop --local")),
+        ),
         "type" => local::type_text(args).await,
         "key" => local::key(args).await,
         "click" => local::click(args).await,
@@ -391,6 +410,26 @@ pub fn positional<'a>(args: &'a [String], at: usize, what: &str) -> computer::Re
     args.get(at)
         .map(String::as_str)
         .ok_or_else(|| computer::Error::denied(format!("expected {what}\n\n{USAGE}")))
+}
+
+/// The positional arguments alone, with the flags and the values they take
+/// removed, so a flag may stand anywhere on the line rather than only after
+/// the last positional. `valued` names the flags that take a value.
+pub fn bare(args: &[String], valued: &[&str]) -> Vec<String> {
+    let mut kept = Vec::new();
+    let mut rest = args.iter();
+
+    while let Some(arg) = rest.next() {
+        if arg.starts_with("--") {
+            if valued.contains(&arg.as_str()) {
+                rest.next();
+            }
+            continue;
+        }
+        kept.push(arg.clone());
+    }
+
+    kept
 }
 
 #[cfg(test)]

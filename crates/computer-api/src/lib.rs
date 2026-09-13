@@ -454,6 +454,26 @@ pub enum OpenIn {
     Current,
 }
 
+/// What a find is looking for.
+///
+/// A struct rather than six arguments: the shape grew past what a positional
+/// list says anything useful about.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Find {
+    /// Words, a name, an id, a placeholder or a selector. Empty where `role`
+    /// says what to look for instead.
+    pub query: String,
+    pub limit: Option<usize>,
+    /// Bring the best match into view before measuring it.
+    pub scroll: Option<bool>,
+    /// Match the whole of an element's words rather than any part.
+    pub exact: Option<bool>,
+    /// Everything built as this kind of thing, however it was built.
+    pub role: Option<String>,
+    /// Which page, or the one on screen.
+    pub tab: Option<String>,
+}
+
 /// Javascript to run in a page.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
