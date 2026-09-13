@@ -277,7 +277,13 @@ pub fn catalogue() -> Value {
             with_page(
                 json!({
                     "query": { "type": "string" },
-                    "button": { "type": "string", "enum": ["left", "right", "middle"] }
+                    "button": { "type": "string", "enum": ["left", "right", "middle"] },
+                    "double": {
+                        "type": "boolean",
+                        "description": "Click it twice: a file to open, a word to select, a row \
+                                        to expand. A page counts two clicks, which two separate \
+                                        calls to this do not give it."
+                    }
                 }),
                 &["query"]
             )
@@ -973,11 +979,22 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             }))
         }
         "click_element" => {
+            let double = flag(arguments, "double");
             let what = OnElement::Click {
                 query: text(arguments, "query")?,
                 button: button(arguments),
+                double,
             };
-            element(client, arguments, what, "clicked").await
+            element(
+                client,
+                arguments,
+                what,
+                match double {
+                    true => "double clicked",
+                    false => "clicked",
+                },
+            )
+            .await
         }
         "fill_field" => {
             let what = OnElement::Fill {

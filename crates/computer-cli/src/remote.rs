@@ -425,16 +425,15 @@ pub async fn click(client: &Client, args: &[String]) -> Done {
         _ => Button::Left,
     };
 
-    act(
-        client,
-        id,
-        Action::Click {
-            at: Some(Point { x, y }),
-            button,
-            held: modifiers(args)?,
-        },
-    )
-    .await
+    let held = modifiers(args)?;
+    let at = Some(Point { x, y });
+
+    let action = match args.iter().any(|arg| arg == "--double") {
+        true => Action::DoubleClick { at, button },
+        false => Action::Click { at, button, held },
+    };
+
+    act(client, id, action).await
 }
 
 pub async fn scroll(client: &Client, args: &[String]) -> Done {

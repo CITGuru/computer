@@ -1486,10 +1486,21 @@ async fn apply(
 
 async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<ElementResult> {
     Ok(match what {
-        OnElement::Click { query, button } => ElementResult {
-            element: Some(element_out(page.click_on(&query, button).await?)),
-            ..ElementResult::default()
-        },
+        OnElement::Click {
+            query,
+            button,
+            double,
+        } => {
+            let on = match double {
+                true => page.double_click_on(&query, button).await?,
+                false => page.click_on(&query, button).await?,
+            };
+
+            ElementResult {
+                element: Some(element_out(on)),
+                ..ElementResult::default()
+            }
+        }
         OnElement::Fill { query, text } => {
             page.fill(&query, &text).await?;
             ElementResult::default()

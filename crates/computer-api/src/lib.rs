@@ -280,6 +280,10 @@ pub enum OnElement {
         query: String,
         #[serde(default)]
         button: Button,
+        /// Twice, as a page counts it: a file to open, a word to select, a row
+        /// to expand.
+        #[serde(default)]
+        double: bool,
     },
     /// Put text in a field, as typing rather than as an assignment.
     Fill { query: String, text: String },
@@ -911,6 +915,18 @@ mod tests {
         let result: BatchResult = serde_json::from_str(answered).expect("parses");
 
         assert!(result.tabs.is_empty());
+    }
+
+    #[test]
+    fn test_a_click_on_an_element_is_single_unless_asked() {
+        let once: OnElement =
+            serde_json::from_str(r#"{"op":"click","query":"Report.pdf"}"#).expect("parses");
+        assert!(matches!(once, OnElement::Click { double: false, .. }));
+
+        let twice: OnElement =
+            serde_json::from_str(r#"{"op":"click","query":"Report.pdf","double":true}"#)
+                .expect("parses");
+        assert!(matches!(twice, OnElement::Click { double: true, .. }));
     }
 
     #[test]

@@ -1748,6 +1748,20 @@ impl Page {
     /// menu the window manager draws is outside the page and no screenshot of
     /// the viewport holds it.
     pub async fn click(&mut self, at: Point, button: Button) -> Result<()> {
+        self.press(at, button, 1).await
+    }
+
+    /// Two clicks, as a page counts them.
+    ///
+    /// Not one press carrying `clickCount: 2`, and not two carrying `1`: the
+    /// first leaves a page counting one click where a person made two, and the
+    /// second raises no `dblclick` at all. Both were measured.
+    pub async fn double_click(&mut self, at: Point, button: Button) -> Result<()> {
+        self.press(at, button, 1).await?;
+        self.press(at, button, 2).await
+    }
+
+    async fn press(&mut self, at: Point, button: Button, count: u32) -> Result<()> {
         let (name, mask) = button_parts(button);
 
         // The protocol does not derive `buttons` from `button`, and a page
@@ -1761,7 +1775,7 @@ impl Page {
                     "y": at.y,
                     "button": name,
                     "buttons": buttons,
-                    "clickCount": 1,
+                    "clickCount": count,
                 }),
             )
             .await?;
@@ -2005,6 +2019,14 @@ impl Page {
     pub async fn click_on(&mut self, query: &str, button: Button) -> Result<Element> {
         let (element, at) = self.reachable(query).await?;
         self.click(at, button).await?;
+        Ok(element)
+    }
+
+    /// [`Self::click_on`], twice. A file to open, a word to select, a row to
+    /// expand — none of which one click does.
+    pub async fn double_click_on(&mut self, query: &str, button: Button) -> Result<Element> {
+        let (element, at) = self.reachable(query).await?;
+        self.double_click(at, button).await?;
         Ok(element)
     }
 
@@ -3054,6 +3076,21 @@ mod tests {
             target_ids_in_context(&json!({}), "CONTEXT-1"),
             Err(Error::Denied { .. })
         ));
+    }
+
+    #[test]
+    fn test_a_double_click_is_two_presses_and_the_second_counts_two() {
+        // Measured against Chromium: one press carrying `clickCount: 2` leaves
+        // a page counting one click where a person made two, and two carrying
+        // `1` raise no `dblclick` at all.
+        let source = include_str!("cdp.rs");
+        let method = source
+            .split("pub async fn double_click(")
+            .nth(1)
+            .expect("double_click is there");
+
+        assert!(method.contains("self.press(at, button, 1)"));
+        assert!(method.contains("self.press(at, button, 2)"));
     }
 
     #[test]

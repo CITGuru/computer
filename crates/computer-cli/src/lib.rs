@@ -45,8 +45,9 @@ computer — a desktop in a box
                               needs a box built with accessibility
   type <box> <text>           type into the focused window
   key <box> <chord>           send a chord, such as ctrl+l or cmd+enter
-  click <box> <x> <y> [button] [--held shift,ctrl]
-                              click at a point, in device pixels. --held keeps
+  click <box> <x> <y> [button] [--double] [--held shift,ctrl]
+                              click at a point, in device pixels. --double
+                              clicks twice, as a page counts it. --held keeps
                               modifiers down around it, which pressing a key
                               first cannot: that press ends with its own command
   still <box> [--settle MS] [--within MS]

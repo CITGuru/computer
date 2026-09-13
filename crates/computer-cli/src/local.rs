@@ -121,9 +121,12 @@ pub async fn click(args: &[String]) -> computer::Result<()> {
         _ => Button::Left,
     };
 
-    computer
-        .click_with(Point::new(x, y), button, &modifiers(args)?)
-        .await
+    let at = Point::new(x, y);
+
+    match args.iter().any(|arg| arg == "--double") {
+        true => computer.double_click(at, button).await,
+        false => computer.click_with(at, button, &modifiers(args)?).await,
+    }
 }
 
 /// `--held shift,ctrl`, in the same spellings a chord takes.
