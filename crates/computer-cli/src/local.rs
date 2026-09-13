@@ -77,7 +77,7 @@ pub async fn list() -> computer::Result<()> {
     Ok(())
 }
 
-pub async fn shot(args: &[String]) -> computer::Result<()> {
+pub async fn screenshot(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let out = crate::remote::named(args).unwrap_or("screen.png");
 
@@ -93,6 +93,75 @@ pub async fn shot(args: &[String]) -> computer::Result<()> {
 pub async fn open(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     computer.open_url(positional(args, 1, "a URL")?).await
+}
+
+/// The pointer, grouped the way the server path groups it.
+pub async fn mouse(args: &[String]) -> computer::Result<()> {
+    let op = positional(args, 1, "move, click, drag, scroll or at")?.to_string();
+
+    let mut rest = args.to_vec();
+    rest.remove(1);
+
+    match op.as_str() {
+        "click" => click(&rest).await,
+        "scroll" => scroll(&rest).await,
+        "move" => {
+            let computer = attach(&rest).await?;
+            computer.move_to(point(&rest, 1)?).await
+        }
+        "drag" => {
+            let computer = attach(&rest).await?;
+            computer
+                .drag_with(
+                    point(&rest, 1)?,
+                    point(&rest, 3)?,
+                    button(rest.get(5)),
+                    &modifiers(&rest)?,
+                )
+                .await
+        }
+        "at" => {
+            let computer = attach(&rest).await?;
+            let at = computer.cursor().await?;
+            println!("{},{}", at.x, at.y);
+            Ok(())
+        }
+        other => Err(computer::Error::denied(format!("no such op: {other}"))),
+    }
+}
+
+pub async fn keyboard(args: &[String]) -> computer::Result<()> {
+    let op = positional(args, 1, "type or key")?.to_string();
+
+    let mut rest = args.to_vec();
+    rest.remove(1);
+
+    match op.as_str() {
+        "type" => type_text(&rest).await,
+        "key" => key(&rest).await,
+        other => Err(computer::Error::denied(format!("no such op: {other}"))),
+    }
+}
+
+fn point(args: &[String], at: usize) -> computer::Result<Point> {
+    let read = |at: usize, what: &str| -> computer::Result<u32> {
+        positional(args, at, what)?
+            .parse()
+            .map_err(|_| computer::Error::denied(format!("{what} must be a whole number")))
+    };
+
+    Ok(Point::new(
+        read(at, "an x coordinate")?,
+        read(at + 1, "a y coordinate")?,
+    ))
+}
+
+fn button(named: Option<&String>) -> Button {
+    match named.map(String::as_str) {
+        Some("right") => Button::Right,
+        Some("middle") => Button::Middle,
+        _ => Button::Left,
+    }
 }
 
 pub async fn type_text(args: &[String]) -> computer::Result<()> {
@@ -115,12 +184,7 @@ pub async fn click(args: &[String]) -> computer::Result<()> {
         .parse()
         .map_err(|_| computer::Error::denied("y must be a whole number of pixels"))?;
 
-    let button = match args.get(3).map(String::as_str) {
-        Some("right") => Button::Right,
-        Some("middle") => Button::Middle,
-        _ => Button::Left,
-    };
-
+    let button = button(args.get(3));
     let at = Point::new(x, y);
 
     match args.iter().any(|arg| arg == "--double") {

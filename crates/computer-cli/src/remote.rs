@@ -86,7 +86,7 @@ pub async fn list(client: &Client) -> Done {
     Ok(())
 }
 
-pub async fn shot(client: &Client, args: &[String]) -> Done {
+pub async fn screenshot(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let out = named(args).unwrap_or("screen.png");
     let shot = asked(args)?;
@@ -195,16 +195,6 @@ pub async fn apps(client: &Client) -> Done {
     Ok(())
 }
 
-/// What is on a screen, whoever opened it.
-pub async fn windows(client: &Client, args: &[String]) -> Done {
-    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-
-    for window in client.windows(id, 0).await.map_err(|e| e.to_string())? {
-        println!("{}", shown(&window));
-    }
-    Ok(())
-}
-
 fn counted<T: std::str::FromStr>(
     args: &[String],
     name: &str,
@@ -299,9 +289,16 @@ pub async fn widget(client: &Client, args: &[String]) -> Done {
 
 pub async fn window(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-    let what = positional(args, 1, "active, wait or a window id").map_err(|e| e.to_string())?;
+    let what =
+        positional(args, 1, "list, active, wait or a window id").map_err(|e| e.to_string())?;
 
     let window = match what {
+        "list" => {
+            for window in client.windows(id, 0).await.map_err(|e| e.to_string())? {
+                println!("{}", shown(&window));
+            }
+            return Ok(());
+        }
         "active" => match client
             .active_window(id, 0)
             .await
@@ -427,17 +424,80 @@ pub async fn key(client: &Client, args: &[String]) -> Done {
     .await
 }
 
+/// The pointer, grouped: click and scroll were at the top level, and move,
+/// drag and the cursor were reachable over the API but from no command.
+pub async fn mouse(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "move, click, drag, scroll or at").map_err(|e| e.to_string())?;
+
+    // The op sits between the box and what the verbs below already parse.
+    let mut rest = args.to_vec();
+    rest.remove(1);
+
+    match op {
+        "click" => click(client, &rest).await,
+        "scroll" => scroll(client, &rest).await,
+        "move" => {
+            let to = point(&rest, 1)?;
+            act(client, id, Action::Move { to }).await
+        }
+        "drag" => {
+            act(
+                client,
+                id,
+                Action::Drag {
+                    from: point(&rest, 1)?,
+                    to: point(&rest, 3)?,
+                    button: button(rest.get(5)),
+                    held: modifiers(&rest)?,
+                },
+            )
+            .await
+        }
+        "at" => {
+            let at = client.cursor(id, 0).await.map_err(|e| e.to_string())?;
+            println!("{},{}", at.x, at.y);
+            Ok(())
+        }
+        other => Err(format!("no such op: {other}")),
+    }
+}
+
+/// The keyboard, grouped to pair with `mouse`.
+pub async fn keyboard(client: &Client, args: &[String]) -> Done {
+    let op = positional(args, 1, "type or key").map_err(|e| e.to_string())?;
+
+    let mut rest = args.to_vec();
+    rest.remove(1);
+
+    match op {
+        "type" => type_text(client, &rest).await,
+        "key" => key(client, &rest).await,
+        other => Err(format!("no such op: {other}")),
+    }
+}
+
+fn point(args: &[String], at: usize) -> Result<Point, String> {
+    Ok(Point {
+        x: number(args, at, "an x coordinate")?,
+        y: number(args, at + 1, "a y coordinate")?,
+    })
+}
+
+fn button(named: Option<&String>) -> Button {
+    match named.map(String::as_str) {
+        Some("right") => Button::Right,
+        Some("middle") => Button::Middle,
+        _ => Button::Left,
+    }
+}
+
 pub async fn click(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let x = number(args, 1, "an x coordinate")?;
     let y = number(args, 2, "a y coordinate")?;
 
-    let button = match args.get(3).map(String::as_str) {
-        Some("right") => Button::Right,
-        Some("middle") => Button::Middle,
-        _ => Button::Left,
-    };
-
+    let button = button(args.get(3));
     let held = modifiers(args)?;
     let at = Some(Point { x, y });
 

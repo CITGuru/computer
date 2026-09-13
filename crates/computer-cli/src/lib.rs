@@ -18,7 +18,8 @@ computer — a desktop in a box
                               turned on afterwards
                               open a box and print where to watch it
   ls                          boxes that are running
-  shot <box> [file.png] [--window ID | --at X,Y --size WxH] [--scale PERCENT]
+  screenshot <box> [file.png] [--window ID | --at X,Y --size WxH]
+             [--scale PERCENT]
                               capture the screen, one window, or a rectangle
                               of it. --scale answers smaller, which is most of
                               a megabyte an agent would otherwise pay per step
@@ -27,7 +28,7 @@ computer — a desktop in a box
                               it landed in. a new tab unless told `current`
   app <box> <name> [args…]    open an application, and wait until it has drawn
   apps                        the application names a box can be given
-  windows <box>               what is on the screen
+  window <box> list           what is on the screen
   window <box> active         which window the keyboard reaches
   window <box> wait <class> [--within SECONDS]
                               wait for a window to appear and hold still
@@ -61,21 +62,27 @@ computer — a desktop in a box
                               exactly the element it found. eval runs javascript
                               in the page, which a box is isolated enough for
 
-  type <box> <text>           type into the focused window
-  key <box> <chord>           send a chord, such as ctrl+l or cmd+enter
-  click <box> <x> <y> [button] [--double] [--held shift,ctrl]
-                              click at a point, in device pixels. --double
-                              clicks twice, as a page counts it. --held keeps
-                              modifiers down around it, which pressing a key
-                              first cannot: that press ends with its own command
-  still <box> [--settle MS] [--within MS]
-                              wait until the screen stops changing
-  scroll <box> [<x> <y>] up|down|left|right [notches]
-  scroll <box> <x> <y> <dy> [dx]
+  keyboard <box> type <text>  type into the focused window
+  keyboard <box> key <chord>  send a chord, such as ctrl+l or cmd+enter
+
+  mouse <box> move <x> <y>    put the pointer somewhere, in device pixels
+  mouse <box> click <x> <y> [button] [--double] [--held shift,ctrl]
+                              --double clicks twice, as a page counts it.
+                              --held keeps modifiers down around it, which
+                              pressing a key first cannot: that press ends
+                              with its own command
+  mouse <box> drag <x> <y> <x> <y> [button] [--held shift,ctrl]
+                              press at the first point, release at the second
+  mouse <box> scroll [<x> <y>] up|down|left|right [notches]
+  mouse <box> scroll <x> <y> <dy> [dx]
                               turn the wheel, in notches. a direction goes 3
                               unless told otherwise; the signed form takes both
                               axes at once, positive being down and right.
                               without a point, the middle of the screen
+  mouse <box> at              where the pointer is
+
+  still <box> [--settle MS] [--within MS]
+                              wait until the screen stops changing
   clip <box> [text] [--primary]
                               read a selection, or set it
   takeover <box>              open the input viewer and print its URL
@@ -181,19 +188,16 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
     match command {
         "up" => remote::up(client, args).await,
         "ls" => remote::list(client).await,
-        "shot" => remote::shot(client, args).await,
+        "screenshot" => remote::screenshot(client, args).await,
         "open" => remote::open(client, args).await,
         "app" => remote::app(client, args).await,
         "apps" => remote::apps(client).await,
-        "windows" => remote::windows(client, args).await,
         "window" => remote::window(client, args).await,
         "browser" => remote::browser(client, args).await,
         "widget" => remote::widget(client, args).await,
-        "type" => remote::type_text(client, args).await,
-        "key" => remote::key(client, args).await,
-        "click" => remote::click(client, args).await,
+        "mouse" => remote::mouse(client, args).await,
+        "keyboard" => remote::keyboard(client, args).await,
         "still" => remote::still(client, args).await,
-        "scroll" => remote::scroll(client, args).await,
         "clip" => remote::clip(client, args).await,
         "takeover" => remote::takeover(client, args).await,
         "release" => remote::release(client, args).await,
@@ -210,16 +214,14 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
     let outcome = match command {
         "up" => local::up(args).await,
         "ls" => local::list().await,
-        "shot" => local::shot(args).await,
+        "screenshot" => local::screenshot(args).await,
         "open" => local::open(args).await,
-        "app" | "apps" | "windows" | "window" | "widget" | "browser" => Err(
-            computer::Error::invalid(format!("`{command}` needs a server; drop --local")),
-        ),
-        "type" => local::type_text(args).await,
-        "key" => local::key(args).await,
-        "click" => local::click(args).await,
+        "app" | "apps" | "window" | "widget" | "browser" => Err(computer::Error::invalid(format!(
+            "`{command}` needs a server; drop --local"
+        ))),
+        "mouse" => local::mouse(args).await,
+        "keyboard" => local::keyboard(args).await,
         "still" => local::still(args).await,
-        "scroll" => local::scroll(args).await,
         "clip" => local::clip(args).await,
         "takeover" => local::takeover(args).await,
         "release" => local::release(args).await,
@@ -564,10 +566,10 @@ mod tests {
 
     #[test]
     fn test_a_global_flag_is_taken_out_of_the_positionals() {
-        let mut given = args(&["--local", "shot", "mybox", "out.png"]);
+        let mut given = args(&["--local", "screenshot", "mybox", "out.png"]);
 
         assert!(take(&mut given, "--local"));
-        assert_eq!(given, args(&["shot", "mybox", "out.png"]));
+        assert_eq!(given, args(&["screenshot", "mybox", "out.png"]));
     }
 
     #[test]
