@@ -6,7 +6,9 @@ use computer_api::{
     OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, Shot, Where, Window,
 };
 use computer_client::{Client, captured_image, frame_png};
-use computer_types::{Button, Desktop, Feature, NodeQuery, Placement, Point, Selection, Spec};
+use computer_types::{
+    Button, Desktop, DisplayServer, Feature, NodeQuery, Placement, Point, Selection, Spec,
+};
 use std::time::Duration;
 
 type Done = Result<(), String>;
@@ -34,6 +36,9 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
     }
     if present(args, "--video") {
         desktop.features.push(Feature::Video);
+    }
+    if present(args, "--wayland") {
+        desktop.server = DisplayServer::Wayland;
     }
 
     let mut placement = Placement::default();

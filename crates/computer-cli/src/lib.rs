@@ -13,11 +13,12 @@ pub const USAGE: &str = "\
 computer — a desktop in a box
 
   up [--size WxH] [--url URL] [--ttl MINUTES] [--wide-fonts]
-     [--accessibility] [--video]
+     [--accessibility] [--video] [--wayland]
                               --accessibility reads native windows by widget
                               name, for the widget command below. --video puts
-                              ffmpeg in the box, for record. neither can be
-                              turned on afterwards
+                              ffmpeg in the box, for record. --wayland runs
+                              sway in place of X11, which draws no pointer
+                              into a capture. none can be turned on afterwards
                               open a box and print where to watch it
   ls                          boxes that are running
   screenshot <box> [file.png] [--window ID | --at X,Y --size WxH]
@@ -26,8 +27,9 @@ computer — a desktop in a box
                               of it. --scale answers smaller, which is most of
                               a megabyte an agent would otherwise pay per step.
                               --pointer draws the pointer, which a capture
-                              leaves out. --tab raises that page first, and
-                              still captures the desktop around it
+                              leaves out; a wayland box refuses it, having no
+                              cursor between commands. --tab raises that page
+                              first, and still captures the desktop around it
   open <box> <url> [--target blank|current]
                               open a URL in the box's browser, and say which tab
                               it landed in. a new tab unless told `current`

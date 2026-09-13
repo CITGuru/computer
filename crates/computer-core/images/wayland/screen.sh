@@ -277,6 +277,83 @@ open_url() {
   computer-browser --user-data-dir="$profile" "$url" >>"${logs}-browser.log" 2>&1 &
 }
 
+recording_file="/tmp/computer/recording-${screen}.mp4"
+recording_pid="/tmp/computer/recording-${screen}.pid"
+recording_flag="/tmp/computer/recording-${screen}.on"
+
+# wlroots publishes no input ffmpeg can read, and this image carries no
+# wf-recorder, so the frames come from the same `grim` every screenshot uses.
+# It manages about sixty grabs a second here, which is well past any rate a
+# recording is watched at.
+#
+# The pointer is not in it. A synthetic move arrives as a virtual-pointer
+# device that lives for the length of one command, so the seat holds no
+# pointer between them and the compositor has no cursor to draw. `grim -c`
+# would draw one only while a person is on the viewer.
+record() {
+  what="${3:-}"
+  fps="${4:-12}"
+
+  running() {
+    pid=$(cat "$recording_pid" 2>/dev/null || true)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  }
+
+  case "$what" in
+    start)
+      command -v ffmpeg >/dev/null 2>&1 \
+        || { echo "this box has no ffmpeg; open it with the video feature" >&2; exit 4; }
+      grim -t png - >/dev/null 2>&1 \
+        || { echo "screen ${screen} is not running" >&2; exit 1; }
+      running && { echo "screen ${screen} is already recording" >&2; exit 3; }
+
+      rm -f "$recording_file"
+      : > "$recording_flag"
+
+      pause=$(awk "BEGIN { printf \"%.4f\", 1 / $fps }")
+
+      # Wall-clock timestamps rather than a fixed input rate: the loop keeps
+      # no exact cadence, and a file that assumes one plays at the wrong
+      # speed. $! after a pipeline is ffmpeg, which is the half to wait on.
+      (
+        while [ -e "$recording_flag" ]; do
+          grim -t ppm - || break
+          sleep "$pause"
+        done
+      ) | ffmpeg -nostdin -loglevel error -y \
+            -f image2pipe -use_wallclock_as_timestamps 1 -i - \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p -vsync vfr \
+            -movflags frag_keyframe+empty_moov \
+            "$recording_file" >>"${logs}-record.log" 2>&1 &
+      echo $! > "$recording_pid"
+      echo "$recording_file"
+      ;;
+    stop)
+      running || { echo "screen ${screen} is not recording" >&2; exit 3; }
+      pid=$(cat "$recording_pid")
+
+      # The flag ends the loop, ffmpeg reaches the end of its input and writes
+      # the index on its own. Not a signal: an mp4 cut off mid-write has no
+      # index and plays in nothing.
+      rm -f "$recording_flag"
+      for _ in $(seq 1 100); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+      rm -f "$recording_pid"
+      echo "$recording_file"
+      ;;
+    status)
+      running && echo "recording ${recording_file}" || echo "idle"
+      ;;
+    *)
+      echo "usage: computer-screen record <screen> start|stop|status [fps]" >&2
+      exit 2
+      ;;
+  esac
+}
+
 case "$action" in
   start)   start ;;
   viewers) viewers ;;
@@ -284,6 +361,6 @@ case "$action" in
   control) control "$@" ;;
   release) release "$@" ;;
   open)    open_url ;;
-  record)  echo "recording is not available on the wayland desktop yet" >&2; exit 4 ;;
+  record)  record "$@" ;;
   *) echo "usage: computer-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
 esac
