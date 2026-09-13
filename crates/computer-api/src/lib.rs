@@ -538,12 +538,59 @@ pub struct Shot {
     /// read survives being halved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<u32>,
+    /// Draw the pointer into the picture. A capture leaves it out otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pointer: bool,
+    /// Bring this page to the front before capturing, so the screen shows it.
+    /// The capture is still of the screen: window frame, address bar and all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
 }
 
 impl Shot {
+    /// Whether the plain whole-screen capture answers this, which is the one
+    /// path a desktop with no cropping of its own can still serve.
     pub fn is_whole(&self) -> bool {
-        self.window.is_none() && self.region.is_none() && self.scale.is_none()
+        self.window.is_none() && self.region.is_none() && self.scale.is_none() && !self.pointer
     }
+}
+
+/// A capture of the page itself, from the browser rather than from the screen.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageShot {
+    /// The whole scrollable page rather than what is in view. As tall as the
+    /// page is: an article measured 33585 pixels and 6.8MB as PNG, which is
+    /// why this answers JPEG unless told otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<Picture>,
+    /// JPEG only, 1 to 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Picture {
+    #[default]
+    Png,
+    Jpeg,
+}
+
+/// A picture, and what it is.
+///
+/// Not a [`Frame`]: that one is hashed and kept for the trace, because the
+/// screen is what a caller watches step by step. A page capture is asked for
+/// on purpose and is as large as the page.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Captured {
+    pub format: Picture,
+    pub bytes: usize,
+    pub image_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -746,6 +793,11 @@ pub enum TraceEvent {
         path: String,
         bytes: usize,
     },
+    PageCaptured {
+        /// Past the viewport, to the whole scrollable page.
+        full: bool,
+        bytes: usize,
+    },
     ClipboardSet {
         screen: u32,
         selection: Selection,
@@ -870,6 +922,19 @@ impl ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_pointer_is_not_the_plain_whole_screen() {
+        assert!(Shot::default().is_whole());
+        assert!(
+            !Shot {
+                pointer: true,
+                ..Shot::default()
+            }
+            .is_whole(),
+            "the plain path cannot draw one, so a pointer shot must not take it"
+        );
+    }
 
     #[test]
     fn test_a_wait_without_an_alternative_is_still_a_wait() {

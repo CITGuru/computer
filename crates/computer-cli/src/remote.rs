@@ -3,9 +3,9 @@
 use crate::{USAGE, bare, flag, framing, positional, present, wheel};
 use computer_api::{
     Action, ActionBatch, Arrange, BatchResult, Evaluate, Find, ForkMode, ForkRequest, Held,
-    OnElement, OnNode, OpenIn, Reading, Rect, Shot, Where, Window,
+    OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, Shot, Where, Window,
 };
-use computer_client::{Client, frame_png};
+use computer_client::{Client, captured_image, frame_png};
 use computer_types::{Button, Desktop, Feature, NodeQuery, Placement, Point, Selection, Spec};
 use std::time::Duration;
 
@@ -112,7 +112,7 @@ pub async fn screenshot(client: &Client, args: &[String]) -> Done {
 
 /// The file to write, which is the first argument that is not part of a flag.
 pub fn named(args: &[String]) -> Option<&str> {
-    let flags = ["--window", "--at", "--size", "--scale"];
+    let flags = ["--window", "--at", "--size", "--scale", "--tab"];
     let mut rest = args.iter().skip(1);
 
     while let Some(arg) = rest.next() {
@@ -145,6 +145,8 @@ fn asked(args: &[String]) -> Result<Shot, String> {
             _ => None,
         },
         scale: shot.scale,
+        pointer: present(args, "--pointer"),
+        tab: flag(args, "--tab").map(str::to_string),
     })
 }
 
@@ -807,6 +809,10 @@ fn summarise(event: &computer_api::TraceEvent) -> String {
         E::AppLaunched { screen, app, .. } => format!("screen {screen}  opened {app}"),
         E::FileWritten { path, bytes } => format!("wrote {bytes} bytes to {path}"),
         E::FileRead { path, bytes } => format!("read {bytes} bytes from {path}"),
+        E::PageCaptured { full, bytes } => match full {
+            true => format!("captured the whole page, {bytes} bytes"),
+            false => format!("captured the page in view, {bytes} bytes"),
+        },
         E::ClipboardSet { selection, .. } => format!("set the {selection:?} selection"),
         E::ClipboardRead { selection, .. } => format!("read the {selection:?} selection"),
         E::TakeoverStarted { screen, .. } => format!("screen {screen} handed to a person"),
@@ -915,7 +921,8 @@ fn number(args: &[String], at: usize, what: &str) -> Result<u32, String> {
 /// nothing about what it searches.
 /// The `browser` flags that take a value, so a positional can be told apart
 /// from one wherever it stands on the line.
-const VALUED: [&str; 8] = [
+const VALUED: [&str; 9] = [
+    "--quality",
     "--tab",
     "--button",
     "--role",
@@ -932,8 +939,8 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     let op = positional(
         &rest,
         1,
-        "read, find, click, fill, select, options, wait, hover, eval, tabs, \
-         switch, close, back, forward or reload",
+        "read, find, click, fill, select, options, wait, hover, eval, \
+         screenshot, tabs, switch, close, back, forward or reload",
     )
     .map_err(|e| e.to_string())?;
 
@@ -949,6 +956,7 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         "read" => return read_page(client, id, args).await,
         "find" => return find_on_page(client, id, args, &rest).await,
         "eval" => return evaluate_on_page(client, id, args, &rest).await,
+        "screenshot" => return capture_page(client, id, args, &rest).await,
         "tabs" => return list_tabs(client, id).await,
         "switch" => {
             let which = query(2)?;
@@ -1095,6 +1103,45 @@ async fn find_on_page(client: &Client, id: &str, args: &[String], rest: &[String
         println!("{}", shown_element(element));
     }
 
+    Ok(())
+}
+
+async fn capture_page(client: &Client, id: &str, args: &[String], rest: &[String]) -> Done {
+    let format = match flag(args, "--format") {
+        Some("png") => Some(Picture::Png),
+        Some("jpeg" | "jpg") => Some(Picture::Jpeg),
+        None => None,
+        Some(other) => return Err(format!("no such format: {other}")),
+    };
+
+    let taken = client
+        .page_screenshot(
+            id,
+            &PageShot {
+                full: present(args, "--full"),
+                format,
+                quality: counted(args, "--quality", "a quality between 1 and 100")?,
+                tab: flag(args, "--tab").map(str::to_string),
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let image = captured_image(&taken).map_err(|e| e.to_string())?;
+
+    // Named for what it holds: --full answers jpeg unless told otherwise, and
+    // a .png full of jpeg bytes opens in nothing.
+    let out = rest.get(2).cloned().unwrap_or_else(|| {
+        match taken.format {
+            Picture::Jpeg => "page.jpg",
+            Picture::Png => "page.png",
+        }
+        .to_string()
+    });
+
+    std::fs::write(&out, &image).map_err(|error| format!("{out}: {error}"))?;
+
+    eprintln!("{} bytes → {out}", image.len());
     Ok(())
 }
 

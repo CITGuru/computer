@@ -35,6 +35,8 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
 /// Deleting a box is not recoverable, and the caller is usually an agent.
 const CONFIRM_DELETE: &str = "x-computer-confirm-delete";
 const TRACE_PAGE: usize = 500;
+/// Long enough for a raised window to be drawn before the screen is captured.
+const RAISE: Duration = Duration::from_millis(250);
 /// The longest a replay is given before it stops and says so. A fork is one
 /// HTTP request, and a box that was driven for an hour cannot take one.
 const REPLAY_BUDGET: Duration = Duration::from_secs(180);
@@ -136,6 +138,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/page/find", get(find_elements))
         .route("/v1/boxes/{id}/page/element", post(on_element))
         .route("/v1/boxes/{id}/page/evaluate", post(evaluate))
+        .route("/v1/boxes/{id}/page/screenshot", post(page_screenshot))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::auth::gate,
@@ -534,6 +537,10 @@ struct FrameQuery {
     height: Option<u32>,
     #[serde(default)]
     scale: Option<u32>,
+    #[serde(default)]
+    pointer: bool,
+    #[serde(default)]
+    tab: Option<String>,
 }
 
 impl FrameQuery {
@@ -564,6 +571,8 @@ impl FrameQuery {
             window: self.window.clone(),
             region,
             scale: self.scale,
+            pointer: self.pointer,
+            tab: self.tab.clone(),
         })
     }
 }
@@ -576,6 +585,14 @@ async fn frame(
     // Before the box is looked up: a query that does not make sense is a bad
     // request whether or not the box behind it is there.
     let shot = query.shot()?;
+
+    // Before the capture, so the screen shows the page that was asked for.
+    // Still a capture of the screen: the window frame and the address bar are
+    // part of what a caller asking for a tab this way wants to see.
+    if let Some(tab) = &shot.tab {
+        named(&state, &id, tab).await?.bring_to_front().await?;
+        tokio::time::sleep(RAISE).await;
+    }
 
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
@@ -618,6 +635,7 @@ fn shot_in(shot: &Shot) -> computer::Shot {
     computer::Shot {
         of,
         scale: shot.scale,
+        pointer: shot.pointer,
     }
 }
 
@@ -1656,6 +1674,56 @@ async fn evaluate(
     Ok(Json(Evaluated {
         json: json.chars().take(limit).collect(),
         truncated,
+    }))
+}
+
+/// The page as the browser draws it, apart from the screen capture: no window
+/// frame, no address bar, no pointer, and the same on a box with no display.
+async fn page_screenshot(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<PageShot>,
+) -> ApiResult<Json<Captured>> {
+    if let Some(quality) = body.quality
+        && !(1..=100).contains(&quality)
+    {
+        return Err(ApiError::bad_request("quality is between 1 and 100"));
+    }
+
+    // JPEG for a whole page unless the caller said otherwise: an article
+    // measured 6.8MB as PNG against 115KB of JPEG for what was in view.
+    let format = body.format.unwrap_or(match body.full {
+        true => Picture::Jpeg,
+        false => Picture::Png,
+    });
+
+    let shot = computer::cdp::PageShot {
+        full: body.full,
+        format: match format {
+            Picture::Png => computer::cdp::Picture::Png,
+            Picture::Jpeg => computer::cdp::Picture::Jpeg,
+        },
+        quality: body.quality.unwrap_or(computer::cdp::JPEG_QUALITY),
+    };
+
+    let mut page = page_for(&state, &id, body.tab.as_deref()).await?;
+    let image = page.capture(&shot).await?;
+
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::PageCaptured {
+                full: body.full,
+                bytes: image.len(),
+            },
+        )
+        .await;
+
+    Ok(Json(Captured {
+        format,
+        bytes: image.len(),
+        image_base64: BASE64.encode(&image),
     }))
 }
 

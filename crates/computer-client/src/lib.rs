@@ -417,6 +417,12 @@ impl Client {
         if let Some(scale) = shot.scale {
             asked.push(format!("scale={scale}"));
         }
+        if shot.pointer {
+            asked.push("pointer=true".to_string());
+        }
+        if let Some(tab) = &shot.tab {
+            asked.push(format!("tab={}", query_value(tab)));
+        }
 
         let path = match asked.is_empty() {
             true => format!("/v1/boxes/{id}/screens/{screen}/frame"),
@@ -424,6 +430,23 @@ impl Client {
         };
 
         self.send(reqwest::Method::GET, &path, None, &[]).await
+    }
+
+    /// The page as the browser draws it, apart from [`Client::capture`], which
+    /// is a picture of the screen.
+    pub async fn page_screenshot(&self, id: &str, shot: &PageShot) -> Result<Captured> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/page/screenshot"),
+            Some(serde_json::json!({
+                "full": shot.full,
+                "format": shot.format,
+                "quality": shot.quality,
+                "tab": shot.tab,
+            })),
+            &[],
+        )
+        .await
     }
 
     pub async fn cursor(&self, id: &str, screen: u32) -> Result<Point> {
@@ -708,6 +731,11 @@ impl Client {
 /// A free function rather than a method: `Frame` belongs to `computer-api`.
 pub fn frame_png(frame: &Frame) -> Result<Option<Vec<u8>>> {
     frame.png_base64.as_deref().map(decode).transpose()
+}
+
+/// The picture out of a page capture.
+pub fn captured_image(taken: &Captured) -> Result<Vec<u8>> {
+    decode(&taken.image_base64)
 }
 
 /// Percent-encodes one query value.

@@ -139,10 +139,47 @@ fn letting_go(held: &[Held]) -> Vec<String> {
     args
 }
 
+/// The arrow drawn where the pointer is, in root coordinates.
+///
+/// X11 keeps the cursor outside the root window's contents, so `import` cannot
+/// see it and neither can any capture built on one. This draws the shape
+/// rather than the real cursor: what a caller needs is where the pointer is,
+/// and the real bitmap would take an XFixes client this image does not carry.
+fn pointer_argv(at: Point) -> Vec<String> {
+    let (x, y) = (i64::from(at.x), i64::from(at.y));
+    let arrow = [
+        (0, 0),
+        (0, 17),
+        (4, 13),
+        (7, 19),
+        (10, 18),
+        (7, 12),
+        (12, 12),
+    ]
+    .iter()
+    .map(|(dx, dy)| format!("{},{}", x + dx, y + dy))
+    .collect::<Vec<_>>()
+    .join(" ");
+
+    // White on black, so it reads against a dark desktop and against text.
+    argv(&[
+        "-stroke",
+        "black",
+        "-strokewidth",
+        "1",
+        "-fill",
+        "white",
+        "-draw",
+    ])
+    .into_iter()
+    .chain([format!("polygon {arrow}")])
+    .collect()
+}
+
 /// `+repage` after a crop, or the PNG carries the offset it was cut from and
 /// a viewer honours it by drawing the picture in the wrong place.
-fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
-    let mut args = argv(&["import", "-window", "root"]);
+fn shaping_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
+    let mut args = Vec::new();
 
     if let Some(area) = area {
         args.push("-crop".to_string());
@@ -163,8 +200,29 @@ fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
         args.push(format!("{scale}%"));
     }
 
+    args
+}
+
+fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
+    let mut args = argv(&["import", "-window", "root"]);
+    args.extend(shaping_argv(area, scale));
+
     // PNG bytes straight out of stdout: encoding them would need a decoder
     // whose flags differ between coreutils and BusyBox.
+    args.push("png:-".to_string());
+    args
+}
+
+/// `convert x:root` rather than `import`, which takes no drawing options.
+///
+/// The arrow goes on before any crop or resize, because the position it is
+/// drawn at is in root coordinates. `-depth 8` because convert reads the root
+/// at sixteen bits per channel and `import` does not: without it the same
+/// picture is half again as large for nothing anyone can see.
+fn pointing_argv(at: Point, area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
+    let mut args = argv(&["convert", "x:root", "-depth", "8"]);
+    args.extend(pointer_argv(at));
+    args.extend(shaping_argv(area, scale));
     args.push("png:-".to_string());
     args
 }
@@ -286,6 +344,11 @@ impl Desktop for X11Desktop {
 
     async fn capture(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
         self.import(capture_argv(area, scale)).await
+    }
+
+    async fn capture_pointing(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        let at = self.cursor().await?;
+        self.import(pointing_argv(at, area, scale)).await
     }
 
     async fn move_to(&self, at: Point) -> Result<()> {
@@ -620,6 +683,32 @@ mod tests {
         assert_eq!(
             capture_argv(None, None),
             argv(&["import", "-window", "root", "png:-"])
+        );
+    }
+
+    #[test]
+    fn test_the_pointer_is_drawn_before_the_picture_is_cut_down() {
+        let args = pointing_argv(
+            Point::new(100, 50),
+            Some(Rect::new(Point::new(80, 40), 200, 200)),
+            Some(50),
+        );
+        let at = |what: &str| args.iter().position(|arg| arg == what);
+
+        assert_eq!(args[0], "convert", "import takes no drawing options");
+        assert_eq!(args[1], "x:root");
+        assert!(
+            at("-draw") < at("-crop") && at("-crop") < at("-resize"),
+            "the arrow is placed in root coordinates, so it goes on before \
+             anything moves or resizes the picture: {args:?}"
+        );
+        assert!(
+            args.iter().any(|arg| arg.starts_with("polygon 100,50 ")),
+            "the arrow starts at the pointer: {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|pair| pair == ["-depth", "8"]),
+            "convert reads the root at sixteen bits and import does not"
         );
     }
 

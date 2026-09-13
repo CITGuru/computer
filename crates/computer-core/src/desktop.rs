@@ -270,6 +270,9 @@ pub struct Shot {
     /// desktop is a megabyte an agent pays for on every step, and most of what
     /// it needs to read survives being halved.
     pub scale: Option<u32>,
+    /// Draw the pointer. A capture leaves it out otherwise, which is why
+    /// asking where the pointer is has to be its own call.
+    pub pointer: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -284,7 +287,11 @@ pub enum Of {
 
 impl Shot {
     pub fn of(of: Of) -> Self {
-        Self { of, scale: None }
+        Self {
+            of,
+            scale: None,
+            pointer: false,
+        }
     }
 
     pub fn window(id: impl Into<String>) -> Self {
@@ -354,6 +361,18 @@ pub trait Desktop: Send + Sync {
                 gaps: vec!["capture"],
             }),
         }
+    }
+
+    /// The same, with the pointer drawn into the picture.
+    ///
+    /// Its own method rather than a flag on [`Desktop::capture`]: a driver
+    /// that cannot draw it must refuse, because a caller that asked for the
+    /// pointer would read a picture without one as the pointer being absent.
+    async fn capture_pointing(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        let _ = (area, scale);
+        Err(Error::Unsupported {
+            gaps: vec!["the pointer in a capture"],
+        })
     }
 
     /// Move the pointer without pressing anything.

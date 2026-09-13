@@ -139,7 +139,19 @@ fn point_parts(at: Point) -> Vec<String> {
 /// `grim`, cropped and scaled as it captures. This image carries no
 /// ImageMagick, so these flags are the only way to ask for either.
 fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
+    capture_argv_with(area, scale, false)
+}
+
+/// `grim -c` draws the compositor's own cursor, which is the real one rather
+/// than a shape drawn where the pointer is thought to be. This driver cannot
+/// read the pointer position once a person has driven the screen, so it is
+/// also the only way to see it at all.
+fn capture_argv_with(area: Option<Rect>, scale: Option<u32>, pointer: bool) -> Vec<String> {
     let mut args = argv(&["grim", "-t", "png"]);
+
+    if pointer {
+        args.push("-c".to_string());
+    }
 
     if let Some(area) = area {
         args.push("-g".to_string());
@@ -272,6 +284,10 @@ impl Desktop for WaylandDesktop {
 
     async fn capture(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
         self.grim(capture_argv(area, scale)).await
+    }
+
+    async fn capture_pointing(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        self.grim(capture_argv_with(area, scale, true)).await
     }
 
     async fn move_to(&self, at: Point) -> Result<()> {
@@ -537,6 +553,19 @@ impl DesktopFactory for WaylandDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_the_compositor_draws_the_cursor_when_one_is_asked_for() {
+        assert!(
+            !capture_argv_with(None, None, false).contains(&"-c".to_string()),
+            "a plain capture leaves the pointer out, as the X11 one does"
+        );
+        assert!(
+            capture_argv_with(None, None, true).contains(&"-c".to_string()),
+            "grim draws the real cursor, which no client here can read the \
+             position of once a person has driven the screen"
+        );
+    }
 
     #[test]
     fn test_screens_are_told_apart_by_directory_and_not_by_socket_name() {

@@ -2233,7 +2233,10 @@ impl Screen {
             }
         }
 
-        self.driver.capture(area, shot.scale).await
+        match shot.pointer {
+            true => self.driver.capture_pointing(area, shot.scale).await,
+            false => self.driver.capture(area, shot.scale).await,
+        }
     }
 
     async fn window_rect(&self, id: &str) -> Result<Rect> {

@@ -21,10 +21,13 @@ computer — a desktop in a box
                               open a box and print where to watch it
   ls                          boxes that are running
   screenshot <box> [file.png] [--window ID | --at X,Y --size WxH]
-             [--scale PERCENT]
+             [--scale PERCENT] [--pointer] [--tab ID]
                               capture the screen, one window, or a rectangle
                               of it. --scale answers smaller, which is most of
-                              a megabyte an agent would otherwise pay per step
+                              a megabyte an agent would otherwise pay per step.
+                              --pointer draws the pointer, which a capture
+                              leaves out. --tab raises that page first, and
+                              still captures the desktop around it
   open <box> <url> [--target blank|current]
                               open a URL in the box's browser, and say which tab
                               it landed in. a new tab unless told `current`
@@ -56,13 +59,19 @@ computer — a desktop in a box
   browser <box> wait <query> [--gone] [--or TEXT,TEXT] [--within MS]
   browser <box> hover <query>
   browser <box> eval <expression> [--timeout MS] [--limit N]
+  browser <box> screenshot [file] [--full] [--format png|jpeg] [--quality N]
   browser <box> tabs | switch <tab> | close <tab>
   browser <box> back | forward | reload
                               drive the web page by what is on it rather than
                               by its pixels: a query is words, a name, an id or
                               a selector, and find answers with one that names
                               exactly the element it found. eval runs javascript
-                              in the page, which a box is isolated enough for
+                              in the page, which a box is isolated enough for.
+                              screenshot is what the browser drew, with no
+                              window frame and no address bar; --full reaches
+                              past the viewport to the whole scrollable page,
+                              which is as tall as the page is and so answers
+                              jpeg unless told otherwise
 
   keyboard <box> type <text>  type into the focused window
   keyboard <box> key <chord>  send a chord, such as ctrl+l or cmd+enter
@@ -320,7 +329,11 @@ pub fn framing(args: &[String]) -> computer::Result<computer::Shot> {
         })?),
     };
 
-    Ok(computer::Shot { of, scale })
+    Ok(computer::Shot {
+        of,
+        scale,
+        pointer: present(args, "--pointer"),
+    })
 }
 
 fn pair(given: Option<&str>, between: char, wanted: &str) -> computer::Result<Option<(u32, u32)>> {

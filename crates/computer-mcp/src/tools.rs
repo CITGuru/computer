@@ -9,9 +9,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
     Action, ActionBatch, Arrange, Evaluate, Find, ForkMode, ForkRequest, Frame, Held, NodeQuery,
-    OnElement, OnNode, OpenIn, Reading, Rect, ScrollTo, Shot, Want, Where,
+    OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, ScrollTo, Shot, Want, Where,
 };
-use computer_client::{Client, frame_png};
+use computer_client::{Client, captured_image, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
 use serde_json::{Value, json};
 
@@ -22,6 +22,13 @@ pub enum Answer {
     Shot {
         text: String,
         png: Vec<u8>,
+    },
+    /// A picture that is not the screen, so it says what it is: a whole-page
+    /// capture answers JPEG where the screen is always PNG.
+    Drawn {
+        text: String,
+        image: Vec<u8>,
+        mime: &'static str,
     },
     /// A refusal the model reads and acts on, with the screen it was refused
     /// on where there is one.
@@ -42,6 +49,16 @@ impl Answer {
                         "type": "image",
                         "data": BASE64.encode(&png),
                         "mimeType": "image/png",
+                    },
+                ]
+            }),
+            Self::Drawn { text, image, mime } => json!({
+                "content": [
+                    { "type": "text", "text": text },
+                    {
+                        "type": "image",
+                        "data": BASE64.encode(&image),
+                        "mimeType": mime,
                     },
                 ]
             }),
@@ -118,7 +135,8 @@ pub fn catalogue() -> Value {
             "Look at the screen, or at one window or rectangle of it. Coordinates for \
              clicking come from this picture: its top-left is (0, 0) and they are device \
              pixels, so a cropped or scaled picture is for reading rather than for aiming. \
-             The pointer is not drawn in it.",
+             This is the desktop, frame and address bar and all; `page_screenshot` is what \
+             the browser drew.",
             with_frame(
                 json!({
                     "window": {
@@ -136,6 +154,43 @@ pub fn catalogue() -> Value {
                         "description": "A percentage of full size, 1 to 400. Halving a \
                                         screen leaves most text readable and costs a \
                                         fraction of the bytes."
+                    },
+                    "pointer": {
+                        "type": "boolean",
+                        "description": "Draw the pointer. Left out otherwise, which is why \
+                                        the `cursor` tool exists."
+                    },
+                    "tab": {
+                        "type": "string",
+                        "description": "Bring this page to the front first, so the screen \
+                                        shows it. Still a picture of the desktop."
+                    }
+                }),
+                &[]
+            )
+        ),
+        tool(
+            "page_screenshot",
+            "The page as the browser drew it: no window frame, no address bar, no pointer, \
+             and the same on a box with no display. Use it to read a page as a picture, and \
+             `screenshot` to see the desktop the page sits on. `full` reaches past the \
+             viewport to the whole scrollable page, which is as tall as the page is — an \
+             article measured 33585 pixels — so it answers JPEG unless you ask otherwise.",
+            with_tab(
+                json!({
+                    "full": {
+                        "type": "boolean",
+                        "description": "The whole scrollable page rather than what is in \
+                                        view. Slower and much larger."
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["png", "jpeg"],
+                        "description": "png unless `full`, which is jpeg unless you say."
+                    },
+                    "quality": {
+                        "type": "integer",
+                        "description": "jpeg only, 1 to 100. 70 unless said."
                     }
                 }),
                 &[]
@@ -775,6 +830,53 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .map_err(|e| e.to_string())?;
 
             Ok(framed("the screen now", Some(&frame)))
+        }
+        "page_screenshot" => {
+            let id = text(arguments, "box_id")?;
+            let full = arguments
+                .get("full")
+                .and_then(Value::as_bool)
+                .unwrap_or_default();
+
+            let format = match arguments.get("format").and_then(Value::as_str) {
+                Some("png") => Some(Picture::Png),
+                Some("jpeg") => Some(Picture::Jpeg),
+                Some(other) => return Err(format!("no such format: {other}")),
+                None => None,
+            };
+
+            let taken = client
+                .page_screenshot(
+                    &id,
+                    &PageShot {
+                        full,
+                        format,
+                        quality: arguments
+                            .get("quality")
+                            .and_then(Value::as_u64)
+                            .map(|quality| quality as u32),
+                        tab: arguments
+                            .get("tab")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let image = captured_image(&taken).map_err(|e| e.to_string())?;
+
+            Ok(Answer::Drawn {
+                text: match full {
+                    true => "the whole page".to_string(),
+                    false => "the page, as far as it is in view".to_string(),
+                },
+                image,
+                mime: match taken.format {
+                    Picture::Jpeg => "image/jpeg",
+                    Picture::Png => "image/png",
+                },
+            })
         }
         "open_url" => {
             act(
@@ -1827,13 +1929,22 @@ fn framing(arguments: &Value) -> Result<Shot, String> {
         _ => return Err("a rectangle takes x, y, width and height together".to_string()),
     };
 
-    Ok(Shot {
-        window: arguments
-            .get("window")
+    let named = |name| {
+        arguments
+            .get(name)
             .and_then(Value::as_str)
-            .map(str::to_string),
+            .map(str::to_string)
+    };
+
+    Ok(Shot {
+        window: named("window"),
         region,
         scale: whole("scale"),
+        pointer: arguments
+            .get("pointer")
+            .and_then(Value::as_bool)
+            .unwrap_or_default(),
+        tab: named("tab"),
     })
 }
 
@@ -2104,24 +2215,23 @@ mod tests {
             "history",
             "scroll_page",
             "upload_file",
+            "page_screenshot",
         ] {
             assert!(takes_tab.contains(&page_tool), "{page_tool} reaches a page");
         }
 
         // A coordinate reaches the screen, which shows whatever is in front.
-        for screen_tool in [
-            "click",
-            "type_text",
-            "press_key",
-            "scroll",
-            "drag",
-            "screenshot",
-        ] {
+        for screen_tool in ["click", "type_text", "press_key", "scroll", "drag"] {
             assert!(
                 !takes_tab.contains(&screen_tool),
                 "{screen_tool} acts on pixels, so naming a tab would promise what it cannot do"
             );
         }
+
+        // The one screen tool that takes a tab, and no contradiction: it
+        // raises the page before capturing rather than reaching into one that
+        // is not in front.
+        assert!(takes_tab.contains(&"screenshot"));
     }
 
     #[test]
