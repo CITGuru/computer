@@ -138,19 +138,89 @@ fn point_parts(at: Point) -> Vec<String> {
 /// two gestures.
 /// `grim`, cropped and scaled as it captures. This image carries no
 /// ImageMagick, so these flags are the only way to ask for either.
-/// Why a capture here cannot show the pointer.
+/// The arrow drawn where this driver last put the pointer.
 ///
-/// `grim -c` asks the compositor to overlay its cursor and there is none to
-/// overlay: a synthetic move arrives as a virtual-pointer device that lives
+/// Not `grim -c`, which asks the compositor to overlay its own cursor and
+/// finds none: a synthetic move arrives as a virtual-pointer device that lives
 /// for the length of one command, so the seat holds no pointer between them.
 /// Measured — the flag is accepted and the PNG comes back byte for byte the
-/// same. A picture with no arrow would be read as the pointer being elsewhere,
-/// so this refuses instead.
-fn no_cursor_here() -> Error {
-    Error::invalid(
-        "this desktop has no cursor to draw between commands, so a capture cannot show the \
-         pointer. Ask where it is instead.",
-    )
+/// same.
+///
+/// Through a shell, because `grim` writes a picture and `convert` draws on
+/// one, and nothing here reads a Wayland screen and draws in a single run.
+/// Only integers reach the command, so there is nothing in it to quote.
+fn pointing_argv(at: Point, area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
+    let mut draw = vec![
+        "convert".to_string(),
+        "png:-".to_string(),
+        "-depth".to_string(),
+        "8".to_string(),
+    ];
+    draw.extend(pointer_argv(at));
+    draw.extend(shaping_argv(area, scale));
+    draw.push("png:-".to_string());
+
+    argv(&["sh", "-c"])
+        .into_iter()
+        .chain([format!("grim -t png - | {}", draw.join(" "))])
+        .collect()
+}
+
+/// White on black, so it reads against a dark desktop and against text.
+///
+/// The same shape the X11 driver draws, so one desktop does not answer with a
+/// pointer the other would not.
+fn pointer_argv(at: Point) -> Vec<String> {
+    let (x, y) = (i64::from(at.x), i64::from(at.y));
+    let arrow = [
+        (0, 0),
+        (0, 17),
+        (4, 13),
+        (7, 19),
+        (10, 18),
+        (7, 12),
+        (12, 12),
+    ]
+    .iter()
+    .map(|(dx, dy)| format!("{},{}", x + dx, y + dy))
+    .collect::<Vec<_>>()
+    .join(" ");
+
+    vec![
+        "-stroke".to_string(),
+        "black".to_string(),
+        "-strokewidth".to_string(),
+        "1".to_string(),
+        "-fill".to_string(),
+        "white".to_string(),
+        "-draw".to_string(),
+        // Quoted for the shell this is joined into: the polygon carries
+        // spaces, and unquoted it would arrive as seven arguments.
+        format!("'polygon {arrow}'"),
+    ]
+}
+
+/// `grim` crops and scales as it captures; `convert` needs telling in its own
+/// flags, and after the arrow, whose position is in screen coordinates.
+fn shaping_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
+    let mut args = Vec::new();
+
+    if let Some(area) = area {
+        args.push("-crop".to_string());
+        args.push(format!(
+            "{}x{}+{}+{}",
+            area.width, area.height, area.at.x, area.at.y
+        ));
+        args.push("+repage".to_string());
+    }
+    if let Some(scale) = scale {
+        args.push("-filter".to_string());
+        args.push("box".to_string());
+        args.push("-resize".to_string());
+        args.push(format!("{scale}%"));
+    }
+
+    args
 }
 
 fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
@@ -289,11 +359,9 @@ impl Desktop for WaylandDesktop {
         self.grim(capture_argv(area, scale)).await
     }
 
-    /// Refused rather than answered without one: `grim -c` asks the
-    /// compositor to overlay a cursor it does not have between commands.
     async fn capture_pointing(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
-        let _ = (area, scale);
-        Err(no_cursor_here())
+        let at = self.cursor().await?;
+        self.grim(pointing_argv(at, area, scale)).await
     }
 
     async fn move_to(&self, at: Point) -> Result<()> {
@@ -561,13 +629,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_a_capture_here_will_not_pretend_to_show_the_pointer() {
-        let refused = no_cursor_here();
+    fn test_the_pointer_is_drawn_before_the_picture_is_cut_down() {
+        let args = pointing_argv(
+            Point::new(100, 50),
+            Some(Rect::new(Point::new(80, 40), 200, 200)),
+            Some(50),
+        );
 
+        assert_eq!(args[0], "sh", "a capture and a draw are two programs");
+        let line = &args[2];
+
+        let at = |what: &str| line.find(what);
         assert!(
-            refused.to_string().contains("cursor"),
-            "the reason has to name what is missing, or a caller reads the \
-             refusal as the pointer being off screen: {refused}"
+            at("-draw") < at("-crop") && at("-crop") < at("-resize"),
+            "the arrow is placed in screen coordinates, so it goes on before \
+             anything moves or resizes the picture: {line}"
+        );
+        assert!(
+            line.contains("'polygon 100,50 "),
+            "the arrow starts at the pointer, quoted for the shell: {line}"
         );
     }
 

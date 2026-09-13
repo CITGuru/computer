@@ -175,6 +175,14 @@ fn the_image_carries_every_binary_the_driver_calls() {
             "{binary} is called by the driver and not installed by the image"
         );
     }
+
+    // `convert` is shelled by name too, and arrives as `imagemagick`. It is
+    // here for one thing: the compositor has no cursor to overlay between
+    // commands, so a capture that shows the pointer has to draw it on.
+    assert!(
+        WAYLAND_DOCKERFILE.contains("imagemagick"),
+        "the pointer is drawn with convert, which comes from imagemagick"
+    );
 }
 
 #[test]

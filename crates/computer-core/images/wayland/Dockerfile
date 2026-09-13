@@ -6,6 +6,10 @@
 # Everything above it — the ports, the verbs, the token protocol — is the same,
 # so the crate's profile helpers need no override.
 #
+# ImageMagick is here for one thing: drawing the pointer into a capture. The
+# compositor has no cursor to overlay between commands, so the arrow has to be
+# drawn on, and 78MB is what that costs.
+#
 # Kept in step with `src/wayland.rs` by `tests/wayland_image.rs`.
 # **The pointer is compiled here, not installed.** Wayland gives no client a
 # way to move somebody else's pointer; synthetic input has to arrive as a
@@ -34,6 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       wayvnc \
       wtype \
       grim \
+      imagemagick \
       wl-clipboard \
       novnc \
       websockify \
