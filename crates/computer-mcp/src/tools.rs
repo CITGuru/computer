@@ -487,7 +487,9 @@ pub fn catalogue() -> Value {
         ),
         tool(
             "press_key",
-            "Press a chord, such as `ctrl+a`, `enter`, `tab` or `cmd+shift+p`.",
+            "Press one key or several at once: `enter`, `tab`, `escape`, `up`, `pagedown`, \
+             `ctrl+a`, `cmd+shift+p`. Names are matched loosely — `esc`, `return`, `pgdn`, \
+             `cmd` and `win` all land where you would expect.",
             with_frame(json!({ "chord": { "type": "string" } }), &["chord"])
         ),
         tool(
