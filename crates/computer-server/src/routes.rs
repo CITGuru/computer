@@ -438,24 +438,15 @@ async fn run(
             button,
             held,
         } => desktop.drag_with(*from, *to, *button, held).await?,
-        Action::Type { text, delay_ms } => match delay_ms {
-            Some(ms) => {
-                desktop
-                    .type_slowly(text, Duration::from_millis(*ms).min(MAX_PACE))
-                    .await?
-            }
-            None => desktop.type_text(text).await?,
-        },
-        // One chord and nothing held is the plain path, which every desktop
-        // has; the rest needs one that can hold a key open.
-        Action::Key { chord, then, held } => match then.is_empty() && held.is_empty() {
-            true => desktop.key(chord).await?,
-            false => {
-                let mut all = vec![chord.clone()];
-                all.extend(then.iter().cloned());
-                desktop.keys(&all, held).await?
-            }
-        },
+        Action::Type { text, delay_ms } => {
+            let pace = delay_ms.map(|ms| Duration::from_millis(ms).min(MAX_PACE));
+            desktop.type_text(text, pace).await?
+        }
+        Action::Key { chord, then, held } => {
+            let mut all = vec![chord.clone()];
+            all.extend(then.iter().cloned());
+            desktop.key(&all, held).await?
+        }
         Action::Scroll { at, dx, dy } => desktop.scroll(*at, Delta { dx: *dx, dy: *dy }).await?,
         Action::OpenUrl { url, target } => {
             // Whatever page action follows wants the page this leaves on

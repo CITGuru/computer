@@ -85,16 +85,16 @@ async fn record(computer: &Computer, out: &str) -> computer::Result<usize> {
     capture("address bar focused", &mut frame).await?;
 
     for chunk in ["a computer", " in a box", ", driven"] {
-        screen.type_text(chunk).await?;
+        screen.type_text(chunk, None).await?;
         settle(Duration::from_millis(400)).await;
         capture(&format!("typed {chunk:?}"), &mut frame).await?;
     }
 
-    screen.key("ctrl+a").await?;
+    screen.key(&["ctrl+a".into()], &[]).await?;
     settle(Duration::from_millis(400)).await;
     capture("select all", &mut frame).await?;
 
-    screen.key("BackSpace").await?;
+    screen.key(&["BackSpace".into()], &[]).await?;
     settle(Duration::from_millis(400)).await;
     capture("cleared", &mut frame).await?;
 
@@ -104,7 +104,7 @@ async fn record(computer: &Computer, out: &str) -> computer::Result<usize> {
     settle(Duration::from_millis(600)).await;
     capture("context menu", &mut frame).await?;
 
-    screen.key("Escape").await?;
+    screen.key(&["Escape".into()], &[]).await?;
     settle(Duration::from_millis(400)).await;
     capture("dismissed", &mut frame).await?;
 

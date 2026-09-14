@@ -5,7 +5,7 @@
 //! a server to remember anything — a trace, and the fork built on one — are not
 //! here.
 
-use crate::{flag, framing, positional, present, wheel};
+use crate::{bare, flag, framing, positional, present, wheel};
 use computer::{Button, Computer, Delta, Point};
 use std::time::Duration;
 
@@ -167,15 +167,33 @@ fn button(named: Option<&String>) -> Button {
     }
 }
 
+/// The `keyboard` flags that take a value.
+const TYPED: [&str; 2] = ["--delay", "--held"];
+
 pub async fn type_text(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
-    let text = args[1..].join(" ");
-    computer.type_text(&text).await
+    let rest = bare(args, &TYPED);
+
+    let delay = match flag(args, "--delay") {
+        None => None,
+        Some(given) => Some(Duration::from_millis(given.parse().map_err(|_| {
+            computer::Error::denied(format!("--delay takes milliseconds: {given}"))
+        })?)),
+    };
+
+    computer.type_text(&rest[1..].join(" "), delay).await
 }
 
 pub async fn key(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
-    computer.key(positional(args, 1, "a chord")?).await
+    let rest = bare(args, &TYPED);
+
+    let keys = rest.get(1..).unwrap_or_default();
+    if keys.is_empty() {
+        return Err(computer::Error::denied("expected a key to press"));
+    }
+
+    computer.key(keys, &modifiers(args)?).await
 }
 
 pub async fn click(args: &[String]) -> computer::Result<()> {

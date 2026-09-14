@@ -67,21 +67,21 @@ async fn tour(computer: &Computer, film: &mut Film<'_>) -> computer::Result<()> 
 
     // A tab and an address by keyboard, not by coordinates: a click at a
     // guessed pixel lands wherever the window happens to be.
-    screen.key("ctrl+t").await?;
+    screen.key(&["ctrl+t".into()], &[]).await?;
     settle(600).await;
-    screen.key("ctrl+l").await?;
-    screen.type_text("pawrly.dev").await?;
-    screen.key("enter").await?;
+    screen.key(&["ctrl+l".into()], &[]).await?;
+    screen.type_text("pawrly.dev", None).await?;
+    screen.key(&["enter".into()], &[]).await?;
     settle(5_000).await;
     film.take("the page").await?;
 
     // Find-in-page. The match highlights, which is the change a frame can show.
-    screen.key("ctrl+f").await?;
+    screen.key(&["ctrl+f".into()], &[]).await?;
     settle(500).await;
-    screen.type_text("SQL").await?;
+    screen.type_text("SQL", None).await?;
     settle(800).await;
     film.take("found in page").await?;
-    screen.key("escape").await?;
+    screen.key(&["escape".into()], &[]).await?;
     settle(400).await;
 
     // Two words of the heading, selected by dragging across them.
@@ -109,7 +109,7 @@ async fn tour(computer: &Computer, film: &mut Film<'_>) -> computer::Result<()> 
         film.take(&format!("scrolled {notch}")).await?;
     }
 
-    screen.key("End").await?;
+    screen.key(&["End".into()], &[]).await?;
     settle(1_200).await;
     film.take("the foot of the page").await?;
 
@@ -118,10 +118,10 @@ async fn tour(computer: &Computer, film: &mut Film<'_>) -> computer::Result<()> 
     screen.click(Point::new(400, 500), Button::Right).await?;
     settle(800).await;
     film.take("context menu").await?;
-    screen.key("escape").await?;
+    screen.key(&["escape".into()], &[]).await?;
     settle(400).await;
 
-    screen.key("Home").await?;
+    screen.key(&["Home".into()], &[]).await?;
     settle(800).await;
     film.take("back to the top").await?;
 

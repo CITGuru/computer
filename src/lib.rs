@@ -14,7 +14,7 @@
 //!
 //! let png = box_.screenshot().await?;
 //! box_.click(Point::new(640, 400), Button::Left).await?;
-//! box_.type_text("hello from rust").await?;
+//! box_.type_text("hello from rust", None).await?;
 //!
 //! box_.shutdown().await?;
 //! # Ok(()) }

@@ -208,7 +208,10 @@ async fn a_whole_box_runs_on_a_hypervisor_the_same_way_it_runs_in_a_container() 
     assert_eq!((display.width, display.height), (1600, 900));
 
     // And it drives through the same calls.
-    computer.type_text("on a microVM").await.expect("typing");
+    computer
+        .type_text("on a microVM", None)
+        .await
+        .expect("typing");
     assert_eq!(
         api.last_line(),
         "xdotool type --clearmodifiers -- on a microVM DISPLAY=:1"

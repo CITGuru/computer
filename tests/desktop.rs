@@ -110,7 +110,7 @@ async fn typed_text_is_passed_after_a_double_dash() {
     let host = Arc::new(ScriptedHost::new());
     let screen = driver(Arc::clone(&host));
 
-    screen.type_text("--version").await.expect("typing");
+    screen.type_text("--version", None).await.expect("typing");
 
     assert_eq!(
         host.last(),
@@ -130,7 +130,10 @@ async fn a_chord_is_translated_before_it_is_sent() {
     let host = Arc::new(ScriptedHost::new());
     let screen = driver(Arc::clone(&host));
 
-    screen.key("cmd+enter").await.expect("a chord");
+    screen
+        .key(&["cmd+enter".into()], &[])
+        .await
+        .expect("a chord");
 
     assert_eq!(
         host.last_line(),
@@ -325,10 +328,13 @@ async fn the_owner_drives_again_once_the_screen_is_handed_back() {
     let screen = driver(Arc::clone(&host)).with_control(Arc::clone(&gate));
 
     gate.hand_over("token", SystemTime::now());
-    assert!(screen.key("ctrl+a").await.is_err());
+    assert!(screen.key(&["ctrl+a".into()], &[]).await.is_err());
 
     assert!(gate.hand_back("token"));
-    screen.key("ctrl+a").await.expect("the owner has it back");
+    screen
+        .key(&["ctrl+a".into()], &[])
+        .await
+        .expect("the owner has it back");
 }
 
 #[tokio::test]

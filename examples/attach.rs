@@ -32,15 +32,15 @@ async fn main() -> computer::Result<()> {
     if !typed.is_empty() {
         // A new tab and the address bar by keyboard, not by coordinates: a
         // click at a guessed pixel lands wherever the window happens to be.
-        computer.key("ctrl+t").await?;
+        computer.key(&["ctrl+t".into()], &[]).await?;
         tokio::time::sleep(Duration::from_millis(600)).await;
 
-        computer.key("ctrl+l").await?;
+        computer.key(&["ctrl+l".into()], &[]).await?;
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        computer.type_text(&typed).await?;
+        computer.type_text(&typed, None).await?;
         tokio::time::sleep(Duration::from_millis(400)).await;
-        computer.key("enter").await?;
+        computer.key(&["enter".into()], &[]).await?;
         println!("  typed {typed:?} and pressed enter");
 
         tokio::time::sleep(Duration::from_secs(5)).await;

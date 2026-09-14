@@ -416,36 +416,21 @@ pub trait Desktop: Send + Sync {
         }
     }
 
-    async fn type_text(&self, text: &str) -> Result<()>;
-
-    /// The same, paced. `delay` is the gap between keystrokes.
+    /// `delay` is the gap between keystrokes, or full speed where it is left
+    /// out.
     ///
-    /// Its own method rather than an argument, so a desktop whose typing tool
-    /// cannot be paced refuses: asking for a delay means full speed has
-    /// already dropped characters, and answering at full speed again would be
-    /// answering with the failure.
-    async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
-        let _ = (text, delay);
+    /// A desktop whose typing tool cannot be paced refuses a `Some` rather
+    /// than typing at full speed anyway, which is the failure the caller asked
+    /// for a delay to avoid.
+    async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()>;
 
-        Err(Error::Unsupported {
-            gaps: vec!["typing at a given speed"],
-        })
-    }
-
-    async fn key(&self, chord: &str) -> Result<()>;
-
-    /// Several chords in turn, with `held` down across all of them.
+    /// Chords pressed in turn, with `held` down across all of them.
     ///
     /// A chord presses and releases everything it names, so `alt+tab` twice
-    /// toggles between two windows. This holds the modifiers open, which is
-    /// how the third window is reached.
-    async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        let _ = (chords, held);
-
-        Err(Error::Unsupported {
-            gaps: vec!["holding a modifier across keys"],
-        })
-    }
+    /// toggles between two windows. Holding the modifiers open is how the
+    /// third one is reached, and a desktop that cannot hold one refuses a
+    /// non-empty `held` rather than sending the keys bare.
+    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()>;
     async fn scroll(&self, at: Point, by: Delta) -> Result<()>;
 
     /// The alternative is a sleep, which is either short enough to read the

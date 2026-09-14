@@ -28,7 +28,7 @@ async fn main() -> computer::Result<()> {
     println!("captured {} bytes to screen.png", frame.len());
 
     computer.click(Point::new(640, 81), Button::Left).await?;
-    computer.type_text("driven from rust").await?;
+    computer.type_text("driven from rust", None).await?;
 
     // The pointer is never in a screenshot, so this is the only way to know.
     let at = computer.cursor().await?;

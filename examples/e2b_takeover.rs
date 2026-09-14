@@ -54,11 +54,11 @@ async fn main() -> computer::Result<()> {
     // The search field takes focus on load, so the text goes to it without a
     // click — and a click would need a coordinate off a screenshot nobody has
     // looked at yet.
-    computer.type_text(&query).await?;
+    computer.type_text(&query, None).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     save(&computer, "google-2-typed.png").await?;
 
-    computer.key("Return").await?;
+    computer.key(&["Return".into()], &[]).await?;
     tokio::time::sleep(Duration::from_secs(5)).await;
     save(&computer, "google-3-results.png").await?;
     println!("  searched for {query:?}");

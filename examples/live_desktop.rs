@@ -86,8 +86,8 @@ async fn drive(computer: &Computer) -> computer::Result<()> {
 
     // Typing needs a window to land in, so this only asserts the call is
     // accepted — where the characters went is the window manager's business.
-    screen.type_text("computer").await?;
-    screen.key("ctrl+a").await?;
+    screen.type_text("computer", None).await?;
+    screen.key(&["ctrl+a".into()], &[]).await?;
     println!("  typed, and sent a chord");
 
     let second = screen.screenshot().await?;

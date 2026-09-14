@@ -494,8 +494,8 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     screen.move_to(Point::new(100, 120)).await?;
     assert_eq!(screen.cursor().await?, Point::new(100, 120));
 
-    screen.type_text("computer-rs").await?;
-    screen.key("ctrl+a").await?;
+    screen.type_text("computer-rs", None).await?;
+    screen.key(&["ctrl+a".into()], &[]).await?;
     screen.scroll(Point::new(640, 400), Delta::down(2)).await?;
     println!("  typed, chorded and scrolled");
 

@@ -203,7 +203,7 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     tokio::time::sleep(Duration::from_secs(3)).await;
     page.evaluate(RECORDERS).await?;
 
-    computer.type_text("KEYBOARD").await?;
+    computer.type_text("KEYBOARD", None).await?;
     let typed = page
         .evaluate("document.querySelector('input').value")
         .await?;
@@ -217,8 +217,8 @@ async fn input(computer: &Computer) -> computer::Result<()> {
 
     // A chord, proving the modifiers are held and released around the key
     // rather than sent as bare letters.
-    computer.key("ctrl+a").await?;
-    computer.type_text("replaced").await?;
+    computer.key(&["ctrl+a".into()], &[]).await?;
+    computer.type_text("replaced", None).await?;
     let after = page
         .evaluate("document.querySelector('input').value")
         .await?;

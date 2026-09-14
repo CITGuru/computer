@@ -22,7 +22,7 @@
 //!
 //! let png = box_.screenshot().await?;
 //! box_.click(Point::new(640, 400), Button::Left).await?;
-//! box_.type_text("hello from rust").await?;
+//! box_.type_text("hello from rust", None).await?;
 //!
 //! box_.shutdown().await?;
 //! # Ok(()) }
@@ -1603,22 +1603,16 @@ impl Computer {
         self.primary.wait_until_still(settle, within).await
     }
 
-    pub async fn type_text(&self, text: &str) -> Result<()> {
-        self.primary.type_text(text).await
+    /// Type into screen 0. `delay` is the gap between keystrokes, or full
+    /// speed for `None`.
+    pub async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
+        self.primary.type_text(text, delay).await
     }
 
-    pub async fn key(&self, chord: &str) -> Result<()> {
-        self.primary.key(chord).await
-    }
-
-    /// Several chords on screen 0, with `held` down across all of them.
-    pub async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        self.primary.keys(chords, held).await
-    }
-
-    /// Type into screen 0 with a gap between keystrokes.
-    pub async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
-        self.primary.type_slowly(text, delay).await
+    /// Chords pressed in turn on screen 0, with `held` down across all of
+    /// them.
+    pub async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        self.primary.key(chords, held).await
     }
 
     pub async fn scroll(&self, at: impl Into<Point>, by: Delta) -> Result<()> {
@@ -1746,12 +1740,12 @@ impl Desktop for Computer {
         Desktop::wait_until_still(&self.primary, settle, within).await
     }
 
-    async fn type_text(&self, text: &str) -> Result<()> {
-        Desktop::type_text(&self.primary, text).await
+    async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
+        Desktop::type_text(&self.primary, text, delay).await
     }
 
-    async fn key(&self, chord: &str) -> Result<()> {
-        Desktop::key(&self.primary, chord).await
+    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        Desktop::key(&self.primary, chords, held).await
     }
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {
@@ -2410,26 +2404,17 @@ impl Screen {
         self.driver.wait_until_still(settle, within).await
     }
 
-    pub async fn type_text(&self, text: &str) -> Result<()> {
-        self.driver.type_text(text).await
+    /// `delay` is the gap between keystrokes, or full speed for `None`.
+    pub async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
+        self.driver.type_text(text, delay).await
     }
 
-    pub async fn key(&self, chord: &str) -> Result<()> {
-        self.driver.key(chord).await
-    }
-
-    /// Several chords in turn with `held` down across all of them.
+    /// Chords pressed in turn, with `held` down across all of them.
     ///
     /// A chord releases what it pressed, so `alt+tab` twice toggles between
-    /// two windows. This reaches the third.
-    pub async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        self.driver.keys(chords, held).await
-    }
-
-    /// Type with a gap between keystrokes, for an input that cannot follow
-    /// full speed.
-    pub async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
-        self.driver.type_slowly(text, delay).await
+    /// two windows; holding alt across two tabs reaches the third.
+    pub async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        self.driver.key(chords, held).await
     }
 
     pub async fn scroll(&self, at: impl Into<Point>, by: Delta) -> Result<()> {
@@ -2526,20 +2511,12 @@ impl Desktop for Screen {
         self.driver.wait_until_still(settle, within).await
     }
 
-    async fn type_text(&self, text: &str) -> Result<()> {
-        self.driver.type_text(text).await
+    async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
+        self.driver.type_text(text, delay).await
     }
 
-    async fn key(&self, chord: &str) -> Result<()> {
-        self.driver.key(chord).await
-    }
-
-    async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        self.driver.keys(chords, held).await
-    }
-
-    async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
-        self.driver.type_slowly(text, delay).await
+    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        self.driver.key(chords, held).await
     }
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {

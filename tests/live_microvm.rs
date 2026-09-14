@@ -77,8 +77,8 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     screen.click(Point::new(640, 400), Button::Left).await?;
     assert_eq!(screen.cursor().await?, Point::new(640, 400));
 
-    screen.type_text("on a microVM").await?;
-    screen.key("ctrl+a").await?;
+    screen.type_text("on a microVM", None).await?;
+    screen.key(&["ctrl+a".into()], &[]).await?;
     screen.scroll(Point::new(640, 400), Delta::down(2)).await?;
 
     // The viewer is forwarded, so a person can watch a machine that has its

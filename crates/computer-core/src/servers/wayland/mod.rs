@@ -395,29 +395,21 @@ impl Desktop for WaylandDesktop {
         Ok(())
     }
 
-    async fn type_text(&self, text: &str) -> Result<()> {
-        self.act(input_argv("type", &[text.to_string()])).await
-    }
+    async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
+        let mut parts = Vec::new();
 
-    async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
-        self.act(input_argv(
-            "type",
-            &[
-                "--delay".to_string(),
-                delay.as_millis().to_string(),
-                text.to_string(),
-            ],
-        ))
-        .await
-    }
+        if let Some(delay) = delay {
+            parts.push("--delay".to_string());
+            parts.push(delay.as_millis().to_string());
+        }
+        parts.push(text.to_string());
 
-    async fn key(&self, keys: &str) -> Result<()> {
-        self.act(input_argv("key", &chord(keys))).await
+        self.act(input_argv("type", &parts)).await
     }
 
     /// One `wtype` run, as the X11 driver uses one `xdotool` run: the hold has
     /// to outlive each key, and a process per key would release it between.
-    async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
+    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
         let mut parts = Vec::new();
 
         for one in held {

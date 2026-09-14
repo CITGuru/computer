@@ -17,7 +17,7 @@ use crate::sandboxes::remote::{
 use crate::screens::ControlGate;
 use crate::{
     Button, Delta, Desktop, DesktopFactory, DesktopSupport, Display, DisplayServer, ExecResult,
-    Point, ScreenAction, ScreenId,
+    Held, Point, ScreenAction, ScreenId,
 };
 use async_trait::async_trait;
 use std::collections::{BTreeMap, VecDeque};
@@ -193,12 +193,25 @@ impl Desktop for ScriptedDesktop {
         ))
     }
 
-    async fn type_text(&self, text: &str) -> Result<()> {
-        self.act(format!("type_text {text}"))
+    async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
+        match delay {
+            Some(delay) => self.act(format!("type_text {text} every {}ms", delay.as_millis())),
+            None => self.act(format!("type_text {text}")),
+        }
     }
 
-    async fn key(&self, chord: &str) -> Result<()> {
-        self.act(format!("key {chord}"))
+    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        match held.is_empty() {
+            true => self.act(format!("key {}", chords.join(" "))),
+            false => self.act(format!(
+                "key {} holding {}",
+                chords.join(" "),
+                held.iter()
+                    .map(|one| one.keysym())
+                    .collect::<Vec<_>>()
+                    .join("+")
+            )),
+        }
     }
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {

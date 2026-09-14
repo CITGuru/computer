@@ -101,13 +101,13 @@ async fn main() -> computer::Result<()> {
     )
     .await?;
 
-    screen.key("ctrl+l").await?;
+    screen.key(&["ctrl+l".into()], &[]).await?;
     screen
-        .type_text("en.wikipedia.org/wiki/Rust_(programming_language)")
+        .type_text("en.wikipedia.org/wiki/Rust_(programming_language)", None)
         .await?;
     shot(
         Step {
-            caption: "computer.key(\"ctrl+l\").await?;  computer.type_text(url).await?;",
+            caption: "computer.key(\"ctrl+l\").await?;  computer.type_text(url, None).await?;",
             settle: 900,
         },
         screen,
@@ -115,7 +115,7 @@ async fn main() -> computer::Result<()> {
     )
     .await?;
 
-    screen.key("enter").await?;
+    screen.key(&["enter".into()], &[]).await?;
     shot(
         Step {
             caption: "computer.key(\"enter\").await?;",
@@ -163,10 +163,10 @@ async fn main() -> computer::Result<()> {
     )
     .await?;
 
-    screen.key("escape").await?;
+    screen.key(&["escape".into()], &[]).await?;
     computer.set_clipboard("driven from rust").await?;
-    screen.key("ctrl+l").await?;
-    screen.key("ctrl+v").await?;
+    screen.key(&["ctrl+l".into()], &[]).await?;
+    screen.key(&["ctrl+v".into()], &[]).await?;
     shot(
         Step {
             caption: "computer.set_clipboard(text).await?;  computer.key(\"ctrl+v\").await?;",
