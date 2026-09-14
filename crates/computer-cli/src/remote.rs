@@ -712,7 +712,7 @@ pub async fn record(client: &Client, args: &[String]) -> Done {
     }
 }
 
-pub async fn still(client: &Client, args: &[String]) -> Done {
+pub async fn wait(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let ms = |name| -> Result<Option<u64>, String> {
         match flag(args, name) {

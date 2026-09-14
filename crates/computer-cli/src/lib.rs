@@ -112,8 +112,11 @@ computer — a desktop in a box
                               inside the box, so the frames never cross the
                               wire; stop brings the file out. needs a box
                               opened with --video
-  still <box> [--settle MS] [--within MS]
-                              wait until the screen stops changing
+  wait <box> [--settle MS] [--within MS]
+                              wait until the screen stops changing: unchanged
+                              for --settle, or give up after --within. the
+                              screen-wide one of `window wait` and
+                              `browser wait`, for what neither can see
   clip <box> [text] [--primary]
                               read a selection, or set it
   takeover <box>              open the input viewer and print its URL
@@ -233,7 +236,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "mouse" => remote::mouse(client, args).await,
         "keyboard" => remote::keyboard(client, args).await,
         "record" => remote::record(client, args).await,
-        "still" => remote::still(client, args).await,
+        "wait" => remote::wait(client, args).await,
         "clip" => remote::clip(client, args).await,
         "takeover" => remote::takeover(client, args).await,
         "release" => remote::release(client, args).await,
@@ -258,7 +261,7 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         ))),
         "mouse" => local::mouse(args).await,
         "keyboard" => local::keyboard(args).await,
-        "still" => local::still(args).await,
+        "wait" => local::wait(args).await,
         "clip" => local::clip(args).await,
         "takeover" => local::takeover(args).await,
         "release" => local::release(args).await,

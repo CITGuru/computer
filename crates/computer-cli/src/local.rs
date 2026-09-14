@@ -236,7 +236,7 @@ pub async fn scroll(args: &[String]) -> computer::Result<()> {
         .await
 }
 
-pub async fn still(args: &[String]) -> computer::Result<()> {
+pub async fn wait(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let ms = |name, fallback| -> computer::Result<Duration> {
         match flag(args, name) {
