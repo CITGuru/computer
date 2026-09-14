@@ -121,18 +121,6 @@ impl Client {
         .await
     }
 
-    /// Start a stopped box. The URLs in the answer are new ones — the runtime
-    /// republished it on host ports it picked as it started.
-    pub async fn start(&self, id: &str) -> Result<BoxView> {
-        self.send(
-            reqwest::Method::POST,
-            &format!("/v1/boxes/{id}/start"),
-            None,
-            &[],
-        )
-        .await
-    }
-
     /// Freeze the box, keeping its memory and its ports.
     pub async fn pause(&self, id: &str) -> Result<BoxView> {
         self.send(
@@ -144,6 +132,11 @@ impl Client {
         .await
     }
 
+    /// Make the box usable again, whichever way it was put down.
+    ///
+    /// A paused box wakes as it was. A stopped one starts a fresh desktop on
+    /// new ports, so read the URLs out of the answer rather than reusing any
+    /// held from before.
     pub async fn resume(&self, id: &str) -> Result<BoxView> {
         self.send(
             reqwest::Method::POST,

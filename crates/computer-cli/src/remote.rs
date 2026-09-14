@@ -166,23 +166,7 @@ pub async fn stop(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     client.stop(id).await.map_err(|e| e.to_string())?;
 
-    eprintln!("stopped; its files are kept. start it with: computer start {id}");
-    Ok(())
-}
-
-pub async fn start(client: &Client, args: &[String]) -> Done {
-    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-    let found = client.start(id).await.map_err(|e| e.to_string())?;
-
-    // The URL, because it is a different one: the runtime published the box on
-    // a host port it picked as it started, and whatever was noted down before
-    // it stopped reaches nothing now.
-    match &found.viewer_url {
-        Some(url) => eprintln!("  watch it  {url}"),
-        None => eprintln!("  no viewer port is published"),
-    }
-    eprintln!("  the desktop started again, so nothing that was open is open");
-
+    eprintln!("stopped; its files are kept. bring it back with: computer resume {id}");
     Ok(())
 }
 
@@ -194,9 +178,22 @@ pub async fn pause(client: &Client, args: &[String]) -> Done {
     Ok(())
 }
 
+/// Make the box usable again, whichever way it was put down.
 pub async fn resume(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-    client.resume(id).await.map_err(|e| e.to_string())?;
+
+    let was = client.get(id).await.map_err(|e| e.to_string())?;
+    let found = client.resume(id).await.map_err(|e| e.to_string())?;
+
+    // A paused box wakes as it was and keeps the URL it had. A stopped one
+    // does neither, and saying so is the whole reason one command does both.
+    if was.state == computer_api::BoxState::Stopped {
+        match &found.viewer_url {
+            Some(url) => eprintln!("  watch it  {url}"),
+            None => eprintln!("  no viewer port is published"),
+        }
+        eprintln!("  it was stopped, so the desktop started again with nothing open");
+    }
 
     Ok(())
 }

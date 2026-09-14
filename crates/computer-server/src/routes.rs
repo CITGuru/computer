@@ -92,7 +92,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/pause", post(pause_box))
         .route("/v1/boxes/{id}/resume", post(resume_box))
         .route("/v1/boxes/{id}/stop", post(stop_box))
-        .route("/v1/boxes/{id}/start", post(start_box))
         .route("/v1/boxes/{id}/exec", post(exec))
         .route("/v1/boxes/{id}/trace", get(read_trace))
         .route("/v1/boxes/{id}/trace/frames/{hash}", get(trace_frame))
@@ -997,13 +996,36 @@ async fn pause_box(
     Ok(Json(viewed(&entry, BoxState::Paused)))
 }
 
+/// Make the box usable again, whichever way it was put down.
+///
+/// One way in, because a caller wanting its box back should not have to
+/// remember how it stopped paying for it. Asking the wrong way used to answer
+/// with the runtime's own words: `cannot start a paused container, try unpause
+/// instead`.
+///
+/// What comes back says where the box is now, which is the part that differs:
+/// a paused box wakes as it was and on the ports it had, a stopped one starts
+/// a fresh desktop on new ones.
 async fn resume_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.registry.get(&id).await?;
-    entry.computer.resume().await?;
 
+    if entry.computer.stopped().await.unwrap_or(false) {
+        let woken = entry.computer.start(WAKE).await?;
+
+        // The handle held here points at the ports the box had before it
+        // stopped, so it is replaced rather than reused.
+        let entry = state.registry.replace(&id, woken).await?;
+        state
+            .record(&id, Actor::Agent, TraceEvent::BoxStarted)
+            .await;
+
+        return Ok(Json(viewed(&entry, BoxState::Ready)));
+    }
+
+    entry.computer.resume().await?;
     state
         .record(&id, Actor::Agent, TraceEvent::BoxResumed)
         .await;
@@ -1024,29 +1046,6 @@ async fn stop_box(
         .await;
 
     Ok(Json(viewed(&entry, BoxState::Stopped)))
-}
-
-/// Start it again, and answer with where it is now.
-///
-/// The viewer and debugger URLs in the answer are new ones: the runtime
-/// publishes on host ports it picks as the box starts, so the URLs from before
-/// it stopped reach nothing.
-async fn start_box(
-    State(state): State<Arc<AppState>>,
-    ApiPath(id): ApiPath<String>,
-) -> ApiResult<Json<BoxView>> {
-    let entry = state.registry.get(&id).await?;
-    let woken = entry.computer.start(WAKE).await?;
-
-    // The handle held in the registry points at the ports the box had before
-    // it stopped, so it is replaced rather than reused.
-    let entry = state.registry.replace(&id, woken).await?;
-
-    state
-        .record(&id, Actor::Agent, TraceEvent::BoxStarted)
-        .await;
-
-    Ok(Json(viewed(&entry, BoxState::Ready)))
 }
 
 async fn exec(

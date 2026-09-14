@@ -181,15 +181,32 @@ async fn adopt_one(
 
     let (machine, profile) = place.driving(label.spec.desktop.server);
 
+    // A paused box reports no ports at all — not through `port`, not through
+    // `inspect`. It has them, and everything below builds its URLs from them,
+    // so it is woken long enough to be read and then put back as it was.
+    let frozen = machine.paused(name).await.unwrap_or(false);
+    if frozen {
+        machine
+            .resume(name)
+            .await
+            .map_err(|error| format!("it is paused and would not wake to be read: {error}"))?;
+    }
+
     // A stopped box is taken back too. It is listed here because it still
     // exists, and forgetting it would leave it on the disk with nothing left
     // that knows how to start it.
     let running = machine.running(name).await.unwrap_or(false);
-    let computer = match running {
-        true => Computer::attach_using(machine, name, profile, None).await,
-        false => Computer::attach_stopped(machine, name, profile, None).await,
+    let taken = match running {
+        true => Computer::attach_using(Arc::clone(&machine), name, profile, None).await,
+        false => Computer::attach_stopped(Arc::clone(&machine), name, profile, None).await,
+    };
+
+    if frozen {
+        // Back to how it was found, whether or not it could be picked up.
+        let _ = machine.pause(name).await;
     }
-    .map_err(|error| error.to_string())?;
+
+    let computer = taken.map_err(|error| error.to_string())?;
 
     let entry = state
         .registry

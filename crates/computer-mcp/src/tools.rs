@@ -8,8 +8,9 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, Arrange, Evaluate, Find, ForkMode, ForkRequest, Frame, Held, NodeQuery,
-    OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, ScrollTo, Shot, Want, Where,
+    Action, ActionBatch, Arrange, BoxState, Evaluate, Find, ForkMode, ForkRequest, Frame, Held,
+    NodeQuery, OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, ScrollTo, Shot, Want,
+    Where,
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
@@ -649,16 +650,9 @@ pub fn catalogue() -> Value {
         tool(
             "stop_box",
             "Stop a box, keeping its files. Cheaper than pausing — the memory goes back — and \
-             costlier to come back from: starting it gives a fresh desktop, so anything you had \
+             costlier to come back from: resuming it gives a fresh desktop, so anything you had \
              open is gone and the viewer URL changes. Pause instead if you are coming straight \
-             back.",
-            box_only(),
-        ),
-        tool(
-            "start_box",
-            "Start a stopped box. It has its files and a desktop that just started, and it is \
-             published on different ports than before — read the answer rather than any URL you \
-             noted earlier.",
+             back. `resume_box` brings it back either way.",
             box_only(),
         ),
         tool(
@@ -671,8 +665,10 @@ pub fn catalogue() -> Value {
         ),
         tool(
             "resume_box",
-            "Wake a paused box, as the box it was. Its windows are where they were and its \
-             ports are the ones you had.",
+            "Make a box usable again, whichever way you put it down. A paused box wakes as it \
+             was, with its windows where they were. A stopped one starts a fresh desktop with \
+             nothing open and a new viewer URL — the answer says which you got, so read it \
+             rather than assuming what is on screen.",
             box_only(),
         ),
         tool(
@@ -1045,20 +1041,9 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             client.stop(&id).await.map_err(|e| e.to_string())?;
 
             Ok(Answer::Text(format!(
-                "{id} is stopped and its files are kept. Start it before anything reaches it, \
+                "{id} is stopped and its files are kept. Resume it before anything reaches it, \
                  and expect a desktop with nothing open."
             )))
-        }
-        "start_box" => {
-            let id = text(arguments, "box_id")?;
-            let found = client.start(&id).await.map_err(|e| e.to_string())?;
-
-            let mut said = format!("{id} is running again, with nothing open on it");
-            if let Some(url) = &found.viewer_url {
-                said.push_str(&format!("\nwatch it at {url}, which is a new address"));
-            }
-
-            Ok(Answer::Text(said))
         }
         "pause_box" => {
             let id = text(arguments, "box_id")?;
@@ -1070,9 +1055,22 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
         }
         "resume_box" => {
             let id = text(arguments, "box_id")?;
-            client.resume(&id).await.map_err(|e| e.to_string())?;
 
-            Ok(Answer::Text(format!("{id} is awake")))
+            let was = client.get(&id).await.map_err(|e| e.to_string())?;
+            let found = client.resume(&id).await.map_err(|e| e.to_string())?;
+
+            // Which it was decides what is on the screen, so it is said rather
+            // than left for the model to assume.
+            if was.state != BoxState::Stopped {
+                return Ok(Answer::Text(format!("{id} is awake, as you left it")));
+            }
+
+            let mut said = format!("{id} was stopped, so it is running again with nothing open");
+            if let Some(url) = &found.viewer_url {
+                said.push_str(&format!("\nwatch it at {url}, which is a new address"));
+            }
+
+            Ok(Answer::Text(said))
         }
         "record" => {
             let id = text(arguments, "box_id")?;

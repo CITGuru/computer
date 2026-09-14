@@ -22,14 +22,14 @@ computer — a desktop in a box
                               open a box and print where to watch it
   ls                          boxes that are running
   box <box>                   everything the server knows about one
-  pause <box>                 freeze it: it keeps its memory and its ports and
-                              costs no processor until resumed
-  resume <box>                wake it, as the box it was
+  pause <box>                 freeze it: it keeps its memory and its ports,
+                              and costs no processor until resumed
   stop <box>                  end everything in it, keeping its files. cheaper
                               than pause, which holds the memory
-  start <box>                 start a stopped box. the desktop starts again,
-                              so nothing that was open is open, and the viewer
-                              URL is a new one
+  resume <box>                make it usable again, either way it was put
+                              down. a paused box wakes as it was; a stopped
+                              one starts a fresh desktop on a new viewer URL,
+                              and says so
   screenshot <box> [file.png] [--window ID | --at X,Y --size WxH]
              [--scale PERCENT] [--pointer] [--tab ID]
                               capture the screen, one window, or a rectangle
@@ -221,7 +221,6 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "ls" => remote::list(client).await,
         "box" => remote::describe(client, args).await,
         "stop" => remote::stop(client, args).await,
-        "start" => remote::start(client, args).await,
         "pause" => remote::pause(client, args).await,
         "resume" => remote::resume(client, args).await,
         "screenshot" => remote::screenshot(client, args).await,
@@ -254,7 +253,7 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "screenshot" => local::screenshot(args).await,
         "open" => local::open(args).await,
         "app" | "apps" | "window" | "widget" | "browser" | "record" | "box" | "pause"
-        | "resume" | "stop" | "start" => Err(computer::Error::invalid(format!(
+        | "resume" | "stop" => Err(computer::Error::invalid(format!(
             "`{command}` needs a server; drop --local"
         ))),
         "mouse" => local::mouse(args).await,
