@@ -86,11 +86,94 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
 
 pub async fn list(client: &Client) -> Done {
     for found in client.list().await.map_err(|e| e.to_string())? {
+        // A frozen box is indistinguishable from a running one here, and is
+        // the one thing a caller reading this list needs to know before it
+        // reaches for one.
+        let state = match found.state {
+            computer_api::BoxState::Ready => String::new(),
+            other => format!("\t{other:?}"),
+        };
+
         println!(
-            "{}\t{}x{}\t{} screen(s)",
+            "{}\t{}x{}\t{} screen(s){state}",
             found.id, found.width, found.height, found.screens
         );
     }
+    Ok(())
+}
+
+/// Everything the server knows about one box.
+pub async fn describe(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let found = client.get(id).await.map_err(|e| e.to_string())?;
+
+    println!("id        {}", found.id);
+    println!("state     {:?}", found.state);
+    println!("screens   {}", found.screens);
+    println!("size      {}x{}", found.width, found.height);
+    println!("spec      {}", found.spec_digest);
+    println!("created   {}", stamped(found.created_at_ms));
+    match found.expires_at_ms {
+        Some(at) => println!("expires   {}", stamped(at)),
+        None => println!("expires   never"),
+    }
+    if let Some(url) = &found.viewer_url {
+        println!("viewer    {url}");
+    }
+    if let Some(url) = &found.devtools_url {
+        println!("devtools  {url}");
+    }
+
+    Ok(())
+}
+
+/// Milliseconds since the epoch as something a person can read, in UTC.
+fn stamped(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    match chrono_free(secs) {
+        Some(when) => when,
+        None => format!("{ms}ms"),
+    }
+}
+
+/// Civil time from a Unix second, without a date crate for one line of output.
+fn chrono_free(secs: i64) -> Option<String> {
+    if secs < 0 {
+        return None;
+    }
+
+    let days = secs / 86_400;
+    let rest = secs % 86_400;
+    let (hour, minute, second) = (rest / 3600, (rest % 3600) / 60, rest % 60);
+
+    // Days since 1970 to a civil date, by Howard Hinnant's algorithm.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = era * 400 + yoe + i64::from(month <= 2);
+
+    Some(format!(
+        "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}Z"
+    ))
+}
+
+pub async fn pause(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    client.pause(id).await.map_err(|e| e.to_string())?;
+
+    eprintln!("frozen; wake it with: computer resume {id}");
+    Ok(())
+}
+
+pub async fn resume(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    client.resume(id).await.map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
@@ -814,6 +897,8 @@ fn summarise(event: &computer_api::TraceEvent) -> String {
         E::AppLaunched { screen, app, .. } => format!("screen {screen}  opened {app}"),
         E::FileWritten { path, bytes } => format!("wrote {bytes} bytes to {path}"),
         E::FileRead { path, bytes } => format!("read {bytes} bytes from {path}"),
+        E::BoxPaused => "frozen".to_string(),
+        E::BoxResumed => "woken".to_string(),
         E::PageCaptured { full, bytes } => match full {
             true => format!("captured the whole page, {bytes} bytes"),
             false => format!("captured the page in view, {bytes} bytes"),

@@ -85,6 +85,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes", get(list_boxes).post(create_box))
         .route("/v1/boxes/{id}", get(get_box).delete(delete_box))
         .route("/v1/boxes/{id}/fork", post(fork))
+        .route("/v1/boxes/{id}/pause", post(pause_box))
+        .route("/v1/boxes/{id}/resume", post(resume_box))
         .route("/v1/boxes/{id}/exec", post(exec))
         .route("/v1/boxes/{id}/trace", get(read_trace))
         .route("/v1/boxes/{id}/trace/frames/{hash}", get(trace_frame))
@@ -203,15 +205,22 @@ async fn create_box(
 }
 
 async fn list_boxes(State(state): State<Arc<AppState>>) -> Json<BoxList> {
-    let boxes = state
-        .registry
-        .list()
-        .await
-        .iter()
-        .map(|entry| view_of(entry))
-        .collect();
+    let mut boxes = Vec::new();
+
+    // A frozen box looks like a running one to everything but the runtime, and
+    // a caller reading this list is choosing which to drive.
+    for entry in state.registry.list().await.iter() {
+        boxes.push(viewed(entry, state_of(entry).await));
+    }
 
     Json(BoxList { boxes })
+}
+
+async fn state_of(entry: &Entry) -> BoxState {
+    match entry.computer.paused().await {
+        Ok(true) => BoxState::Paused,
+        _ => BoxState::Ready,
+    }
 }
 
 async fn get_box(
@@ -219,7 +228,9 @@ async fn get_box(
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.registry.get(&id).await?;
-    Ok(Json(view_of(&entry)))
+    let state = state_of(&entry).await;
+
+    Ok(Json(viewed(&entry, state)))
 }
 
 async fn delete_box(
@@ -959,6 +970,33 @@ async fn stop_recording(
         recording: false,
         path: Some(path),
     }))
+}
+
+/// Freeze the box, keeping its memory and its ports.
+async fn pause_box(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+) -> ApiResult<Json<BoxView>> {
+    let entry = state.registry.get(&id).await?;
+    entry.computer.pause().await?;
+
+    state.record(&id, Actor::Agent, TraceEvent::BoxPaused).await;
+
+    Ok(Json(viewed(&entry, BoxState::Paused)))
+}
+
+async fn resume_box(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+) -> ApiResult<Json<BoxView>> {
+    let entry = state.registry.get(&id).await?;
+    entry.computer.resume().await?;
+
+    state
+        .record(&id, Actor::Agent, TraceEvent::BoxResumed)
+        .await;
+
+    Ok(Json(viewed(&entry, BoxState::Ready)))
 }
 
 async fn exec(
@@ -2063,10 +2101,14 @@ fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
 }
 
 fn view_of(entry: &Entry) -> BoxView {
+    viewed(entry, BoxState::Ready)
+}
+
+fn viewed(entry: &Entry, state: BoxState) -> BoxView {
     BoxView {
         id: entry.id.clone(),
         spec_digest: entry.spec_digest(),
-        state: BoxState::Ready,
+        state,
         screens: entry.screens,
         width: entry.width,
         height: entry.height,

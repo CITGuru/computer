@@ -41,6 +41,10 @@ pub struct BoxView {
 #[serde(rename_all = "snake_case")]
 pub enum BoxState {
     Ready,
+    /// Frozen: it holds its memory and its ports, and does nothing until it is
+    /// resumed. Every call that reaches into the box will hang rather than
+    /// fail, so this is worth checking before driving one.
+    Paused,
     Gone,
 }
 
@@ -793,6 +797,8 @@ pub enum TraceEvent {
         path: String,
         bytes: usize,
     },
+    BoxPaused,
+    BoxResumed,
     PageCaptured {
         /// Past the viewport, to the whole scrollable page.
         full: bool,

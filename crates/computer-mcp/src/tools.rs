@@ -640,6 +640,27 @@ pub fn catalogue() -> Value {
             box_only(),
         ),
         tool(
+            "inspect_box",
+            "Everything the server knows about one box: its state, its size, when it was made, \
+             when it expires, and where to watch it. `list_boxes` names them; this describes \
+             one.",
+            box_only(),
+        ),
+        tool(
+            "pause_box",
+            "Freeze a box. It keeps its memory and its ports and costs no processor until you \
+             resume it, and comes back as the box it was — the windows that were open are \
+             still open. Use it when you are done with a box for now but not done with it. \
+             Every other tool will hang on a paused box rather than fail, so resume it first.",
+            box_only(),
+        ),
+        tool(
+            "resume_box",
+            "Wake a paused box, as the box it was. Its windows are where they were and its \
+             ports are the ones you had.",
+            box_only(),
+        ),
+        tool(
             "record",
             "Record the screen to a video file, or stop a recording and read where it landed. \
              ffmpeg writes it inside the box, so the frames never cross the wire and the cost \
@@ -985,6 +1006,38 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             let at = client.cursor(&id, 0).await.map_err(|e| e.to_string())?;
 
             Ok(Answer::Text(format!("the pointer is at {},{}", at.x, at.y)))
+        }
+        "inspect_box" => {
+            let id = text(arguments, "box_id")?;
+            let found = client.get(&id).await.map_err(|e| e.to_string())?;
+
+            let mut said = format!(
+                "{} — {:?}, {} screen(s), {}x{}",
+                found.id, found.state, found.screens, found.width, found.height
+            );
+            if let Some(url) = &found.viewer_url {
+                said.push_str(&format!("\nwatch it at {url}"));
+            }
+            match found.expires_at_ms {
+                Some(at) => said.push_str(&format!("\nit expires at {at}ms")),
+                None => said.push_str("\nit has no deadline"),
+            }
+
+            Ok(Answer::Text(said))
+        }
+        "pause_box" => {
+            let id = text(arguments, "box_id")?;
+            client.pause(&id).await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!(
+                "{id} is frozen; resume it before anything else reaches it"
+            )))
+        }
+        "resume_box" => {
+            let id = text(arguments, "box_id")?;
+            client.resume(&id).await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!("{id} is awake")))
         }
         "record" => {
             let id = text(arguments, "box_id")?;

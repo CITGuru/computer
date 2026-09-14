@@ -21,6 +21,10 @@ computer — a desktop in a box
                               afterwards
                               open a box and print where to watch it
   ls                          boxes that are running
+  box <box>                   everything the server knows about one
+  pause <box>                 freeze it: it keeps its memory and its ports and
+                              costs no processor until resumed
+  resume <box>                wake it, as the box it was
   screenshot <box> [file.png] [--window ID | --at X,Y --size WxH]
              [--scale PERCENT] [--pointer] [--tab ID]
                               capture the screen, one window, or a rectangle
@@ -210,6 +214,9 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
     match command {
         "up" => remote::up(client, args).await,
         "ls" => remote::list(client).await,
+        "box" => remote::describe(client, args).await,
+        "pause" => remote::pause(client, args).await,
+        "resume" => remote::resume(client, args).await,
         "screenshot" => remote::screenshot(client, args).await,
         "open" => remote::open(client, args).await,
         "app" => remote::app(client, args).await,
@@ -239,9 +246,10 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "ls" => local::list().await,
         "screenshot" => local::screenshot(args).await,
         "open" => local::open(args).await,
-        "app" | "apps" | "window" | "widget" | "browser" | "record" => Err(
-            computer::Error::invalid(format!("`{command}` needs a server; drop --local")),
-        ),
+        "app" | "apps" | "window" | "widget" | "browser" | "record" | "box" | "pause"
+        | "resume" => Err(computer::Error::invalid(format!(
+            "`{command}` needs a server; drop --local"
+        ))),
         "mouse" => local::mouse(args).await,
         "keyboard" => local::keyboard(args).await,
         "still" => local::still(args).await,

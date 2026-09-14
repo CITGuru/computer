@@ -1027,6 +1027,27 @@ impl Computer {
     }
 
     /// When this box will be taken away, if it was given a life.
+    /// Freeze every process in the box, keeping its memory and its ports.
+    ///
+    /// A paused box holds its memory and comes back as the box it was: the
+    /// windows that were open are still open and the ports still answer.
+    /// Apart from removing it, which is not recoverable, and from stopping the
+    /// container, which ends the desktop and hands back different ports.
+    pub async fn pause(&self) -> Result<()> {
+        self.touch();
+        self.machine.pause(&self.name).await
+    }
+
+    pub async fn resume(&self) -> Result<()> {
+        self.touch();
+        self.machine.resume(&self.name).await
+    }
+
+    /// Whether the box is frozen. `false` on a runtime that cannot freeze one.
+    pub async fn paused(&self) -> Result<bool> {
+        self.machine.paused(&self.name).await
+    }
+
     pub fn expires_at(&self) -> Option<SystemTime> {
         self.expires_at
     }

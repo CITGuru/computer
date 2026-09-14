@@ -110,6 +110,27 @@ impl Client {
 
     /// Takes the confirmation header for you: the caller reached for a method
     /// called `delete`, which is the confirmation the header exists to get.
+    /// Freeze the box, keeping its memory and its ports.
+    pub async fn pause(&self, id: &str) -> Result<BoxView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/pause"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn resume(&self, id: &str) -> Result<BoxView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/resume"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     pub async fn delete(&self, id: &str) -> Result<()> {
         self.nothing(
             reqwest::Method::DELETE,

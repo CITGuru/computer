@@ -100,7 +100,36 @@ pub trait Machine: Send + Sync {
     /// up explains itself.
     async fn logs(&self, name: &str) -> Result<String>;
 
+    /// Take the box away. Not a pause — see [`Machine::pause`].
     async fn stop(&self, name: &str) -> Result<()>;
+
+    /// Freeze every process, keeping memory and published ports.
+    ///
+    /// Apart from stopping, which ends the processes and, on a container
+    /// runtime, hands back different host ports when they start again. A
+    /// paused box comes back as the box it was.
+    ///
+    /// The default refuses: a substrate that cannot freeze one must say so
+    /// rather than leave the caller thinking the box costs nothing.
+    async fn pause(&self, name: &str) -> Result<()> {
+        let _ = name;
+        Err(Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn resume(&self, name: &str) -> Result<()> {
+        let _ = name;
+        Err(Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    /// Whether the box is frozen. `false` where the runtime cannot freeze one.
+    async fn paused(&self, name: &str) -> Result<bool> {
+        let _ = name;
+        Ok(false)
+    }
 
     /// Every box this runtime holds that carries the label, and its value.
     ///
@@ -376,6 +405,17 @@ impl DockerMachine {
         }
     }
 
+    /// `pause` or `unpause`, which every container runtime here spells the
+    /// same and which report nothing on success.
+    async fn freeze(&self, verb: &str, name: &str) -> Result<()> {
+        let result = self.cli.run(&[arg(verb), arg(name)]).await?;
+
+        if result.code != 0 {
+            return Err(Error::denied(result.stderr_utf8().trim().to_string()));
+        }
+        Ok(())
+    }
+
     /// `docker cp`, rather than an encoding round trip: base64 flags differ
     /// between coreutils and BusyBox, and an argument list has a size ceiling
     /// that a screenshot walks straight through.
@@ -478,6 +518,27 @@ impl Machine for DockerMachine {
                 arg("inspect"),
                 arg("--format"),
                 arg("{{.State.Running}}"),
+                arg(name),
+            ])
+            .await?;
+        Ok(state.stdout_utf8().trim() == "true")
+    }
+
+    async fn pause(&self, name: &str) -> Result<()> {
+        self.freeze("pause", name).await
+    }
+
+    async fn resume(&self, name: &str) -> Result<()> {
+        self.freeze("unpause", name).await
+    }
+
+    async fn paused(&self, name: &str) -> Result<bool> {
+        let state = self
+            .cli
+            .run(&[
+                arg("inspect"),
+                arg("--format"),
+                arg("{{.State.Paused}}"),
                 arg(name),
             ])
             .await?;
