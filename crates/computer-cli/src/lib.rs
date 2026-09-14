@@ -88,10 +88,10 @@ computer — a desktop in a box
                               jpeg unless told otherwise
 
   keyboard <box> type <text>  type into the focused window
-  keyboard <box> key <keys>   press one key or several at once: enter, tab,
-                              escape, up, pagedown, ctrl+l, cmd+shift+p. one
-                              key is a combination of one, so there is no
-                              second command for it
+  keyboard <box> press <keys> one key or several at once: enter, tab, escape,
+                              up, pagedown, ctrl+l, cmd+shift+p. one key is a
+                              combination of one, so there is no second
+                              command for it
 
   mouse <box> move <x> <y>    put the pointer somewhere, in device pixels
   mouse <box> click <x> <y> [button] [--double] [--held shift,ctrl]

@@ -579,14 +579,14 @@ pub async fn mouse(client: &Client, args: &[String]) -> Done {
 
 /// The keyboard, grouped to pair with `mouse`.
 pub async fn keyboard(client: &Client, args: &[String]) -> Done {
-    let op = positional(args, 1, "type or key").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "type or press").map_err(|e| e.to_string())?;
 
     let mut rest = args.to_vec();
     rest.remove(1);
 
     match op {
         "type" => type_text(client, &rest).await,
-        "key" => key(client, &rest).await,
+        "press" => key(client, &rest).await,
         other => Err(format!("no such op: {other}")),
     }
 }

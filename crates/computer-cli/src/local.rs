@@ -134,14 +134,14 @@ pub async fn mouse(args: &[String]) -> computer::Result<()> {
 }
 
 pub async fn keyboard(args: &[String]) -> computer::Result<()> {
-    let op = positional(args, 1, "type or key")?.to_string();
+    let op = positional(args, 1, "type or press")?.to_string();
 
     let mut rest = args.to_vec();
     rest.remove(1);
 
     match op.as_str() {
         "type" => type_text(&rest).await,
-        "key" => key(&rest).await,
+        "press" => key(&rest).await,
         other => Err(computer::Error::denied(format!("no such op: {other}"))),
     }
 }
