@@ -47,7 +47,15 @@ case "$verb" in
   # `--` next, or text starting with a dash is read as a flag and the failure
   # is a refusal the caller cannot diagnose.
   type)
-    said=$(wtype -s 120 -- "$@" 2>&1) || true
+    # `--delay MS` ahead of the text, which is how the driver asks for a pace.
+    # `-s` is wtype's own name for it, and it already carries one: the first
+    # keystroke goes out before the compositor has applied the keymap.
+    pace=120
+    if [ "${1:-}" = "--delay" ]; then
+      pace="${2:-120}"
+      shift 2
+    fi
+    said=$(wtype -s "$pace" -- "$@" 2>&1) || true
     ;;
   key)
     said=$(wtype -s 120 "$@" 2>&1) || true

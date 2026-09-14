@@ -482,15 +482,44 @@ pub fn catalogue() -> Value {
         ),
         tool(
             "type_text",
-            "Type into whatever has keyboard focus. Click the field first.",
-            with_frame(json!({ "text": { "type": "string" } }), &["text"])
+            "Type into whatever has keyboard focus. Click the field first. `delay_ms` paces \
+             the keystrokes: a few inputs act on every keystroke and drop characters that \
+             arrive at full speed, and 30 to 50 is usually enough for one of those.",
+            with_frame(
+                json!({
+                    "text": { "type": "string" },
+                    "delay_ms": {
+                        "type": "integer",
+                        "description": "Milliseconds between keystrokes. Full speed unless said."
+                    }
+                }),
+                &["text"]
+            )
         ),
         tool(
             "press_key",
             "Press one key or several at once: `enter`, `tab`, `escape`, `up`, `pagedown`, \
              `ctrl+a`, `cmd+shift+p`. Names are matched loosely — `esc`, `return`, `pgdn`, \
-             `cmd` and `win` all land where you would expect.",
-            with_frame(json!({ "chord": { "type": "string" } }), &["chord"])
+             `cmd` and `win` all land where you would expect. `then` and `held` are for the \
+             one thing a combination cannot do: hold a modifier open across several keys. \
+             `chord: \"tab\", then: [\"tab\"], held: [\"alt\"]` reaches the third window, where \
+             pressing `alt+tab` twice only ever reaches the second.",
+            with_frame(
+                json!({
+                    "chord": { "type": "string" },
+                    "then": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "More keys, pressed in turn while `held` stays down."
+                    },
+                    "held": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["shift", "ctrl", "alt", "cmd"] },
+                        "description": "Modifiers kept down across every key named."
+                    }
+                }),
+                &["chord"]
+            )
         ),
         tool(
             "scroll",
@@ -1382,6 +1411,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 arguments,
                 Action::Type {
                     text: text(arguments, "text")?,
+                    delay_ms: arguments.get("delay_ms").and_then(Value::as_u64),
                 },
                 400,
             )
@@ -1393,6 +1423,11 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 arguments,
                 Action::Key {
                     chord: text(arguments, "chord")?,
+                    then: strings(arguments, "then"),
+                    held: strings(arguments, "held")
+                        .iter()
+                        .filter_map(|word| Held::named(word))
+                        .collect(),
                 },
                 400,
             )

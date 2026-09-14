@@ -104,9 +104,22 @@ pub enum Action {
     },
     Type {
         text: String,
+        /// Milliseconds between keystrokes. Full speed where it is left out,
+        /// which a few inputs that debounce on every event cannot follow.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delay_ms: Option<u64>,
     },
     Key {
+        /// One key or several at once: `enter`, `ctrl+l`, `cmd+shift+p`.
         chord: String,
+        /// More of them, pressed in turn while `held` stays down.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        then: Vec<String>,
+        /// Modifiers held down across the whole run, which a chord cannot do:
+        /// `alt+tab` three times toggles between two windows, where alt held
+        /// across three tabs reaches the third.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        held: Vec<Held>,
     },
     /// In notches: positive `dy` down, positive `dx` right. Whatever sits
     /// under the point is what moves, so this reaches a list or a sidebar

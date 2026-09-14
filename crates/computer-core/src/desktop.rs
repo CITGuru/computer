@@ -417,7 +417,35 @@ pub trait Desktop: Send + Sync {
     }
 
     async fn type_text(&self, text: &str) -> Result<()>;
+
+    /// The same, paced. `delay` is the gap between keystrokes.
+    ///
+    /// Its own method rather than an argument, so a desktop whose typing tool
+    /// cannot be paced refuses: asking for a delay means full speed has
+    /// already dropped characters, and answering at full speed again would be
+    /// answering with the failure.
+    async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
+        let _ = (text, delay);
+
+        Err(Error::Unsupported {
+            gaps: vec!["typing at a given speed"],
+        })
+    }
+
     async fn key(&self, chord: &str) -> Result<()>;
+
+    /// Several chords in turn, with `held` down across all of them.
+    ///
+    /// A chord presses and releases everything it names, so `alt+tab` twice
+    /// toggles between two windows. This holds the modifiers open, which is
+    /// how the third window is reached.
+    async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        let _ = (chords, held);
+
+        Err(Error::Unsupported {
+            gaps: vec!["holding a modifier across keys"],
+        })
+    }
     async fn scroll(&self, at: Point, by: Delta) -> Result<()>;
 
     /// The alternative is a sleep, which is either short enough to read the

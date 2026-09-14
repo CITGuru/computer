@@ -513,13 +513,19 @@ fn shown(window: &Window) -> String {
     )
 }
 
+/// The `keyboard` flags that take a value.
+const TYPED: [&str; 2] = ["--delay", "--held"];
+
 pub async fn type_text(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let rest = bare(args, &TYPED);
+
     act(
         client,
         id,
         Action::Type {
-            text: args[1..].join(" "),
+            text: rest[1..].join(" "),
+            delay_ms: counted(args, "--delay", "a number of milliseconds")?,
         },
     )
     .await
@@ -527,12 +533,21 @@ pub async fn type_text(client: &Client, args: &[String]) -> Done {
 
 pub async fn key(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-    let chord = positional(args, 1, "a chord").map_err(|e| e.to_string())?;
+    let rest = bare(args, &TYPED);
+
+    let mut keys = rest.get(1..).unwrap_or_default().iter();
+    let chord = keys
+        .next()
+        .ok_or_else(|| "expected a key to press".to_string())?
+        .clone();
+
     act(
         client,
         id,
         Action::Key {
-            chord: chord.to_string(),
+            chord,
+            then: keys.cloned().collect(),
+            held: modifiers(args)?,
         },
     )
     .await
@@ -974,8 +989,11 @@ fn name_of(action: &Action) -> String {
         Action::Drag { from, to, .. } => {
             format!("drag {},{} → {},{}", from.x, from.y, to.x, to.y)
         }
-        Action::Type { text } => format!("type {text:?}"),
-        Action::Key { chord } => format!("key {chord}"),
+        Action::Type { text, .. } => format!("type {text:?}"),
+        Action::Key { chord, then, .. } => match then.is_empty() {
+            true => format!("press {chord}"),
+            false => format!("press {chord} and {} more", then.len()),
+        },
         Action::Scroll { dy, .. } => format!("scroll {dy}"),
         Action::OpenUrl { url, .. } => format!("open {url}"),
         Action::OnPage { what } => format!("page {}", op_of(what)),

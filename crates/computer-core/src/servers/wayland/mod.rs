@@ -29,8 +29,8 @@ use crate::machine::ScreenHost;
 use crate::screens::ControlGate;
 use crate::servers::{a11y, settled, still_argv};
 use crate::{
-    Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Node, NodeQuery,
-    Point, Rect, ScreenId, Selection,
+    Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Held, Node,
+    NodeQuery, Point, Rect, ScreenId, Selection,
 };
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
@@ -399,8 +399,41 @@ impl Desktop for WaylandDesktop {
         self.act(input_argv("type", &[text.to_string()])).await
     }
 
+    async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
+        self.act(input_argv(
+            "type",
+            &[
+                "--delay".to_string(),
+                delay.as_millis().to_string(),
+                text.to_string(),
+            ],
+        ))
+        .await
+    }
+
     async fn key(&self, keys: &str) -> Result<()> {
         self.act(input_argv("key", &chord(keys))).await
+    }
+
+    /// One `wtype` run, as the X11 driver uses one `xdotool` run: the hold has
+    /// to outlive each key, and a process per key would release it between.
+    async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        let mut parts = Vec::new();
+
+        for one in held {
+            parts.push("-M".to_string());
+            parts.push(one.keysym().to_string());
+        }
+        for one in chords {
+            parts.extend(chord(one));
+        }
+        // Released in reverse, so the last one held is the first one let go.
+        for one in held.iter().rev() {
+            parts.push("-m".to_string());
+            parts.push(one.keysym().to_string());
+        }
+
+        self.act(input_argv("key", &parts)).await
     }
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {

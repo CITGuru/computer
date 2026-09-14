@@ -1611,6 +1611,16 @@ impl Computer {
         self.primary.key(chord).await
     }
 
+    /// Several chords on screen 0, with `held` down across all of them.
+    pub async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        self.primary.keys(chords, held).await
+    }
+
+    /// Type into screen 0 with a gap between keystrokes.
+    pub async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
+        self.primary.type_slowly(text, delay).await
+    }
+
     pub async fn scroll(&self, at: impl Into<Point>, by: Delta) -> Result<()> {
         self.primary.scroll(at, by).await
     }
@@ -2408,6 +2418,20 @@ impl Screen {
         self.driver.key(chord).await
     }
 
+    /// Several chords in turn with `held` down across all of them.
+    ///
+    /// A chord releases what it pressed, so `alt+tab` twice toggles between
+    /// two windows. This reaches the third.
+    pub async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        self.driver.keys(chords, held).await
+    }
+
+    /// Type with a gap between keystrokes, for an input that cannot follow
+    /// full speed.
+    pub async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
+        self.driver.type_slowly(text, delay).await
+    }
+
     pub async fn scroll(&self, at: impl Into<Point>, by: Delta) -> Result<()> {
         self.driver.scroll(at.into(), by).await
     }
@@ -2508,6 +2532,14 @@ impl Desktop for Screen {
 
     async fn key(&self, chord: &str) -> Result<()> {
         self.driver.key(chord).await
+    }
+
+    async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        self.driver.keys(chords, held).await
+    }
+
+    async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
+        self.driver.type_slowly(text, delay).await
     }
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {

@@ -426,9 +426,34 @@ impl Desktop for X11Desktop {
         self.act(args).await
     }
 
+    async fn type_slowly(&self, text: &str, delay: Duration) -> Result<()> {
+        let mut args = argv(&["xdotool", "type", "--clearmodifiers", "--delay"]);
+        args.push(delay.as_millis().to_string());
+        args.push("--".to_string());
+        args.push(text.to_string());
+        self.act(args).await
+    }
+
     async fn key(&self, keys: &str) -> Result<()> {
         let mut args = argv(&["xdotool", "key", "--clearmodifiers"]);
         args.push(chord(keys));
+        self.act(args).await
+    }
+
+    /// One chained `xdotool` run, not a call each: a `keydown` in one process
+    /// may be released when that process exits, and the keys in between would
+    /// then arrive unmodified.
+    ///
+    /// No `--clearmodifiers` here — it would drop the very keys being held.
+    async fn keys(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        let mut args = holding(held);
+
+        for one in chords {
+            args.push("key".to_string());
+            args.push(chord(one));
+        }
+        args.extend(letting_go(held));
+
         self.act(args).await
     }
 

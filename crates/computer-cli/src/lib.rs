@@ -87,11 +87,19 @@ computer — a desktop in a box
                               which is as tall as the page is and so answers
                               jpeg unless told otherwise
 
-  keyboard <box> type <text>  type into the focused window
-  keyboard <box> press <keys> one key or several at once: enter, tab, escape,
+  keyboard <box> type <text> [--delay MS]
+                              type into the focused window. --delay paces the
+                              keystrokes, for an input that drops characters
+                              when they arrive at full speed
+  keyboard <box> press <keys…> [--held shift,alt]
+                              one key or several at once: enter, tab, escape,
                               up, pagedown, ctrl+l, cmd+shift+p. one key is a
                               combination of one, so there is no second
-                              command for it
+                              command for it. --held keeps modifiers down
+                              across every key named, which a combination
+                              cannot: `press tab tab tab --held alt` reaches
+                              the third window where `press alt+tab` three
+                              times only ever reaches the second
 
   mouse <box> move <x> <y>    put the pointer somewhere, in device pixels
   mouse <box> click <x> <y> [button] [--double] [--held shift,ctrl]

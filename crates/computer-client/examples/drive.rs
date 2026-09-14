@@ -115,7 +115,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // A refusal arrives as one, rather than as a status code to interpret.
     match client
-        .act_once(&box_.id, 9, Action::Key { chord: "a".into() })
+        .act_once(
+            &box_.id,
+            9,
+            Action::Key {
+                chord: "a".into(),
+                then: Vec::new(),
+                held: Vec::new(),
+            },
+        )
         .await
     {
         Err(error) => println!("screen 9: {error}"),
