@@ -405,7 +405,7 @@ impl Machine for MicroVm {
         self.api.logs(name).await
     }
 
-    async fn stop(&self, name: &str) -> Result<()> {
+    async fn remove(&self, name: &str) -> Result<()> {
         self.api.remove(name).await
     }
 

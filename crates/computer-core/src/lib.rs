@@ -808,7 +808,7 @@ const REAP_PAUSE: Duration = Duration::from_secs(10);
 /// recording why — which is exactly what a deadline was set to prevent.
 async fn reap(machine: Arc<dyn Machine>, name: String, because: &'static str) {
     for attempt in 1..=REAP_ATTEMPTS {
-        match machine.stop(&name).await {
+        match machine.remove(&name).await {
             Ok(()) => {
                 tracing::info!(box_ = %name, reason = because, "box removed");
                 return;
@@ -944,6 +944,28 @@ impl Computer {
         Self::pick_up(machine, name, profile, driver, environment).await
     }
 
+    /// Take back a box that is not running, so that it can be started.
+    ///
+    /// Apart from [`Computer::attach_using`], which refuses one: a stopped box
+    /// is not gone, and something has to be able to pick it up again after the
+    /// process that stopped it has itself gone away.
+    ///
+    /// Only [`Computer::start`] and [`Computer::shutdown`] work on what this
+    /// answers. A stopped box publishes no ports, so it has no viewer, no
+    /// debugger and no screen to drive — and `start` answers with the handle
+    /// that has all three.
+    pub async fn attach_stopped(
+        machine: Arc<dyn Machine>,
+        name: impl Into<String>,
+        profile: Arc<dyn Profile>,
+        driver: Option<Arc<dyn DesktopFactory>>,
+    ) -> Result<Self> {
+        let name = name.into();
+        let environment = machine.env(&name).await;
+
+        Self::pick_up(machine, name, profile, driver, environment).await
+    }
+
     /// The half both attach paths share, with the environment already read.
     async fn pick_up(
         machine: Arc<dyn Machine>,
@@ -1046,6 +1068,54 @@ impl Computer {
     /// Whether the box is frozen. `false` on a runtime that cannot freeze one.
     pub async fn paused(&self) -> Result<bool> {
         self.machine.paused(&self.name).await
+    }
+
+    /// End every process, keeping the filesystem.
+    ///
+    /// Cheaper than [`Computer::pause`] and costlier to come back from: a
+    /// paused box holds its memory and wakes as it was, a stopped one gives
+    /// the memory back and starts the desktop again from the beginning.
+    /// Neither takes the box away — that is [`Computer::shutdown`].
+    pub async fn stop(&self) -> Result<()> {
+        self.touch();
+        self.machine.halt(&self.name).await
+    }
+
+    /// Start a stopped box, and answer with a handle that reaches it.
+    ///
+    /// A new handle, not this one. A container runtime publishes on a host
+    /// port it picks as the box starts and picks again every time, so every
+    /// URL this handle holds — the viewer, the debugger — is wrong from the
+    /// moment the box comes back. The old handle is left pointing at ports
+    /// that are now somebody else's.
+    ///
+    /// The box keeps its files and loses its memory: the desktop starts again,
+    /// so the windows that were open are not. `within` bounds the wait for the
+    /// screen to come back.
+    ///
+    /// Attaching rather than owning, as [`Computer::attach`] is: the handle
+    /// this answers with does not take the box away when it drops.
+    pub async fn start(&self, within: Duration) -> Result<Self> {
+        self.machine.wake(&self.name).await?;
+
+        let environment = self.machine.env(&self.name).await;
+        let woken = Self::pick_up(
+            Arc::clone(&self.machine),
+            self.name.clone(),
+            Arc::clone(&self.profile),
+            Some(Arc::clone(&self.driver)),
+            environment,
+        )
+        .await?;
+
+        woken.wait_until_ready(within).await?;
+
+        Ok(woken)
+    }
+
+    /// Whether the box is stopped: it exists and nothing in it is running.
+    pub async fn stopped(&self) -> Result<bool> {
+        Ok(!self.machine.running(&self.name).await?)
     }
 
     pub fn expires_at(&self) -> Option<SystemTime> {
@@ -1471,7 +1541,7 @@ impl Computer {
     ///
     /// Dropping the handle does this too, without reporting whether it worked.
     pub async fn shutdown(mut self) -> Result<()> {
-        let outcome = self.machine.stop(&self.name).await;
+        let outcome = self.machine.remove(&self.name).await;
 
         // Cleared whatever the runtime answered, so the drop below does not
         // remove it a second time.
@@ -2598,7 +2668,7 @@ pub async fn sweep_expired(machine: &dyn Machine, now: SystemTime) -> Result<Vec
         };
 
         if seconds >= at {
-            machine.stop(&name).await?;
+            machine.remove(&name).await?;
             swept.push(name);
         }
     }

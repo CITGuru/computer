@@ -25,6 +25,11 @@ computer — a desktop in a box
   pause <box>                 freeze it: it keeps its memory and its ports and
                               costs no processor until resumed
   resume <box>                wake it, as the box it was
+  stop <box>                  end everything in it, keeping its files. cheaper
+                              than pause, which holds the memory
+  start <box>                 start a stopped box. the desktop starts again,
+                              so nothing that was open is open, and the viewer
+                              URL is a new one
   screenshot <box> [file.png] [--window ID | --at X,Y --size WxH]
              [--scale PERCENT] [--pointer] [--tab ID]
                               capture the screen, one window, or a rectangle
@@ -215,6 +220,8 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "up" => remote::up(client, args).await,
         "ls" => remote::list(client).await,
         "box" => remote::describe(client, args).await,
+        "stop" => remote::stop(client, args).await,
+        "start" => remote::start(client, args).await,
         "pause" => remote::pause(client, args).await,
         "resume" => remote::resume(client, args).await,
         "screenshot" => remote::screenshot(client, args).await,
@@ -247,7 +254,7 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "screenshot" => local::screenshot(args).await,
         "open" => local::open(args).await,
         "app" | "apps" | "window" | "widget" | "browser" | "record" | "box" | "pause"
-        | "resume" => Err(computer::Error::invalid(format!(
+        | "resume" | "stop" | "start" => Err(computer::Error::invalid(format!(
             "`{command}` needs a server; drop --local"
         ))),
         "mouse" => local::mouse(args).await,

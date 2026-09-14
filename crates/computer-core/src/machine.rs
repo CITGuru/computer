@@ -100,8 +100,37 @@ pub trait Machine: Send + Sync {
     /// up explains itself.
     async fn logs(&self, name: &str) -> Result<String>;
 
-    /// Take the box away. Not a pause — see [`Machine::pause`].
-    async fn stop(&self, name: &str) -> Result<()>;
+    /// Take the box away, and its volumes with it. Not recoverable.
+    ///
+    /// Named apart from [`Machine::halt`], which a box comes back from: one
+    /// word for both is how a caller destroys what it meant to put down.
+    async fn remove(&self, name: &str) -> Result<()>;
+
+    /// End every process, keeping the filesystem.
+    ///
+    /// The box comes back through [`Machine::wake`] with its files but not its
+    /// memory: the desktop starts again from the beginning, so the windows
+    /// that were open are not.
+    ///
+    /// The default refuses, as [`Machine::pause`] does.
+    async fn halt(&self, name: &str) -> Result<()> {
+        let _ = name;
+        Err(Error::Unsupported {
+            gaps: vec!["stopping a box without removing it"],
+        })
+    }
+
+    /// Start a halted box, and answer with the ports it now has.
+    ///
+    /// The map is the point. A container runtime publishes on a host port it
+    /// chooses, and chooses again every time the box starts — so every URL
+    /// built from the old map is wrong the moment this returns.
+    async fn wake(&self, name: &str) -> Result<PortMap> {
+        let _ = name;
+        Err(Error::Unsupported {
+            gaps: vec!["stopping a box without removing it"],
+        })
+    }
 
     /// Freeze every process, keeping memory and published ports.
     ///
@@ -356,6 +385,16 @@ async fn discard(path: &Path) {
     }
 }
 
+/// The runtime's words for a box that is not running, in ours.
+///
+/// It names a container id the caller never saw and says nothing about what to
+/// do about it, and it is what every command into a stopped box comes back as.
+fn if_stopped(name: &str, stderr: &str) -> Option<Error> {
+    stderr
+        .contains("is not running")
+        .then(|| Error::denied(format!("box {name} is stopped. Start it first.")))
+}
+
 fn arg(value: impl Into<String>) -> String {
     value.into()
 }
@@ -405,13 +444,16 @@ impl DockerMachine {
         }
     }
 
-    /// `pause` or `unpause`, which every container runtime here spells the
-    /// same and which report nothing on success.
+    /// `pause`, `unpause`, `stop` or `start` — one word, one container, and
+    /// nothing to read on success. Every runtime here spells them the same.
     async fn freeze(&self, verb: &str, name: &str) -> Result<()> {
         let result = self.cli.run(&[arg(verb), arg(name)]).await?;
 
         if result.code != 0 {
-            return Err(Error::denied(result.stderr_utf8().trim().to_string()));
+            let said = result.stderr_utf8();
+            return Err(
+                if_stopped(name, &said).unwrap_or_else(|| Error::denied(said.trim().to_string()))
+            );
         }
         Ok(())
     }
@@ -528,6 +570,19 @@ impl Machine for DockerMachine {
         self.freeze("pause", name).await
     }
 
+    async fn halt(&self, name: &str) -> Result<()> {
+        self.freeze("stop", name).await
+    }
+
+    async fn wake(&self, name: &str) -> Result<PortMap> {
+        self.freeze("start", name).await?;
+
+        // Read after starting, never before: the runtime picks the host ports
+        // as it starts, and the ones it picked last time are somebody else's
+        // now.
+        Ok(self.ports(name).await)
+    }
+
     async fn resume(&self, name: &str) -> Result<()> {
         self.freeze("unpause", name).await
     }
@@ -587,7 +642,15 @@ impl Machine for DockerMachine {
         }
         args.push(arg(name));
         args.extend(argv.iter().cloned());
-        self.cli.run(&args).await
+
+        let result = self.cli.run(&args).await?;
+        if result.code != 0
+            && let Some(stopped) = if_stopped(name, &result.stderr_utf8())
+        {
+            return Err(stopped);
+        }
+
+        Ok(result)
     }
 
     async fn read_file(&self, name: &str, path: &Path) -> Result<Vec<u8>> {
@@ -648,7 +711,7 @@ impl Machine for DockerMachine {
         Ok(format!("{}{}", result.stdout_utf8(), result.stderr_utf8()))
     }
 
-    async fn stop(&self, name: &str) -> Result<()> {
+    async fn remove(&self, name: &str) -> Result<()> {
         let result = self
             .cli
             .run(&[arg("rm"), arg("--force"), arg("--volumes"), arg(name)])

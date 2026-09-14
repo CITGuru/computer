@@ -313,7 +313,7 @@ impl Machine for RemoteMachine {
         self.api.logs(&sandbox.id).await
     }
 
-    async fn stop(&self, name: &str) -> Result<()> {
+    async fn remove(&self, name: &str) -> Result<()> {
         let sandbox = self.sandbox(name).await?;
         self.api.kill(&sandbox.id).await?;
 
@@ -602,7 +602,7 @@ mod tests {
             RemoteMachine::new(Arc::clone(&api) as Arc<dyn RemoteApi>, Arc::clone(&remote));
 
         machine.start("desk-1", &config()).await.expect("started");
-        machine.stop("desk-1").await.expect("stopped");
+        machine.remove("desk-1").await.expect("removed");
 
         assert_eq!(api.killed(), vec!["sbx-0".to_string()]);
         assert!(remote.get().is_none(), "the URL outlives nothing");

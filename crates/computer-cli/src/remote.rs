@@ -162,6 +162,30 @@ fn chrono_free(secs: i64) -> Option<String> {
     ))
 }
 
+pub async fn stop(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    client.stop(id).await.map_err(|e| e.to_string())?;
+
+    eprintln!("stopped; its files are kept. start it with: computer start {id}");
+    Ok(())
+}
+
+pub async fn start(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let found = client.start(id).await.map_err(|e| e.to_string())?;
+
+    // The URL, because it is a different one: the runtime published the box on
+    // a host port it picked as it started, and whatever was noted down before
+    // it stopped reaches nothing now.
+    match &found.viewer_url {
+        Some(url) => eprintln!("  watch it  {url}"),
+        None => eprintln!("  no viewer port is published"),
+    }
+    eprintln!("  the desktop started again, so nothing that was open is open");
+
+    Ok(())
+}
+
 pub async fn pause(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     client.pause(id).await.map_err(|e| e.to_string())?;
@@ -899,6 +923,8 @@ fn summarise(event: &computer_api::TraceEvent) -> String {
         E::FileRead { path, bytes } => format!("read {bytes} bytes from {path}"),
         E::BoxPaused => "frozen".to_string(),
         E::BoxResumed => "woken".to_string(),
+        E::BoxStopped => "stopped".to_string(),
+        E::BoxStarted => "started again, on new ports".to_string(),
         E::PageCaptured { full, bytes } => match full {
             true => format!("captured the whole page, {bytes} bytes"),
             false => format!("captured the page in view, {bytes} bytes"),

@@ -45,6 +45,10 @@ pub enum BoxState {
     /// resumed. Every call that reaches into the box will hang rather than
     /// fail, so this is worth checking before driving one.
     Paused,
+    /// Stopped: it keeps its files and nothing in it is running. Starting it
+    /// gives a fresh desktop and a new viewer URL — the old one points at a
+    /// port the runtime has handed to somebody else.
+    Stopped,
     Gone,
 }
 
@@ -799,6 +803,8 @@ pub enum TraceEvent {
     },
     BoxPaused,
     BoxResumed,
+    BoxStopped,
+    BoxStarted,
     PageCaptured {
         /// Past the viewport, to the whole scrollable page.
         full: bool,

@@ -647,6 +647,21 @@ pub fn catalogue() -> Value {
             box_only(),
         ),
         tool(
+            "stop_box",
+            "Stop a box, keeping its files. Cheaper than pausing — the memory goes back — and \
+             costlier to come back from: starting it gives a fresh desktop, so anything you had \
+             open is gone and the viewer URL changes. Pause instead if you are coming straight \
+             back.",
+            box_only(),
+        ),
+        tool(
+            "start_box",
+            "Start a stopped box. It has its files and a desktop that just started, and it is \
+             published on different ports than before — read the answer rather than any URL you \
+             noted earlier.",
+            box_only(),
+        ),
+        tool(
             "pause_box",
             "Freeze a box. It keeps its memory and its ports and costs no processor until you \
              resume it, and comes back as the box it was — the windows that were open are \
@@ -1021,6 +1036,26 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             match found.expires_at_ms {
                 Some(at) => said.push_str(&format!("\nit expires at {at}ms")),
                 None => said.push_str("\nit has no deadline"),
+            }
+
+            Ok(Answer::Text(said))
+        }
+        "stop_box" => {
+            let id = text(arguments, "box_id")?;
+            client.stop(&id).await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!(
+                "{id} is stopped and its files are kept. Start it before anything reaches it, \
+                 and expect a desktop with nothing open."
+            )))
+        }
+        "start_box" => {
+            let id = text(arguments, "box_id")?;
+            let found = client.start(&id).await.map_err(|e| e.to_string())?;
+
+            let mut said = format!("{id} is running again, with nothing open on it");
+            if let Some(url) = &found.viewer_url {
+                said.push_str(&format!("\nwatch it at {url}, which is a new address"));
             }
 
             Ok(Answer::Text(said))

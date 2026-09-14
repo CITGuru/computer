@@ -156,8 +156,8 @@ pub async fn adopt_from(state: &AppState, places: &[Place]) -> usize {
                     box_ = %name,
                     place = %where_,
                     %error,
-                    "a box is running that this server could not take back; it will \
-                     keep its memory until something else removes it"
+                    "a box is here that this server could not take back; it will \
+                     keep what it holds until something else removes it"
                 ),
             }
         }
@@ -180,9 +180,16 @@ async fn adopt_one(
     };
 
     let (machine, profile) = place.driving(label.spec.desktop.server);
-    let computer = Computer::attach_using(machine, name, profile, None)
-        .await
-        .map_err(|error| error.to_string())?;
+
+    // A stopped box is taken back too. It is listed here because it still
+    // exists, and forgetting it would leave it on the disk with nothing left
+    // that knows how to start it.
+    let running = machine.running(name).await.unwrap_or(false);
+    let computer = match running {
+        true => Computer::attach_using(machine, name, profile, None).await,
+        false => Computer::attach_stopped(machine, name, profile, None).await,
+    }
+    .map_err(|error| error.to_string())?;
 
     let entry = state
         .registry

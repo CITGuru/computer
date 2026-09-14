@@ -37,6 +37,10 @@ const CONFIRM_DELETE: &str = "x-computer-confirm-delete";
 const TRACE_PAGE: usize = 500;
 /// Long enough for a raised window to be drawn before the screen is captured.
 const RAISE: Duration = Duration::from_millis(250);
+/// The longest a stopped box is given to bring its desktop back. The whole
+/// stack starts again from the entrypoint, which is most of what a first
+/// launch does.
+const WAKE: Duration = Duration::from_secs(90);
 /// The longest a replay is given before it stops and says so. A fork is one
 /// HTTP request, and a box that was driven for an hour cannot take one.
 const REPLAY_BUDGET: Duration = Duration::from_secs(180);
@@ -87,6 +91,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/fork", post(fork))
         .route("/v1/boxes/{id}/pause", post(pause_box))
         .route("/v1/boxes/{id}/resume", post(resume_box))
+        .route("/v1/boxes/{id}/stop", post(stop_box))
+        .route("/v1/boxes/{id}/start", post(start_box))
         .route("/v1/boxes/{id}/exec", post(exec))
         .route("/v1/boxes/{id}/trace", get(read_trace))
         .route("/v1/boxes/{id}/trace/frames/{hash}", get(trace_frame))
@@ -217,6 +223,12 @@ async fn list_boxes(State(state): State<Arc<AppState>>) -> Json<BoxList> {
 }
 
 async fn state_of(entry: &Entry) -> BoxState {
+    // Stopped first: a container that is not running cannot be paused, and
+    // asking the runtime about a pause on one answers false.
+    if let Ok(true) = entry.computer.stopped().await {
+        return BoxState::Stopped;
+    }
+
     match entry.computer.paused().await {
         Ok(true) => BoxState::Paused,
         _ => BoxState::Ready,
@@ -994,6 +1006,44 @@ async fn resume_box(
 
     state
         .record(&id, Actor::Agent, TraceEvent::BoxResumed)
+        .await;
+
+    Ok(Json(viewed(&entry, BoxState::Ready)))
+}
+
+/// End every process, keeping the filesystem.
+async fn stop_box(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+) -> ApiResult<Json<BoxView>> {
+    let entry = state.registry.get(&id).await?;
+    entry.computer.stop().await?;
+
+    state
+        .record(&id, Actor::Agent, TraceEvent::BoxStopped)
+        .await;
+
+    Ok(Json(viewed(&entry, BoxState::Stopped)))
+}
+
+/// Start it again, and answer with where it is now.
+///
+/// The viewer and debugger URLs in the answer are new ones: the runtime
+/// publishes on host ports it picks as the box starts, so the URLs from before
+/// it stopped reach nothing.
+async fn start_box(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+) -> ApiResult<Json<BoxView>> {
+    let entry = state.registry.get(&id).await?;
+    let woken = entry.computer.start(WAKE).await?;
+
+    // The handle held in the registry points at the ports the box had before
+    // it stopped, so it is replaced rather than reused.
+    let entry = state.registry.replace(&id, woken).await?;
+
+    state
+        .record(&id, Actor::Agent, TraceEvent::BoxStarted)
         .await;
 
     Ok(Json(viewed(&entry, BoxState::Ready)))
@@ -2105,6 +2155,11 @@ fn view_of(entry: &Entry) -> BoxView {
 }
 
 fn viewed(entry: &Entry, state: BoxState) -> BoxView {
+    // A stopped box publishes nothing, and the handle held here still carries
+    // the ports it had before it stopped. Answering with those would send a
+    // caller to a port the runtime is free to give to the next box that asks.
+    let reachable = state != BoxState::Stopped;
+
     BoxView {
         id: entry.id.clone(),
         spec_digest: entry.spec_digest(),
@@ -2112,11 +2167,12 @@ fn viewed(entry: &Entry, state: BoxState) -> BoxView {
         screens: entry.screens,
         width: entry.width,
         height: entry.height,
-        viewer_url: entry.computer.viewer_url(),
+        viewer_url: entry.computer.viewer_url().filter(|_| reachable),
         devtools_url: entry
             .computer
             .devtools()
-            .map(|endpoint| endpoint.http_url.clone()),
+            .map(|endpoint| endpoint.http_url.clone())
+            .filter(|_| reachable),
         created_at_ms: millis(entry.created_at),
         expires_at_ms: entry.computer.expires_at().map(millis),
     }

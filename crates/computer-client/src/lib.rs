@@ -110,6 +110,29 @@ impl Client {
 
     /// Takes the confirmation header for you: the caller reached for a method
     /// called `delete`, which is the confirmation the header exists to get.
+    /// End every process, keeping the filesystem.
+    pub async fn stop(&self, id: &str) -> Result<BoxView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/stop"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    /// Start a stopped box. The URLs in the answer are new ones — the runtime
+    /// republished it on host ports it picked as it started.
+    pub async fn start(&self, id: &str) -> Result<BoxView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/start"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     /// Freeze the box, keeping its memory and its ports.
     pub async fn pause(&self, id: &str) -> Result<BoxView> {
         self.send(

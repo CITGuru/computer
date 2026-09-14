@@ -141,6 +141,38 @@ impl Registry {
         self.boxes.read().await.values().cloned().collect()
     }
 
+    /// Put a box back under the same id with a handle that reaches it.
+    ///
+    /// For a box that was stopped and started: the runtime published it on new
+    /// host ports, so the handle held here points at ports that are somebody
+    /// else's now. Everything else about the box — the spec it was made from,
+    /// when it was made — is carried across.
+    ///
+    /// A request already holding the old `Arc<Entry>` keeps the dead handle
+    /// and the old batch locks with it. Both were already useless: the box was
+    /// stopped underneath it.
+    pub async fn replace(&self, id: &str, computer: Computer) -> ApiResult<Arc<Entry>> {
+        let mut boxes = self.boxes.write().await;
+
+        let was = boxes
+            .get(id)
+            .ok_or_else(|| ApiError::not_found(format!("no box {id}")))?;
+
+        let entry = Arc::new(Entry {
+            id: was.id.clone(),
+            spec: was.spec.clone(),
+            created_at: was.created_at,
+            screens: was.screens,
+            width: was.width,
+            height: was.height,
+            computer,
+            locks: Mutex::new(BTreeMap::new()),
+        });
+
+        boxes.insert(id.to_string(), Arc::clone(&entry));
+        Ok(entry)
+    }
+
     /// Stop holding a box without taking it away.
     ///
     /// For one that has already gone: stopping it again would ask a runtime to
@@ -159,7 +191,7 @@ impl Registry {
             .remove(id)
             .ok_or_else(|| ApiError::not_found(format!("no box {id}")))?;
 
-        entry.computer.machine().stop(&entry.id).await?;
+        entry.computer.machine().remove(&entry.id).await?;
         Ok(())
     }
 }
