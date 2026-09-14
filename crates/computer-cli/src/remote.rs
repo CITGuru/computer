@@ -924,6 +924,9 @@ fn number(args: &[String], at: usize, what: &str) -> Result<u32, String> {
 /// Grouped rather than spread across the top level: a page is one thing to
 /// address, the way a window and a widget are, and `find` on its own would say
 /// nothing about what it searches.
+/// Where a file handed to a page is put inside the box.
+const UPLOADS: &str = "/tmp/computer/uploads";
+
 /// The `browser` flags that take a value, so a positional can be told apart
 /// from one wherever it stands on the line.
 const VALUED: [&str; 9] = [
@@ -944,7 +947,7 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     let op = positional(
         &rest,
         1,
-        "read, find, click, fill, select, options, wait, hover, eval, \
+        "read, find, click, fill, select, options, upload, wait, hover, eval, \
          screenshot, tabs, switch, close, back, forward or reload",
     )
     .map_err(|e| e.to_string())?;
@@ -1007,6 +1010,10 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
                 .to_string(),
         },
         "options" => OnElement::Options { query: query(2)? },
+        "upload" => OnElement::Upload {
+            query: query(2)?,
+            paths: handed(client, id, args, &rest).await?,
+        },
         "wait" => OnElement::WaitFor {
             query: query(2)?,
             gone: present(args, "--gone"),
@@ -1109,6 +1116,49 @@ async fn find_on_page(client: &Client, id: &str, args: &[String], rest: &[String
     }
 
     Ok(())
+}
+
+/// The files a page is to be handed, as paths inside the box.
+///
+/// A path on the command line is one out here, so each is read and written
+/// into the box first. `--in-box` names paths that are already there, which is
+/// what the API and MCP take and the only way to hand over something `exec`
+/// made.
+async fn handed(
+    client: &Client,
+    id: &str,
+    args: &[String],
+    rest: &[String],
+) -> Result<Vec<String>, String> {
+    let named = rest.get(3..).unwrap_or_default();
+    if named.is_empty() {
+        return Err("expected a file to upload".to_string());
+    }
+
+    if present(args, "--in-box") {
+        return Ok(named.to_vec());
+    }
+
+    let mut inside = Vec::with_capacity(named.len());
+    for path in named {
+        let bytes = std::fs::read(path).map_err(|why| format!("{path}: {why}"))?;
+
+        // Named for the file rather than the path it came from: a page is
+        // shown the name, and a caller's directories are not the box's.
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("{path} has no file name"))?;
+        let there = format!("{UPLOADS}/{name}");
+
+        client
+            .write_file(id, &there, &bytes)
+            .await
+            .map_err(|e| e.to_string())?;
+        inside.push(there);
+    }
+
+    Ok(inside)
 }
 
 async fn capture_page(client: &Client, id: &str, args: &[String], rest: &[String]) -> Done {

@@ -57,6 +57,10 @@ computer — a desktop in a box
   browser <box> click <query> [--double] [--button right] [--tab ID]
   browser <box> fill <query> <value>
   browser <box> select <query> <option> | options <query>
+  browser <box> upload <query> <file…> [--in-box]
+                              hand files to a file input. a path is one out
+                              here, read and written into the box first;
+                              --in-box names paths already there
   browser <box> wait <query> [--gone] [--or TEXT,TEXT] [--within MS]
   browser <box> hover <query>
   browser <box> eval <expression> [--timeout MS] [--limit N]

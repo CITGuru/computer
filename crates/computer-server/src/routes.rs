@@ -1528,10 +1528,41 @@ async fn on_element(
     ApiQuery(query): ApiQuery<SettleQuery>,
     ApiJson(body): ApiJson<OnElement>,
 ) -> ApiResult<Json<ElementResult>> {
+    // Before the page is reached: the debugger takes a path it never checks,
+    // and a file that is not there arrives as an empty one of that name. The
+    // page then holds a zero-byte file and the call answers that it worked.
+    if let OnElement::Upload { paths, .. } = &body {
+        missing(&state, &id, paths).await?;
+    }
+
     let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
     let settle = Duration::from_millis(query.settle_ms.unwrap_or_default()).min(MAX_PAUSE);
 
     Ok(Json(apply(&mut page, body, settle).await?))
+}
+
+/// Refuses naming the first path the box does not have.
+async fn missing(state: &AppState, id: &str, paths: &[String]) -> ApiResult<()> {
+    if paths.is_empty() {
+        return Err(ApiError::bad_request(
+            "an upload with no files hands over nothing",
+        ));
+    }
+
+    let entry = state.registry.get(id).await?;
+
+    for path in paths {
+        let mut argv = vec!["test".to_string(), "-f".to_string()];
+        argv.push(path.clone());
+
+        if !entry.computer.exec(&argv).await?.ok() {
+            return Err(ApiError::bad_request(format!(
+                "the box has no file at {path}. Write it there first."
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// How long to let the page stop moving before it is measured.
