@@ -1,13 +1,3 @@
-//! Who holds a screen, and who is driving it.
-//!
-//! A screen outlives the call that took it, which makes the release the
-//! dangerous operation: a slow holder releasing late tears down a screen its
-//! replacement is already using. Leases are fenced, so a release that cannot
-//! prove it still holds the screen is refused.
-//!
-//! [`ControlGate`] is the other half: while a person drives a screen, the
-//! owner may read it and may not act on it.
-
 use crate::error::{Error, Result};
 use crate::{Control, HolderId, ScreenId};
 use std::collections::HashMap;
@@ -15,18 +5,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-/// The default a caller gets when it does not choose.
-///
-/// Long enough that a slow turn does not lose its screen mid-thought, short
-/// enough that a crashed holder does not block one until somebody notices.
 pub const DEFAULT_LEASE: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenLease {
     pub screen: ScreenId,
     pub holder: HolderId,
-    /// Monotonic per holder. A later fence takes the screen; an earlier one
-    /// cannot release it.
     pub fence: u64,
     pub expires_at: SystemTime,
 }
@@ -37,7 +21,6 @@ impl ScreenLease {
     }
 }
 
-/// The screens one box has, and who holds them.
 pub struct Screens {
     max: u32,
     held: Mutex<HashMap<ScreenId, ScreenLease>>,
@@ -61,17 +44,12 @@ impl Screens {
             .map_err(|_| Error::transport("the screen registry was poisoned by a panic", false))
     }
 
-    /// How many are held right now.
-    ///
-    /// Expired leases are not counted: a screen whose holder never came back
-    /// is free.
     pub fn in_use(&self, now: SystemTime) -> u32 {
         self.lock()
             .map(|held| held.values().filter(|lease| !lease.expired(now)).count() as u32)
             .unwrap_or(0)
     }
 
-    /// Take any free screen, or renew the one this holder already has.
     pub fn claim(
         &self,
         holder: &HolderId,
@@ -81,8 +59,6 @@ impl Screens {
     ) -> Result<ScreenLease> {
         let mut held = self.lock()?;
 
-        // A holder that returns gets the screen it was already on, with its
-        // windows and browser profile still on it.
         if let Some(existing) = held
             .values()
             .find(|lease| &lease.holder == holder && !lease.expired(now))
@@ -128,10 +104,6 @@ impl Screens {
         })
     }
 
-    /// Take one particular screen, whoever has it.
-    ///
-    /// Succeeds when the incoming fence is higher than the held one, which is
-    /// how a caller recovers a screen from one that never came back.
     pub fn take(
         &self,
         screen: ScreenId,
@@ -171,10 +143,6 @@ impl Screens {
         Ok(lease)
     }
 
-    /// Give a screen back.
-    ///
-    /// Succeeds only for the same holder at a fence at least as high, so a
-    /// stale release cannot tear down its replacement's screen.
     pub fn release(&self, lease: &ScreenLease) -> Result<()> {
         let mut held = self.lock()?;
 
@@ -187,7 +155,6 @@ impl Screens {
                 screen: Some(lease.screen),
                 held_by: Some(current.holder.clone()),
             }),
-            // Already gone. Releasing twice is not an error.
             None => Ok(()),
         }
     }
@@ -200,7 +167,6 @@ impl Screens {
             .map(|lease| lease.holder.clone())
     }
 
-    /// Drop every lease that has run out, so the count and the map agree.
     pub fn sweep(&self, now: SystemTime) -> usize {
         let Ok(mut held) = self.lock() else {
             return 0;
@@ -211,16 +177,8 @@ impl Screens {
     }
 }
 
-/// Who is driving a screen — the owner, or a person who took it over.
-///
-/// Fenced by a token for the same reason a lease is fenced: ending your own
-/// takeover must not end the takeover of whoever replaced you.
 pub struct ControlGate {
     state: Mutex<(Control, Option<String>)>,
-    /// How many takeovers this gate has seen, ever.
-    ///
-    /// A driver that remembers something about the screen can hold this beside
-    /// it and tell that a person has driven since.
     takeovers: AtomicU64,
 }
 
@@ -238,10 +196,6 @@ impl ControlGate {
         }
     }
 
-    /// How many takeovers have been started on this screen.
-    ///
-    /// Read it beside anything a driver remembers about the screen, and
-    /// compare before trusting that memory.
     pub fn takeovers(&self) -> u64 {
         self.takeovers.load(Ordering::Relaxed)
     }
@@ -260,10 +214,6 @@ impl ControlGate {
         }
     }
 
-    /// Give the input back, if this is the takeover that is actually running.
-    ///
-    /// Returns false when someone else holds it now — the stale caller's
-    /// release is refused rather than obeyed.
     pub fn hand_back(&self, token: &str) -> bool {
         let Ok(mut held) = self.state.lock() else {
             return false;
@@ -279,19 +229,12 @@ impl ControlGate {
         }
     }
 
-    /// Take the input back with no token.
-    ///
-    /// A caller deciding the person is finished, rather than a stale release
-    /// arriving late. Nothing reaches this on a timeout or a retry.
     pub fn reclaim(&self) {
         if let Ok(mut held) = self.state.lock() {
             *held = (Control::Owner, None);
         }
     }
 
-    /// Whether the owner may still send input.
-    ///
-    /// Reads stay allowed while a person drives: only the input is withheld.
     pub fn may_act(&self) -> Result<()> {
         match self.control() {
             Control::Owner => Ok(()),

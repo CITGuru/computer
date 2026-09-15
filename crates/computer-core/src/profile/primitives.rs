@@ -12,20 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// How a profile turns a typed screen action into an image command.
-///
-/// This is the compatibility boundary for images that own their screen
-/// implementation. A later native runtime can perform the action directly;
-/// profiles that use scripts can share this command protocol meanwhile.
 pub trait ScreenCommands: Send + Sync {
     fn command(&self, action: ScreenAction, screen: ScreenId, extra: &[String]) -> Vec<String>;
 }
 
-/// A screen command whose first arguments are fixed.
-///
-/// The built-in images use `computer-screen`. A custom image can use another
-/// executable, or an interpreter plus a script path, without rewriting the
-/// action and screen-number protocol in its profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandScreen {
     prefix: Vec<String>,
@@ -63,7 +53,6 @@ impl ScreenCommands for CommandScreen {
     }
 }
 
-/// Browser operations that are independent of screen lifecycle.
 #[async_trait]
 pub trait BrowserRuntime: Send + Sync {
     async fn open(
@@ -75,7 +64,6 @@ pub trait BrowserRuntime: Send + Sync {
     ) -> Result<()>;
 }
 
-/// Open pages through the command protocol supplied by a profile.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CommandBrowserRuntime;
 
@@ -109,16 +97,11 @@ pub trait WallpaperRuntime: Send + Sync {
         path: &Path,
     ) -> Result<()>;
 
-    /// Whether this runtime can set one at all.
-    ///
-    /// Separate from [`WallpaperRuntime::set`] so a caller can be refused
-    /// before it sends an image nothing will use.
     fn supported(&self) -> Result<()> {
         Ok(())
     }
 }
 
-/// A wallpaper setter implemented by a command inside the image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandWallpaperRuntime {
     prefix: Vec<String>,
@@ -221,7 +204,6 @@ impl WallpaperRuntime for WaylandWallpaperRuntime {
     }
 }
 
-/// A profile that does not declare wallpaper support.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UnsupportedWallpaperRuntime;
 
@@ -244,11 +226,6 @@ impl WallpaperRuntime for UnsupportedWallpaperRuntime {
     }
 }
 
-/// Starting programs on a screen, and finding what they drew.
-///
-/// A mapped window is not a drawn one: GIMP maps a splash carrying its own
-/// `WM_CLASS` half a second before the program exists, and VS Code maps its
-/// real window and paints a second later.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
     pub command: Vec<String>,
@@ -260,7 +237,6 @@ pub struct Launch {
 
 #[async_trait]
 pub trait AppRuntime: Send + Sync {
-    /// Returns only once the window has held still for `settle`.
     async fn launch(
         &self,
         host: &MachineHost,
@@ -292,9 +268,7 @@ pub trait AppRuntime: Send + Sync {
         window: &str,
     ) -> Result<()>;
 
-    /// Answers with the window as it ended up, which is not always what was
-    /// asked for: a window manager clamps a move to the screen, and honours a
-    /// resize only within the size hints the program gave it.
+    /// The window as it ended up: a window manager may clamp a move or a resize.
     async fn arrange(
         &self,
         host: &MachineHost,
@@ -311,9 +285,7 @@ pub trait AppRuntime: Send + Sync {
         screen: ScreenId,
     ) -> Result<Option<Window>>;
 
-    /// Waits for the window to stop moving rather than to stop drawing: what
-    /// a caller waits for here usually has a caret blinking in it, and that
-    /// never holds still.
+    /// Waits for the window to stop moving, not drawing: a blinking caret never stops.
     async fn wait_for_window(
         &self,
         host: &MachineHost,
@@ -414,26 +386,15 @@ impl AppRuntime for UnsupportedAppRuntime {
 pub struct X11AppRuntime;
 
 impl X11AppRuntime {
-    /// The picture the window is showing, which separates a drawn window from
-    /// an empty one: VS Code maps its real window and paints a second later.
     const DRAWN: &'static str =
         r#"$(import -window $id png:- 2>/dev/null | cksum | cut -d' ' -f1)"#;
 
-    /// Where the window is and how big, which is all that can be asked of a
-    /// window that draws forever: a caret blinking in a dialog never lets its
-    /// picture hold still.
+    /// A caret blinking in a dialog never lets its picture hold still.
     const PLACED: &'static str =
         r#"$(xdotool getwindowgeometry --shell $id 2>/dev/null | tr '\n' ' ')"#;
 
-    /// The whole wait, as one command in the box: a loop out here would pay a
-    /// container exec per probe.
-    ///
-    /// The window type separates a program from its splash. A window declaring
-    /// no type is taken as ordinary — `xterm` sets none, and requiring it
-    /// would hide every program older than the hint.
-    ///
-    /// `sample` is what has to stop changing, and the two callers want
-    /// different things of it: see [`Self::DRAWN`] and [`Self::PLACED`].
+    /// Polls inside the box to avoid an exec per probe. An untyped window counts
+    /// as ordinary: `xterm` sets no type.
     fn wait_for(class: &str, settle: Duration, within: Duration, sample: &str) -> Vec<String> {
         let settle_ms = settle.as_millis();
         let within_ms = within.as_millis();
@@ -474,23 +435,14 @@ echo waited"#
         ]
     }
 
-    /// The pause is fluxbox's: it applies the change on its own event loop,
-    /// and reading straight back answers with the geometry from before it.
-    ///
-    /// A window whose place the manager owns does not move — this image pins
-    /// the browser maximised — and the answer says so by carrying the
-    /// geometry the window kept.
+    /// The sleep lets fluxbox apply the change before the geometry is read back.
     fn arranging(window: &str, how: Arrange) -> Vec<String> {
-        // wmctrl rather than xdotool for the two states: the xdotool these
-        // images carry has no `windowstate` verb. It remembers the geometry a
-        // window had before it spread, which is what makes `Restore` mean
-        // something.
+        // wmctrl for the states: the xdotool in these images has no `windowstate`.
         const SPREAD: &str = "wmctrl -i -r $w -b add,maximized_vert,maximized_horz";
         const GATHER: &str = "wmctrl -i -r $w -b remove,maximized_vert,maximized_horz";
 
         let verbs: Vec<String> = match how {
-            // A maximised window is the size the manager gives it, and ignores
-            // a move or a resize until it is not one.
+            // A maximised window ignores a move or a resize.
             Arrange::At { to } => vec![
                 GATHER.to_string(),
                 format!("xdotool windowmove $w {} {}", to.x, to.y),
@@ -501,8 +453,7 @@ echo waited"#
             ],
             Arrange::Maximise => vec![SPREAD.to_string()],
             Arrange::Minimise => vec!["xdotool windowminimize $w".to_string()],
-            // Mapping it is how ICCCM says to come back from iconified, and it
-            // leaves the keyboard where it is. Activating would take it.
+            // Mapping, not activating, so keyboard focus stays where it is.
             Arrange::Restore => vec!["xdotool windowmap $w".to_string(), GATHER.to_string()],
         };
 
@@ -556,8 +507,6 @@ impl AppRuntime for X11AppRuntime {
         let start = start_command(command);
         let started = host.run_within(&start, &env, host.timeout()).await?;
 
-        // Otherwise the wait spends its deadline on a window that was never
-        // coming, and blames the window.
         if started.code == 127 {
             return Err(Error::invalid(format!(
                 "{} is not installed in this box: an app has to be named in \
@@ -717,16 +666,12 @@ impl AppRuntime for X11AppRuntime {
 pub struct WaylandAppRuntime;
 
 impl WaylandAppRuntime {
-    /// Read from the file the image wrote, not derived from the screen
-    /// number: a name built from a number points every screen after the first
-    /// at nothing.
+    /// Read from the file the image wrote; it cannot be derived from the screen number.
     fn socket(screen: ScreenId) -> String {
         format!("\"$(cat /tmp/computer/screen-{}.sway)\"", screen.0)
     }
 
-    /// Python because the tree is JSON and this image has no `jq`. Sway has
-    /// no `_NET_WM_WINDOW_TYPE`, so the largest match wins instead: a splash
-    /// is a small window and a program's own is not.
+    /// No `jq` in the image, and sway has no window type, so the largest match wins.
     const PICK: &'static str = r#"
 import json,sys
 def walk(n):
@@ -754,10 +699,8 @@ if best:
     print('\t'.join(str(f) for f in best[1:]))
 "#;
 
-    /// The picture the window is showing: a mapped window is not a drawn one.
     const DRAWN: &'static str = r#"$(grim -g "$2,$3 $4x$5" - 2>/dev/null | cksum | cut -d' ' -f1)"#;
 
-    /// All that can be asked of a window that draws forever.
     const PLACED: &'static str = r#""$2 $3 $4 $5""#;
 
     fn wait_for(
@@ -801,9 +744,7 @@ echo waited"#
         ]
     }
 
-    /// The tree walked once and filtered: every window, the focused one, or
-    /// one by container id. Containers that hold no window are skipped, so a
-    /// workspace does not answer as a window of its own.
+    /// Containers with no window are skipped, so a workspace is not a window.
     const NODES: &'static str = r#"
 import json,sys
 def walk(n):
@@ -854,9 +795,7 @@ for n in walk(json.load(sys.stdin)):
         ]
     }
 
-    /// A tiled window has no position or size of its own — the layout owns
-    /// both — so asking for either is taken as asking for it to float. The
-    /// state verbs leave the tiling alone.
+    /// A tiled window has no position or size, so a move or resize floats it.
     fn arranging(screen: ScreenId, window: &str, how: Arrange) -> Vec<String> {
         let verb: Vec<String> = match how {
             Arrange::At { to } => vec![format!(
@@ -868,8 +807,7 @@ for n in walk(json.load(sys.stdin)):
             }
             Arrange::Maximise => vec!["fullscreen enable".to_string()],
             Arrange::Minimise => vec!["move scratchpad".to_string()],
-            // Sway keeps the two apart and the caller does not, so both are
-            // asked and whichever does not apply fails quietly.
+            // Only one applies; the other fails quietly.
             Arrange::Restore => vec![
                 "fullscreen disable".to_string(),
                 "scratchpad show".to_string(),
@@ -1056,16 +994,10 @@ impl AppRuntime for WaylandAppRuntime {
     }
 }
 
-/// Slack over the wait's own deadline, so a slow exec does not turn its
-/// report into a transport timeout.
+/// Slack so a slow exec reports the wait, not a transport timeout.
 const SLACK: Duration = Duration::from_secs(5);
 
-/// What the window in `$w` is and where, as one line. `missing` is what to do
-/// when the window has gone between the question and the asking.
-///
-/// Tab separated with the title last, because a title is the one field that
-/// can hold anything — a tab in one would otherwise put a window's name in its
-/// class.
+/// The title goes last: it is the one field that can hold a tab.
 fn x11_window(missing: &str) -> String {
     format!(
         r#"unset X Y WIDTH HEIGHT
@@ -1077,9 +1009,6 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     )
 }
 
-/// Every visible window, one line each, so the shell does the walking: a call
-/// per window per field would be four container round trips for a desktop
-/// with one thing on it.
 fn x11_windows() -> String {
     format!(
         "for w in $(xdotool search --onlyvisible --name . 2>/dev/null); do\n{}\ndone",
@@ -1089,8 +1018,6 @@ fn x11_windows() -> String {
 
 const NO_WINDOW: &str = r#"{ echo "there is no window $w on this screen" >&2; exit 1; }"#;
 
-/// A line short of its fields is skipped rather than guessed at: a window that
-/// went away between the search and the questions leaves a partial one.
 fn window_line(line: &str) -> Option<Window> {
     let mut fields = line.splitn(7, '\t');
     let id = fields.next()?.trim();
@@ -1111,8 +1038,7 @@ fn window_line(line: &str) -> Option<Window> {
     })
 }
 
-/// Detached, because a GUI program does not exit — which is also why its own
-/// exit code reaches nobody, and why the command is checked first.
+/// Detached, since a GUI program does not exit; hence the `command -v` check first.
 fn start_command(command: &[String]) -> Vec<String> {
     let words = command
         .iter()
@@ -1130,17 +1056,10 @@ fn start_command(command: &[String]) -> Vec<String> {
     ]
 }
 
-/// A launch hands its argv to `setsid` through `sh -c`, because nothing else
-/// detaches. This is what keeps an argument an argument.
 fn shell_word(word: &str) -> String {
     format!("'{}'", word.replace('\'', r"'\''"))
 }
 
-/// The lifecycle of a screen, independent of how an image implements it.
-///
-/// Built-in and existing custom images use [`CommandScreenRuntime`]. A guest
-/// agent or another native implementation can implement these operations
-/// without changing `Computer`, `Screen` or `Takeover`.
 #[async_trait]
 pub trait ScreenRuntime: Send + Sync {
     async fn start(
@@ -1184,8 +1103,7 @@ pub trait ScreenRuntime: Send + Sync {
         screen: ScreenId,
     ) -> Result<()>;
 
-    /// The path the recording is being written to inside the box, or `None`
-    /// where nothing is recording.
+    /// The recording's path inside the box, or `None` where nothing is recording.
     async fn record(
         &self,
         host: &MachineHost,
@@ -1196,7 +1114,6 @@ pub trait ScreenRuntime: Send + Sync {
     ) -> Result<Option<String>>;
 }
 
-/// Run the command protocol supplied by a profile.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CommandScreenRuntime;
 
@@ -1318,8 +1235,7 @@ impl ScreenRuntime for CommandScreenRuntime {
         match result.code {
             0 => {}
             3 => return Err(Error::denied(result.stderr_utf8().trim().to_string())),
-            // What the box cannot do at all, apart from what it is refusing
-            // right now: no ffmpeg in the image, or a desktop with no grabber.
+            // Cannot do at all, as opposed to 3, which refuses right now.
             4 => return Err(Error::invalid(result.stderr_utf8().trim().to_string())),
             code => {
                 return Err(Error::Failed {
@@ -1339,7 +1255,6 @@ impl ScreenRuntime for CommandScreenRuntime {
     }
 }
 
-/// How a profile records and recovers the size of a desktop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeometrySpec {
     width_env: String,
@@ -1378,8 +1293,6 @@ impl GeometrySpec {
     }
 }
 
-/// The parts of the bundled desktop contract that do not depend on a display
-/// server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DesktopContract {
     name: String,
@@ -1409,7 +1322,6 @@ impl DesktopContract {
         }
     }
 
-    /// The shared contract implemented by the bundled X11 and Wayland images.
     pub fn standard(name: impl Into<String>, image: ImageSource) -> Self {
         Self::new(
             name,
@@ -1469,15 +1381,10 @@ impl DesktopContract {
     }
 }
 
-/// How driver commands reach one screen's display server.
 pub trait ScreenEnvironment: Send + Sync {
     fn environment(&self, screen: ScreenId) -> BTreeMap<String, String>;
 }
 
-/// Where a person watches a screen.
-///
-/// The shipped images serve noVNC's `vnc.html`; an image with a viewer of its
-/// own hands back a different address for the same port.
 pub trait ViewerUrl: Send + Sync {
     fn url(&self, at: &Address, ticket: Option<&Secret>) -> String;
 }
@@ -1514,12 +1421,6 @@ impl ScreenEnvironment for WaylandEnvironment {
     }
 }
 
-/// A profile derived from another profile with explicit overrides.
-///
-/// Ports, display behavior, capabilities, environment and viewer URLs stay on
-/// the base profile unless a separate profile is needed. This keeps a custom
-/// image from copying the X11 or Wayland contract only to change its image or
-/// command names.
 #[derive(Clone)]
 pub struct ConfiguredProfile {
     base: Arc<dyn Profile>,
@@ -1578,7 +1479,6 @@ impl std::fmt::Debug for ConfiguredProfile {
     }
 }
 
-/// Derive a custom profile from a tested base contract.
 pub struct ProfileBuilder {
     profile: ConfiguredProfile,
 }
@@ -1612,8 +1512,6 @@ impl ProfileBuilder {
         }
     }
 
-    /// Change the contract name.
-    ///
     /// A built image must carry the same value in `computer.profile`.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.profile.name = Some(name.into());
@@ -1625,20 +1523,11 @@ impl ProfileBuilder {
         self
     }
 
-    /// Build this profile's image from a local Docker build context.
-    ///
-    /// The directory needs a `Dockerfile` carrying this profile's name in its
-    /// `computer.profile` label. Carried here rather than on
-    /// [`crate::Builder`] so a launch cannot pair a custom image with the
-    /// wrong contract by omission.
+    /// The `Dockerfile` must carry this profile's name in its `computer.profile` label.
     pub fn image_dir(self, directory: impl Into<PathBuf>) -> Self {
         self.image(ImageSource::Directory(directory.into()))
     }
 
-    /// The driver this image expects.
-    ///
-    /// A base contract names one, and an image that keeps the contract but
-    /// speaks to a different display server needs its own.
     pub fn driver<D>(mut self, driver: D) -> Self
     where
         D: DesktopFactory + 'static,
@@ -1688,20 +1577,11 @@ impl ProfileBuilder {
         self
     }
 
-    /// Where this image's screens listen.
-    ///
-    /// The port arithmetic comes with it, so a screen's ports and the ones the
-    /// runtime publishes cannot disagree.
     pub fn ports(mut self, ports: PortLayout) -> Self {
         self.profile.ports = Some(ports);
         self
     }
 
-    /// How a desktop's size is asked for and read back.
-    ///
-    /// One spec rather than three methods: the default size, the environment a
-    /// launch carries and the geometry read off a running box have to agree,
-    /// and separately overridable versions of them would not have to.
     pub fn geometry(mut self, geometry: GeometrySpec) -> Self {
         self.profile.geometry = Some(geometry);
         self
@@ -1715,16 +1595,12 @@ impl ProfileBuilder {
         self
     }
 
-    /// What this image can do.
-    ///
-    /// The display is filled in per request from the size asked for, so a
-    /// caller states the capabilities and not the geometry twice.
+    /// The display's size is replaced by each request's.
     pub fn support(mut self, support: DesktopSupport) -> Self {
         self.profile.support = Some(support);
         self
     }
 
-    /// Where a person watches a screen.
     pub fn viewer_url<V>(mut self, viewer: V) -> Self
     where
         V: ViewerUrl + 'static,
@@ -1763,8 +1639,6 @@ impl Profile for ConfiguredProfile {
             return self.base.support_at(width, height);
         };
 
-        // The size is the request's, not the template's: a caller states what
-        // the image can do once, and every size it is asked for reuses it.
         DesktopSupport {
             display: support.display.map(|display| crate::Display {
                 width,
@@ -2214,9 +2088,6 @@ mod tests {
         assert!(matches!(error, Error::Denied { .. }));
     }
 
-    /// `Screen` and `Computer` implement `Desktop` by forwarding one method at
-    /// a time, so a method with a default that nobody forwarded is refused by
-    /// a box that supports it perfectly well.
     #[tokio::test]
     async fn test_every_desktop_method_reaches_the_driver_through_a_screen() {
         let cli = Arc::new(ScriptedCli::new());
@@ -2395,8 +2266,6 @@ mod tests {
             .driver(crate::WaylandDriver)
             .build();
 
-        // An image that keeps a contract but speaks to another display server
-        // needs its own driver, or it has to write the whole trait out.
         assert_eq!(profile.driver().display_server(), DisplayServer::Wayland);
         assert_eq!(X11Profile.driver().display_server(), DisplayServer::X11);
     }
@@ -2428,8 +2297,6 @@ mod tests {
         assert_eq!(launch.get("H").map(String::as_str), Some("768"));
         assert_eq!(profile.geometry_from(&launch), Some((1024, 768)));
 
-        // The base reads other names, so a spec that governed only one of the
-        // three would let a launch and a read-back disagree.
         assert_eq!(X11Profile.geometry_from(&launch), None);
     }
 

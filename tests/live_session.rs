@@ -1,17 +1,8 @@
-//! A logged-in state carried from one box to another. Ignored by default.
-//!
-//! ```text
-//! cargo test --test live_session -- --ignored --nocapture
-//! ```
+//! A login carried between boxes: `cargo test --test live_session -- --ignored`.
 
 use computer::{Carry, Computer, Reading, Session};
 use std::time::Duration;
 
-/// The whole promise: log in, take the box away, and be logged in again.
-///
-/// A local page stands in for a real site because the point is the carrying,
-/// not the logging in — and a test that depended on somebody's real login
-/// would be a test that fails when their session expires.
 #[tokio::test]
 #[ignore = "needs a container runtime"]
 async fn a_session_outlives_the_box_it_was_made_in() {
@@ -36,7 +27,6 @@ async fn a_session_outlives_the_box_it_was_made_in() {
     );
     assert!(!taken.databases.is_empty(), "the database was asked for");
 
-    // The box, and everything in it, is gone.
     first.shutdown().await.expect("it goes away");
 
     let second = Computer::launch().await.expect("another box");
@@ -53,8 +43,6 @@ async fn sign_in_and_export(computer: &Computer) -> computer::Result<Session> {
 
     let mut page = browser.open_page(ORIGIN, Duration::from_secs(30)).await?;
 
-    // What a login leaves behind: a cookie the server set, and a token the
-    // page kept for itself.
     page.evaluate("document.cookie = 'sid=who-i-am; path=/; max-age=86400'")
         .await?;
     page.evaluate("localStorage.setItem('token', 'also-who-i-am')")
@@ -62,7 +50,6 @@ async fn sign_in_and_export(computer: &Computer) -> computer::Result<Session> {
     page.evaluate("sessionStorage.setItem('tab', 'this-tab-only')")
         .await?;
 
-    // And a database, which is where Firebase would have put it.
     page.evaluate(
         r#"new Promise((ok, no) => {
              const r = indexedDB.open('auth', 1);
@@ -77,8 +64,7 @@ async fn sign_in_and_export(computer: &Computer) -> computer::Result<Session> {
     )
     .await?;
 
-    // Left open on purpose: session storage belongs to this tab, and an export
-    // that opened its own would find none of it.
+    // Left open: session storage belongs to this tab.
     let taken = browser
         .export_session(&[ORIGIN.to_string()], Carry::all())
         .await;
@@ -91,7 +77,6 @@ async fn restored(computer: &Computer, session: &Session) -> computer::Result<()
     serve(computer).await?;
     let browser = computer.browser().expect("a published DevTools port");
 
-    // Before: a box that has never seen the site.
     let mut fresh = browser.open_page(ORIGIN, Duration::from_secs(30)).await?;
     let before = fresh
         .evaluate("document.cookie + '|' + (localStorage.getItem('token') || '')")
@@ -103,7 +88,6 @@ async fn restored(computer: &Computer, session: &Session) -> computer::Result<()
     );
     fresh.close().await.ok();
 
-    // The tabs it left open, because session storage only exists in one.
     let mut held = browser.import_session(session).await?;
     let mut page = match held.pop() {
         Some(page) => page,
@@ -161,8 +145,7 @@ async fn restored(computer: &Computer, session: &Session) -> computer::Result<()
     Ok(())
 }
 
-/// Something to be logged in to. A cookie needs a real origin; `file://` has
-/// none, and nothing is stored against it.
+/// A cookie needs a real origin, and `file://` has none.
 async fn serve(computer: &Computer) -> computer::Result<()> {
     computer
         .write_file(
@@ -180,11 +163,6 @@ async fn serve(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// The other way to keep a login: leave the profile on the host.
-///
-/// A volume carries what a session cannot — a database too large to write as
-/// JSON, a key the page will not hand over — at the cost of never leaving this
-/// machine.
 #[tokio::test]
 #[ignore = "needs a container runtime"]
 async fn a_volume_keeps_the_browser_between_boxes() {
@@ -207,8 +185,7 @@ async fn a_volume_keeps_the_browser_between_boxes() {
     let outcome = still_signed_in(&second).await;
     second.shutdown().await.expect("it goes away");
 
-    // Whatever happened above: a volume outlives the box, so nothing else
-    // removes it.
+    // A volume outlives the box, so nothing else removes it.
     tokio::process::Command::new("docker")
         .args(["volume", "rm", "--force", &volume])
         .output()
@@ -230,9 +207,7 @@ async fn sign_in(computer: &Computer) -> computer::Result<()> {
 
     page.close().await.ok();
 
-    // Chromium keeps its cookies in a database it flushes on its own schedule,
-    // and a box is torn down with a kill. Closing the browser is what makes it
-    // write: local storage lands without this, and cookies do not.
+    // Chromium flushes cookies on its own schedule; closing it makes it write.
     computer
         .exec_within(
             ["sh", "-c", "pkill -TERM chromium; sleep 20"],
@@ -260,10 +235,7 @@ async fn still_signed_in(computer: &Computer) -> computer::Result<()> {
         token.as_str().unwrap_or_default()
     );
 
-    // Local storage, because that is what a box removed with a kill is certain
-    // to have written. Cookies live in a database Chromium commits on its own
-    // schedule, so one set moments before the box went may not have reached
-    // the volume — see the note on `Builder::profiles`.
+    // Local storage, because cookies may not reach the volume before the kill.
     assert_eq!(
         token.as_str(),
         Some("also-kept"),

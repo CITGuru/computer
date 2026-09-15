@@ -1,8 +1,3 @@
-//! The API's answers that do not need a box behind them.
-//!
-//! The runtime is a double all the same: a test asserting a refusal would
-//! otherwise learn the refusal stopped by leaving a real container behind.
-
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use computer::testing::ScriptedCli;
@@ -12,7 +7,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-/// So an accepted spec reaches the double, not the host.
 fn nowhere() -> Arc<AppState> {
     Arc::new(AppState::default().through(Some(Arc::new(ScriptedCli::new()))))
 }
@@ -85,9 +79,7 @@ async fn test_removing_a_box_without_saying_so_is_refused() {
 
     let (status, body) = send(request).await;
 
-    // Refused for the missing header rather than 404 for the missing box: the
-    // guard is the point, and a caller that learns the box is gone first will
-    // never learn about the header at all.
+    // The guard comes before the lookup, or a caller never learns about the header.
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body["message"]
@@ -156,8 +148,6 @@ async fn test_a_misspelled_key_is_refused_in_the_same_shape_as_everything_else()
 async fn test_a_body_that_is_not_json_answers_json_anyway() {
     let (status, body) = send(post("/v1/boxes", "not json at all")).await;
 
-    // A client parses errors one way or it parses them twice. This is the
-    // first error most clients will ever see.
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["code"], "bad_request");
 }
@@ -166,7 +156,7 @@ async fn test_a_body_that_is_not_json_answers_json_anyway() {
 async fn test_driving_a_box_that_is_not_here_is_not_found() {
     let (status, body) = send(post(
         "/v1/boxes/box_nope/screens/0/actions",
-        r#"{"actions":[{"type":"key","chord":"ctrl+a"}]}"#,
+        r#"{"actions":[{"type":"press","chord":"ctrl+a"}]}"#,
     ))
     .await;
 
@@ -219,8 +209,6 @@ async fn test_forking_a_box_nobody_ever_traced_is_not_found() {
 async fn test_a_snapshot_fork_says_why_it_cannot() {
     let (status, body) = send(post("/v1/boxes/box_nope/fork", r#"{"mode":"snapshot"}"#)).await;
 
-    // Refused ahead of the missing box: the caller needs to hear that no
-    // substrate here can do this at all, not that this one box is absent.
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
     assert_eq!(body["code"], "unsupported");
     assert!(
@@ -290,8 +278,6 @@ async fn test_the_right_token_gets_through() {
 
 #[tokio::test]
 async fn test_health_answers_without_one() {
-    // A load balancer has no token, and a refusal would tell whoever asked the
-    // same thing this does.
     let (status, body) = send_gated(get("/v1/health")).await;
 
     assert_eq!(status, StatusCode::OK);
@@ -305,9 +291,6 @@ async fn test_an_ungated_api_on_loopback_still_opens() {
     assert_eq!(status, StatusCode::OK);
 }
 
-/// The case that leaked containers before the runtime was a seam: a spec that
-/// used to be refused became valid, and the suite said so by leaving boxes
-/// running.
 #[tokio::test]
 async fn test_an_accepted_spec_is_built_through_the_runtime_it_was_given() {
     let cli = Arc::new(ScriptedCli::new());
@@ -353,14 +336,12 @@ async fn test_launching_an_app_no_catalog_holds_is_refused() {
     ))
     .await;
 
-    // The box is missing first: a name is checked against a box's own spec.
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 }
 
 #[tokio::test]
 async fn test_the_windows_that_are_not_ids_are_routes_of_their_own() {
-    // `active` and `wait` sit where a window id sits. A route that matched
-    // them as ids would look for a window called "active" and find none.
+    // `active` and `wait` must not match as window ids.
     for request in [
         get("/v1/boxes/box_nope/screens/0/windows/active"),
         post(
@@ -415,8 +396,6 @@ async fn test_a_capture_is_of_a_window_or_a_region_and_not_both() {
 
 #[tokio::test]
 async fn test_a_plain_frame_still_asks_for_nothing() {
-    // The box is missing, not the query: a shot naming nothing has to reach
-    // the handler the way it always did.
     let (status, body) = send(get("/v1/boxes/box_nope/screens/0/frame")).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);

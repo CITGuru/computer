@@ -1,9 +1,3 @@
-//! microsandbox through its library.
-//!
-//! Behind `--features microsandbox`, because the crate pulls a hypervisor, an
-//! ORM and a database driver behind it and most builds run containers. The
-//! same machine as [`super::msb`], reached without shelling out.
-
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use crate::microvm::{MicroVm, MicroVmApi, Plan};
@@ -12,16 +6,10 @@ use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Anything the vendor reports, as one of ours.
-///
-/// Coarse on purpose: the only question a caller has is whether to retry.
 fn from_vendor(error: MicrosandboxError) -> Error {
     Error::transport(error.to_string(), false)
 }
 
-/// A handle names a machine; a [`Sandbox`] can be talked to.
-///
-/// `connect` rather than `start`: the machine is already running.
 async fn connect(name: &str) -> Result<Sandbox> {
     Sandbox::get(name)
         .await
@@ -37,8 +25,7 @@ pub struct Microsandbox;
 #[async_trait]
 impl MicroVmApi for Microsandbox {
     async fn available(&self) -> Result<()> {
-        // Nothing to ask a hypervisor that holds no machines. A failed
-        // create is where it reports itself.
+        // The hypervisor only reports itself through a failed create.
         Ok(())
     }
 
@@ -52,13 +39,9 @@ impl MicroVmApi for Microsandbox {
             builder = builder.memory(mib as u32);
         }
         if !plan.network {
-            // Removes the interface entirely, which is a stronger "off"
-            // than a container's empty network namespace.
             builder = builder.disable_network();
         }
         for (host, guest) in &plan.ports {
-            // Loopback by default in this builder. The screen has no
-            // password on it.
             builder = builder.port(*host, *guest);
         }
         for (key, value) in &plan.env {
@@ -68,10 +51,7 @@ impl MicroVmApi for Microsandbox {
             builder = builder.replace();
         }
 
-        // Detached, or the machine dies with the handle. `create`
-        // returns a live sandbox and dropping it tears the microVM down,
-        // so the next exec reconnects to nothing. A place has to outlive
-        // the call that made it.
+        // Dropping the sandbox `create` returns tears the microVM down.
         builder
             .create_detached()
             .await
@@ -84,9 +64,7 @@ impl MicroVmApi for Microsandbox {
     }
 
     async fn remove(&self, name: &str) -> Result<()> {
-        // Stopped first: remove refuses a running machine, and a failed
-        // disposal leaves a microVM holding its whole memory ceiling until
-        // somebody finds it by hand.
+        // Remove refuses a running machine.
         if let Ok(sandbox) = connect(name).await {
             let _ = sandbox.stop().await;
         }
@@ -107,10 +85,7 @@ impl MicroVmApi for Microsandbox {
         let arguments = arguments.to_vec();
         let env = env.clone();
 
-        // `exec_with` rather than `exec`: the plain form takes only a
-        // command and arguments, so the display would be dropped without
-        // anything saying so — and every screenshot would come back from
-        // whichever display the machine happened to default to.
+        // Plain `exec` silently drops env, and with it the display.
         let output = sandbox
             .exec_with(command, move |mut options| {
                 options = options.args(arguments);
@@ -142,8 +117,6 @@ impl MicroVmApi for Microsandbox {
     }
 }
 
-/// A hypervisor-backed machine, ready to hand to
-/// [`Computer::builder`](crate::Computer::builder).
 pub fn machine() -> MicroVm {
     MicroVm::new(Arc::new(Microsandbox)).named("microsandbox")
 }

@@ -1,33 +1,14 @@
-//! Where a box can be reached from.
-//!
-//! Three things that are easy to conflate and must not be: which addresses a
-//! port is *published* on ([`Bind`]), whether that puts it beyond this host
-//! ([`Reach`]), and the address a person is *told* to use ([`Address`]).
-//!
-//! They come apart in practice. A box published on every interface is reachable
-//! at a name this crate has never been told, so the address in a URL cannot be
-//! derived from the bind — it has to be supplied. And a [`Machine`] that
-//! forwards nothing, like a sandbox that publishes a hostname per port, has no
-//! bind at all and still answers from the internet.
-//!
-//! [`Machine`]: crate::Machine
-
 use std::net::IpAddr;
 
-/// Which addresses a published port answers on.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Bind {
-    /// 127.0.0.1. Nothing off this host connects.
     #[default]
     Loopback,
-    /// Every interface. Whoever can route to this host reaches the box.
     Any,
-    /// One interface, named.
     Address(IpAddr),
 }
 
 impl Bind {
-    /// The host side of a `--publish`, as a container runtime wants it.
     pub fn publish_prefix(&self) -> String {
         match self {
             Self::Loopback => "127.0.0.1".to_string(),
@@ -36,11 +17,6 @@ impl Bind {
         }
     }
 
-    /// Whether this hands out an address beyond the host.
-    ///
-    /// Loopback is loopback however it is spelled: an explicit `127.0.0.1` or
-    /// `::1` answers the same as [`Bind::Loopback`], because refusing it would
-    /// send a caller looking for a credential they do not need.
     pub fn reach(&self) -> Reach {
         match self {
             Self::Loopback => Reach::Loopback,
@@ -51,17 +27,10 @@ impl Bind {
     }
 }
 
-/// Whether what a machine published can be reached beyond this host.
-///
-/// [`Reach::Loopback`] is not a claim that nothing else can get in. It is a
-/// claim that this crate did not hand out the address — which is the only thing
-/// this crate is in a position to promise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Reach {
-    /// This host only, as far as this crate arranged.
     #[default]
     Loopback,
-    /// Somewhere else can connect.
     Routable,
 }
 
@@ -71,7 +40,6 @@ impl Reach {
     }
 }
 
-/// How a URL addresses the box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Scheme {
     #[default]
@@ -88,11 +56,6 @@ impl Scheme {
     }
 }
 
-/// Where a published port answers, as a person is told it.
-///
-/// The host is carried rather than derived: a box on every interface is reached
-/// at whatever name resolves to this machine, and nothing here knows that name
-/// unless a caller says so.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Address {
     pub scheme: Scheme,
@@ -101,7 +64,6 @@ pub struct Address {
 }
 
 impl Address {
-    /// The loopback address, which is where every box is until told otherwise.
     pub fn loopback(port: u16) -> Self {
         Self {
             scheme: Scheme::Http,
@@ -110,10 +72,6 @@ impl Address {
         }
     }
 
-    /// The authority a URL is built on.
-    ///
-    /// IPv6 needs the brackets, and a literal without them produces a URL that
-    /// parses as a different host and port entirely.
     pub fn authority(&self) -> String {
         if self.host.contains(':') && !self.host.starts_with('[') {
             format!("[{}]:{}", self.host, self.port)
@@ -137,8 +95,6 @@ mod tests {
         );
     }
 
-    /// `127.0.0.1` written out is still loopback, and refusing it would send a
-    /// caller looking for a secret they do not need.
     #[test]
     fn test_loopback_spelled_out_is_still_loopback() {
         assert_eq!(
@@ -169,7 +125,6 @@ mod tests {
         );
     }
 
-    /// A v6 literal without brackets is a URL that means something else.
     #[test]
     fn test_an_ipv6_host_is_bracketed() {
         let address = Address {

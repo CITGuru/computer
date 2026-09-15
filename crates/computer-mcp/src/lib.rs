@@ -1,5 +1,3 @@
-//! An MCP server that hands an agent a desktop.
-
 mod jsonrpc;
 mod tools;
 
@@ -8,10 +6,8 @@ use jsonrpc::{INVALID_PARAMS, METHOD_NOT_FOUND, Request, Response};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
-/// What an `initialize` with no version of its own is answered with.
 pub const DEFAULT_PROTOCOL: &str = "2024-11-05";
 
-/// Answers requests until the reader ends.
 pub async fn serve<R, W>(client: &Client, input: R, output: W) -> std::io::Result<()>
 where
     R: AsyncRead + Unpin,
@@ -47,7 +43,6 @@ where
     Ok(())
 }
 
-/// [`serve`] over this process's own streams.
 pub async fn stdio(client: &Client) -> std::io::Result<()> {
     serve(client, tokio::io::stdin(), tokio::io::stdout()).await
 }

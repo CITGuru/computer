@@ -1,12 +1,3 @@
-//! The gate on the API itself.
-//!
-//! Whoever reaches this API creates boxes, drives them, reads their frames and
-//! runs commands inside them, so an address it hands out is worth more than any
-//! single viewer URL behind it. The rule is the engine's own
-//! [`computer::Reach::needs_a_secret`]: loopback opens without a token,
-//! anything routable requires one at startup rather than on the first
-//! unauthenticated request.
-
 use crate::error::ApiError;
 use crate::{AppState, routes};
 use axum::extract::{Request, State};
@@ -30,8 +21,6 @@ pub fn bind_of(address: &SocketAddr) -> Bind {
     }
 }
 
-/// Refused at startup, because the alternative is a routable box factory that
-/// only reveals it is open when somebody finds it.
 pub fn allowed(address: &SocketAddr, token: Option<&Secret>) -> Result<(), String> {
     if token.is_some() || !bind_of(address).reach().needs_a_secret() {
         return Ok(());
@@ -44,9 +33,7 @@ pub fn allowed(address: &SocketAddr, token: Option<&Secret>) -> Result<(), Strin
     ))
 }
 
-/// `/v1/health` is left open: it says only that a server is answering, which is
-/// what a load balancer needs and no more than a refused request already tells
-/// whoever asked.
+/// `/v1/health` stays open: it tells no more than a refused request does.
 pub async fn gate(State(state): State<Arc<AppState>>, request: Request, next: Next) -> Response {
     let Some(token) = &state.token else {
         return next.run(request).await;
@@ -75,8 +62,7 @@ pub async fn gate(State(state): State<Arc<AppState>>, request: Request, next: Ne
     next.run(request).await
 }
 
-/// Compared in time that does not depend on where the two differ, so a caller
-/// cannot learn the token one byte at a time.
+/// Constant time, so the token cannot be learned a byte at a time.
 fn same(offered: &[u8], expected: &[u8]) -> bool {
     if offered.len() != expected.len() {
         return false;

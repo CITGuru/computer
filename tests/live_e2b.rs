@@ -6,9 +6,7 @@
 //! cargo test --features e2b --test live_e2b -- --ignored --nocapture
 //! ```
 //!
-//! Needs a template, because E2B builds those and this crate builds container
-//! images. Its builder is a Docker subset that `images/desktop/Dockerfile`
-//! does not clear unchanged, so derive a context first:
+//! Needs a template derived from the desktop image:
 //!
 //! ```text
 //! python3 images/context.py images/desktop /tmp/e2b-ctx --for e2b
@@ -16,9 +14,6 @@
 //!     -c "/usr/local/bin/computer-desktop" --ready-cmd "true" \
 //!     --cpu-count 2 --memory-mb 2048
 //! ```
-//!
-//! Everything after the launch is the code the container test runs, and that
-//! is the point: `Machine` is the only part that knows where the box is.
 
 #![cfg(feature = "e2b")]
 
@@ -50,8 +45,6 @@ async fn a_real_sandbox_runs_the_same_desktop() {
     let (machine, profile) = e2b::pair(Arc::new(cloud), Arc::new(X11Profile));
 
     let computer = Computer::builder()
-        // A public viewer is reachable from the internet, so it goes through
-        // the same gate as any other publish.
         .auth(Auth::Token)
         .machine(Arc::new(machine.public_viewer(true)))
         .profile(profile)
@@ -65,8 +58,6 @@ async fn a_real_sandbox_runs_the_same_desktop() {
         println!("  viewer available");
     }
 
-    // The one deployment that is genuinely on the internet, so the one where
-    // the gate has to be watched rather than assumed.
     let gate = the_viewer_refuses_a_wrong_ticket(&computer);
 
     let outcome = exercise(&computer).await;
@@ -76,7 +67,6 @@ async fn a_real_sandbox_runs_the_same_desktop() {
     outcome.expect("every step");
 }
 
-/// A wrong ticket must not open a desktop that anybody can route to.
 fn the_viewer_refuses_a_wrong_ticket(computer: &Computer) -> Result<(), String> {
     let url = computer.viewer_url().ok_or("no viewer URL")?;
     let authority = url
@@ -152,7 +142,6 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     screen.set_wallpaper(&frame).await?;
     println!("  wallpaper changed from uploaded image bytes");
 
-    // A real pointer, over the internet.
     screen.click(Point::new(640, 400), Button::Left).await?;
     assert_eq!(screen.cursor().await?, Point::new(640, 400));
     screen.scroll(Point::new(640, 400), Delta::down(2)).await?;
@@ -167,15 +156,13 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     );
     println!("  the clipboard round-tripped");
 
-    // Files, which go through envd rather than a container runtime.
     let bytes = b"a file that crossed the internet\n";
     computer.write_file("/tmp/in.txt", bytes).await?;
     let read = computer.exec(["cat", "/tmp/in.txt"]).await?;
     assert_eq!(read.stdout, bytes, "what went in is what came out");
     assert_eq!(computer.read_file("/tmp/in.txt").await?, bytes);
 
-    // A directory nothing made yet. The container runtimes create it, so envd
-    // has to as well or the same call answers differently per machine.
+    // Container runtimes create missing parents, so envd has to as well.
     computer.write_file("/tmp/made/here/in.txt", bytes).await?;
     assert_eq!(computer.read_file("/tmp/made/here/in.txt").await?, bytes);
 
@@ -196,8 +183,6 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     );
     println!("  files went over and came back, directories and all");
 
-    // Withdrawn rather than broken: the browser is up in the box, and nothing
-    // out here can reach its debugger.
     assert!(
         computer.devtools().is_none(),
         "an endpoint out here would be wss, and cdp.rs speaks plain TCP"
@@ -211,9 +196,6 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     computer.close_screen(ScreenId(1)).await?;
     println!("  screen 1 is its own display");
 
-    // The same audit the container test ends with. `browser` is not in it,
-    // because the profile stopped claiming it rather than claiming it and
-    // failing.
     let audit = computer::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
     println!("  audit: {audit}");
     assert!(

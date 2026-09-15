@@ -1,14 +1,3 @@
-//! The Wayland image and the claim about it, checked against each other.
-//!
-//! The same job `tests/image.rs` does for the X11 pair, for the second one.
-//! A drift check belongs to a profile: `src/wayland.rs` names commands, ports
-//! and verbs, and `images/wayland/` is what answers them. Nothing else notices
-//! when they stop agreeing — the code keeps sending `computer-input click`,
-//! the image quietly renames it, and the failure arrives as a screen that does
-//! not move.
-//!
-//! Read as text. No Docker, no build, no daemon.
-
 use computer::bundle::{
     POINTER_C, SWAY_CONFIG, VIRTUAL_POINTER_XML, WAYLAND_BROWSER_SH, WAYLAND_DOCKERFILE,
     WAYLAND_INPUT_SH, WAYLAND_SCREEN_SH, WAYLAND_START_SH,
@@ -18,7 +7,6 @@ use computer::servers::wayland::{DISPLAY_NAME, INPUT_COMMAND};
 use computer::{AUTH_ENV, CONTROL_SECRET_ENV, VIEW_SECRET_ENV, VIEWER_USER};
 use computer::{Profile, ScreenAction, ScreenId, WaylandProfile};
 
-/// The `EXPOSE` lines, flattened into port numbers.
 fn exposed() -> Vec<u16> {
     let mut ports: Vec<u16> = WAYLAND_DOCKERFILE
         .lines()
@@ -124,16 +112,13 @@ fn every_verb_the_profile_sends_is_one_the_script_answers() {
 
 #[test]
 fn every_input_verb_the_driver_sends_is_one_the_script_answers() {
-    // The driver builds these by hand, so a rename on either side is a command
-    // that goes in and moves nothing.
     let dispatch = WAYLAND_INPUT_SH
         .split("case \"$verb\" in")
         .nth(1)
         .expect("the script dispatches on a verb");
 
     for verb in ["move", "click", "dblclick", "drag", "scroll", "type", "key"] {
-        // Either alone or in an alternation, which is how the pointer verbs
-        // share one branch.
+        // Alone or in an alternation, which is how the pointer verbs share one branch.
         assert!(
             dispatch.contains(&format!("{verb})")) || dispatch.contains(&format!("{verb}|")),
             "{verb} is sent by the driver and has no case in {INPUT_COMMAND}"
@@ -158,8 +143,6 @@ fn the_commands_the_code_names_are_the_ones_the_image_installs() {
 
 #[test]
 fn the_image_carries_every_binary_the_driver_calls() {
-    // The driver shells these by name. A missing one is a refusal the caller
-    // reads as a broken tool rather than as a missing package.
     for binary in [
         "sway",
         "wayvnc",
@@ -176,9 +159,7 @@ fn the_image_carries_every_binary_the_driver_calls() {
         );
     }
 
-    // `convert` is shelled by name too, and arrives as `imagemagick`. It is
-    // here for one thing: the compositor has no cursor to overlay between
-    // commands, so a capture that shows the pointer has to draw it on.
+    // No compositor cursor to overlay, so a capture that shows the pointer draws it with `convert`.
     assert!(
         WAYLAND_DOCKERFILE.contains("imagemagick"),
         "the pointer is drawn with convert, which comes from imagemagick"
@@ -187,10 +168,7 @@ fn the_image_carries_every_binary_the_driver_calls() {
 
 #[test]
 fn the_pointer_arrives_as_a_device_and_not_through_the_compositors_own_seat() {
-    // sway's `seat cursor` commands move the seat's own pointer, and a
-    // headless backend gives the seat no input devices — so sway accepts every
-    // one of them, exits zero, and the screen does not move. The only synthetic
-    // pointer Wayland has is a virtual device.
+    // Headless sway has no input devices, so `seat cursor` exits zero and moves nothing.
     assert!(
         POINTER_C.contains("zwlr_virtual_pointer_manager_v1_create_virtual_pointer"),
         "the pointer has to be a device the compositor made"
@@ -211,8 +189,7 @@ fn the_pointer_arrives_as_a_device_and_not_through_the_compositors_own_seat() {
 
 #[test]
 fn the_device_exists_before_any_event_is_sent_through_it() {
-    // A virtual device does not exist until the compositor has made it, and
-    // events sent into that gap are dropped with nothing to say they were.
+    // Events sent before the compositor has made the device are dropped silently.
     let created = POINTER_C
         .split("create_virtual_pointer(manager, seat)")
         .nth(1)
@@ -230,9 +207,7 @@ fn the_device_exists_before_any_event_is_sent_through_it() {
 
 #[test]
 fn the_first_keystroke_is_not_swallowed_by_a_keymap_that_is_not_ready() {
-    // wtype makes a virtual keyboard, uploads a keymap and starts typing. The
-    // first key goes out before the compositor has applied the keymap, so
-    // `KEYBOARD` arrives as `EYBOARD`.
+    // wtype's first key races the keymap, so `KEYBOARD` arrives as `EYBOARD`.
     assert!(
         WAYLAND_INPUT_SH.contains("wtype -s 120"),
         "the new device needs a pause to become real"
@@ -241,8 +216,7 @@ fn the_first_keystroke_is_not_swallowed_by_a_keymap_that_is_not_ready() {
 
 #[test]
 fn a_tool_that_cannot_fail_loudly_is_made_to() {
-    // `wtype` exits zero whatever happens — a bad flag, no compositor, a
-    // keystroke that never left. What it says is the only signal there is.
+    // `wtype` exits zero whatever happens; its output is the only signal.
     assert!(
         WAYLAND_INPUT_SH.contains("said=$(wtype"),
         "an input command that reports success while the screen stays put is \
@@ -253,9 +227,6 @@ fn a_tool_that_cannot_fail_loudly_is_made_to() {
 
 #[test]
 fn input_is_refused_by_the_image_and_not_only_by_the_crate() {
-    // The gate inside the crate is a promise: an owner that reaches past the
-    // API is not stopped by an agreement it never made. This is the only path
-    // in, so every caller meets it.
     assert!(
         WAYLAND_INPUT_SH.contains("COMPUTER_TOKEN"),
         "the holder of a takeover has to be able to drive its own screen"
@@ -342,9 +313,6 @@ fn releasing_control_leaves_the_read_only_viewer_up() {
 
 #[test]
 fn a_viewer_is_counted_by_connection_and_not_by_whether_a_server_is_up() {
-    // The control viewer keeps listening after the last person closes the tab,
-    // so "the server is up" would say somebody is driving long after nobody
-    // is — and a run waiting for them to finish would wait for ever.
     assert!(WAYLAND_SCREEN_SH.contains("/proc/net/tcp"));
     assert!(
         WAYLAND_SCREEN_SH.contains("$4==\"01\""),
@@ -355,8 +323,7 @@ fn a_viewer_is_counted_by_connection_and_not_by_whether_a_server_is_up() {
 
 #[test]
 fn the_resolution_reaches_the_compositor_through_its_configuration() {
-    // sway reads no environment in its configuration, so a template is the
-    // only way the geometry the box was given reaches the output.
+    // sway reads no environment in its config, so geometry arrives by template.
     assert!(SWAY_CONFIG.contains("%WIDTH%x%HEIGHT%"));
     assert!(WAYLAND_SCREEN_SH.contains("s/%WIDTH%/${width}/"));
     assert!(WAYLAND_SCREEN_SH.contains("s/%HEIGHT%/${height}/"));
@@ -369,8 +336,7 @@ fn the_resolution_reaches_the_compositor_through_its_configuration() {
 
 #[test]
 fn the_compositor_socket_is_recorded_rather_than_guessed() {
-    // sway names its IPC socket after its own process, so nothing that did not
-    // start it can work out the name.
+    // sway names its IPC socket after its own process.
     assert!(SWAY_CONFIG.contains("%SOCKFILE%"));
     assert!(WAYLAND_SCREEN_SH.contains("s|%SOCKFILE%|${sockfile}|"));
     assert!(
@@ -416,9 +382,7 @@ fn the_browser_gets_a_profile_per_screen() {
 
 #[test]
 fn devtools_is_published_through_a_bridge_and_not_straight_out() {
-    // Chromium binds the debugging port to loopback whatever
-    // --remote-debugging-address says, so a host port forwarded onto 9222
-    // reaches nothing and answers with an empty reply.
+    // Chromium binds DevTools to loopback, so 9222 cannot be forwarded straight on.
     assert!(WAYLAND_START_SH.contains(&format!("TCP-LISTEN:{DEVTOOLS_BRIDGE_PORT}")));
     assert!(WAYLAND_START_SH.contains(&format!("TCP:127.0.0.1:{DEVTOOLS_PORT}")));
     assert!(WAYLAND_DOCKERFILE.contains("socat"));
@@ -437,9 +401,7 @@ fn extra_screens_are_not_started_up_front() {
 
 #[test]
 fn the_image_can_also_bring_a_screen_up_and_return() {
-    // A container stops when its command exits, so the supervisor idles to
-    // hold it open. A microVM lives until it is stopped, so the same idle loop
-    // there would hold an exec open for the life of the machine.
+    // A container needs the idle loop to stay up; on a microVM it would hold an exec open.
     assert!(WAYLAND_START_SH.contains(r#"if [ "${1:-}" = "--once" ]; then"#));
     assert_eq!(
         WaylandProfile.boot_command(),
@@ -479,9 +441,6 @@ fn the_container_idles_rather_than_exiting() {
     );
 }
 
-/// The crate writes the gate into the box as environment and the script reads
-/// it back. Neither half means anything without the other, and a rename on one
-/// side leaves a viewer that refuses everybody or, worse, one that does not.
 #[test]
 fn the_script_reads_the_gate_the_crate_writes() {
     for name in [AUTH_ENV, VIEW_SECRET_ENV, CONTROL_SECRET_ENV] {
@@ -509,10 +468,6 @@ fn the_script_reads_the_gate_the_crate_writes() {
     );
 }
 
-/// The two doors must not read one variable. They differ by a port number in a
-/// URL, so one credential across both makes every watch link a control link,
-/// and `input-guard.sh` does not close that — it shadows `xdotool`, and a
-/// person on the control port drives over VNC without going near it.
 #[test]
 fn each_door_carries_its_own_credential() {
     let gate = WAYLAND_SCREEN_SH
@@ -525,9 +480,6 @@ fn each_door_carries_its_own_credential() {
     assert!(gate.contains(&format!("control) secret=\"${{{CONTROL_SECRET_ENV}")));
 }
 
-/// A gate that cannot find its secret must refuse. Starting the viewer anyway
-/// would serve an open desktop while the crate reported it locked, which is the
-/// one failure this whole arrangement exists to prevent.
 #[test]
 fn a_gate_with_no_secret_refuses_rather_than_opening() {
     let gate = WAYLAND_SCREEN_SH
@@ -542,8 +494,6 @@ fn a_gate_with_no_secret_refuses_rather_than_opening() {
     );
 }
 
-/// Both viewers go through the gate. One that took its target directly would
-/// serve an ungated desktop on a port the crate believes is locked.
 #[test]
 fn neither_viewer_reaches_websockify_around_the_gate() {
     for door in ["view", "control"] {
@@ -562,11 +512,7 @@ fn neither_viewer_reaches_websockify_around_the_gate() {
     );
 }
 
-/// Xwayland is started from whether it is installed, not from a constant.
-///
-/// The two have to agree: a configuration that says `enable` in an image
-/// without Xwayland makes sway fail to start, and one that says `disable` in
-/// an image with it wastes the packages.
+/// Xwayland `enable` without the package stops sway from starting.
 #[test]
 fn the_second_display_server_is_started_only_where_it_exists() {
     assert!(

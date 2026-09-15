@@ -1,30 +1,13 @@
-//! Replies kept long enough to answer a retry with them.
-//!
-//! An agent whose request times out retries it. On a driving API that is not
-//! a nicety: a replayed click is a double click, which on a real interface
-//! opens the file rather than selecting it, and a replayed create is a second
-//! box nobody asked for and everybody pays for.
-
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Long enough to cover a client's retry window, short enough that the map
-/// does not become storage.
 const KEEP: Duration = Duration::from_secs(600);
 
-/// A ceiling on the map itself. A reply can carry a whole PNG, and a client
-/// that mints a fresh key per request never asks for any of them back, so
-/// expiry alone does not bound this.
+/// Expiry alone does not bound this: a client may mint a fresh key per request.
 const MAX_REPLIES: usize = 256;
 
-/// What a key was first used for.
-///
-/// A retry repeats one request; a key that arrives on a different one is a
-/// client bug, and answering it with the first request's reply hides that bug
-/// behind a success. Route and body are both here because the same body means
-/// different things on different routes.
 pub type Fingerprint = [u8; 32];
 
 pub fn fingerprint(route: &str, body: &[u8]) -> Fingerprint {
@@ -36,11 +19,8 @@ pub fn fingerprint(route: &str, body: &[u8]) -> Fingerprint {
 }
 
 pub enum Lookup {
-    /// This key is new, or its reply has expired.
     Fresh,
-    /// The same request again: answer it with what it was answered before.
     Replay { status: u16, body: Vec<u8> },
-    /// The same key on a different request.
     Reused,
 }
 

@@ -1,5 +1,3 @@
-//! Waiting, history and hover.
-
 use computer::{Button, Computer};
 use std::time::{Duration, Instant};
 
@@ -12,8 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut page = browser
         .open_page("file:///tmp/wait.html", Duration::from_secs(30))
         .await?;
-    // A tab that is not in front has its timers throttled, which a wait would
-    // otherwise be blamed for.
+    // A background tab's timers are throttled.
     page.bring_to_front().await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 

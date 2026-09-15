@@ -1,8 +1,3 @@
-//! Engine failures, mapped onto status codes.
-//!
-//! The engine already splits its errors by what the caller does next, so this
-//! is a translation rather than a judgement.
-
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -70,8 +65,7 @@ impl From<computer::Error> for ApiError {
             E::Unsupported { .. } => (StatusCode::BAD_REQUEST, ErrorCode::Unsupported),
             E::Invalid { .. } => (StatusCode::BAD_REQUEST, ErrorCode::BadRequest),
             E::Gone(_) => (StatusCode::GONE, ErrorCode::Gone),
-            // A person holding the screen is the usual reason, which is a
-            // conflict rather than a permission failure.
+            // Usually a person holding the screen: a conflict, not a permission failure.
             E::Denied { .. } => (StatusCode::CONFLICT, ErrorCode::Denied),
             E::Failed { .. } => (StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::Failed),
             E::Timeout { .. } => (StatusCode::GATEWAY_TIMEOUT, ErrorCode::Timeout),

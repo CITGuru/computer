@@ -1,5 +1,3 @@
-//! Rows in a database, in whichever of two dialects the URL names.
-
 use crate::{BoxRecord, Error, Frames, Result, Store, now_ms};
 use async_trait::async_trait;
 use computer_api::{Actor, TraceEntry, TraceEvent};
@@ -7,7 +5,6 @@ use sqlx::any::AnyPoolOptions;
 use sqlx::{AnyPool, AssertSqlSafe, Row, error::DatabaseError};
 use std::sync::Arc;
 
-/// How many times a racing writer re-reads the sequence before giving up.
 const ATTEMPTS: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,7 +19,6 @@ pub struct Sql {
 }
 
 impl Sql {
-    /// Connects, and makes the tables if they are not there.
     pub async fn open(url: &str) -> Result<Self> {
         sqlx::any::install_default_drivers();
 
@@ -99,7 +95,6 @@ impl Sql {
         Ok(())
     }
 
-    /// A statement in this dialect.
     fn q(&self, written: &str) -> AssertSqlSafe<String> {
         AssertSqlSafe(numbered(self.dialect, written))
     }
@@ -417,7 +412,6 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// A database file of its own per test, taken away afterwards.
     struct Scratch(PathBuf);
 
     impl Scratch {

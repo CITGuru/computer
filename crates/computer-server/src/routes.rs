@@ -1,10 +1,3 @@
-//! The HTTP surface.
-//!
-//! Everything a box can be asked is reachable here, because REST being the
-//! complete surface is the promise: a shell script with `curl` and an MCP
-//! server built by mapping tools onto endpoints both have to work without an
-//! SDK in between.
-
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
@@ -32,58 +25,27 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const HEALTH: &str = "/v1/health";
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
-/// Deleting a box is not recoverable, and the caller is usually an agent.
 const CONFIRM_DELETE: &str = "x-computer-confirm-delete";
 const TRACE_PAGE: usize = 500;
-/// Long enough for a raised window to be drawn before the screen is captured.
 const RAISE: Duration = Duration::from_millis(250);
-/// The slowest typing that is still typing. A caller asking for more than this
-/// per key wants a wait between calls, not one call that holds the screen.
 const MAX_PACE: Duration = Duration::from_millis(1_000);
-/// The longest a stopped box is given to bring its desktop back. The whole
-/// stack starts again from the entrypoint, which is most of what a first
-/// launch does.
 const WAKE: Duration = Duration::from_secs(90);
-/// The longest a replay is given before it stops and says so. A fork is one
-/// HTTP request, and a box that was driven for an hour cannot take one.
 const REPLAY_BUDGET: Duration = Duration::from_secs(180);
-/// The most page text one read answers with.
-/// A ceiling rather than a default a caller can raise: `limit` is there to ask
-/// for less than this, and a page is unbounded.
 const PAGE_TEXT: usize = 20_000;
-/// Characters of an evaluated answer to return, and the most one can ask for.
 const EVALUATED: usize = 100_000;
-/// How long an expression runs by default, and the longest it can be given.
-///
-/// The screen lock is held across it, so an uncapped one is a box nobody else
-/// can reach again.
+/// Capped: the screen lock is held across an evaluation.
 const EVALUATE_MS: u64 = 5_000;
 const LINKS: usize = 100;
-/// The most matches one find answers with.
 const FOUND: usize = 50;
-/// How many tabs a box keeps. Enough that a caller can come back to what it
-/// opened a few steps ago, few enough that a long run does not bury the
-/// browser.
 const TABS: usize = 12;
-/// How long a wait runs by default, and the longest one it can be asked for:
-/// a request holds a connection while it waits.
 const WAIT_MS: u64 = 10_000;
 const MAX_WAIT: Duration = Duration::from_secs(60);
-/// The most of an original pause a replay reproduces. Pacing matters — a page
-/// that had two seconds to load gets them — but an idle hour does not.
 const REPLAY_GAP_CAP: Duration = Duration::from_secs(2);
-/// A ceiling on any pause a request can ask for. The screen lock is held
-/// across a settle and across a wait, so an uncapped one from a single caller
-/// is a screen no other request can reach again.
+/// The screen lock is held across a pause, so none may be uncapped.
 const MAX_PAUSE: Duration = Duration::from_secs(30);
 
-/// How long a screen has to hold still before a `wait_still` calls it settled,
-/// and how long it may go on waiting. Both are clamped by [`MAX_PAUSE`], so a
-/// caller cannot hold the screen lock for the length of a lease.
 const SETTLE: u64 = 400;
 const STILL: u64 = 10_000;
-/// A ceiling on a command's own limit, above the engine's two-minute default
-/// but short of holding a connection open indefinitely.
 const MAX_EXEC: Duration = Duration::from_secs(600);
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -215,8 +177,6 @@ async fn create_box(
 async fn list_boxes(State(state): State<Arc<AppState>>) -> Json<BoxList> {
     let mut boxes = Vec::new();
 
-    // A frozen box looks like a running one to everything but the runtime, and
-    // a caller reading this list is choosing which to drive.
     for entry in state.registry.list().await.iter() {
         boxes.push(viewed(entry, state_of(entry).await));
     }
@@ -225,8 +185,7 @@ async fn list_boxes(State(state): State<Arc<AppState>>) -> Json<BoxList> {
 }
 
 async fn state_of(entry: &Entry) -> BoxState {
-    // Stopped first: a container that is not running cannot be paused, and
-    // asking the runtime about a pause on one answers false.
+    // Stopped first: a stopped container cannot be paused, and reports not paused.
     if let Ok(true) = entry.computer.stopped().await {
         return BoxState::Stopped;
     }
@@ -289,8 +248,7 @@ async fn actions(
     let target = entry.desktop(screen).await?;
     let desktop = target.as_desktop();
 
-    // Resolved when the first page action asks, not before: `open_url` raises a
-    // new tab, so a handle taken up front would address the one it replaced.
+    // Resolved lazily: `open_url` raises a new tab, so an early handle is stale.
     let browser = entry.computer.browser();
     let mut page = None;
 
@@ -311,7 +269,6 @@ async fn actions(
         )
         .await;
 
-        // Its own event: a name and its arguments are the whole launch.
         match (&outcome, action) {
             (Ok(Some(window)), Action::Launch { app, args }) => {
                 state
@@ -353,9 +310,7 @@ async fn actions(
                 })
             }
             Err(error) => {
-                // Stop here. A click that follows a move which failed lands
-                // wherever the pointer was, and the frame afterwards looks
-                // like it worked.
+                // Stop: a click after a failed move lands wherever the pointer was.
                 results.push(ActionResult {
                     index,
                     ok: false,
@@ -442,20 +397,16 @@ async fn run(
             let pace = delay_ms.map(|ms| Duration::from_millis(ms).min(MAX_PACE));
             desktop.type_text(text, pace).await?
         }
-        Action::Key { chord, then, held } => {
+        Action::Press { chord, then, held } => {
             let mut all = vec![chord.clone()];
             all.extend(then.iter().cloned());
-            desktop.key(&all, held).await?
+            desktop.press(&all, held).await?
         }
         Action::Scroll { at, dx, dy } => desktop.scroll(*at, Delta { dx: *dx, dy: *dy }).await?,
         Action::OpenUrl { url, target } => {
-            // Whatever page action follows wants the page this leaves on
-            // screen, not the one the batch started on.
             *page = None;
 
             match (browser, target) {
-                // Through the debugger, which is the only way to learn the id
-                // of what was opened and the only way to reuse a tab.
                 (Some(browser), OpenIn::Blank) => {
                     let opened = browser.open(url).await?;
                     let mut fresh = browser.attach(&opened).await?;
@@ -464,9 +415,6 @@ async fn run(
 
                     tabs.push(tab_out(&opened, true));
 
-                    // And the ones before it do not accumulate. Best effort: a
-                    // browser that would not say what it holds is not a reason
-                    // to refuse the page that just opened.
                     let _ = browser.tidy(TABS).await;
                 }
                 (Some(browser), OpenIn::Current) => {
@@ -478,9 +426,6 @@ async fn run(
 
                     tabs.push(tab_out(showing.target(), true));
                 }
-                // No debugger to reach, so the browser in the box opens it and
-                // nothing here learns its id. `current` cannot be honoured at
-                // all: there is no page to navigate.
                 (None, _) => {
                     let screen = screen.ok_or_else(|| {
                         ApiError::bad_request("this screen has no browser to open a page in")
@@ -511,8 +456,6 @@ async fn run(
                 .as_mut()
                 .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
 
-            // No settle of its own: the batch takes one frame after all of its
-            // actions, and pausing inside each would pay it per action.
             apply(page, what.clone(), Duration::ZERO).await?;
         }
         Action::OnNode { what } => {
@@ -551,8 +494,6 @@ async fn run(
     Ok(None)
 }
 
-/// Flat rather than nested, because this is a GET and a query string has no
-/// shape: `?window=42&scale=50`.
 #[derive(Debug, Deserialize)]
 struct FrameQuery {
     #[serde(default)]
@@ -584,8 +525,6 @@ impl FrameQuery {
                 width,
                 height,
             }),
-            // Half a rectangle would otherwise be read as a corner and a
-            // guess, and answered with a picture of the wrong thing.
             _ => {
                 return Err(ApiError::bad_request(
                     "a region takes x, y, width and height together",
@@ -614,13 +553,8 @@ async fn frame(
     ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiQuery(query): ApiQuery<FrameQuery>,
 ) -> ApiResult<Json<Frame>> {
-    // Before the box is looked up: a query that does not make sense is a bad
-    // request whether or not the box behind it is there.
     let shot = query.shot()?;
 
-    // Before the capture, so the screen shows the page that was asked for.
-    // Still a capture of the screen: the window frame and the address bar are
-    // part of what a caller asking for a tab this way wants to see.
     if let Some(tab) = &shot.tab {
         named(&state, &id, tab).await?.bring_to_front().await?;
         tokio::time::sleep(RAISE).await;
@@ -631,8 +565,6 @@ async fn frame(
 
     let png = match shot.is_whole() {
         true => target.as_desktop().screenshot().await?,
-        // Everything narrower goes through the screen, which is where a
-        // window becomes a rectangle and where the sizes are checked.
         false => {
             let held = target
                 .as_screen()
@@ -671,8 +603,6 @@ fn shot_in(shot: &Shot) -> computer::Shot {
     }
 }
 
-/// A desktop is mostly still between steps, so a caller already holding this
-/// picture is told so rather than sent it again.
 async fn capture(
     state: &AppState,
     id: &str,
@@ -686,7 +616,6 @@ async fn capture(
     Ok(recorded(state, id, actor, screen, png, have).await)
 }
 
-/// Left out altogether when the caller already holds it.
 async fn recorded(
     state: &AppState,
     id: &str,
@@ -716,11 +645,6 @@ async fn recorded(
     }
 }
 
-/// Act on the widget a query names, in whatever native window published it.
-///
-/// The tree rather than the pixels: a native window has no DevTools behind it,
-/// so the alternative is a coordinate worked out from a screenshot and a click
-/// that lands on whatever has since moved there.
 async fn on_node(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
@@ -732,10 +656,6 @@ async fn on_node(
     Ok(Json(on_tree(target.as_desktop(), body).await?))
 }
 
-/// One tree operation against a desktop already in hand.
-///
-/// Shared with the action batch, so filling a native form is one round trip
-/// and the screen lock is held across the whole of it.
 async fn on_tree(desktop: &dyn computer::Desktop, what: OnNode) -> ApiResult<NodeResult> {
     Ok(match what {
         OnNode::Tree { app, depth } => NodeResult {
@@ -755,7 +675,6 @@ async fn on_tree(desktop: &dyn computer::Desktop, what: OnNode) -> ApiResult<Nod
         OnNode::Invoke { node, action } => {
             let invoked = desktop.invoke_node(&node, action.as_deref()).await?;
             NodeResult {
-                // Which action ran, since the caller may not have named one.
                 action: invoked.actions.first().cloned(),
                 node: Some(invoked),
                 ..NodeResult::default()
@@ -775,9 +694,6 @@ async fn cursor(
     let entry = state.registry.get(&id).await?;
     let target = entry.desktop(screen).await?;
 
-    // Asked about for its own sake, so a desktop that cannot read the
-    // position may put the pointer somewhere to answer. The cursor a batch
-    // reports, and a click with no point, still go through `cursor`.
     Ok(Json(target.as_desktop().find_cursor().await?))
 }
 
@@ -852,8 +768,6 @@ async fn start_takeover(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be handed over"))?;
 
-    // The frame the person is being given, so what they changed is the
-    // difference between this and the one taken when they hand it back.
     let _ = capture(&state, &id, Actor::Agent, screen, target.as_desktop(), None).await;
 
     let takeover = if body.shared {
@@ -880,9 +794,7 @@ async fn start_takeover(
     }))
 }
 
-/// Through `reclaim` rather than `Takeover::end`: the handle that started it
-/// belonged to a request that has already returned. The token that says who is
-/// driving lives in the box, which is what makes this possible.
+/// Through `reclaim`: the `Takeover` handle belonged to a request that has returned.
 async fn end_takeover(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
@@ -893,9 +805,7 @@ async fn end_takeover(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be reclaimed"))?;
 
-    // Taken while the screen is still theirs — reading is allowed during a
-    // handover — so the frame is what the person left rather than what
-    // happened after they let go.
+    // Captured before release, so the frame is what the person left.
     let _ = capture(
         &state,
         &id,
@@ -993,7 +903,6 @@ async fn stop_recording(
     }))
 }
 
-/// Freeze the box, keeping its memory and its ports.
 async fn pause_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1006,16 +915,6 @@ async fn pause_box(
     Ok(Json(viewed(&entry, BoxState::Paused)))
 }
 
-/// Make the box usable again, whichever way it was put down.
-///
-/// One way in, because a caller wanting its box back should not have to
-/// remember how it stopped paying for it. Asking the wrong way used to answer
-/// with the runtime's own words: `cannot start a paused container, try unpause
-/// instead`.
-///
-/// What comes back says where the box is now, which is the part that differs:
-/// a paused box wakes as it was and on the ports it had, a stopped one starts
-/// a fresh desktop on new ones.
 async fn resume_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1025,8 +924,6 @@ async fn resume_box(
     if entry.computer.stopped().await.unwrap_or(false) {
         let woken = entry.computer.start(WAKE).await?;
 
-        // The handle held here points at the ports the box had before it
-        // stopped, so it is replaced rather than reused.
         let entry = state.registry.replace(&id, woken).await?;
         state
             .record(&id, Actor::Agent, TraceEvent::BoxStarted)
@@ -1043,7 +940,6 @@ async fn resume_box(
     Ok(Json(viewed(&entry, BoxState::Ready)))
 }
 
-/// End every process, keeping the filesystem.
 async fn stop_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1156,9 +1052,6 @@ async fn write_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Build a box again from what was done to the first one.
-/// Reads the source's trace rather than the source, so a box that has been
-/// removed can still be forked: its record outlived it and carries the spec.
 async fn fork(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1249,10 +1142,6 @@ async fn fork(
 
     let report = replay_onto(&entry, &state, &new_id, &history, body.up_to).await;
 
-    // Close with what the replay produced, so a caller can compare it against
-    // the source's own last frame. They will rarely be the same bytes: a
-    // desktop animates, which is why the report counts actions rather than
-    // claiming the two boxes match.
     if let Ok(target) = entry.desktop(0).await {
         let _ = capture(&state, &new_id, Actor::Agent, 0, target.as_desktop(), None).await;
     }
@@ -1267,8 +1156,6 @@ async fn fork(
     )
 }
 
-/// Do again, in order and at roughly the original pace, what the source was
-/// asked to do.
 async fn replay_onto(
     entry: &Entry,
     state: &AppState,
@@ -1285,9 +1172,7 @@ async fn replay_onto(
         skipped: Vec::new(),
     };
     let mut previous: Option<u64> = None;
-    // Held across the replay: `desktop` runs the image's screen start command
-    // every time it is called, and a five hundred action history would spend
-    // most of its budget on those rather than on the actions.
+    // Held across the replay: `desktop` reruns the screen start command on each call.
     let mut targets: BTreeMap<u32, Box<dyn AsDesktop + Send + '_>> = BTreeMap::new();
 
     for source in history {
@@ -1305,13 +1190,11 @@ async fn replay_onto(
                 screen: *screen,
                 action: action.clone(),
             },
-            // An action the original was refused is not part of what happened
-            // to it, so replaying it would invent a difference.
+            // A refused action did not happen, so replaying it would invent a difference.
             TraceEvent::Acted { .. } => continue,
             TraceEvent::Executed { argv, .. } if !argv.is_empty() => {
                 Step::Exec { argv: argv.clone() }
             }
-            // Replayable, unlike a file write: the trace holds all of it.
             TraceEvent::AppLaunched {
                 screen, app, args, ..
             } => Step::Act {
@@ -1321,10 +1204,6 @@ async fn replay_onto(
                     args: args.clone(),
                 },
             },
-            // The trace keeps what a write or a copy was about, not the bytes
-            // it carried, so these cannot be done again from the record. Said
-            // out loud, because a fork short of the original in a way nothing
-            // reports is worse than one that says where it is short.
             TraceEvent::FileWritten { path, .. } => {
                 report.skipped.push(Skipped {
                     seq: source.seq,
@@ -1375,8 +1254,6 @@ async fn replay_onto(
                             &entry.spec,
                             None,
                             &mut None,
-                            // A replay drives a fresh box; the ids a tab had in
-                            // the source mean nothing in it.
                             &mut Vec::new(),
                         )
                         .await
@@ -1448,7 +1325,6 @@ async fn replay_onto(
     report
 }
 
-/// One thing a replay does again.
 enum Step {
     Act { screen: u32, action: Action },
     Exec { argv: Vec<String> },
@@ -1462,8 +1338,6 @@ struct TraceQuery {
     limit: Option<usize>,
 }
 
-/// Oldest first, and answers for a box that has been removed: the record is the
-/// point.
 async fn read_trace(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1516,9 +1390,6 @@ struct PageQuery {
     tab: Option<String>,
 }
 
-/// What the page in front is showing, as text.
-/// The page the screen shows, not the first one open: a caller reading what it
-/// can see is the point, and a frame and this have to agree.
 async fn read_page(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1532,8 +1403,6 @@ async fn read_page(
         Reading::Raw => computer::Reading::Raw,
     };
 
-    // Clamped here rather than in the engine: a ceiling is what a deployment
-    // owes whoever it answers, and a library owes its caller none.
     let read = page
         .read(
             format,
@@ -1560,8 +1429,6 @@ async fn read_page(
 
 #[derive(Debug, Deserialize)]
 struct FindQuery {
-    /// Words, a name, an id, a placeholder or a selector. Either this or
-    /// `role`.
     #[serde(default)]
     q: Option<String>,
     #[serde(default)]
@@ -1572,12 +1439,10 @@ struct FindQuery {
     exact: Option<bool>,
     #[serde(default)]
     tab: Option<String>,
-    /// Everything built as this kind of thing, however it was built.
     #[serde(default)]
     role: Option<String>,
 }
 
-/// What on the page matches, best first.
 async fn find_elements(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1585,8 +1450,6 @@ async fn find_elements(
 ) -> ApiResult<Json<Vec<Element>>> {
     let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
 
-    // A role becomes the selector that finds it rather than a second way of
-    // asking: everything below already takes a selector.
     let what = match query.role.as_deref() {
         Some(role) => computer::cdp::selector_for(role)
             .ok_or_else(|| {
@@ -1614,20 +1477,13 @@ async fn find_elements(
     Ok(Json(found.into_iter().map(element_out).collect()))
 }
 
-/// Act on the element a query names.
-/// By name rather than by coordinate: a point worked out from a frame is stale
-/// the moment the page moves under it, and some of these have no coordinate at
-/// all — a file chooser is the operating system's window, and a native
-/// dropdown opens a menu no screenshot shows.
 async fn on_element(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<SettleQuery>,
     ApiJson(body): ApiJson<OnElement>,
 ) -> ApiResult<Json<ElementResult>> {
-    // Before the page is reached: the debugger takes a path it never checks,
-    // and a file that is not there arrives as an empty one of that name. The
-    // page then holds a zero-byte file and the call answers that it worked.
+    // Checked first: the debugger uploads a missing path as an empty file and succeeds.
     if let OnElement::Upload { paths, .. } = &body {
         missing(&state, &id, paths).await?;
     }
@@ -1638,7 +1494,6 @@ async fn on_element(
     Ok(Json(apply(&mut page, body, settle).await?))
 }
 
-/// Refuses naming the first path the box does not have.
 async fn missing(state: &AppState, id: &str, paths: &[String]) -> ApiResult<()> {
     if paths.is_empty() {
         return Err(ApiError::bad_request(
@@ -1662,11 +1517,6 @@ async fn missing(state: &AppState, id: &str, paths: &[String]) -> ApiResult<()> 
     Ok(())
 }
 
-/// How long to let the page stop moving before it is measured.
-///
-/// A click that opens a menu or starts a navigation has not finished when the
-/// call returns, and a URL or a frame read at that moment is the page on its
-/// way rather than the page it arrived at.
 #[derive(Debug, Deserialize)]
 struct SettleQuery {
     #[serde(default)]
@@ -1675,9 +1525,6 @@ struct SettleQuery {
     tab: Option<String>,
 }
 
-/// One element operation against a page already in hand.
-/// Shared with the action batch, so a form is one round trip rather than one
-/// per field and the screen lock is held across the whole of it.
 async fn apply(
     page: &mut computer::Page,
     what: OnElement,
@@ -1768,7 +1615,6 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             let (x, y) = page.scroll(query.as_deref(), how).await?;
 
             ElementResult {
-                // Never negative: a browser clamps a scroll at the top.
                 at: Some(Point {
                     x: x.max(0) as u32,
                     y: y.max(0) as u32,
@@ -1779,12 +1625,6 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
     })
 }
 
-/// Run javascript in a page and answer with what it evaluated to.
-///
-/// The box is the boundary, not this: an agent already has a shell here through
-/// `exec`, and page javascript reaches less than that does. What this owes is a
-/// ceiling — a deadline, because the screen lock is held across the call, and a
-/// size, because a document is megabytes.
 async fn evaluate(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1808,8 +1648,6 @@ async fn evaluate(
     }))
 }
 
-/// The page as the browser draws it, apart from the screen capture: no window
-/// frame, no address bar, no pointer, and the same on a box with no display.
 async fn page_screenshot(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1821,8 +1659,7 @@ async fn page_screenshot(
         return Err(ApiError::bad_request("quality is between 1 and 100"));
     }
 
-    // JPEG for a whole page unless the caller said otherwise: an article
-    // measured 6.8MB as PNG against 115KB of JPEG for what was in view.
+    // JPEG by default for a full page: 6.8MB as PNG against 115KB as JPEG.
     let format = body.format.unwrap_or(match body.full {
         true => Picture::Jpeg,
         false => Picture::Png,
@@ -1864,15 +1701,12 @@ struct TabQuery {
     tab: Option<String>,
 }
 
-/// The pages a box has open.
 async fn list_tabs(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<Vec<Tab>>> {
     let browser = debugger(&state, &id).await?;
 
-    // Which one is frontmost costs an attach each: the debugger lists tabs but
-    // never says which the person is looking at.
     let showing = match browser.visible_page().await {
         Ok(Some(page)) => Some(page.target().id.clone()),
         _ => None,
@@ -1906,7 +1740,6 @@ async fn close_tab(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// This box's debugger.
 async fn debugger(state: &AppState, id: &str) -> ApiResult<computer::Devtools> {
     let entry = state.registry.get(id).await?;
 
@@ -1916,10 +1749,6 @@ async fn debugger(state: &AppState, id: &str) -> ApiResult<computer::Devtools> {
         .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))
 }
 
-/// The page a request names, or the one on screen where it names none.
-///
-/// Naming one is also cheaper: finding the visible page means attaching to every
-/// tab and asking each whether it is frontmost.
 async fn page_for(state: &AppState, id: &str, tab: Option<&str>) -> ApiResult<computer::Page> {
     match tab {
         Some(tab) => named(state, id, tab).await,
@@ -1940,7 +1769,6 @@ async fn named(state: &AppState, id: &str, tab: &str) -> ApiResult<computer::Pag
     Ok(browser.attach(&target).await?)
 }
 
-/// The page the screen is showing.
 async fn visible(state: &AppState, id: &str) -> ApiResult<computer::Page> {
     let entry = state.registry.get(id).await?;
     let browser = entry
@@ -1994,8 +1822,7 @@ async fn list_windows(
     Ok(Json(screen.windows().await?.into_iter().collect()))
 }
 
-/// Untraced: a replay against a fork whose windows opened in another order
-/// would raise the wrong one.
+/// Untraced: on a fork whose windows opened in another order it would raise the wrong one.
 async fn focus_window(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen, window)): ApiPath<(String, u32, String)>,
@@ -2067,12 +1894,10 @@ async fn await_window(
     Ok(Json(screen.wait_for_window(&body.class, within).await?))
 }
 
-/// So an agent reads the names rather than guessing one and meeting a 400.
 async fn catalog() -> Json<BTreeMap<String, computer_types::App>> {
     Json(computer::apps::builtin())
 }
 
-/// The builder, pointed at whatever this server reaches runtimes through.
 fn through(builder: computer::Builder, state: &AppState) -> computer::Builder {
     match &state.cli {
         Some(cli) => builder.cli(Arc::clone(cli)),
@@ -2087,11 +1912,6 @@ fn header(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// One request's claim on an idempotency key.
-/// The key is bound to the route and the body it first arrived on. A retry
-/// carries both again and is answered from the store; the same key on a
-/// different request is a client bug, and returning the first request's reply
-/// would hide it behind a success.
 struct Idempotent {
     key: Option<String>,
     print: idempotency::Fingerprint,
@@ -2107,7 +1927,6 @@ impl Idempotent {
         }
     }
 
-    /// The reply this request was already given, if it is the same request.
     fn replay(&self, replies: &Replies) -> ApiResult<Option<Response>> {
         let Some(key) = self.key.as_deref() else {
             return Ok(None);
@@ -2131,7 +1950,6 @@ impl Idempotent {
         }
     }
 
-    /// Keeps the answer where a retry of the same request will find it.
     fn answer<T: serde::Serialize>(
         &self,
         replies: &Replies,
@@ -2164,9 +1982,7 @@ fn view_of(entry: &Entry) -> BoxView {
 }
 
 fn viewed(entry: &Entry, state: BoxState) -> BoxView {
-    // A stopped box publishes nothing, and the handle held here still carries
-    // the ports it had before it stopped. Answering with those would send a
-    // caller to a port the runtime is free to give to the next box that asks.
+    // A stopped box's held ports may already belong to another box.
     let reachable = state != BoxState::Stopped;
 
     BoxView {
@@ -2224,8 +2040,7 @@ fn millis(at: SystemTime) -> u64 {
 
 fn new_id() -> String {
     let mut bytes = [0u8; 16];
-    // A box id names a thing anyone who can reach this API can drive, so it
-    // comes from the CSPRNG rather than from the clock.
+    // An id grants control, so it comes from the CSPRNG, not the clock.
     if getrandom::fill(&mut bytes).is_err() {
         return format!("box_{}", millis(SystemTime::now()));
     }

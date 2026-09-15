@@ -1,9 +1,6 @@
-//! A server for the length of one command.
-
 use computer_server::{AppState, recover, routes};
 use std::sync::{Arc, OnceLock};
 
-/// The state of the server this process started, if it started one.
 static SERVING: OnceLock<Arc<AppState>> = OnceLock::new();
 
 pub async fn start() -> Result<String, String> {
@@ -29,7 +26,6 @@ pub async fn start() -> Result<String, String> {
     Ok(format!("http://127.0.0.1:{port}"))
 }
 
-/// Puts down what the server this process started is still holding.
 pub async fn flush() {
     let Some(state) = SERVING.get() else {
         return;

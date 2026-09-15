@@ -1,19 +1,4 @@
-// Synthetic pointer input for a Wayland box.
-//
-// **Wayland gives no client a way to move somebody else's pointer.** The
-// compositor owns the seat, and its input devices come from the backend — of
-// which a headless one has none, so `sway`'s own `seat cursor` commands are
-// accepted and move nothing. Synthetic input has to arrive as a *device*, and
-// `zwlr_virtual_pointer_v1` is how a client asks for one. It is the pointer
-// half of what `wtype` does for the keyboard.
-//
-// One gesture per run, and the whole gesture in one run. A virtual pointer
-// lives only as long as the client that made it, so a process per event would
-// create and destroy a device for each one and race the compositor every time.
-//
-// It is loud on failure. A compositor that does not offer the protocol, or an
-// argument that makes no sense, exits non-zero and says so — the alternative is
-// a command that reports success and leaves the screen where it was.
+// One gesture per run: a virtual pointer lives only as long as its client.
 
 #define _POSIX_C_SOURCE 200809L
 
@@ -30,7 +15,6 @@
 #define BTN_RIGHT 0x111
 #define BTN_MIDDLE 0x112
 
-// One wheel notch, as a compositor expects to see it.
 #define NOTCH 15
 
 static struct wl_display *display;
@@ -39,9 +23,7 @@ static struct wl_output *output;
 static struct zwlr_virtual_pointer_manager_v1 *manager;
 static struct zwlr_virtual_pointer_v1 *pointer;
 
-// The coordinate space the caller's pixels are against, read from the output
-// rather than passed in: a screen that came up at a different size is the one
-// the coordinates have to be scaled against, and only the compositor knows it.
+// Read from the output: only the compositor knows the size the screen came up at.
 static int32_t screen_width;
 static int32_t screen_height;
 
@@ -132,8 +114,7 @@ static void button(uint32_t code, uint32_t pressed) {
 	zwlr_virtual_pointer_v1_frame(pointer);
 }
 
-// One notch on one axis. Forward is down on the vertical axis and right on
-// the horizontal one, which is the sign the protocol uses for both.
+// Forward is down or right, the sign the protocol uses for both axes.
 static void wheel(uint32_t axis, int forward) {
 	zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
 	zwlr_virtual_pointer_v1_axis_discrete(pointer, now_ms(), axis,
@@ -142,8 +123,6 @@ static void wheel(uint32_t axis, int forward) {
 	zwlr_virtual_pointer_v1_frame(pointer);
 }
 
-// A signed count of notches on one axis. Zero sends nothing, so an axis the
-// caller did not ask for does not move.
 static void wheel_by(uint32_t axis, long notches) {
 	long count = notches < 0 ? -notches : notches;
 
@@ -221,9 +200,7 @@ int main(int argc, char **argv) {
 
 	pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(manager, seat);
 
-	// **Before any event.** The device does not exist until the compositor has
-	// made it, and events sent into that gap are dropped with nothing to say
-	// they were.
+	// Before any event: events sent before the compositor makes the device are dropped.
 	wl_display_roundtrip(display);
 
 	const char *verb = argv[1];
@@ -238,9 +215,7 @@ int main(int argc, char **argv) {
 		button(code, 1);
 		button(code, 0);
 	} else if (strcmp(verb, "dblclick") == 0 && rest == 3) {
-		// One run, not two. Two runs are two devices and two round trips
-		// through the runtime, far enough apart that the application sees two
-		// single clicks — a different gesture.
+		// One run: two runs are far enough apart to read as two single clicks.
 		uint32_t code = button_code(argv[4]);
 		move_to(number(argv[2]), number(argv[3]));
 		settle(20);
@@ -250,8 +225,7 @@ int main(int argc, char **argv) {
 		button(code, 1);
 		button(code, 0);
 	} else if (strcmp(verb, "drag") == 0 && rest == 5) {
-		// Through the middle, because a drag that teleports is one some
-		// applications never register: they track motion, not the endpoints.
+		// Through the middle: some applications track motion, not the endpoints.
 		long x1 = number(argv[2]), y1 = number(argv[3]);
 		long x2 = number(argv[4]), y2 = number(argv[5]);
 		uint32_t code = button_code(argv[6]);
@@ -267,12 +241,10 @@ int main(int argc, char **argv) {
 		button(code, 0);
 	} else if (strcmp(verb, "scroll") == 0 && (rest == 3 || rest == 4)) {
 		long down = number(argv[4]);
-		// Optional, so a caller that only ever scrolled down still works.
 		long right = rest == 4 ? number(argv[5]) : 0;
 
 		move_to(number(argv[2]), number(argv[3]));
 		settle(20);
-		// One device for both, so a diagonal reads as one gesture.
 		wheel_by(WL_POINTER_AXIS_VERTICAL_SCROLL, down);
 		wheel_by(WL_POINTER_AXIS_HORIZONTAL_SCROLL, right);
 	} else {

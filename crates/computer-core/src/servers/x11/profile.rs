@@ -1,5 +1,3 @@
-//! What the X11 image offers, and how to talk to it.
-
 use super::X11Driver;
 use crate::desktop::DesktopFactory;
 use crate::image;
@@ -11,9 +9,6 @@ use crate::{DesktopSupport, ScreenAction, ScreenId};
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
-/// The image this crate carries: Xvfb, fluxbox, chromium and a noVNC viewer.
-///
-/// The default every box gets. Its numbers are [`crate::image`]'s constants.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct X11Profile;
 

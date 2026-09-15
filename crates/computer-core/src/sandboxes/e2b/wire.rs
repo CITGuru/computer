@@ -1,22 +1,10 @@
-//! What goes on the wire, as pure functions.
-//!
-//! Bodies in, bytes out, and no client anywhere near it. The parts worth
-//! testing — which JSON a plan turns into, and what a stream of Connect
-//! envelopes means — are checkable with no account and no network, which is
-//! the same trade [`crate::sandboxes::microsandbox::msb`] makes by shelling
-//! out.
-
 use super::api::{DEFAULT_USER, NAME_KEY, Sandbox, SandboxPlan};
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-/// The body of `POST /sandboxes`.
-///
-/// `secure` is not optional. Every other [`Machine`](crate::Machine) publishes
-/// on loopback, where the bind is the whole authentication story; a sandbox is
-/// on the public internet, and the screen still has no password on it.
+/// `secure` is not optional: a sandbox is public and the screen has no password.
 pub fn new_sandbox(plan: &SandboxPlan) -> Value {
     let mut metadata: BTreeMap<&str, &str> = plan
         .metadata
@@ -59,11 +47,7 @@ pub fn sandbox_from(body: &Value) -> Result<Sandbox> {
     })
 }
 
-/// The IDs in a listing whose metadata carries `key`, with its value.
-///
-/// Filtered here rather than trusted from the query. The control plane takes
-/// the filter as one encoded string, and a filter it does not understand
-/// answers with everything — which would read as a match.
+/// A filter the control plane does not understand answers with everything.
 pub fn carrying(listing: &Value, key: &str) -> Vec<(String, String)> {
     listing
         .as_array()
@@ -78,17 +62,10 @@ pub fn carrying(listing: &Value, key: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// The `metadata` filter for a listing, as one encoded parameter.
 pub fn metadata_query(key: &str, value: &str) -> String {
     format!("{}%3D{}", escape(key), escape(value))
 }
 
-/// The body of `POST /process.Process/Start`.
-///
-/// `argv` runs directly rather than through a shell. Everything this crate
-/// sends is already a built argument list — a screen command, or `xdotool`
-/// with coordinates — and putting a shell in front of it would make quoting
-/// this side's problem for no gain.
 pub fn start_request(argv: &[String], env: &BTreeMap<String, String>) -> Result<Value> {
     let (cmd, args) = argv
         .split_first()
@@ -103,22 +80,15 @@ pub fn start_request(argv: &[String], env: &BTreeMap<String, String>) -> Result<
     }))
 }
 
-/// Basic auth naming the user envd should run as, which is how envd takes it.
 pub fn user_header(user: &str) -> String {
     format!("Basic {}", base64_encode(format!("{user}:").as_bytes()))
 }
 
-/// The same, for the user this crate always runs as.
 pub fn default_user_header() -> String {
     user_header(DEFAULT_USER)
 }
 
-/// A payload wrapped as one Connect envelope.
-///
-/// **The request is framed too.** `Process.Start` is a streaming RPC, and a
-/// streaming Connect body is enveloped in both directions. Sent as bare JSON
-/// the server reads the first five bytes of `{"process"…` as a header and
-/// refuses with *promised 577794671 bytes in enveloped message*.
+/// A streaming Connect request is enveloped too; bare JSON is read as a header.
 pub fn enveloped(payload: &[u8]) -> Vec<u8> {
     let mut framed = Vec::with_capacity(payload.len() + 5);
     framed.push(0);
@@ -127,7 +97,7 @@ pub fn enveloped(payload: &[u8]) -> Vec<u8> {
     framed
 }
 
-/// One envelope off a Connect stream: its flags, its payload, and what is left.
+/// Flags, payload, rest.
 type Envelope<'a> = (u8, &'a [u8], &'a [u8]);
 
 fn envelope(bytes: &[u8]) -> Result<Option<Envelope<'_>>> {
@@ -154,22 +124,12 @@ fn envelope(bytes: &[u8]) -> Result<Option<Envelope<'_>>> {
     )))
 }
 
-/// Connect's compression bit. Nothing here negotiates an encoding, so a set
-/// bit is a payload this cannot read rather than one to decompress.
 const COMPRESSED: u8 = 0x01;
-/// The last envelope, which carries the stream's own outcome.
 const END_OF_STREAM: u8 = 0x02;
 
-/// What `timed_out` costs a caller who reads only the code.
-///
-/// `timeout(1)`'s number, so a deadline from E2B and a deadline from the
-/// runner in `MachineHost` report the same thing.
+/// `timeout(1)`'s code, matching the runner in `MachineHost`.
 const TIMEOUT_CODE: i32 = 124;
 
-/// A whole `Process.Start` response, as one result.
-///
-/// Collected rather than streamed: every command here is bounded already, and
-/// [`ExecResult`] holds the output whole, so a stream would give nothing back.
 pub fn parse_events(body: &[u8]) -> Result<ExecResult> {
     let mut result = ExecResult::default();
     let mut ended = false;
@@ -207,8 +167,7 @@ pub fn parse_events(body: &[u8]) -> Result<ExecResult> {
 
         if let Some(end) = event.get("end") {
             ended = true;
-            // Absent means zero: proto3 JSON leaves out a default, so a clean
-            // exit carries no exitCode at all.
+            // proto3 JSON omits a zero exitCode.
             result.code = end.get("exitCode").and_then(Value::as_i64).unwrap_or(0) as i32;
 
             if let Some(detail) = end.get("error").and_then(Value::as_str) {
@@ -223,12 +182,7 @@ pub fn parse_events(body: &[u8]) -> Result<ExecResult> {
     ))
 }
 
-/// The end-of-stream envelope, which reports the stream rather than the
-/// process.
-///
-/// A deadline is the one failure worth keeping as a result: the command really
-/// did run and really was cut off, and a caller that only reads the code needs
-/// to see that rather than a transport fault.
+/// A deadline is kept as a result: the command ran and was cut off.
 fn finish(mut result: ExecResult, ended: bool, message: &Value) -> Result<ExecResult> {
     let Some(error) = message.get("error") else {
         return match ended {
@@ -258,10 +212,6 @@ fn finish(mut result: ExecResult, ended: bool, message: &Value) -> Result<ExecRe
     Err(Error::transport(format!("{code}: {detail}"), false))
 }
 
-/// The boundary and body of a one-part upload.
-///
-/// Hand-built because envd wants exactly one part and a multipart crate would
-/// arrive with a MIME database behind it.
 pub fn multipart(filename: &str, bytes: &[u8], boundary: &str) -> Vec<u8> {
     let mut body = Vec::with_capacity(bytes.len() + 256);
 
@@ -277,10 +227,6 @@ pub fn multipart(filename: &str, bytes: &[u8], boundary: &str) -> Vec<u8> {
     body
 }
 
-/// Everything outside the unreserved set, escaped.
-///
-/// Deliberately strict: a path or a name that needs no escaping is unchanged,
-/// and anything else is encoded rather than guessed at.
 pub fn escape(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
 

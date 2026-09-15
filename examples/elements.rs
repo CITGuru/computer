@@ -1,8 +1,4 @@
-//! Find things on a page and act on them by name.
-//!
-//! ```bash
 //! cargo run --example elements -- <box>
-//! ```
 
 use computer::{Button, Computer, Reading};
 use std::time::Duration;

@@ -1,10 +1,3 @@
-//! What an agent is offered, and what it gets back.
-//!
-//! Every tool that moves the screen answers with the frame it produced, as an
-//! image rather than as a hash. An agent that has to ask for a screenshot after
-//! every click spends two round trips on one step, and the second one is where
-//! it forgets to look.
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
@@ -16,7 +9,6 @@ use computer_client::{Client, captured_image, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
 use serde_json::{Value, json};
 
-/// What a tool call answers with: text a model reads, or a picture it looks at.
 #[derive(Debug)]
 pub enum Answer {
     Text(String),
@@ -24,15 +16,11 @@ pub enum Answer {
         text: String,
         png: Vec<u8>,
     },
-    /// A picture that is not the screen, so it says what it is: a whole-page
-    /// capture answers JPEG where the screen is always PNG.
     Drawn {
         text: String,
         image: Vec<u8>,
         mime: &'static str,
     },
-    /// A refusal the model reads and acts on, with the screen it was refused
-    /// on where there is one.
     Failed {
         text: String,
         png: Option<Vec<u8>>,
@@ -801,11 +789,6 @@ fn box_only() -> Value {
     })
 }
 
-/// [`with_frame`], and which page to act on.
-///
-/// Only for the tools that reach a page. A coordinate click reaches the screen,
-/// which shows whatever tab is in front, so naming one there would promise
-/// something it cannot do.
 fn with_page(mut properties: Value, required: &[&str]) -> Value {
     if let Some(map) = properties.as_object_mut() {
         map.insert("tab".to_string(), tab_field());
@@ -814,8 +797,6 @@ fn with_page(mut properties: Value, required: &[&str]) -> Value {
     with_frame(properties, required)
 }
 
-/// [`with_box`], and which page to act on, for a tool that answers with no
-/// screen of its own.
 fn with_tab(mut properties: Value, required: &[&str]) -> Value {
     if let Some(map) = properties.as_object_mut() {
         map.insert("tab".to_string(), tab_field());
@@ -832,11 +813,6 @@ fn tab_field() -> Value {
     })
 }
 
-/// [`with_box`], and the hash of the picture the caller already holds.
-///
-/// For the tools that answer with the screen. Passing back the hash from the
-/// last answer turns an unmoved screen into a line of text instead of an image
-/// the caller is already looking at.
 fn with_frame(mut properties: Value, required: &[&str]) -> Value {
     if let Some(map) = properties.as_object_mut() {
         map.insert(
@@ -885,8 +861,6 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
         }
         "screenshot" => {
             let id = text(arguments, "box_id")?;
-            // No mode here: asking for the screen and asking for no screen is
-            // a contradiction, and `never` on this tool would answer nothing.
             let frame = client
                 .capture(&id, 0, &framing(arguments)?, have(arguments).as_deref())
                 .await
@@ -970,9 +944,6 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 })
                 .unwrap_or_default();
 
-            // No settle of its own: the launch already waited for the app to
-            // stop drawing, and a second wait on top would be paid for
-            // nothing.
             act(
                 client,
                 arguments,
@@ -1090,8 +1061,6 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             let was = client.get(&id).await.map_err(|e| e.to_string())?;
             let found = client.resume(&id).await.map_err(|e| e.to_string())?;
 
-            // Which it was decides what is on the screen, so it is said rather
-            // than left for the model to assume.
             if was.state != BoxState::Stopped {
                 return Ok(Answer::Text(format!("{id} is awake, as you left it")));
             }
@@ -1202,7 +1171,6 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .map(|n| n as usize);
 
             let role = arguments.get("role").and_then(Value::as_str);
-            // One or the other: a role is the query, expanded by the server.
             let query = match arguments.get("query").and_then(Value::as_str) {
                 Some(query) => query.to_string(),
                 None if role.is_some() => String::new(),
@@ -1242,8 +1210,6 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                                 true => String::new(),
                                 false => format!(" {:?}", one.text),
                             },
-                            // Only where it adds something: a button whose
-                            // label is its words would say it twice.
                             match one.label.as_deref() {
                                 Some(label) if label != one.text => format!(" [{label}]"),
                                 _ => String::new(),
@@ -1258,15 +1224,11 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                             },
                             one.width,
                             one.height,
-                            // The states say it where there are any, so a
-                            // bare `disabled` would be said twice.
                             match (one.enabled, one.states.is_empty()) {
                                 (false, true) => "  disabled".to_string(),
                                 (_, false) => format!("  [{}]", one.states.join(" ")),
                                 _ => String::new(),
                             },
-                            // What to act by. Words can match more than one
-                            // thing; this matched exactly one when it was read.
                             match one.selector.as_deref() {
                                 Some(selector) => format!("  {selector}"),
                                 None => String::new(),
@@ -1421,7 +1383,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             act(
                 client,
                 arguments,
-                Action::Key {
+                Action::Press {
                     chord: text(arguments, "chord")?,
                     then: strings(arguments, "then"),
                     held: strings(arguments, "held")
@@ -1638,9 +1600,6 @@ async fn run(client: &Client, arguments: &Value) -> Result<Answer, String> {
     )))
 }
 
-/// Do the thing, let the screen settle, and hand back what it looks like now.
-/// One element operation, and a screenshot of what it did.
-/// One word per node, since an agent reads these rather than a JSON dump.
 fn said_node(node: &computer_api::Node) -> String {
     let where_ = match node.at {
         Some(at) => format!(" at {},{} {}x{}", at.x, at.y, node.width, node.height),
@@ -1730,8 +1689,6 @@ async fn widget(client: &Client, arguments: &Value) -> Result<Answer, String> {
         }));
     }
 
-    // A frame after acting, the same as every other tool that presses
-    // something: the caller's next move depends on what it did.
     let did = match (&result.node, &result.action) {
         (Some(node), Some(action)) => format!("{action} on {}", said_node(node)),
         (Some(node), None) => said_node(node),
@@ -1881,9 +1838,7 @@ async fn element(
 ) -> Result<Answer, String> {
     let id = text(arguments, "box_id")?;
 
-    // The same pause the coordinate tools take. Without it the URL and the
-    // frame below are the page on its way rather than the page it reached,
-    // which made the element tools less reliable than the ones they replace.
+    // Without the settle, the URL and frame are the page mid-navigation.
     let settle_ms = match &what {
         OnElement::WaitFor { .. } | OnElement::Options { .. } => 0,
         _ => SETTLE_MS,
@@ -1895,8 +1850,6 @@ async fn element(
 
     let result = match client.on_element(&id, &what, settle_ms, tab).await {
         Ok(result) => result,
-        // Nothing was captured with it, so the screen is asked for here. The
-        // settle was already paid by the call that failed.
         Err(why) => {
             let png = match how.wanted() {
                 true => screen_now(client, &id).await,
@@ -1920,8 +1873,6 @@ async fn element(
         (None, None) => did.to_string(),
     };
 
-    // Where it left the page. A click that navigated and one that did nothing
-    // read the same without this.
     let said = match (&result.url, result.navigated) {
         (Some(url), true) => format!("{said} — {url}"),
         (Some(_), false) => format!("{said} — the page did not move"),
@@ -1933,9 +1884,6 @@ async fn element(
         None => said,
     };
 
-    // The frame it produced, like every other tool that moves the screen: an
-    // agent that has to ask for one after each step spends two round trips on
-    // one, and forgets to look on the second.
     if !how.wanted() {
         return Ok(Answer::Text(said));
     }
@@ -1945,7 +1893,6 @@ async fn element(
     Ok(framed(&said, frame.as_ref()))
 }
 
-/// The screen, for an answer that has none of its own.
 async fn screen_now(client: &Client, id: &str) -> Option<Vec<u8>> {
     client
         .frame(id, 0, None)
@@ -1971,9 +1918,7 @@ async fn act(
             &ActionBatch {
                 actions: vec![action],
                 settle_ms: Some(settle_ms),
-                // Cursor either way. A screenshot does not draw the pointer,
-                // and a click with no point of its own goes wherever it is, so
-                // an agent that cannot read it is aiming blind.
+                // A screenshot does not draw the pointer.
                 want: match how.wanted() {
                     true => vec![Want::Frame, Want::Cursor],
                     false => vec![Want::Cursor],
@@ -1993,8 +1938,6 @@ async fn act(
             .map(|error| error.message.clone())
             .unwrap_or_else(|| "it was refused".to_string());
 
-        // The batch already captured one, after its settle. A refusal is when a
-        // caller most wants to see the screen and least wants a second call.
         return Ok(Answer::Failed {
             text: why,
             png: result
@@ -2047,8 +1990,6 @@ fn framing(arguments: &Value) -> Result<Shot, String> {
             width,
             height,
         }),
-        // Half a rectangle would be read as a corner and a guess, and
-        // answered with a picture of the wrong thing.
         _ => return Err("a rectangle takes x, y, width and height together".to_string()),
     };
 
@@ -2101,21 +2042,12 @@ fn button(arguments: &Value) -> Button {
     }
 }
 
-/// What a click, a fill or a history step is given to finish in.
-///
-/// The same as the coordinate tools take, because the same page is settling.
 const SETTLE_MS: u64 = 600;
 
-/// When an answer carries the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shots {
-    /// The screen when it moved, and whenever something was refused. A screen
-    /// the caller already holds costs a hash — see `have_frame`.
     Auto,
-    /// Every time, even where nothing moved.
     Always,
-    /// Never. The screen is not captured at all, so it costs nothing either
-    /// end.
     Never,
 }
 
@@ -2124,8 +2056,6 @@ impl Shots {
         !matches!(self, Self::Never)
     }
 
-    /// Whether the caller's hash is worth sending. Under `Always` it is not:
-    /// answering `unchanged` is exactly what it asked not to happen.
     fn deduped(&self) -> bool {
         matches!(self, Self::Auto)
     }
@@ -2142,7 +2072,6 @@ fn shots(arguments: &Value) -> Result<Shots, String> {
     }
 }
 
-/// The hash the caller says it already has.
 fn have(arguments: &Value) -> Option<String> {
     if !shots(arguments).is_ok_and(|how| how.deduped()) {
         return None;
@@ -2155,11 +2084,6 @@ fn have(arguments: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// What an answer carries: the picture, or a note that it is the one the caller
-/// already has.
-///
-/// The hash goes in either way. Without it in the answer there is nothing for
-/// the caller to pass back, and every step pays for an image again.
 fn framed(said: &str, frame: Option<&Frame>) -> Answer {
     let Some(frame) = frame else {
         return Answer::Text(said.to_string());
@@ -2343,7 +2267,6 @@ mod tests {
             assert!(takes_tab.contains(&page_tool), "{page_tool} reaches a page");
         }
 
-        // A coordinate reaches the screen, which shows whatever is in front.
         for screen_tool in ["click", "type_text", "press_key", "scroll", "drag"] {
             assert!(
                 !takes_tab.contains(&screen_tool),
@@ -2351,9 +2274,6 @@ mod tests {
             );
         }
 
-        // The one screen tool that takes a tab, and no contradiction: it
-        // raises the page before capturing rather than reaching into one that
-        // is not in front.
         assert!(takes_tab.contains(&"screenshot"));
     }
 
@@ -2387,7 +2307,6 @@ mod tests {
 
     #[test]
     fn test_always_does_not_send_the_hash() {
-        // Sending it invites `unchanged`, which is what `always` asked against.
         assert!(have(&json!({ "screenshot": "always", "have_frame": "abc" })).is_none());
         assert_eq!(
             have(&json!({ "screenshot": "auto", "have_frame": "abc" })),
@@ -2504,7 +2423,6 @@ mod tests {
             vec!["sold out".to_string(), "unavailable".to_string()]
         );
         assert!(strings(&given, "absent").is_empty());
-        // Not an array, so nothing rather than a panic.
         assert!(strings(&given, "n").is_empty());
     }
 
@@ -2528,8 +2446,6 @@ mod tests {
     #[test]
     fn test_a_tool_that_needs_a_box_says_so() {
         let listed = catalogue();
-        // The three that ask the server rather than a box: two list what it
-        // holds, and one lists what it can install.
         let serverwide = ["launch_box", "list_boxes", "list_apps"];
 
         for one in listed.as_array().expect("a list") {

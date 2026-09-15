@@ -1,24 +1,3 @@
-//! Driving a Wayland compositor, wherever it is running.
-//!
-//! The same shape as [`crate::servers::x11`], against a display server that refuses
-//! three things X11 allowed.
-//!
-//! Synthetic input is a compositor privilege, so there is no `xdotool`. The
-//! image supplies `computer-input`, which reaches sway's IPC for the pointer
-//! and `wtype` for the keyboard; neither needs `/dev/uinput`, so the box keeps
-//! the isolation it started with.
-//!
-//! There is no root window to capture, so `grim` asks the compositor.
-//!
-//! No client can read the global pointer position, so this driver remembers
-//! where it put the pointer and refuses to answer once a person has driven the
-//! screen. See [`WaylandDesktop::cursor`].
-//!
-//! # Coordinates
-//!
-//! Device pixels, top-left origin, against the frame the last screenshot
-//! returned, as everywhere else in this crate.
-
 mod profile;
 
 pub use profile::WaylandProfile;
@@ -36,18 +15,10 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// The command the image installs for every input it accepts.
 pub const INPUT_COMMAND: &str = "computer-input";
 
-/// What every compositor in this image calls its socket.
-///
-/// One name for all of them: a compositor is reached through the directory
-/// holding the socket, so the separation is the directory.
 pub const DISPLAY_NAME: &str = "wayland-1";
 
-/// The runtime directory screen *i*'s compositor lives in.
-///
-/// One per screen. Two sharing a directory would fight for one socket name.
 pub fn runtime_dir(screen: ScreenId) -> String {
     format!("/tmp/computer/run-{}", screen.0 + 1)
 }
@@ -56,9 +27,6 @@ fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| (*part).to_string()).collect()
 }
 
-/// What `computer-pointer` calls a mouse button.
-///
-/// A name rather than a Linux event code, so `0x110` lives in one place.
 fn button_name(button: Button) -> &'static str {
     match button {
         Button::Left => "left",
@@ -67,14 +35,10 @@ fn button_name(button: Button) -> &'static str {
     }
 }
 
-/// `wtype`'s name for a key, as a caller is likely to name it.
-///
-/// `wtype -k` takes an xkb keysym, the same vocabulary `xdotool` takes.
 pub fn keysym(key: &str) -> String {
     crate::servers::x11::keysym(key)
 }
 
-/// Whether a key names a modifier `wtype` can hold down.
 fn modifier(key: &str) -> Option<&'static str> {
     match key.to_ascii_lowercase().as_str() {
         "ctrl" | "control" => Some("ctrl"),
@@ -85,9 +49,6 @@ fn modifier(key: &str) -> Option<&'static str> {
     }
 }
 
-/// Turn a chord such as `ctrl+shift+p` into the `wtype` arguments for it.
-///
-/// `wtype` has no chord syntax: `-M` holds a modifier, `-m` releases it.
 pub fn chord(input: &str) -> Vec<String> {
     let parts: Vec<&str> = input
         .split('+')
@@ -111,7 +72,6 @@ pub fn chord(input: &str) -> Vec<String> {
         args.push("-k".to_string());
         args.push(key.clone());
     }
-    // Released in reverse, so the last one held is the first one let go.
     for name in held.iter().rev() {
         args.push("-m".to_string());
         args.push((*name).to_string());
@@ -129,26 +89,7 @@ fn point_parts(at: Point) -> Vec<String> {
     vec![at.x.to_string(), at.y.to_string()]
 }
 
-/// A signed count of wheel notches, negative for up.
-///
-/// The protocol takes a direction and a distance, so there is no button 4
-/// and 5 here.
-/// Down then right, as one run: `computer-pointer` sends both axes from one
-/// virtual device, and two runs are two devices far enough apart to read as
-/// two gestures.
-/// `grim`, cropped and scaled as it captures. This image carries no
-/// ImageMagick, so these flags are the only way to ask for either.
-/// The arrow drawn where this driver last put the pointer.
-///
-/// Not `grim -c`, which asks the compositor to overlay its own cursor and
-/// finds none: a synthetic move arrives as a virtual-pointer device that lives
-/// for the length of one command, so the seat holds no pointer between them.
-/// Measured — the flag is accepted and the PNG comes back byte for byte the
-/// same.
-///
-/// Through a shell, because `grim` writes a picture and `convert` draws on
-/// one, and nothing here reads a Wayland screen and draws in a single run.
-/// Only integers reach the command, so there is nothing in it to quote.
+/// Not `grim -c`: a synthetic pointer lives for one command, so the seat has no cursor to draw.
 fn pointing_argv(at: Point, area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
     let mut draw = vec![
         "convert".to_string(),
@@ -166,10 +107,6 @@ fn pointing_argv(at: Point, area: Option<Rect>, scale: Option<u32>) -> Vec<Strin
         .collect()
 }
 
-/// White on black, so it reads against a dark desktop and against text.
-///
-/// The same shape the X11 driver draws, so one desktop does not answer with a
-/// pointer the other would not.
 fn pointer_argv(at: Point) -> Vec<String> {
     let (x, y) = (i64::from(at.x), i64::from(at.y));
     let arrow = [
@@ -194,14 +131,11 @@ fn pointer_argv(at: Point) -> Vec<String> {
         "-fill".to_string(),
         "white".to_string(),
         "-draw".to_string(),
-        // Quoted for the shell this is joined into: the polygon carries
-        // spaces, and unquoted it would arrive as seven arguments.
+        // Joined into a shell line, and the polygon carries spaces.
         format!("'polygon {arrow}'"),
     ]
 }
 
-/// `grim` crops and scales as it captures; `convert` needs telling in its own
-/// flags, and after the arrow, whose position is in screen coordinates.
 fn shaping_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
     let mut args = Vec::new();
 
@@ -234,21 +168,17 @@ fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
         ));
     }
     if let Some(scale) = scale {
-        // grim takes a factor where the rest of this takes a percentage, and
-        // its default is the output's own scale rather than 1.
         args.push("-s".to_string());
         args.push(format!("{:.4}", f64::from(scale) / 100.0));
     }
 
-    // PNG bytes straight out of stdout, as with the X11 image's `import`.
     args.push("-".to_string());
     args
 }
 
 fn scroll_argv(at: Point, by: Delta) -> Vec<String> {
     let mut parts = point_parts(at);
-    // A delta with no distance in it is still a scroll: one notch down, which
-    // is the only thing a caller that named neither axis can have meant.
+    // A zero delta still scrolls one notch down.
     parts.push(notches(by.dy, by.dx == 0).to_string());
     parts.push(notches(by.dx, false).to_string());
     input_argv("scroll", &parts)
@@ -266,17 +196,12 @@ fn notches(delta: i32, floor: bool) -> i32 {
     }
 }
 
-/// Where the pointer was last put, and which takeover that was true under.
-///
-/// A person on the input moves a pointer this driver did not move, so the
-/// remembered position stops being an answer once one has driven.
 #[derive(Debug, Clone, Copy)]
 struct Tracked {
     at: Point,
     takeovers: u64,
 }
 
-/// One screen, driven through a compositor.
 pub struct WaylandDesktop {
     host: Arc<dyn ScreenHost>,
     screen: ScreenId,
@@ -294,7 +219,6 @@ impl WaylandDesktop {
         }
     }
 
-    /// Share a gate, so a takeover started elsewhere stops this driver too.
     pub fn with_control(mut self, control: Arc<ControlGate>) -> Self {
         self.control = control;
         self
@@ -319,8 +243,6 @@ impl WaylandDesktop {
         Ok(result)
     }
 
-    /// A capture, refused rather than returned empty: a zero-byte PNG reaches
-    /// a caller as a picture of nothing rather than as a failure.
     async fn grim(&self, args: Vec<String>) -> Result<Vec<u8>> {
         let result = self.run(args).await?;
 
@@ -330,15 +252,11 @@ impl WaylandDesktop {
         Ok(result.stdout)
     }
 
-    /// Every input path, and the only place the takeover rule is applied here.
-    ///
-    /// Reads do not come through it: a run may watch and may not act.
     async fn act(&self, args: Vec<String>) -> Result<()> {
         self.control.may_act()?;
         self.run(args).await.map(|_| ())
     }
 
-    /// Record where the pointer now is, against the takeover it is true under.
     fn moved_to(&self, at: Point) {
         if let Ok(mut pointer) = self.pointer.lock() {
             *pointer = Some(Tracked {
@@ -395,21 +313,21 @@ impl Desktop for WaylandDesktop {
         Ok(())
     }
 
+    /// `wtype -s` sleeps once before the first key, not between keys, so pace is ignored.
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
-        let mut parts = Vec::new();
-
         if let Some(delay) = delay {
-            parts.push("--delay".to_string());
-            parts.push(delay.as_millis().to_string());
+            tracing::warn!(
+                asked_ms = delay.as_millis() as u64,
+                "this desktop types at one speed; the text is going out at full speed"
+            );
         }
-        parts.push(text.to_string());
 
-        self.act(input_argv("type", &parts)).await
+        self.act(input_argv("type", &[text.to_string()])).await
     }
 
-    /// One `wtype` run, as the X11 driver uses one `xdotool` run: the hold has
-    /// to outlive each key, and a process per key would release it between.
-    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
+    /// One `wtype` run: a process per key would release the hold between keys.
+    /// Held shift reaches apps as a modifier, so `a` stays `a` where X11 gives `A`.
+    async fn press(&self, chords: &[String], held: &[Held]) -> Result<()> {
         let mut parts = Vec::new();
 
         for one in held {
@@ -419,7 +337,6 @@ impl Desktop for WaylandDesktop {
         for one in chords {
             parts.extend(chord(one));
         }
-        // Released in reverse, so the last one held is the first one let go.
         for one in held.iter().rev() {
             parts.push("-m".to_string());
             parts.push(one.keysym().to_string());
@@ -434,12 +351,6 @@ impl Desktop for WaylandDesktop {
         Ok(())
     }
 
-    /// Where this driver last put the pointer.
-    ///
-    /// Wayland reports no global pointer position to any client, so this is
-    /// remembered rather than read, and refused once a person has driven.
-    /// Bounded by the box's own command timeout, so a `within` longer than
-    /// that ends as a transport failure rather than as this one's answer.
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
         let watched = self
             .run(still_argv("grim -t png - 2>/dev/null", settle, within))
@@ -456,8 +367,6 @@ impl Desktop for WaylandDesktop {
         a11y::find(&self.host, self.screen, query, limit).await
     }
 
-    /// Through the takeover gate: pressing a widget is input, whatever it
-    /// travelled over to get there.
     async fn focus_node(&self, query: &NodeQuery) -> Result<Node> {
         self.control.may_act()?;
         a11y::focus(&self.host, self.screen, query).await
@@ -492,16 +401,7 @@ impl Desktop for WaylandDesktop {
         }
     }
 
-    /// Puts the pointer in the middle and answers with that, where the tally
-    /// says nothing.
-    ///
-    /// Nothing here can read the position, so the only way to know it is to
-    /// set it. Not a nudge: a small move from an unknown place lands in
-    /// another unknown place. The middle is somewhere a caller can predict.
-    ///
-    /// Once per box, and again only after a person has driven the screen.
-    /// During one this refuses, as moving their pointer would be worse than
-    /// not answering.
+    /// Moves the pointer to the middle when its position is unknown, since nothing can read it.
     async fn find_cursor(&self) -> Result<Point> {
         if let Ok(at) = self.cursor().await {
             return Ok(at);
@@ -519,8 +419,6 @@ impl Desktop for WaylandDesktop {
             .run(argv(&[
                 "bash",
                 "-c",
-                // The compositor's own idea of the size: coordinates are
-                // against the screen that came up.
                 "grim -t png - | head -c 24 | od -An -tu1 -j16 -N8",
             ]))
             .await?;
@@ -529,9 +427,7 @@ impl Desktop for WaylandDesktop {
             .ok_or_else(|| Error::denied("the screen geometry could not be read"))
     }
 
-    /// Asked of the compositor rather than of a socket file: one that died
-    /// leaves the file behind, and every check that reads configuration passes
-    /// while the first screenshot fails.
+    /// Asks the compositor, since a dead one leaves its socket file behind.
     async fn alive(&self) -> Result<()> {
         let sockfile = format!("/tmp/computer/screen-{}.sway", self.screen.0);
         let mut args = argv(&["bash", "-c"]);
@@ -554,8 +450,6 @@ impl Desktop for WaylandDesktop {
     }
 }
 
-/// `wl-copy` and `wl-paste` name the primary selection with a flag rather than
-/// with a name, so there is nothing to pass for the clipboard.
 fn selection_flag(selection: Selection) -> &'static [&'static str] {
     match selection {
         Selection::Clipboard => &[],
@@ -563,15 +457,12 @@ fn selection_flag(selection: Selection) -> &'static [&'static str] {
     }
 }
 
-/// Whether a failure means nothing owns the selection.
 fn empty_selection(stderr: &str) -> bool {
     stderr.contains("No selection")
 }
 
 #[async_trait]
 impl Clipboard for WaylandDesktop {
-    /// `-n` drops the trailing newline `wl-paste` adds, so what
-    /// comes back is what was copied.
     async fn text(&self, selection: Selection) -> Result<String> {
         let mut args = argv(&["wl-paste", "-n"]);
         args.extend(argv(selection_flag(selection)));
@@ -583,21 +474,13 @@ impl Clipboard for WaylandDesktop {
         }
     }
 
-    /// `wl-copy` forks and holds the selection itself, so unlike `xclip` this
-    /// needs no detaching.
-    ///
-    /// The path is a positional argument rather than part of the command, so a
-    /// space or a quotation mark in it cannot become shell syntax.
+    /// The path is `$0`, so no character in it can become shell syntax.
     async fn set_from(&self, selection: Selection, path: &str) -> Result<()> {
         let mut args = argv(&["bash", "-c", "wl-copy \"$@\" < \"$0\"", path, "--"]);
         args.extend(argv(selection_flag(selection)));
         self.act(args).await
     }
 
-    /// The selection as one of the types its owner offers, returned raw.
-    ///
-    /// Raw, because a picture through a `String` loses every byte that is not
-    /// valid UTF-8.
     async fn bytes(&self, selection: Selection, target: &str) -> Result<Vec<u8>> {
         let mut args = argv(&["wl-paste"]);
         args.extend(argv(selection_flag(selection)));
@@ -619,8 +502,6 @@ impl Clipboard for WaylandDesktop {
         self.act(args).await
     }
 
-    /// `-l` lists the types, one per line — the same question `TARGETS` asks
-    /// an X selection.
     async fn targets(&self, selection: Selection) -> Result<Vec<String>> {
         let mut args = argv(&["wl-paste", "-l"]);
         args.extend(argv(selection_flag(selection)));
@@ -640,9 +521,6 @@ impl Clipboard for WaylandDesktop {
     }
 }
 
-/// The size out of a PNG's header, as `od` prints those bytes.
-///
-/// Eight big-endian bytes: four of width, four of height.
 pub fn parse_png_size(output: &str) -> Option<(u32, u32)> {
     let bytes: Vec<u32> = output
         .split_whitespace()
@@ -675,8 +553,6 @@ impl DesktopFactory for WaylandDriver {
 mod tests {
     use super::*;
 
-    /// A host that reaches no box, so a call that needs one is told apart
-    /// from one that answered out of the driver's own state.
     struct NoHost;
 
     #[async_trait]
@@ -696,9 +572,6 @@ mod tests {
              and a click with no point of its own, both come through here"
         );
 
-        // And `find_cursor` does move it, which is why the two are separate.
-        // It reaches the host, which this one refuses, so the failure it gives
-        // back is the move rather than the empty tally.
         let reached = desktop.find_cursor().await.expect_err("no host here");
         assert!(
             !reached.to_string().contains("before the first move"),
@@ -799,7 +672,6 @@ mod tests {
 
     #[test]
     fn test_scrolling_up_is_a_negative_count_and_down_a_positive_one() {
-        // The two counts come last, down before right.
         assert_eq!(tail(Delta::up(3)), ["-3", "0"]);
         assert_eq!(tail(Delta::down(3)), ["3", "0"]);
     }
@@ -820,7 +692,6 @@ mod tests {
         assert_eq!(tail(Delta { dx: 2, dy: 3 }), ["3", "2"]);
     }
 
-    /// The two notch counts a scroll ends with.
     fn tail(by: Delta) -> [String; 2] {
         let args = scroll_argv(Point::new(5, 5), by);
         let mut last = args.iter().rev().take(2);
@@ -849,7 +720,6 @@ mod tests {
 
     #[test]
     fn test_a_size_is_read_out_of_the_frames_own_header() {
-        // 1280x800, as od prints those eight bytes.
         assert_eq!(
             parse_png_size(" 0 0 5 0 0 0 3 32\n"),
             Some((1280, 800)),

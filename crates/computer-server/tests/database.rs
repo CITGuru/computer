@@ -1,5 +1,3 @@
-//! That a database holds what a directory does.
-
 #![cfg(feature = "sqlite")]
 
 use computer_api::{Actor, TraceEvent};

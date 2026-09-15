@@ -1,5 +1,3 @@
-//! Boxes that outlived the server.
-
 use crate::AppState;
 use crate::spec;
 use computer::sandboxes::remote::{self, RemoteApi};
@@ -9,8 +7,6 @@ use computer_storage::BoxRecord;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// What a box says it is, written where the runtime keeps it rather than where
-/// this process does.
 pub const BOX_LABEL: &str = "computer.server.box";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,9 +20,6 @@ pub struct BoxLabel {
 }
 
 impl BoxLabel {
-    /// A label value, or `None` where it would not serialise — a box that
-    /// cannot describe itself is still worth starting, it just will not come
-    /// back after a restart.
     pub fn encode(&self) -> Option<String> {
         serde_json::to_string(self).ok()
     }
@@ -36,8 +29,6 @@ impl BoxLabel {
     }
 }
 
-/// A box placed on a runtime nobody asks about stays lost, so the list is
-/// configurable rather than assumed.
 pub fn runtimes() -> Vec<String> {
     listed(std::env::var("COMPUTER_SERVER_RUNTIMES").ok().as_deref())
 }
@@ -121,8 +112,6 @@ fn vendor(name: &str) -> Option<Arc<dyn RemoteApi>> {
     None
 }
 
-/// Never fails: a runtime that is not installed is not an error at startup, and
-/// a box that will not come back must not stop the ones that will.
 pub async fn adopt(state: &AppState, runtimes: &[String], sandboxes: &[String]) -> usize {
     let mut places: Vec<Place> = runtimes.iter().cloned().map(Place::Runtime).collect();
     places.extend(
@@ -166,8 +155,6 @@ pub async fn adopt_from(state: &AppState, places: &[Place]) -> usize {
     taken
 }
 
-/// Not an `ApiError`: nothing here is answering a request, and the only reader
-/// is the log.
 async fn adopt_one(
     state: &AppState,
     place: &Place,
@@ -181,9 +168,7 @@ async fn adopt_one(
 
     let (machine, profile) = place.driving(label.spec.desktop.server);
 
-    // A paused box reports no ports at all — not through `port`, not through
-    // `inspect`. It has them, and everything below builds its URLs from them,
-    // so it is woken long enough to be read and then put back as it was.
+    // A paused box reports no ports, so it is woken long enough to read them.
     let frozen = machine.paused(name).await.unwrap_or(false);
     if frozen {
         machine
@@ -192,9 +177,7 @@ async fn adopt_one(
             .map_err(|error| format!("it is paused and would not wake to be read: {error}"))?;
     }
 
-    // A stopped box is taken back too. It is listed here because it still
-    // exists, and forgetting it would leave it on the disk with nothing left
-    // that knows how to start it.
+    // Stopped boxes too, or they stay on disk with nothing that can start them.
     let running = machine.running(name).await.unwrap_or(false);
     let taken = match running {
         true => Computer::attach_using(Arc::clone(&machine), name, profile, None).await,
@@ -202,7 +185,6 @@ async fn adopt_one(
     };
 
     if frozen {
-        // Back to how it was found, whether or not it could be picked up.
         let _ = machine.pause(name).await;
     }
 

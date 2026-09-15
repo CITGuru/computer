@@ -1,17 +1,7 @@
-//! Drive a search in a cloud sandbox, then give the screen to a person.
-//!
 //! ```text
 //! export E2B_API_KEY=...
 //! cargo run --features e2b --example e2b_takeover -- <template-id> [query]
 //! ```
-//!
-//! The box is left running and the takeover is left open, because the point of
-//! it is somebody opening the URL after this program has gone. Nothing here
-//! refreshes the deadline once it exits, so the sandbox goes away on its own.
-//!
-//! Ends with the gate closed: the takeover token lives in the box, so the
-//! program's own input is refused from here on and the person has the keyboard
-//! to themselves.
 
 use computer::sandboxes::e2b::{self, cloud::Cloud};
 use computer::{Button, Computer, Point, X11Profile};
@@ -51,14 +41,12 @@ async fn main() -> computer::Result<()> {
     tokio::time::sleep(Duration::from_secs(6)).await;
     save(&computer, "google-1-loaded.png").await?;
 
-    // The search field takes focus on load, so the text goes to it without a
-    // click — and a click would need a coordinate off a screenshot nobody has
-    // looked at yet.
-    computer.type_text(&query, None).await?;
+    // The search field takes focus on load, so no click is needed.
+    computer.type_text(&query).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     save(&computer, "google-2-typed.png").await?;
 
-    computer.key(&["Return".into()], &[]).await?;
+    computer.press("Return").await?;
     tokio::time::sleep(Duration::from_secs(5)).await;
     save(&computer, "google-3-results.png").await?;
     println!("  searched for {query:?}");
@@ -70,8 +58,6 @@ async fn main() -> computer::Result<()> {
     );
     println!("  watch it  {}", computer.viewer_url().unwrap_or_default());
 
-    // Proof rather than a claim: the gate is closed here, and the box refuses
-    // this program's input even through a raw exec.
     let refused = computer.click(Point::new(10, 10), Button::Left).await;
     println!("\n  our own input is now refused: {}", refused.is_err());
 

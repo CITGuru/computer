@@ -1,13 +1,9 @@
-//! Records that are no longer worth their disk.
-
 use crate::AppState;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const EVERY: Duration = Duration::from_secs(60 * 60);
-/// How long a frame is kept. Long enough to see what just went wrong.
 pub const KEEP_FRAMES: Duration = Duration::from_secs(2 * 60 * 60);
-/// How long an entry is kept. Long enough to fork last week's box.
 pub const KEEP_ENTRIES: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -23,7 +19,6 @@ impl Swept {
     }
 }
 
-/// The windows, from the environment or the constants above.
 pub fn windows() -> (Duration, Duration) {
     (
         seconds("COMPUTER_KEEP_FRAMES_SECS").unwrap_or(KEEP_FRAMES),
@@ -63,7 +58,6 @@ pub fn spawn(state: Arc<AppState>, every: Duration) {
     });
 }
 
-/// Cutoffs rather than windows, so a pass is a function of its arguments.
 pub async fn once(state: &AppState, frames_before: u64, entries_before: u64) -> Swept {
     let mut swept = Swept::default();
 
@@ -110,7 +104,6 @@ pub async fn once(state: &AppState, frames_before: u64, entries_before: u64) -> 
     swept
 }
 
-/// A box with nothing left to say and no desktop still running.
 async fn forgettable(state: &AppState, id: &str) -> bool {
     if state.registry.get(id).await.is_ok() {
         return false;
@@ -152,12 +145,10 @@ mod tests {
         }
     }
 
-    /// A cutoff before everything written here, so nothing ages out.
     fn keep_all() -> u64 {
         cutoff(Duration::from_secs(60 * 60))
     }
 
-    /// A cutoff after everything written here, so it all does.
     fn keep_none() -> u64 {
         cutoff(Duration::ZERO) + 60_000
     }

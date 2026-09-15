@@ -1,10 +1,3 @@
-//! The container runtime, reached through its command line.
-//!
-//! `docker`, `podman` and `nerdctl` take the same arguments, so one
-//! implementation reaches all three without a client library or a socket path.
-//! Turning a [`Config`] into flags stays a pure function, testable with no
-//! daemon.
-
 use crate::ExecResult;
 use crate::bundle;
 use crate::error::{Error, Result};
@@ -17,11 +10,9 @@ use std::path::PathBuf;
 pub trait ContainerCli: Send + Sync {
     async fn run(&self, args: &[String]) -> Result<ExecResult>;
 
-    /// The program being run, for the message when it is missing.
     fn program(&self) -> &str;
 }
 
-/// The `docker` on this host — or `podman`, or `nerdctl`.
 #[derive(Debug, Clone)]
 pub struct SystemDocker {
     program: String,
@@ -46,9 +37,7 @@ impl ContainerCli for SystemDocker {
     async fn run(&self, args: &[String]) -> Result<ExecResult> {
         let output = tokio::process::Command::new(&self.program)
             .args(args)
-            // Killed with the future that owns it. A timeout drops that
-            // future, and the process would otherwise carry on with nobody
-            // reading it.
+            // A timeout drops the future; the process would otherwise run on unread.
             .kill_on_drop(true)
             .stdin(std::process::Stdio::null())
             .output()
@@ -74,72 +63,28 @@ impl ContainerCli for SystemDocker {
     }
 }
 
-/// How a box is started.
-///
-/// Held apart from the box itself so the flags are a pure function of it, and
-/// so a caller can print what would be run before anything runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
     pub image: String,
     pub width: u32,
     pub height: u32,
-    /// Off means `--network none`: a desktop with no way out.
     pub network: bool,
-    /// The ports inside the box to map onto free host ports.
-    ///
-    /// Numbers rather than a flag, because which ports exist is the image's
-    /// answer and this crate's images do not all use the same ones.
     pub publish: Vec<u16>,
-    /// Which addresses those ports answer on.
     pub bind: crate::Bind,
-    /// What the viewer asks of whoever connects.
     pub auth: crate::Auth,
-    /// The two doors' credentials, where the gate is not open.
-    ///
-    /// Minted at launch unless the caller supplied a pair. Never logged: the
-    /// whole of [`crate::Secret`] exists so that a `{:?}` on this struct does
-    /// not put a desktop on somebody's terminal.
     pub credentials: Option<crate::Credentials>,
-    /// The host to put in a viewer URL, where it is not the one bound.
-    ///
-    /// A box on every interface is reached at whatever name resolves here, and
-    /// nothing in this crate knows that name. Unset uses the bind's own
-    /// address, which is right for loopback and for nothing else.
     pub advertise: Option<String>,
     pub env: BTreeMap<String, String>,
     pub memory: Option<String>,
     pub cpus: Option<String>,
-    /// Chromium's shared memory. The image already passes
-    /// `--disable-dev-shm-usage`, so this is only for a caller who would
-    /// rather give it the memory than the workaround.
     pub shm_size: Option<String>,
-    /// A named volume to keep the browser's profiles in.
-    ///
-    /// A box is thrown away and its profiles go with it. Docker keeps a
-    /// *named* volume across `rm --volumes`, which is what removes a box here,
-    /// so two boxes given the same name are the same browser: logged into what
-    /// the last one logged into, with its history and its extensions.
-    ///
-    /// The whole profile rather than a session, so it holds what
-    /// [`crate::Session`] cannot — a device-bound key, a database too large to
-    /// carry. It never leaves this host, which a session does.
+    /// A named volume survives `rm --volumes`, so boxes given the same name share a browser.
     pub profiles: Option<String>,
     pub labels: BTreeMap<String, String>,
-    /// Packages to install into the image, which make it a different image.
     pub extras: bundle::Extras,
-    /// The bytes to build this image from, where this crate carries them.
-    ///
-    /// `None` is an image to fetch. Named rather than guessed from the tag, so
-    /// a caller's own `computer-desktop:mine` is not handed ours.
     pub bundle: Option<bundle::Bundle>,
-    /// A caller-owned Docker build context.
-    ///
-    /// Its content-derived tag is built when absent. This and [`Config::bundle`]
-    /// are mutually exclusive.
+    /// Mutually exclusive with [`Config::bundle`].
     pub image_dir: Option<PathBuf>,
-    /// What to run to bring the box up, where the place has no entrypoint.
-    ///
-    /// Empty where the image starts itself, which is every container.
     pub boot: Vec<String>,
 }
 
@@ -147,13 +92,9 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             image: bundle::DESKTOP.tag(),
-            // A bare configuration has no profile to ask. A builder replaces
-            // both from the one it was given.
             width: image::WIDTH,
             height: image::HEIGHT,
             network: true,
-            // Filled from the profile at launch: a bare configuration cannot
-            // know which ports an image it has not been told about serves.
             publish: Vec::new(),
             bind: crate::Bind::Loopback,
             auth: crate::Auth::Open,
@@ -177,18 +118,13 @@ fn arg(value: impl Into<String>) -> String {
     value.into()
 }
 
-/// Turn a configuration into `docker run` arguments.
-///
-/// A pure function on purpose: it decides what the box is allowed to do, and
-/// it is the one part that can be checked without starting anything.
 pub fn run_args(name: &str, config: &Config) -> Vec<String> {
     let mut args = vec![
         arg("run"),
         arg("--detach"),
         arg("--name"),
         arg(name),
-        // A screen that dies takes the container with it, so a box that looks
-        // healthy is one with a screen in it.
+        // A screen that dies takes the container with it.
         arg("--init"),
     ];
 
@@ -203,8 +139,6 @@ pub fn run_args(name: &str, config: &Config) -> Vec<String> {
     }
 
     for port in &config.publish {
-        // A free host port rather than the same number: two boxes on one
-        // machine both want 6080.
         args.push(arg("--publish"));
         args.push(format!("{}::{port}", config.bind.publish_prefix()));
     }
@@ -234,21 +168,13 @@ pub fn run_args(name: &str, config: &Config) -> Vec<String> {
         args.push(format!("{key}={value}"));
     }
 
-    // No command. The image's own entrypoint is the supervisor that brings up
-    // the X server, the window manager and the browser; replacing it with a
-    // sleep gives a container that answers exec and has no screen in it.
+    // No command: the image's entrypoint is the supervisor that brings up the screen.
     args.push(config.image.clone());
     args
 }
 
-/// Where the images keep their browser profiles.
-///
-/// One directory holding every screen's, so a box with three screens carries
-/// all three in one volume.
 pub const PROFILES: &str = "/home/computer/.browser-profiles";
 
-/// `docker port` output, as container port to host port.
-///
 /// A port bound on IPv4 and IPv6 appears twice; the first wins.
 pub fn parse_ports(output: &str) -> BTreeMap<u16, u16> {
     let mut found = BTreeMap::new();
@@ -283,7 +209,6 @@ pub fn parse_ports(output: &str) -> BTreeMap<u16, u16> {
 mod tests {
     use super::*;
 
-    /// Every value the given flag is passed, for a box started with `config`.
     fn values(config: &Config, flag: &str) -> Vec<String> {
         run_args("box", config)
             .windows(2)

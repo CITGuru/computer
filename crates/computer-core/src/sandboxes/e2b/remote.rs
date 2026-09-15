@@ -1,7 +1,3 @@
-//! E2B as [`crate::sandboxes::remote`] sees it: the part that is E2B's and
-//! nobody else's, which is a port that becomes a subdomain, a second token the
-//! seam has nowhere to put, and an image that is a template.
-
 use super::api::{E2bApi, Sandbox, SandboxPlan};
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
@@ -14,10 +10,7 @@ use std::time::Duration;
 
 pub struct E2bVendor {
     api: Arc<dyn E2bApi>,
-    /// ID to the sandbox as the control plane described it.
-    ///
-    /// [`remote::Sandbox`] carries one token; E2B needs two and a domain that
-    /// is not always `e2b.app`, so what does not fit lives here.
+    /// [`remote::Sandbox`] carries one token; E2B needs two and a domain.
     known: Mutex<BTreeMap<String, Sandbox>>,
 }
 
@@ -39,11 +32,6 @@ impl E2bVendor {
         }
     }
 
-    /// The whole description behind an ID.
-    ///
-    /// `create` and `find` record what they answered, so an ID this has never
-    /// seen is one no credential here can drive — [`Error::Gone`], rather than
-    /// a call refused for a reason nobody could act on.
     fn described(&self, sandbox: &remote::Sandbox) -> Result<Sandbox> {
         self.known
             .lock()
@@ -52,7 +40,6 @@ impl E2bVendor {
             .ok_or_else(|| Error::Gone(sandbox.id.clone()))
     }
 
-    /// A sandbox as the seam carries it.
     fn published(sandbox: &Sandbox, ports: &[u16]) -> remote::Sandbox {
         remote::Sandbox {
             id: sandbox.id.clone(),
@@ -88,9 +75,6 @@ impl RemoteApi for E2bVendor {
             })
             .await?;
 
-        // Asked for secure and not given a token: the proxy is gating nothing,
-        // so every published port answers to whoever has the URL. Said out
-        // loud because the alternative is a caller believing otherwise.
         if sandbox.traffic_token.is_none() {
             tracing::warn!(
                 sandbox = %sandbox.id,
@@ -104,11 +88,8 @@ impl RemoteApi for E2bVendor {
         Ok(Self::published(&sandbox, &plan.publish))
     }
 
-    /// A sandbox somebody else started, with the credentials that drive it.
-    ///
-    /// No endpoints: which ports the box serves is the image's answer, and
-    /// nothing here was told which image it was. It drives; it hands out no
-    /// viewer URL.
+    /// No endpoints: which ports the box serves depends on an image nothing
+    /// here was told.
     async fn find(&self, name: &str) -> Result<Option<remote::Sandbox>> {
         let Some(sandbox) = self.api.find(name).await? else {
             return Ok(None);
@@ -160,10 +141,6 @@ impl RemoteApi for E2bVendor {
         self.api.write(&self.described(sandbox)?, path, bytes).await
     }
 
-    /// E2B runs templates, and this crate builds container images.
-    ///
-    /// Refused with the way across rather than left to fail later as an
-    /// unknown template, which sends the caller looking for a typo.
     async fn ensure_image(&self, config: &Config) -> Result<()> {
         let Some(bundle) = config.bundle.as_ref().filter(|b| b.owns(&config.image)) else {
             return Ok(());

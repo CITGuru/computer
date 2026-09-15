@@ -1,5 +1,3 @@
-//! What the Wayland image offers, and how to talk to it.
-
 use super::WaylandDriver;
 use crate::bundle;
 use crate::desktop::DesktopFactory;
@@ -12,10 +10,6 @@ use crate::{DesktopSupport, Display, DisplayServer, ScreenAction, ScreenId};
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
-/// The Wayland image this crate carries: sway headless, chromium and wayvnc.
-///
-/// Its ports, verbs and screen numbering are the X11 image's, so swapping
-/// the image changes what is in the box and not how it is reached.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WaylandProfile;
 
@@ -93,13 +87,7 @@ impl Profile for WaylandProfile {
         Self::contract().geometry_from(environment)
     }
 
-    /// A compositor is reached through its socket and the directory that
-    /// holds it, where an X server is reached through a display number.
-    ///
-    /// The directory changes per screen and the socket name does not. A
-    /// Wayland socket is a file, so its name is only unique within one
-    /// directory; a screen number carried into the name is an X11 habit that
-    /// points every screen after the first at nothing.
+    /// A Wayland socket name is unique only within its directory, so each screen gets its own.
     fn screen_env(&self, screen: ScreenId) -> BTreeMap<String, String> {
         WaylandEnvironment.environment(screen)
     }

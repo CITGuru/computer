@@ -1,13 +1,7 @@
-//! Drive a box somebody else opened.
-//!
 //! ```text
 //! cargo run --example serve
 //! cargo run --example attach -- <box-name> pawrly.dev
 //! ```
-//!
-//! A box picked up this way keeps its windows, its browser profile and its
-//! files, and it is not taken away when this program ends: this process
-//! did not create it.
 
 use computer::Computer;
 use std::time::Duration;
@@ -30,17 +24,15 @@ async fn main() -> computer::Result<()> {
     );
 
     if !typed.is_empty() {
-        // A new tab and the address bar by keyboard, not by coordinates: a
-        // click at a guessed pixel lands wherever the window happens to be.
-        computer.key(&["ctrl+t".into()], &[]).await?;
+        computer.press("ctrl+t").await?;
         tokio::time::sleep(Duration::from_millis(600)).await;
 
-        computer.key(&["ctrl+l".into()], &[]).await?;
+        computer.press("ctrl+l").await?;
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        computer.type_text(&typed, None).await?;
+        computer.type_text(&typed).await?;
         tokio::time::sleep(Duration::from_millis(400)).await;
-        computer.key(&["enter".into()], &[]).await?;
+        computer.press("enter").await?;
         println!("  typed {typed:?} and pressed enter");
 
         tokio::time::sleep(Duration::from_secs(5)).await;

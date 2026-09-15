@@ -1,9 +1,3 @@
-//! Talking to a `computer-server`.
-//!
-//! Every endpoint is here, because REST being the complete surface is the
-//! promise the server makes — a client that had to reach past it for one verb
-//! would mean the promise was not kept.
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::*;
@@ -12,20 +6,15 @@ use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The server understood and refused, and said why.
     #[error("{}: {}", .0.code.as_str(), .0.message)]
     Refused(ErrorBody),
-    /// Never reached it, or it never finished.
     #[error("transport: {0}")]
     Transport(String),
-    /// It answered something this client cannot read, which is a version skew
-    /// rather than a refusal.
     #[error("{status} answered with {body}")]
     Unreadable { status: u16, body: String },
 }
 
 impl Error {
-    /// Whether sending it again could work.
     pub fn retryable(&self) -> bool {
         match self {
             Self::Refused(body) => body.retryable,
@@ -44,9 +33,6 @@ pub struct Client {
 }
 
 impl Client {
-    /// `http://127.0.0.1:8080`, with or without a trailing slash.
-    /// Which server this talks to, for a caller that resolved one rather than
-    /// naming it and has to say which it found.
     pub fn base(&self) -> &str {
         &self.base
     }
@@ -64,8 +50,6 @@ impl Client {
         self
     }
 
-    /// Checks what answered, not merely that something did: a client that
-    /// guesses a port has to tell this apart from whatever else is on it.
     pub async fn health(&self) -> Result<()> {
         let health: Health = self
             .send(reqwest::Method::GET, "/v1/health", None, &[])
@@ -108,9 +92,6 @@ impl Client {
             .await
     }
 
-    /// Takes the confirmation header for you: the caller reached for a method
-    /// called `delete`, which is the confirmation the header exists to get.
-    /// End every process, keeping the filesystem.
     pub async fn stop(&self, id: &str) -> Result<BoxView> {
         self.send(
             reqwest::Method::POST,
@@ -121,7 +102,6 @@ impl Client {
         .await
     }
 
-    /// Freeze the box, keeping its memory and its ports.
     pub async fn pause(&self, id: &str) -> Result<BoxView> {
         self.send(
             reqwest::Method::POST,
@@ -132,11 +112,7 @@ impl Client {
         .await
     }
 
-    /// Make the box usable again, whichever way it was put down.
-    ///
-    /// A paused box wakes as it was. A stopped one starts a fresh desktop on
-    /// new ports, so read the URLs out of the answer rather than reusing any
-    /// held from before.
+    /// A stopped box starts on new ports, so read the URLs from the answer.
     pub async fn resume(&self, id: &str) -> Result<BoxView> {
         self.send(
             reqwest::Method::POST,
@@ -173,7 +149,6 @@ impl Client {
         .await
     }
 
-    /// What the page in front is showing, as text.
     pub async fn page(
         &self,
         id: &str,
@@ -201,7 +176,6 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// What on the page matches, best first.
     pub async fn find(&self, id: &str, what: &Find) -> Result<Vec<Element>> {
         let mut path = format!("/v1/boxes/{id}/page/find?q={}", query_value(&what.query));
 
@@ -220,10 +194,6 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// `settle_ms` is how long the page is given to stop moving before the URL
-    /// it ended on is read. Zero measures immediately.
-    ///
-    /// `tab` names which page, or the one on screen where it names none.
     pub async fn on_element(
         &self,
         id: &str,
@@ -245,11 +215,6 @@ impl Client {
         .await
     }
 
-    /// Act on the widget a query names, in a native window.
-    ///
-    /// The accessibility tree rather than the page: a file dialog, a settings
-    /// panel or an installer has no DevTools behind it, and a coordinate from a
-    /// screenshot is the only other way in.
     pub async fn on_node(&self, id: &str, screen: u32, what: &OnNode) -> Result<NodeResult> {
         self.send(
             reqwest::Method::POST,
@@ -260,7 +225,6 @@ impl Client {
         .await
     }
 
-    /// Run javascript in a page and read what it evaluated to.
     pub async fn evaluate(
         &self,
         id: &str,
@@ -281,7 +245,6 @@ impl Client {
         .await
     }
 
-    /// Every page this box has open, and which of them is on screen.
     pub async fn tabs(&self, id: &str) -> Result<Vec<Tab>> {
         self.send(
             reqwest::Method::GET,
@@ -292,7 +255,6 @@ impl Client {
         .await
     }
 
-    /// Bring one to the front.
     pub async fn focus_tab(&self, id: &str, tab: &str) -> Result<()> {
         self.nothing(
             reqwest::Method::POST,
@@ -313,7 +275,6 @@ impl Client {
         .await
     }
 
-    /// The app names this server can open.
     pub async fn catalog(&self) -> Result<Vec<String>> {
         let apps: std::collections::BTreeMap<String, serde_json::Value> = self
             .send(reqwest::Method::GET, "/v1/catalog", None, &[])
@@ -322,7 +283,6 @@ impl Client {
         Ok(apps.into_keys().collect())
     }
 
-    /// What is on a screen, whoever opened it.
     pub async fn windows(&self, id: &str, screen: u32) -> Result<Vec<Window>> {
         self.send(
             reqwest::Method::GET,
@@ -409,7 +369,6 @@ impl Client {
         .await
     }
 
-    /// One action and a look, which is most of what an agent ever asks for.
     pub async fn act_once(&self, id: &str, screen: u32, action: Action) -> Result<BatchResult> {
         self.act(
             id,
@@ -428,8 +387,6 @@ impl Client {
         self.capture(id, screen, &Shot::default(), have).await
     }
 
-    /// A `Shot` naming nothing is the whole screen at full size, which is what
-    /// `frame` asks for.
     pub async fn capture(
         &self,
         id: &str,
@@ -469,8 +426,6 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// The page as the browser draws it, apart from [`Client::capture`], which
-    /// is a picture of the screen.
     pub async fn page_screenshot(&self, id: &str, shot: &PageShot) -> Result<Captured> {
         self.send(
             reqwest::Method::POST,
@@ -557,7 +512,6 @@ impl Client {
         .await
     }
 
-    /// Where this screen is recording to, or nothing if it is not.
     pub async fn recording(&self, id: &str, screen: u32) -> Result<RecordingView> {
         self.send(
             reqwest::Method::GET,
@@ -583,7 +537,6 @@ impl Client {
         .await
     }
 
-    /// Stop it. The file stays in the box; [`Client::read_file`] takes it out.
     pub async fn stop_recording(&self, id: &str, screen: u32) -> Result<RecordingView> {
         self.send(
             reqwest::Method::DELETE,
@@ -668,7 +621,6 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// A frame out of a trace, as the PNG itself.
     pub async fn trace_frame(&self, id: &str, hash: &str) -> Result<Vec<u8>> {
         let response = self
             .request(
@@ -762,24 +714,15 @@ impl Client {
     }
 }
 
-/// The picture out of a frame, where one came. `None` where the caller already
-/// held it.
-///
-/// A free function rather than a method: `Frame` belongs to `computer-api`.
+/// `None` where the caller already held the frame.
 pub fn frame_png(frame: &Frame) -> Result<Option<Vec<u8>>> {
     frame.png_base64.as_deref().map(decode).transpose()
 }
 
-/// The picture out of a page capture.
 pub fn captured_image(taken: &Captured) -> Result<Vec<u8>> {
     decode(&taken.image_base64)
 }
 
-/// Percent-encodes one query value.
-///
-/// A path is the caller's, and `&`, `#` or `?` in one ends the value early:
-/// the request then names a different file and the wrong bytes come back as a
-/// success.
 fn query_value(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
 

@@ -1,8 +1,5 @@
 //! A computer in a box.
 //!
-//! The API lives in `computer-core` and is re-exported whole from here; the
-//! `computer` and `computerd` commands are built from here too.
-//!
 //! ```no_run
 //! use computer::{Button, Computer, Point};
 //!
@@ -14,7 +11,7 @@
 //!
 //! let png = box_.screenshot().await?;
 //! box_.click(Point::new(640, 400), Button::Left).await?;
-//! box_.type_text("hello from rust", None).await?;
+//! box_.type_text("hello from rust").await?;
 //!
 //! box_.shutdown().await?;
 //! # Ok(()) }

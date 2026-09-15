@@ -1,54 +1,17 @@
-//! The gate in front of a viewer, and the credentials it reads.
-//!
-//! Two shapes, because they fail in opposite directions and a deployment knows
-//! which one it can live with. [`Auth::Password`] keeps the credential out of
-//! every URL and cannot be put in a link; [`Auth::Token`] puts it in the link
-//! and therefore in whatever the link touches.
-//!
-//! [`Auth::Open`] is the default and is what every box on loopback has always
-//! been. It is refused wherever the port is reachable beyond this host.
-
 use crate::Secret;
 use crate::error::Result;
 
-/// What `screen.sh` is told the gate is.
 pub const AUTH_ENV: &str = "COMPUTER_VIEWER_AUTH";
-/// Where the read-only viewer's credential travels.
 pub const VIEW_SECRET_ENV: &str = "COMPUTER_VIEW_SECRET";
-/// Where the control viewer's credential travels.
 pub const CONTROL_SECRET_ENV: &str = "COMPUTER_CONTROL_SECRET";
 
-/// The user half of the browser prompt.
-///
-/// Fixed, because it is not a second secret and a caller who has to tell a
-/// person two things will tell them the wrong one. The password carries the
-/// entropy.
 pub const VIEWER_USER: &str = "computer";
 
-/// How a viewer asks who is connecting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Auth {
-    /// Nothing asks.
-    ///
-    /// Whoever reaches the port gets the desktop, and on the control port they
-    /// drive it. Refused wherever [`crate::Reach`] says the port is reachable
-    /// beyond this host.
     #[default]
     Open,
-    /// A browser prompt, and the noVNC page gated with the socket.
-    ///
-    /// The credential reaches the browser through the prompt, so it lands in no
-    /// history, no referrer header and no proxy log. The cost is that there is
-    /// no link to hand anybody: the address and the password travel separately,
-    /// and revoking means restarting the viewer.
     Password,
-    /// A ticket in the URL's query.
-    ///
-    /// One link carries everything, which is the only shape that can be sent to
-    /// a person who is not going to be talked through a login. The cost is that
-    /// the credential goes wherever the link goes — browser history, the
-    /// referrer on anything the desktop opens, and the access log of every
-    /// proxy in front. The box's deadline is what bounds it.
     Token,
 }
 
@@ -61,7 +24,6 @@ impl Auth {
         matches!(self, Self::Token)
     }
 
-    /// The word the image reads out of the environment.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Open => "open",
@@ -71,14 +33,7 @@ impl Auth {
     }
 }
 
-/// The credentials for one box's two doors.
-///
-/// Separate values, and not one across both: the read-only viewer and the
-/// control viewer differ by a port number in a URL, so a single credential
-/// would make every watch link a control link for anybody who tried the next
-/// port. The takeover token does not close that gap — `input-guard.sh` shadows
-/// `xdotool`, and a person on the control port drives over VNC without going
-/// near it.
+/// Separate values: the viewers differ only by port, so one would open control to every watcher.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Credentials {
     pub view: Secret,
@@ -86,7 +41,6 @@ pub struct Credentials {
 }
 
 impl Credentials {
-    /// A fresh pair from the CSPRNG.
     pub fn generate() -> Result<Self> {
         Ok(Self {
             view: Secret::generate()?,
@@ -94,11 +48,6 @@ impl Credentials {
         })
     }
 
-    /// A pair a caller already holds.
-    ///
-    /// For credentials that have to outlive the process: a second program
-    /// attaching to the same box hands out the same URLs only if it was given
-    /// the same values.
     pub fn new(view: Secret, control: Secret) -> Result<Self> {
         if view == control {
             return Err(crate::Error::denied(
@@ -110,10 +59,6 @@ impl Credentials {
     }
 }
 
-/// The gate a running box carries, read back out of its environment.
-///
-/// A box outlives the process that made it, so what its viewers ask cannot
-/// live only in that process's memory.
 pub fn from_environment(
     environment: &std::collections::BTreeMap<String, String>,
 ) -> (Auth, Option<Credentials>) {
@@ -145,8 +90,6 @@ mod tests {
         assert!(Auth::Token.is_gated());
     }
 
-    /// Which one leaks into a URL decides what `viewer_url` may append, so it
-    /// is asked rather than matched on at every call site.
     #[test]
     fn test_only_a_token_travels_in_the_url() {
         assert!(Auth::Token.is_in_the_url());
@@ -170,7 +113,6 @@ mod tests {
         );
     }
 
-    /// The mistake a caller supplying their own is most likely to make.
     #[test]
     fn test_the_same_value_twice_is_refused() {
         let secret = Secret::new("a-secret-from-a-vault").expect("long enough");

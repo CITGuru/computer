@@ -1,25 +1,12 @@
-//! Named programs a box can install and run.
-//!
-//! A name carries the flags and the window match a caller would otherwise
-//! have to know: `code` alone does not start, because everything in a box
-//! runs as root and it refuses that without two flags.
-
 use crate::error::{Error, Result};
 use computer_types::{App, Source, Spec, WindowMatch};
 use std::collections::BTreeMap;
 
-/// How long a window has to hold still before it counts as drawn.
-///
-/// Measured, not picked: GIMP settles ~300ms after it maps and VS Code ~3s. A
-/// floor on every launch, which is why a catalog entry can change it.
+/// Measured: GIMP settles ~300ms after it maps, VS Code ~3s.
 pub const SETTLE_MS: u64 = 600;
 
 pub const READY_MS: u64 = 30_000;
 
-/// The apps this crate knows by name.
-///
-/// An entry promises the packages install, the command starts, and the match
-/// finds the program rather than its splash. `tests/live_apps.rs` runs them.
 pub fn builtin() -> BTreeMap<String, App> {
     let mut apps = BTreeMap::new();
 
@@ -57,8 +44,6 @@ pub fn builtin() -> BTreeMap<String, App> {
         "text-editor".to_string(),
         App {
             packages: vec!["mousepad".to_string()],
-            // ~11s to first draw against xterm's 1s. `--disable-server`
-            // does not change it.
             command: vec!["mousepad".to_string()],
             window: Some(WindowMatch::Class("Mousepad".to_string())),
             ..App::default()
@@ -73,7 +58,7 @@ pub fn builtin() -> BTreeMap<String, App> {
                 key_url: "https://packages.microsoft.com/keys/microsoft.asc".to_string(),
                 list: "https://packages.microsoft.com/repos/code stable main".to_string(),
             }),
-            // Load-bearing: without them it prints a refusal and exits.
+            // As root, without both flags it prints a refusal and exits.
             command: vec![
                 "code".to_string(),
                 "--no-sandbox".to_string(),
@@ -88,10 +73,6 @@ pub fn builtin() -> BTreeMap<String, App> {
     apps
 }
 
-/// The caller's map first, then the built-in table.
-///
-/// A name in neither is refused rather than run as itself: a typo that reached
-/// the box would fail further from its cause.
 pub fn resolve(spec: &Spec, name: &str) -> Result<App> {
     if let Some(app) = spec.apps.get(name) {
         return match app == &App::default() {

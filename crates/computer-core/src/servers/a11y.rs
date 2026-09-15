@@ -1,23 +1,14 @@
-//! The accessibility tree, through the reader in the box.
-//!
-//! Shared by both display servers rather than written twice: AT-SPI sits at the
-//! toolkit, so the same tree comes back whether X11 or Wayland drew the window,
-//! and the command that reads it is the same command.
-
 use crate::error::{Error, Result};
 use crate::machine::ScreenHost;
 use crate::{Node, NodeQuery, ScreenId};
 use std::sync::Arc;
 
-/// The reader, as the image installs it.
 const READER: &str = "computer-a11y";
 
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| (*part).to_string()).collect()
 }
 
-/// What a query narrows the search by, without the words it searches for:
-/// `set` takes a second positional, so the flags cannot be bundled with them.
 fn flags_of(query: &NodeQuery) -> Vec<String> {
     let mut flags = Vec::new();
 
@@ -40,8 +31,6 @@ async fn read(host: &Arc<dyn ScreenHost>, screen: ScreenId, args: Vec<String>) -
     if result.code != 0 {
         let said = result.stderr_utf8().trim().to_string();
 
-        // 127 is the shell's "no such command", which here means an image
-        // built without the feature rather than a call that was wrong.
         if result.code == 127 {
             return Err(Error::denied(
                 "this box has no accessibility tree: it was built without \
@@ -176,8 +165,6 @@ mod tests {
 
     #[test]
     fn test_a_tree_with_no_bounds_still_parses() {
-        // The reader leaves out what a widget does not publish, and a menu
-        // item that has never been drawn has no rectangle.
         let nodes = nodes_from(
             r#"{"nodes":[{"id":"0.1","app":"zenity","role":"menu item",
                           "name":"Open","actions":["click"],"states":["enabled"]}]}"#,

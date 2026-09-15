@@ -1,16 +1,3 @@
-//! Driving an X display, wherever it is running.
-//!
-//! [`X11Desktop`] turns each [`Desktop`] method into one command: `xdotool`
-//! for input, `import` for a capture, `xclip` for the selections. It reaches
-//! them through [`ScreenHost`], so the same driver works against a container, a
-//! microVM, or anything else that can run a command on a display.
-//!
-//! # Coordinates
-//!
-//! Device pixels, top-left origin, against the frame the last screenshot
-//! returned. A click resolved against a scaled or stale frame lands somewhere
-//! else, and nothing in the result says so.
-
 mod profile;
 
 pub use profile::X11Profile;
@@ -27,8 +14,6 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Screen *i* is display `:i+1`.
-///
 /// Never `:0`, which on a host with a physical display is that display.
 pub fn display_for(screen: ScreenId) -> String {
     format!(":{}", screen.0 + 1)
@@ -38,10 +23,6 @@ fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| (*part).to_string()).collect()
 }
 
-/// X keysym for a key as a caller is likely to name it.
-///
-/// Unrecognised names pass through unchanged. `xdotool` already understands
-/// keysyms, so this translates only the names people get wrong.
 pub fn keysym(key: &str) -> String {
     match key.to_ascii_lowercase().as_str() {
         "enter" | "return" => "Return",
@@ -68,7 +49,6 @@ pub fn keysym(key: &str) -> String {
     .to_string()
 }
 
-/// Translate a chord such as `ctrl+shift+p` into what `xdotool key` takes.
 pub fn chord(input: &str) -> String {
     input
         .split('+')
@@ -87,10 +67,6 @@ fn button_number(button: Button) -> &'static str {
     }
 }
 
-/// `xdotool getmouselocation --shell` output.
-///
-/// `None` where either coordinate is missing, rather than a guess the caller
-/// cannot tell from a measurement.
 pub fn parse_cursor(output: &str) -> Option<Point> {
     let mut x = None;
     let mut y = None;
@@ -113,11 +89,7 @@ fn point_argv(command: &[&str], at: Point) -> Vec<String> {
     args
 }
 
-/// The modifiers pressed, as the first words of a chained `xdotool` command.
-///
-/// One command, because a press held across separate calls is released when
-/// the first call's process exits — and `--clearmodifiers`, which the typing
-/// path uses, would undo it even within one.
+/// One chained command: a held key is released when the process that pressed it exits.
 fn holding(held: &[Held]) -> Vec<String> {
     let mut args = argv(&["xdotool"]);
 
@@ -128,7 +100,6 @@ fn holding(held: &[Held]) -> Vec<String> {
     args
 }
 
-/// The same modifiers released, last one first.
 fn letting_go(held: &[Held]) -> Vec<String> {
     let mut args = Vec::new();
 
@@ -139,12 +110,7 @@ fn letting_go(held: &[Held]) -> Vec<String> {
     args
 }
 
-/// The arrow drawn where the pointer is, in root coordinates.
-///
-/// X11 keeps the cursor outside the root window's contents, so `import` cannot
-/// see it and neither can any capture built on one. This draws the shape
-/// rather than the real cursor: what a caller needs is where the pointer is,
-/// and the real bitmap would take an XFixes client this image does not carry.
+/// `import` cannot see the X11 cursor, so a stand-in arrow is drawn.
 fn pointer_argv(at: Point) -> Vec<String> {
     let (x, y) = (i64::from(at.x), i64::from(at.y));
     let arrow = [
@@ -161,7 +127,6 @@ fn pointer_argv(at: Point) -> Vec<String> {
     .collect::<Vec<_>>()
     .join(" ");
 
-    // White on black, so it reads against a dark desktop and against text.
     argv(&[
         "-stroke",
         "black",
@@ -176,8 +141,7 @@ fn pointer_argv(at: Point) -> Vec<String> {
     .collect()
 }
 
-/// `+repage` after a crop, or the PNG carries the offset it was cut from and
-/// a viewer honours it by drawing the picture in the wrong place.
+/// `+repage`, or the PNG keeps its crop offset and a viewer draws it misplaced.
 fn shaping_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
     let mut args = Vec::new();
 
@@ -190,10 +154,7 @@ fn shaping_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
         args.push("+repage".to_string());
     }
     if let Some(scale) = scale {
-        // Area averaging, not the default Lanczos. Blurring a desktop's flat
-        // colours into gradients is what a smaller picture is meant to avoid:
-        // halved, the default costs 67KB against the full screen's 36KB, and
-        // this costs 24KB with the text still readable.
+        // Box, not the default Lanczos: halved, Lanczos is 67KB and box is 24KB.
         args.push("-filter".to_string());
         args.push("box".to_string());
         args.push("-resize".to_string());
@@ -207,18 +168,11 @@ fn capture_argv(area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
     let mut args = argv(&["import", "-window", "root"]);
     args.extend(shaping_argv(area, scale));
 
-    // PNG bytes straight out of stdout: encoding them would need a decoder
-    // whose flags differ between coreutils and BusyBox.
     args.push("png:-".to_string());
     args
 }
 
-/// `convert x:root` rather than `import`, which takes no drawing options.
-///
-/// The arrow goes on before any crop or resize, because the position it is
-/// drawn at is in root coordinates. `-depth 8` because convert reads the root
-/// at sixteen bits per channel and `import` does not: without it the same
-/// picture is half again as large for nothing anyone can see.
+/// `import` takes no drawing options, and `convert` reads the root at 16 bits unless told.
 fn pointing_argv(at: Point, area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
     let mut args = argv(&["convert", "x:root", "-depth", "8"]);
     args.extend(pointer_argv(at));
@@ -227,16 +181,10 @@ fn pointing_argv(at: Point, area: Option<Rect>, scale: Option<u32>) -> Vec<Strin
     args
 }
 
-/// A wheel notch is button 4 up, 5 down, 6 left and 7 right. `xdotool` has no
-/// scroll distance, so a delta becomes a repeat count, bounded at twenty.
-///
-/// Both axes travel as one chained command, because two commands are two
-/// round trips into the box with the pointer sitting still between them.
 fn scroll_argv(at: Point, by: Delta) -> Vec<String> {
     let mut args = point_argv(&["xdotool", "mousemove", "--"], at);
 
-    // A delta with no distance in it is still a scroll: one notch down, which
-    // is the only thing a caller that named neither axis can have meant.
+    // A zero delta still scrolls one notch down.
     if by.dy != 0 || by.dx == 0 {
         args.extend(wheel_argv(by.dy, "4", "5"));
     }
@@ -257,10 +205,6 @@ fn wheel_argv(delta: i32, back: &str, forward: &str) -> Vec<String> {
     args
 }
 
-/// The driver this crate ships, and the default every box gets.
-///
-/// Separate from [`X11Desktop`] because a box picks a driver once and opens
-/// every screen with it: the choice is configured, not the screen.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct X11Driver;
 
@@ -274,7 +218,6 @@ impl DesktopFactory for X11Driver {
     }
 }
 
-/// One screen, driven through synthetic X input.
 pub struct X11Desktop {
     host: Arc<dyn ScreenHost>,
     screen: ScreenId,
@@ -290,7 +233,6 @@ impl X11Desktop {
         }
     }
 
-    /// Share a gate, so a takeover started elsewhere stops this driver too.
     pub fn with_control(mut self, control: Arc<ControlGate>) -> Self {
         self.control = control;
         self
@@ -315,12 +257,6 @@ impl X11Desktop {
         Ok(result)
     }
 
-    /// Every input path, and the only place the takeover rule is applied.
-    ///
-    /// Reads do not come through here. A run is not paused while a person
-    /// drives; it may watch and may not act.
-    /// A capture, refused rather than returned empty: a zero-byte PNG reaches
-    /// a caller as a picture of nothing rather than as a failure.
     async fn import(&self, args: Vec<String>) -> Result<Vec<u8>> {
         let result = self.run(args).await?;
 
@@ -370,9 +306,7 @@ impl Desktop for X11Desktop {
         self.act(args).await
     }
 
-    /// `xdotool`'s own repeat, not two calls: two round trips through the
-    /// runtime are far enough apart that the application sees two single
-    /// clicks, which is a different gesture.
+    /// One command: two round trips arrive far enough apart to read as two single clicks.
     async fn double_click(&self, at: Point, button: Button) -> Result<()> {
         let mut args = point_argv(&["xdotool", "mousemove", "--"], at);
         args.extend(argv(&["click", "--repeat", "2", "--delay", "80"]));
@@ -380,8 +314,6 @@ impl Desktop for X11Desktop {
         self.act(args).await
     }
 
-    /// One command: a press held across separate calls may be released when
-    /// the first call's process exits.
     async fn drag(&self, from: Point, to: Point, button: Button) -> Result<()> {
         self.drag_with(from, to, button, &[]).await
     }
@@ -391,8 +323,7 @@ impl Desktop for X11Desktop {
         let mut args = holding(held);
         args.extend(point_argv(&["mousemove", "--"], from));
         args.extend(argv(&["mousedown", number]));
-        // Through the middle, because an application that tracks motion sees
-        // nothing in a drag that teleports.
+        // Through the middle: an app that tracks motion ignores a drag that teleports.
         let middle = Point {
             x: from.x.midpoint(to.x),
             y: from.y.midpoint(to.y),
@@ -405,8 +336,6 @@ impl Desktop for X11Desktop {
         self.act(args).await
     }
 
-    /// Bounded by the box's own command timeout, so a `within` longer than
-    /// that ends as a transport failure rather than as this one's answer.
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
         let watched = self
             .run(still_argv(
@@ -432,13 +361,8 @@ impl Desktop for X11Desktop {
         self.act(args).await
     }
 
-    /// One chained run, not a call per key: a `keydown` in one process may be
-    /// released when that process exits, and the keys in between would then
-    /// arrive unmodified.
-    ///
-    /// `--clearmodifiers` only where nothing is held — it would drop the very
-    /// keys being held open.
-    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
+    /// `--clearmodifiers` only when nothing is held, as it would drop the held keys.
+    async fn press(&self, chords: &[String], held: &[Held]) -> Result<()> {
         if let ([one], true) = (chords, held.is_empty()) {
             let mut args = argv(&["xdotool", "key", "--clearmodifiers"]);
             args.push(chord(one));
@@ -467,8 +391,6 @@ impl Desktop for X11Desktop {
         a11y::find(&self.host, self.screen, query, limit).await
     }
 
-    /// Through the takeover gate: pressing a widget is input, whatever it
-    /// travelled over to get there.
     async fn focus_node(&self, query: &NodeQuery) -> Result<Node> {
         self.control.may_act()?;
         a11y::focus(&self.host, self.screen, query).await
@@ -525,8 +447,6 @@ impl Desktop for X11Desktop {
 
 #[async_trait]
 impl Clipboard for X11Desktop {
-    /// `-o` prints the selection and exits. Owning one means staying alive to
-    /// serve it, which is why writing has a different shape from reading.
     async fn text(&self, selection: Selection) -> Result<String> {
         let result = self
             .run(argv(&["xclip", "-selection", selection.name(), "-o"]))
@@ -534,9 +454,7 @@ impl Clipboard for X11Desktop {
 
         match result {
             Ok(result) => Ok(result.stdout_utf8()),
-            // Nothing owns the selection: `xclip` answers "target STRING not
-            // available" and exits non-zero. Anything else — no display, no
-            // xclip — is broken rather than empty, and stays an error.
+            // No owner answers "not available"; any other failure stays an error.
             Err(Error::Failed { stderr, .. }) if stderr.contains("not available") => {
                 Ok(String::new())
             }
@@ -544,11 +462,7 @@ impl Clipboard for X11Desktop {
         }
     }
 
-    /// Own a selection, serving what is in a file already inside the box.
-    ///
-    /// `setsid`, because X keeps no copy of a selection: `xclip` has to outlive
-    /// the command that started it or the next paste finds nothing. The path is
-    /// a positional argument, so a space in it cannot become shell syntax.
+    /// `setsid`: X keeps no copy of a selection, so `xclip` must outlive the command.
     async fn set_from(&self, selection: Selection, path: &str) -> Result<()> {
         let mut args = argv(&[
             "bash",
@@ -561,10 +475,6 @@ impl Clipboard for X11Desktop {
         self.act(args).await
     }
 
-    /// `xclip -selection NAME -t TARGET -o`, and the bytes are returned raw.
-    ///
-    /// Raw, because a picture through a `String` loses every byte that is not
-    /// valid UTF-8.
     async fn bytes(&self, selection: Selection, target: &str) -> Result<Vec<u8>> {
         let mut args = argv(&["xclip", "-selection", selection.name(), "-t"]);
         args.push(target.to_string());
@@ -572,8 +482,6 @@ impl Clipboard for X11Desktop {
 
         match self.run(args).await {
             Ok(result) => Ok(result.stdout),
-            // Nothing owns it, or its owner cannot offer this type. Empty for
-            // the same reason as in `text`.
             Err(Error::Failed { stderr, .. }) if stderr.contains("not available") => Ok(Vec::new()),
             Err(error) => Err(error),
         }
@@ -604,10 +512,7 @@ impl Clipboard for X11Desktop {
     }
 }
 
-/// Whether something is listening on a port inside the box.
-///
-/// Runs under `bash`, not `sh`. `/dev/tcp` is a bash feature, and Debian's
-/// `sh` is dash, which answers "Directory nonexistent" for it.
+/// Under `bash`: `/dev/tcp` is a bash feature and Debian's `sh` is dash.
 pub async fn port_listening(host: &dyn ScreenHost, screen: ScreenId, port: u16) -> bool {
     let probe = format!("(echo > /dev/tcp/127.0.0.1/{port}) 2>/dev/null");
     let mut args = argv(&["bash", "-c"]);
@@ -771,8 +676,6 @@ mod tests {
 
     #[test]
     fn test_a_sideways_scroll_does_not_also_go_down() {
-        // `dy` is zero here and means zero, not the default: a caller asking
-        // to go right and landing lower is a page in the wrong place.
         let args = scroll_argv(Point::new(0, 0), Delta::right(2));
         let buttons: Vec<&String> = args.iter().skip(4).collect();
 

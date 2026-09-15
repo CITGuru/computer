@@ -1,5 +1,3 @@
-//! Driving boxes through a server.
-
 use crate::{USAGE, bare, flag, framing, positional, present, wheel};
 use computer_api::{
     Action, ActionBatch, Arrange, BatchResult, Evaluate, Find, ForkMode, ForkRequest, Held,
@@ -74,8 +72,7 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
             .map_err(|error| error.to_string())?;
     }
 
-    // The id on standard output, so `computer shot $(computer up)` works.
-    // Everything a person reads goes to standard error.
+    // Only the id goes to stdout, so `computer shot $(computer up)` works.
     println!("{}", created.id);
     if let Some(url) = &created.viewer_url {
         eprintln!("  watch it  {url}");
@@ -86,9 +83,6 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
 
 pub async fn list(client: &Client) -> Done {
     for found in client.list().await.map_err(|e| e.to_string())? {
-        // A frozen box is indistinguishable from a running one here, and is
-        // the one thing a caller reading this list needs to know before it
-        // reaches for one.
         let state = match found.state {
             computer_api::BoxState::Ready => String::new(),
             other => format!("\t{other:?}"),
@@ -102,7 +96,6 @@ pub async fn list(client: &Client) -> Done {
     Ok(())
 }
 
-/// Everything the server knows about one box.
 pub async fn describe(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let found = client.get(id).await.map_err(|e| e.to_string())?;
@@ -127,7 +120,6 @@ pub async fn describe(client: &Client, args: &[String]) -> Done {
     Ok(())
 }
 
-/// Milliseconds since the epoch as something a person can read, in UTC.
 fn stamped(ms: u64) -> String {
     let secs = (ms / 1000) as i64;
     match chrono_free(secs) {
@@ -136,7 +128,6 @@ fn stamped(ms: u64) -> String {
     }
 }
 
-/// Civil time from a Unix second, without a date crate for one line of output.
 fn chrono_free(secs: i64) -> Option<String> {
     if secs < 0 {
         return None;
@@ -178,15 +169,12 @@ pub async fn pause(client: &Client, args: &[String]) -> Done {
     Ok(())
 }
 
-/// Make the box usable again, whichever way it was put down.
 pub async fn resume(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
 
     let was = client.get(id).await.map_err(|e| e.to_string())?;
     let found = client.resume(id).await.map_err(|e| e.to_string())?;
 
-    // A paused box wakes as it was and keeps the URL it had. A stopped one
-    // does neither, and saying so is the whole reason one command does both.
     if was.state == computer_api::BoxState::Stopped {
         match &found.viewer_url {
             Some(url) => eprintln!("  watch it  {url}"),
@@ -219,7 +207,6 @@ pub async fn screenshot(client: &Client, args: &[String]) -> Done {
     Ok(())
 }
 
-/// The file to write, which is the first argument that is not part of a flag.
 pub fn named(args: &[String]) -> Option<&str> {
     let flags = ["--window", "--at", "--size", "--scale", "--tab"];
     let mut rest = args.iter().skip(1);
@@ -285,7 +272,6 @@ pub async fn open(client: &Client, args: &[String]) -> Done {
     Ok(())
 }
 
-/// Open an app by name, and wait until it has drawn.
 pub async fn app(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let app = positional(args, 1, "an app").map_err(|e| e.to_string())?;
@@ -301,7 +287,6 @@ pub async fn app(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-/// The app names this server can open.
 pub async fn apps(client: &Client) -> Done {
     for name in client.catalog().await.map_err(|e| e.to_string())? {
         println!("{name}");
@@ -323,7 +308,6 @@ fn counted<T: std::str::FromStr>(
     }
 }
 
-/// One line per widget, for a person reading a terminal.
 fn shown_node(node: &computer_api::Node) -> String {
     let named = match (&node.labelled, node.name.is_empty()) {
         (Some(label), _) => format!("labelled {label:?}"),
@@ -449,9 +433,7 @@ pub async fn window(client: &Client, args: &[String]) -> Done {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                // Answered with whatever holds the keyboard afterwards: a
-                // window manager is free to refuse a raise, and this is the
-                // only thing that says whether it did.
+                // A window manager may refuse a raise, so answer with what holds focus after.
                 match client
                     .active_window(id, 0)
                     .await
@@ -461,7 +443,6 @@ pub async fn window(client: &Client, args: &[String]) -> Done {
                     None => return Ok(()),
                 }
             }
-            // Nothing to answer with: the window it named is gone.
             "close" => {
                 return client
                     .close_window(id, 0, window)
@@ -513,7 +494,6 @@ fn shown(window: &Window) -> String {
     )
 }
 
-/// The `keyboard` flags that take a value.
 const TYPED: [&str; 2] = ["--delay", "--held"];
 
 pub async fn type_text(client: &Client, args: &[String]) -> Done {
@@ -531,7 +511,7 @@ pub async fn type_text(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-pub async fn key(client: &Client, args: &[String]) -> Done {
+pub async fn press(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let rest = bare(args, &TYPED);
 
@@ -544,7 +524,7 @@ pub async fn key(client: &Client, args: &[String]) -> Done {
     act(
         client,
         id,
-        Action::Key {
+        Action::Press {
             chord,
             then: keys.cloned().collect(),
             held: modifiers(args)?,
@@ -553,13 +533,10 @@ pub async fn key(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-/// The pointer, grouped: click and scroll were at the top level, and move,
-/// drag and the cursor were reachable over the API but from no command.
 pub async fn mouse(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let op = positional(args, 1, "move, click, drag, scroll or at").map_err(|e| e.to_string())?;
 
-    // The op sits between the box and what the verbs below already parse.
     let mut rest = args.to_vec();
     rest.remove(1);
 
@@ -592,7 +569,6 @@ pub async fn mouse(client: &Client, args: &[String]) -> Done {
     }
 }
 
-/// The keyboard, grouped to pair with `mouse`.
 pub async fn keyboard(client: &Client, args: &[String]) -> Done {
     let op = positional(args, 1, "type or press").map_err(|e| e.to_string())?;
 
@@ -601,7 +577,7 @@ pub async fn keyboard(client: &Client, args: &[String]) -> Done {
 
     match op {
         "type" => type_text(client, &rest).await,
-        "press" => key(client, &rest).await,
+        "press" => press(client, &rest).await,
         other => Err(format!("no such op: {other}")),
     }
 }
@@ -644,8 +620,6 @@ pub async fn scroll(client: &Client, args: &[String]) -> Done {
 
     let at = match turn.at {
         Some((x, y)) => Point { x, y },
-        // Asked for rather than assumed: a box can be any size, and a wheel
-        // turned outside the screen reaches nothing.
         None => {
             let found = client.get(id).await.map_err(|e| e.to_string())?;
             Point {
@@ -667,7 +641,6 @@ pub async fn scroll(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-/// Record the screen into the box, and take the file out when it stops.
 pub async fn record(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let op = positional(args, 1, "start, stop or status").map_err(|e| e.to_string())?;
@@ -698,8 +671,6 @@ pub async fn record(client: &Client, args: &[String]) -> Done {
                 return Err("the box did not say what it had recorded".to_string());
             };
 
-            // Into a file out here unless told otherwise: a recording is not
-            // something to put on a terminal, and it is why anyone recorded.
             let out = rest
                 .get(2)
                 .cloned()
@@ -750,7 +721,6 @@ pub async fn wait(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-/// `--held shift,ctrl`, in the same spellings a chord takes.
 fn modifiers(args: &[String]) -> Result<Vec<Held>, String> {
     let Some(given) = flag(args, "--held") else {
         return Ok(Vec::new());
@@ -834,7 +804,6 @@ pub async fn release(client: &Client, args: &[String]) -> Done {
 pub async fn exec(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
 
-    // Everything after `--`, so the box's command keeps its own flags.
     let argv: Vec<String> = args
         .iter()
         .position(|arg| arg == "--")
@@ -990,7 +959,7 @@ fn name_of(action: &Action) -> String {
             format!("drag {},{} → {},{}", from.x, from.y, to.x, to.y)
         }
         Action::Type { text, .. } => format!("type {text:?}"),
-        Action::Key { chord, then, .. } => match then.is_empty() {
+        Action::Press { chord, then, .. } => match then.is_empty() {
             true => format!("press {chord}"),
             false => format!("press {chord} and {} more", then.len()),
         },
@@ -1007,7 +976,6 @@ fn name_of(action: &Action) -> String {
     }
 }
 
-/// Do it, and say nothing when it worked.
 async fn act(client: &Client, id: &str, action: Action) -> Done {
     acted(client, id, action).await.map(|_| ())
 }
@@ -1045,16 +1013,8 @@ fn number(args: &[String], at: usize, what: &str) -> Result<u32, String> {
         .map_err(|_| format!("{what} must be a whole number of pixels"))
 }
 
-/// Everything a web page can be asked, which is the browser's half of a box.
-///
-/// Grouped rather than spread across the top level: a page is one thing to
-/// address, the way a window and a widget are, and `find` on its own would say
-/// nothing about what it searches.
-/// Where a file handed to a page is put inside the box.
 const UPLOADS: &str = "/tmp/computer/uploads";
 
-/// The `browser` flags that take a value, so a positional can be told apart
-/// from one wherever it stands on the line.
 const VALUED: [&str; 9] = [
     "--quality",
     "--tab",
@@ -1085,7 +1045,6 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
             .to_string())
     };
 
-    // The ones that are not element operations answer for themselves.
     match op {
         "read" => return read_page(client, id, args).await,
         "find" => return find_on_page(client, id, args, &rest).await,
@@ -1162,8 +1121,6 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         other => return Err(format!("no such op: {other}")),
     };
 
-    // The same settle a click through the batch takes, so what comes back is
-    // the page it reached rather than the page on its way.
     let result = client
         .on_element(id, &what, 600, tab)
         .await
@@ -1178,8 +1135,6 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     if let Some(matched) = &result.matched {
         println!("matched {matched:?}");
     }
-    // A reload lands where it started, which is not the same as not moving.
-    // Only what was about moving is worth a word when it did not move.
     match &result.url {
         Some(url) if result.navigated || op == "reload" => println!("{url}"),
         Some(_) if matches!(op, "click" | "back" | "forward") => {
@@ -1244,12 +1199,6 @@ async fn find_on_page(client: &Client, id: &str, args: &[String], rest: &[String
     Ok(())
 }
 
-/// The files a page is to be handed, as paths inside the box.
-///
-/// A path on the command line is one out here, so each is read and written
-/// into the box first. `--in-box` names paths that are already there, which is
-/// what the API and MCP take and the only way to hand over something `exec`
-/// made.
 async fn handed(
     client: &Client,
     id: &str,
@@ -1269,8 +1218,6 @@ async fn handed(
     for path in named {
         let bytes = std::fs::read(path).map_err(|why| format!("{path}: {why}"))?;
 
-        // Named for the file rather than the path it came from: a page is
-        // shown the name, and a caller's directories are not the box's.
         let name = std::path::Path::new(path)
             .file_name()
             .and_then(|name| name.to_str())
@@ -1310,8 +1257,7 @@ async fn capture_page(client: &Client, id: &str, args: &[String], rest: &[String
 
     let image = captured_image(&taken).map_err(|e| e.to_string())?;
 
-    // Named for what it holds: --full answers jpeg unless told otherwise, and
-    // a .png full of jpeg bytes opens in nothing.
+    // --full answers JPEG by default, so the extension follows the format.
     let out = rest.get(2).cloned().unwrap_or_else(|| {
         match taken.format {
             Picture::Jpeg => "page.jpg",

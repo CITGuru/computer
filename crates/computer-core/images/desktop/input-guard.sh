@@ -1,15 +1,5 @@
 #!/usr/bin/env bash
-#
-# `xdotool`, refused while a person is driving the screen.
-#
-# On the PATH rather than in the SDK, because the in-process gate is a promise
-# and a shell or an `exec` never made it. This is the part that confines.
-#
-# Shadows the real binary at /usr/bin/xdotool. A takeover records its token
-# beside the screen; a caller holding it passes COMPUTER_TOKEN, and anything
-# else is refused with status 3 while the file exists.
-#
-# Reads stay allowed: withholding input and not observation is the point.
+# On the PATH, so a shell or an `exec` meets the gate the SDK only promises.
 set -uo pipefail
 
 real=/usr/bin/xdotool

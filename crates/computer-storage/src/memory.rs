@@ -1,5 +1,3 @@
-//! Everything in this process, and nothing after it.
-
 use crate::error::poisoned;
 use crate::{Blobs, BoxRecord, Frames, Result, Store, now_ms};
 use async_trait::async_trait;
@@ -8,17 +6,14 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Entries kept per box.
 const MAX_ENTRIES: usize = 10_000;
 const MAX_FRAMES: usize = 256;
-/// Boxes whose traces are kept after they are gone.
 const MAX_TRACES: usize = 256;
 
 #[derive(Default)]
 pub struct Memory {
     boxes: Mutex<BTreeMap<String, BoxRecord>>,
     traces: Mutex<HashMap<String, Arc<Trace>>>,
-    /// First-touch order, for the cap on traces.
     order: Mutex<VecDeque<String>>,
     frames: Mutex<HashMap<String, Held>>,
 }

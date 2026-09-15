@@ -1,12 +1,4 @@
-//! Drive a box's browser through a search, then open what it found and read it.
-//!
-//! ```bash
 //! cargo run --example research -- <box> "a subject"
-//! ```
-//!
-//! The reading is done with `evaluate` rather than from a screenshot: a
-//! picture of text is not text, and a page that answered with a login wall
-//! says so in its own words.
 
 use computer::{Computer, Reading, SearchProvider};
 use std::time::Duration;
@@ -59,9 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  did not load\n");
             continue;
         };
-        // These are redirect URLs, so the load that `open_page` waited for is
-        // the redirector's. Wait for the page it lands on to put something on
-        // screen, rather than guessing at a sleep.
+        // Redirect URLs: `open_page` waited for the redirector, not the page it lands on.
         page.wait_for("body", false, Duration::from_secs(10))
             .await
             .ok();
@@ -81,8 +71,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             false => println!("  body:  {}\n", read.text.trim()),
         }
 
-        // Whoever opened it closes it. A page per result and none of them shut
-        // is a browser with a hundred tabs by the end of a search.
         page.close().await.ok();
     }
 

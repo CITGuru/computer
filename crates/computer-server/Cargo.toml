@@ -8,20 +8,13 @@ license = "MIT"
 
 [features]
 default = []
-# Reach E2B, so a restart takes back boxes in somebody else's cloud as well as
-# the ones on this host. Off by default: the vendor client pulls a TLS stack,
-# and most servers hand out containers.
 e2b = ["computer/e2b"]
-# Keep records in a database rather than a directory. One or both dialects; a
-# server with neither still keeps a directory or memory.
 sql = []
 sqlite = ["sql", "computer-storage/sqlite"]
 postgres = ["sql", "computer-storage/postgres"]
-# Keep records in a bucket. The same layout a directory holds.
 s3 = ["computer-storage/s3"]
 
 [dependencies]
-# Renamed at the use site, so everything below still says `computer`.
 computer = { package = "computer-core", path = "../computer-core", version = "0.1.0" }
 computer-api = { path = "../computer-api", version = "0.1.0" }
 computer-storage = { path = "../computer-storage", version = "0.1.0" }
@@ -33,10 +26,7 @@ serde_json = "1"
 thiserror = "2"
 tracing = "0.1"
 base64 = "0.22"
-# Frames are addressed by content so a screen that has not moved costs no
-# bytes. A collision would hand back a stale picture, which is the one bug
-# this API must not have — so a real digest rather than the FNV the image
-# tags use.
+# A real digest, not FNV: a frame-address collision would hand back a stale picture.
 sha2 = "0.10"
 getrandom = "0.3"
 

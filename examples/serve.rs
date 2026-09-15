@@ -1,5 +1,3 @@
-//! Open a box, print where to watch it, and leave it running.
-//!
 //! ```text
 //! cargo run --example serve
 //! cargo run --example serve -- https://news.ycombinator.com
@@ -7,12 +5,6 @@
 //! cargo run --example serve -- --dock https://news.ycombinator.com
 //! cargo run --example serve -- --image-dir images/ubuntu https://news.ycombinator.com
 //! ```
-//!
-//! Unlike every other example, this one keeps what it opened: the box is for a
-//! person to look at, and a box removed when the program ends is a URL that is
-//! dead by the time it is read. It says how to take it away again, because a
-//! box nobody disposes of holds a core and a couple of gigabytes until
-//! somebody notices.
 
 use computer::{Computer, Profile, WaylandProfile, X11Profile};
 use std::sync::Arc;
@@ -63,8 +55,6 @@ async fn main() -> computer::Result<()> {
         println!("  devtools  {}", endpoint.http_url);
     }
 
-    // The viewer is read-only. Anyone who is to type into it needs the other
-    // port, which exists only while a takeover is running.
     println!("\n  keyboard  cargo run --example takeover");
     println!("  stop it   docker rm -f {}", computer.name());
 

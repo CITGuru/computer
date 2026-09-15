@@ -1,15 +1,5 @@
 //! A computer in a box.
 //!
-//! Published as `computer`, which re-exports this whole, so the examples below
-//! are written the way a caller writes them. The hidden line in each is what
-//! lets a doc test compile against the name this crate has here.
-//!
-//! One call gives a program a real graphical desktop — an X server, a window
-//! manager, a browser and a viewer — running on the machine it is already on,
-//! and a small API to look at it and drive it. The desktop lives in a
-//! container by default and in a microVM on request; nothing above
-//! [`Machine`] knows the difference.
-//!
 //! ```no_run
 //! # extern crate computer_core as computer;
 //! use computer::{Button, Computer, Point};
@@ -22,48 +12,11 @@
 //!
 //! let png = box_.screenshot().await?;
 //! box_.click(Point::new(640, 400), Button::Left).await?;
-//! box_.type_text("hello from rust", None).await?;
+//! box_.type_text("hello from rust").await?;
 //!
 //! box_.shutdown().await?;
 //! # Ok(()) }
 //! ```
-//!
-//! # What is in the box
-//!
-//! `images/desktop/` is compiled into this crate and built on first use, so
-//! the only thing to install is a runtime to put it in: `docker`, `podman` or
-//! `nerdctl`, which take the same arguments, or a sandbox vendor from
-//! [`sandboxes`] for a machine
-//! with a kernel of its own. The image is ours, so what it supports is a
-//! constant, and `tests/image.rs` fails when the code and the image disagree.
-//!
-//! # What drives it
-//!
-//! A [`Profile`] is the image's contract: its ports, its commands, the
-//! environment it reads, what it claims, and the driver it expects. A
-//! [`DesktopFactory`] is how a screen is driven.
-//!
-//! Two pairs ship. [`X11Profile`] with [`X11Driver`] is the default — Xvfb,
-//! fluxbox, x11vnc and `xdotool`. [`WaylandProfile`] with [`WaylandDriver`]
-//! runs the same box on sway headless, wayvnc, `grim` and `wtype`, with no
-//! `/dev/uinput`, so the box keeps the isolation it was started with.
-//!
-//! A third image is another `Profile`; a third display server is another
-//! `DesktopFactory` with a [`Desktop`] under it. The screens, the takeover
-//! gate, the leases and the descriptor are written against the traits. A
-//! profile names its own driver, so a Wayland image cannot be left on the X11
-//! default, where the commands go in and nothing moves.
-//!
-//! # What it will not do for you
-//!
-//! - A screenshot does not show the pointer. A capture of the screen does not
-//!   include the cursor, so track its position yourself or read it back with
-//!   [`Desktop::cursor`].
-//! - Coordinates are device pixels against the frame you just captured. A
-//!   click computed from a scaled or stale screenshot lands somewhere else,
-//!   and neither the result nor the next frame says so.
-//! - The screen has no password on it. Viewer ports are published on loopback
-//!   only, and anyone who reaches a control port can drive the desktop.
 
 mod auth;
 mod desktop;
@@ -95,16 +48,12 @@ pub use cdp::{
 };
 pub use desktop::{
     Browser, BrowserEndpoint, Button, Clipboard, Control, Delta, Desktop, DesktopFactory,
-    DesktopNeed, DesktopPresence, DesktopSupport, Display, DisplayServer, Held, Node, NodeQuery,
-    Of, Point, Rect, Selection, Shot, Viewer, ViewerKind, Viewers,
+    DesktopNeed, DesktopPresence, DesktopSupport, Display, DisplayServer, Held, Keys, Node,
+    NodeQuery, Of, Point, Press, Rect, Selection, Shot, Typing, Viewer, ViewerKind, Viewers,
 };
 pub use error::{Error, Result};
 
-/// The largest a capture may be asked to grow.
-///
-/// Scaling up is not what this is for, but refusing it outright would make a
-/// caller crop and enlarge by hand. The ceiling is here so a mistyped
-/// percentage cannot ask the box for a picture it has no memory for.
+/// Caps a capture's scale, so a mistyped percentage cannot exhaust the box's memory.
 pub const MAGNIFY: u32 = 400;
 pub use exec::ExecResult;
 pub use image::{ScreenAction, ScreenPorts};
@@ -128,10 +77,7 @@ pub use servers::wayland::{WaylandDesktop, WaylandDriver, WaylandProfile};
 pub use servers::x11::{X11Desktop, X11Driver, X11Profile};
 pub use spec::Resolved;
 
-/// The vocabulary a spec is written in, re-exported so a caller launching from
-/// one needs no second dependency. Aliased rather than glob-imported: its
-/// `Auth`, `Bind`, `Desktop`, `Point`, `Button` and `Selection` name the same
-/// ideas as this crate's and are not the same types.
+/// Aliased, not glob-imported: several of its names clash with this crate's own types.
 pub use computer_types as types;
 pub use computer_types::{Placement, Spec};
 
@@ -152,7 +98,6 @@ impl std::fmt::Display for ScreenId {
     }
 }
 
-/// Whoever holds a screen. Opaque here — this crate never learns what it is.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct HolderId(String);
 
@@ -172,29 +117,18 @@ impl std::fmt::Display for HolderId {
     }
 }
 
-/// Where a box records when it should be taken away.
-///
-/// On the box as well as in a timer, so a box that outlives its process can
-/// still be swept.
+/// Written on the box too, so a box that outlives its process can still be swept.
 pub const EXPIRY_LABEL: &str = "computer.expires-at";
 
-/// How long [`Builder::launch`] waits for the screen and the browser.
 pub const READY_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// How a box is opened.
 pub struct Builder {
     config: Config,
     machine: Option<Arc<dyn Machine>>,
     profile: Arc<dyn Profile>,
-    /// Unset means the profile's own, which is the pairing that cannot be
-    /// wrong. Set is a caller overriding it on purpose.
     driver: Option<Arc<dyn DesktopFactory>>,
-    /// An image the caller named, which is never one this crate builds.
     image: Option<String>,
-    /// A caller-owned Docker build context.
     image_dir: Option<PathBuf>,
-    /// Unset takes the profile's own, because 1280x800 is the built-in
-    /// image's number and not every image's.
     size: Option<(u32, u32)>,
     publish: bool,
     cli: Option<Arc<dyn ContainerCli>>,
@@ -231,58 +165,35 @@ impl Default for Builder {
 }
 
 impl Builder {
-    /// The image to run.
-    ///
-    /// Fetched rather than built. An image named here takes no packages from
-    /// [`Builder::packages`]: it is somebody else's image, already built.
+    /// Pulled, never built, so [`Builder::packages`] is refused.
     pub fn image(mut self, image: impl Into<String>) -> Self {
         self.image = Some(image.into());
         self.image_dir = None;
         self
     }
 
-    /// Build and run an image from a local Docker build context.
-    ///
-    /// The directory needs a `Dockerfile` and has to implement the active
-    /// [`Profile`]. Its tag follows the files, the packages and the
-    /// architecture, so an edit builds a new image.
-    ///
-    /// A profile can carry its own with [`ImageSource::Directory`]; one named
-    /// here replaces it.
     pub fn image_dir(mut self, directory: impl Into<PathBuf>) -> Self {
         self.image = None;
         self.image_dir = Some(directory.into());
         self
     }
 
-    /// Which image contract the box speaks: its ports, its commands, and what it
-    /// claims.
-    ///
-    /// A profile also names the driver it expects, which [`Builder::driver`]
-    /// overrides.
     pub fn profile(mut self, profile: Arc<dyn Profile>) -> Self {
         self.profile = profile;
         self
     }
 
-    /// Install extra packages into the image.
-    ///
-    /// A different list is a different image, so the first launch with a new one
-    /// builds it.
     pub fn packages(mut self, packages: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.config.extras = bundle::Extras::with(packages);
         self
     }
 
-    /// Replaces the list rather than adding to it, so set it after the
-    /// packages.
+    /// Replaces the launchers; set it after the packages, which reset them.
     pub fn launchers(mut self, launchers: impl IntoIterator<Item = bundle::Launcher>) -> Self {
         self.config.extras = self.config.extras.clone().with_launchers(launchers);
         self
     }
 
-    /// For a program Debian does not carry. A source joins the tag: one
-    /// package list against two archives is two images.
     pub fn packages_from(
         mut self,
         packages: impl IntoIterator<Item = impl Into<String>>,
@@ -292,93 +203,62 @@ impl Builder {
         self
     }
 
-    /// Give the box a dock along the bottom.
-    ///
-    /// Opt-in: a dock costs about sixty pixels of every screenshot, which a
-    /// box driven by a program would rather keep. See [`bundle::Extras::dock`].
     pub fn dock(self) -> Self {
         let wanted = bundle::Extras::dock();
         self.packages(wanted.packages)
     }
 
-    /// Fonts for Chinese, Japanese, Korean and emoji, which the base image
-    /// cannot draw. About 100 MB, which is why they are opt-in.
     pub fn wide_fonts(self) -> Self {
         let wanted = bundle::Extras::wide_fonts();
         self.packages(wanted.packages)
     }
 
-    /// The accessibility tree, so a native window can be driven by the names of
-    /// its widgets. See [`Screen::find_nodes`].
-    ///
-    /// Nothing can turn this on later: an application publishes to the tree
-    /// only if the bus was already there when it drew its first window, and by
-    /// the time a box is up its browser is one of those applications.
+    /// Launch-time only: an app joins the tree only if the bus exists before its first window.
     pub fn accessibility(self) -> Self {
         let wanted = bundle::Extras::accessibility();
         self.packages(wanted.packages)
     }
 
-    /// `ffmpeg`, which plays video and is also what [`Screen::record`] records
-    /// with.
-    ///
-    /// Opt-in: about a hundred megabytes of image, paid whether or not
-    /// anything is ever recorded or played.
     pub fn video(self) -> Self {
         let wanted = bundle::Extras::video();
         self.packages(wanted.packages)
     }
 
-    /// `docker`, `podman` or `nerdctl`.
     pub fn runtime(mut self, program: impl Into<String>) -> Self {
         self.program = program.into();
         self
     }
 
-    /// Reach the container runtime through something else entirely — a remote
-    /// host, a recording, a test double.
     pub fn cli(mut self, cli: Arc<dyn ContainerCli>) -> Self {
         self.cli = Some(cli);
         self
     }
 
-    /// Put the box somewhere other than a container.
-    ///
-    /// [`MicroVm`] is one. Anything that can run a
-    /// command against a display can be another.
     pub fn machine(mut self, machine: Arc<dyn Machine>) -> Self {
         self.machine = Some(machine);
         self
     }
 
-    /// Drive the box through a display server other than the one its profile
-    /// names.
-    ///
-    /// Unset, the box takes [`Profile::driver`].
     pub fn driver(mut self, driver: Arc<dyn DesktopFactory>) -> Self {
         self.driver = Some(driver);
         self
     }
 
-    /// Name the container, instead of one derived from this process.
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
-    /// The size of every screen in this box.
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.size = Some((width, height));
         self
     }
 
-    /// Off gives the box no network at all.
     pub fn network(mut self, on: bool) -> Self {
         self.config.network = on;
         self
     }
 
-    /// Map the viewer and DevTools ports onto loopback, so a person can watch.
     pub fn publish_ports(mut self, publish: bool) -> Self {
         self.publish = publish;
         self
@@ -394,7 +274,6 @@ impl Builder {
         self
     }
 
-    /// A memory ceiling, in the runtime's own notation — `"2g"`.
     pub fn memory(mut self, limit: impl Into<String>) -> Self {
         self.config.memory = Some(limit.into());
         self
@@ -405,24 +284,8 @@ impl Builder {
         self
     }
 
-    /// Keep the browser's profiles in a named volume.
-    ///
-    /// Two boxes given the same name are the same browser: the second wakes up
-    /// logged into whatever the first logged into. Docker keeps a named volume
-    /// when a box is removed, so this outlives the box that made it — and
-    /// nothing removes it but a caller.
-    ///
-    /// Host-local. A [`Session`] travels between machines and carries only
-    /// what the protocol can read back; a volume stays here and carries
-    /// everything, including what a session cannot.
-    ///
-    /// One box at a time per name: two sharing a profile directory is how a
-    /// browser corrupts one.
-    ///
-    /// A box is removed with a kill, and Chromium commits its cookie database
-    /// on its own schedule — so a cookie set moments before a box goes may not
-    /// reach the volume. Local storage lands sooner. Nothing here forces a
-    /// flush, because nothing can: the browser decides when to write.
+    /// One box per volume at a time: two browsers sharing a profile directory corrupt it.
+    /// A cookie set just before removal may be lost: Chromium flushes on its own schedule.
     pub fn profiles(mut self, volume: impl Into<String>) -> Self {
         self.config.profiles = Some(volume.into());
         self
@@ -433,88 +296,53 @@ impl Builder {
         self
     }
 
-    /// Build or pull the image when the runtime does not have it.
-    ///
-    /// On by default. The first launch on a machine therefore takes minutes.
     pub fn ensure_image(mut self, ensure: bool) -> Self {
         self.ensure_image = ensure;
         self
     }
 
-    /// Wait for the screen and the browser before returning.
-    ///
-    /// `None` returns as soon as the box is up, before anything is drawn.
     pub fn wait_for_ready(mut self, within: Option<Duration>) -> Self {
         self.wait = within;
         self
     }
 
-    /// Take the box away after this long, whatever else happens.
-    ///
-    /// Kept by a task here and written on the box as [`EXPIRY_LABEL`], so
-    /// [`sweep_expired`] can find it later.
     pub fn expires_after(mut self, ttl: Duration) -> Self {
         self.ttl = Some(ttl);
         self
     }
 
-    /// Take the box away once nothing has been asked of it for this long.
-    ///
-    /// Idleness is measured through this handle: every command, capture and file
-    /// copy counts. Work arriving another way needs [`Computer::touch`].
+    /// Only activity through this handle counts; other work needs [`Computer::touch`].
     pub fn expires_when_idle(mut self, idle: Duration) -> Self {
         self.idle = Some(idle);
         self
     }
 
-    /// Leave the box running when the handle is dropped.
     pub fn keep_on_drop(mut self, keep: bool) -> Self {
         self.keep = keep;
         self
     }
 
-    /// Which addresses the published ports answer on.
-    ///
-    /// Loopback is the default. A routable bind also needs [`Auth::Password`]
-    /// or [`Auth::Token`]; launch refuses an open viewer that another host can
     pub fn publish_on(mut self, bind: Bind) -> Self {
         self.config.bind = bind;
         self
     }
 
-    /// What the viewer asks of whoever connects.
-    ///
-    /// [`Auth::Open`] is the default and is what a box on loopback has always
-    /// been. Anything published beyond loopback needs one of the other two —
     pub fn auth(mut self, auth: Auth) -> Self {
         self.config.auth = auth;
         self
     }
 
-    /// Credentials that have to outlive this process.
-    ///
-    /// Unset, a pair is minted at launch and lives as long as the handle. A
-    /// second program attaching to the same box hands out working URLs only if
-    /// it was given the same values.
     pub fn credentials(mut self, credentials: Credentials) -> Self {
         self.config.credentials = Some(credentials);
         self
     }
 
-    /// The host to put in a viewer URL.
-    ///
-    /// A box published on every interface is reached at a name this crate has
-    /// never been told, so a URL built from the bind would be wrong. Unset
-    /// keeps the loopback address.
     pub fn advertise(mut self, host: impl Into<String>) -> Self {
         self.config.advertise = Some(host.into());
         self
     }
 
-    /// The arguments this would run, without running anything.
-    ///
-    /// Carries no credential: the gate's secrets are minted at launch, and a
-    /// preview that printed them would put a desktop in whatever logged it.
+    /// Carries no credential: secrets are minted at launch, so this is safe to log.
     pub fn preview(&self) -> Result<Vec<String>> {
         Ok(runtime::run_args(
             self.name.as_deref().unwrap_or("computer-preview"),
@@ -522,7 +350,6 @@ impl Builder {
         ))
     }
 
-    /// Where the image is fetched from, or built.
     fn source(&self) -> ImageSource {
         match &self.image {
             Some(name) => ImageSource::Registry(name.clone()),
@@ -530,10 +357,6 @@ impl Builder {
         }
     }
 
-    /// What this box would be started with, resolved.
-    ///
-    /// The profile's decisions become plain data here, so a [`Machine`] starts a
-    /// box from values rather than from a contract.
     pub fn config(&self) -> Result<Config> {
         let mut config = self.config.clone();
 
@@ -541,9 +364,6 @@ impl Builder {
         config.width = width;
         config.height = height;
         let source = self.source();
-        // The builder's own directory wins, then one the profile carries: a
-        // custom image and the contract it implements can arrive together
-        // instead of being two things a caller has to pair correctly.
         match self.image_dir.as_deref().or_else(|| source.directory()) {
             Some(directory) => {
                 let (directory, image) = bundle::directory_image(directory, &config.extras)?;
@@ -564,11 +384,8 @@ impl Builder {
             Vec::new()
         };
 
-        // The profile's first, so a caller who set a variable by hand keeps
-        // it, even where that disagrees with `size()`.
+        // The profile's first, so a variable the caller set by hand wins.
         let mut env = self.profile.launch_env(width, height);
-        // Which contract this box speaks, written where a process that never
-        // saw this builder can read it back.
         env.insert(
             profile::PROFILE_ENV.to_string(),
             self.profile.name().to_string(),
@@ -579,7 +396,6 @@ impl Builder {
         Ok(config)
     }
 
-    /// Open the box.
     pub async fn launch(self) -> Result<Computer> {
         let machine: Arc<dyn Machine> = match (&self.machine, &self.cli) {
             (Some(machine), _) => Arc::clone(machine),
@@ -589,15 +405,11 @@ impl Builder {
             )))),
         };
 
-        // Asked first, so "the runtime is not there" arrives as itself
-        // rather than as a box that would not start.
         machine.preflight().await?;
 
         let mut config = self.config()?;
 
-        // Asked of the `Machine` rather than the bind, because a bind is a
-        // container idea: E2B publishes a hostname per port and would walk
-        // past a rule phrased as "loopback or not".
+        // Asked of the machine, not the bind: E2B publishes a hostname per port.
         let routable = !config.publish.is_empty() && machine.reach(&config).needs_a_secret();
 
         if routable && !config.auth.is_gated() {
@@ -609,25 +421,17 @@ impl Builder {
             ));
         }
 
-        // CDP has no authentication and cannot be given one — Chromium binds
-        // its debugging port to loopback whatever it is told, and a forward
-        // cannot add a check to a WebSocket upgrade. Withdrawn rather than
-        // published where the gate cannot follow: reach it through a tunnel,
-        // or from inside the box.
+        // CDP has no authentication, and a forward cannot add one to a WebSocket upgrade.
         if routable && let Some(bridge) = self.profile.ports().devtools_bridge {
             config.publish.retain(|port| *port != bridge);
         }
 
-        // Minted here rather than in `config`, so `preview` stays a thing that
-        // can be printed: a secret exists once a box is going to.
         if config.auth.is_gated() {
             let credentials = match config.credentials.take() {
                 Some(supplied) => supplied,
                 None => Credentials::generate()?,
             };
-            // Carried as container environment, where every `screen.sh`
-            // invocation reads it — a screen opened long after launch has to
-            // be reachable with the credential the first one was.
+            // In the container environment, so a screen opened later takes the same credential.
             config
                 .env
                 .insert(auth::AUTH_ENV.to_string(), config.auth.as_str().to_string());
@@ -646,8 +450,6 @@ impl Builder {
             machine.ensure_image(&config).await?;
         }
 
-        // Checked before the box is started. A mismatched pairing builds and
-        // starts, and only shows up as a display that never came up.
         if let Some(declared) = machine.image_contract(&config.image).await
             && declared != self.profile.name()
         {
@@ -662,8 +464,6 @@ impl Builder {
         let name = self.name.clone().unwrap_or_else(unique_name);
         let expires_at = self.ttl.map(|ttl| SystemTime::now() + ttl);
         if let Some(at) = expires_at {
-            // On the box as well as in this process, so a box that outlives
-            // its program can still be swept.
             config.labels.insert(
                 EXPIRY_LABEL.to_string(),
                 at.duration_since(UNIX_EPOCH)
@@ -708,8 +508,7 @@ impl Builder {
             driver.as_ref(),
         );
         if routable && let Some(browser) = support.browser.as_mut() {
-            // A claim withdrawn rather than one broken, so `audit` skips the
-            // check instead of failing it.
+            // Withdrawn rather than broken, so `audit` skips the check instead of failing it.
             browser.cdp = false;
         }
 
@@ -723,8 +522,6 @@ impl Builder {
         computer.expires_at = expires_at;
 
         if let Some(ttl) = self.ttl {
-            // Detached: the box has to go even if nobody polls the handle
-            // again.
             let doomed = Arc::clone(&machine);
             let condemned = name.clone();
             tokio::spawn(async move {
@@ -734,9 +531,6 @@ impl Builder {
         }
 
         if let Some(idle) = self.idle {
-            // Woken on the same period it is watching for, so a box goes
-            // within one interval of the last thing asked of it rather than
-            // being polled every second for hours.
             let doomed = Arc::clone(&machine);
             let condemned = name.clone();
             let active_at = computer.host.active_at();
@@ -764,8 +558,6 @@ impl Builder {
 
         if let Some(within) = self.wait {
             if let Err(error) = computer.wait_until_ready(within).await {
-                // The box's own output explains a screen that never came up,
-                // and dropping `computer` below takes it away.
                 return Err(match (error, computer.logs().await) {
                     (Error::Timeout { after, detail }, Ok(logs)) if !logs.trim().is_empty() => {
                         Error::Timeout {
@@ -782,7 +574,6 @@ impl Builder {
     }
 }
 
-/// The image's claim, corrected for the driver actually in use.
 fn driven_by(mut support: DesktopSupport, driver: &dyn DesktopFactory) -> DesktopSupport {
     if let Some(display) = support.display.as_mut() {
         display.server = driver.display_server();
@@ -790,22 +581,11 @@ fn driven_by(mut support: DesktopSupport, driver: &dyn DesktopFactory) -> Deskto
     support
 }
 
-/// How many times a reaper asks before it gives up.
-///
-/// A runtime that is restarting answers nothing for a few seconds, and a box
-/// abandoned because the first ask landed in that window is the whole failure
-/// this exists to prevent.
+/// A restarting runtime answers nothing for a few seconds.
 const REAP_ATTEMPTS: u32 = 5;
 
-/// How long between those asks.
 const REAP_PAUSE: Duration = Duration::from_secs(10);
 
-/// Take a box away, and say so if it will not go.
-///
-/// **A detached task has no caller to return to.** Both reapers run long after
-/// the handle that made them stopped being polled, so a discarded error here
-/// is a box that keeps its processor and its memory with nothing anywhere
-/// recording why — which is exactly what a deadline was set to prevent.
 async fn reap(machine: Arc<dyn Machine>, name: String, because: &'static str) {
     for attempt in 1..=REAP_ATTEMPTS {
         match machine.remove(&name).await {
@@ -813,8 +593,6 @@ async fn reap(machine: Arc<dyn Machine>, name: String, because: &'static str) {
                 tracing::info!(box_ = %name, reason = because, "box removed");
                 return;
             }
-            // Already gone: something else took it, which is the outcome asked
-            // for rather than a failure to report.
             Err(Error::Gone(_)) => return,
             Err(error) => {
                 tracing::warn!(
@@ -866,13 +644,8 @@ impl ProfileRuntimes {
     }
 }
 
-/// A running box: a place with a desktop in it.
-///
-/// Which kind of place is a [`Machine`].
 pub struct Computer {
     machine: Arc<dyn Machine>,
-    /// Both held for the life of the box: a screen started on demand has to get
-    /// the same image contract and the same driver as the one it opened with.
     profile: Arc<dyn Profile>,
     runtimes: ProfileRuntimes,
     driver: Arc<dyn DesktopFactory>,
@@ -887,7 +660,6 @@ pub struct Computer {
 }
 
 impl Computer {
-    /// A box with everything at its default.
     pub async fn launch() -> Result<Self> {
         Self::builder().launch().await
     }
@@ -896,18 +668,11 @@ impl Computer {
         Builder::default()
     }
 
-    /// Pick up a box that is already running, with its windows, its browser
-    /// profile and its files.
-    ///
-    /// Never removed when the handle is dropped: this process did not create it.
+    /// Never removed on drop: this process did not create it.
     pub async fn attach(name: impl Into<String>) -> Result<Self> {
         Self::attach_to(Arc::new(DockerMachine::default()), name).await
     }
 
-    /// Pick up a box on any machine.
-    ///
-    /// The profile is the one the box names, where this crate ships one by that
-    /// name. See [`Computer::attach_using`] for any other.
     pub async fn attach_to(machine: Arc<dyn Machine>, name: impl Into<String>) -> Result<Self> {
         let name = name.into();
 
@@ -924,10 +689,6 @@ impl Computer {
         Self::pick_up(machine, name, profile, None, environment).await
     }
 
-    /// Pick up a box that speaks a contract this crate does not ship.
-    ///
-    /// A box records the name of its profile, not the profile itself, so the
-    /// caller supplies it again.
     pub async fn attach_using(
         machine: Arc<dyn Machine>,
         name: impl Into<String>,
@@ -944,16 +705,7 @@ impl Computer {
         Self::pick_up(machine, name, profile, driver, environment).await
     }
 
-    /// Take back a box that is not running, so that it can be started.
-    ///
-    /// Apart from [`Computer::attach_using`], which refuses one: a stopped box
-    /// is not gone, and something has to be able to pick it up again after the
-    /// process that stopped it has itself gone away.
-    ///
-    /// Only [`Computer::start`] and [`Computer::shutdown`] work on what this
-    /// answers. A stopped box publishes no ports, so it has no viewer, no
-    /// debugger and no screen to drive — and `start` answers with the handle
-    /// that has all three.
+    /// Only [`Computer::start`] and [`Computer::shutdown`] work on the handle this answers.
     pub async fn attach_stopped(
         machine: Arc<dyn Machine>,
         name: impl Into<String>,
@@ -966,7 +718,6 @@ impl Computer {
         Self::pick_up(machine, name, profile, driver, environment).await
     }
 
-    /// The half both attach paths share, with the environment already read.
     async fn pick_up(
         machine: Arc<dyn Machine>,
         name: String,
@@ -981,15 +732,11 @@ impl Computer {
         let support = driven_by(profile.support_at(width, height), driver.as_ref());
 
         let mapped = machine.ports(&name).await;
-        // The gate travels in the box's own environment, so a second process
-        // can rebuild it. Without this an attached handle hands out viewer
-        // URLs with no ticket on them, which the box's own gate then refuses.
         let (auth, credentials) = auth::from_environment(&environment);
         let host = MachineHost::new(machine, profile, name).gated_by(auth, credentials);
         let computer = Self::assemble(Arc::new(host), driver, support, mapped, None);
 
-        // A person may already have this screen, and the gate is per
-        // process, so the box is asked rather than assumed.
+        // The gate is per process, so a takeover already running is asked of the box.
         if computer.person_driving().await {
             computer
                 .primary
@@ -1004,9 +751,6 @@ impl Computer {
         Self::attach_to(Arc::new(DockerMachine::new(cli)), name).await
     }
 
-    /// Built around a [`MachineHost`] rather than its parts, because the host
-    /// is what knows where the box is advertised, and a second one made here
-    /// would answer differently.
     fn assemble(
         host: Arc<MachineHost>,
         driver: Arc<dyn DesktopFactory>,
@@ -1048,13 +792,6 @@ impl Computer {
         self.machine.runtime()
     }
 
-    /// When this box will be taken away, if it was given a life.
-    /// Freeze every process in the box, keeping its memory and its ports.
-    ///
-    /// A paused box holds its memory and comes back as the box it was: the
-    /// windows that were open are still open and the ports still answer.
-    /// Apart from removing it, which is not recoverable, and from stopping the
-    /// container, which ends the desktop and hands back different ports.
     pub async fn pause(&self) -> Result<()> {
         self.touch();
         self.machine.pause(&self.name).await
@@ -1065,36 +802,17 @@ impl Computer {
         self.machine.resume(&self.name).await
     }
 
-    /// Whether the box is frozen. `false` on a runtime that cannot freeze one.
+    /// `false` on a runtime that cannot freeze one.
     pub async fn paused(&self) -> Result<bool> {
         self.machine.paused(&self.name).await
     }
 
-    /// End every process, keeping the filesystem.
-    ///
-    /// Cheaper than [`Computer::pause`] and costlier to come back from: a
-    /// paused box holds its memory and wakes as it was, a stopped one gives
-    /// the memory back and starts the desktop again from the beginning.
-    /// Neither takes the box away — that is [`Computer::shutdown`].
     pub async fn stop(&self) -> Result<()> {
         self.touch();
         self.machine.halt(&self.name).await
     }
 
-    /// Start a stopped box, and answer with a handle that reaches it.
-    ///
-    /// A new handle, not this one. A container runtime publishes on a host
-    /// port it picks as the box starts and picks again every time, so every
-    /// URL this handle holds — the viewer, the debugger — is wrong from the
-    /// moment the box comes back. The old handle is left pointing at ports
-    /// that are now somebody else's.
-    ///
-    /// The box keeps its files and loses its memory: the desktop starts again,
-    /// so the windows that were open are not. `within` bounds the wait for the
-    /// screen to come back.
-    ///
-    /// Attaching rather than owning, as [`Computer::attach`] is: the handle
-    /// this answers with does not take the box away when it drops.
+    /// A new handle, which does not own the box: the runtime picks new host ports on every start.
     pub async fn start(&self, within: Duration) -> Result<Self> {
         self.machine.wake(&self.name).await?;
 
@@ -1113,7 +831,6 @@ impl Computer {
         Ok(woken)
     }
 
-    /// Whether the box is stopped: it exists and nothing in it is running.
     pub async fn stopped(&self) -> Result<bool> {
         Ok(!self.machine.running(&self.name).await?)
     }
@@ -1122,62 +839,44 @@ impl Computer {
         self.expires_at
     }
 
-    /// How long the box has had nothing asked of it through this handle.
     pub fn idle_for(&self) -> Duration {
         self.host.idle_for()
     }
 
-    /// Count this moment as activity, for work that does not go through this
-    /// handle.
     pub fn touch(&self) {
         self.host.touch();
     }
 
-    /// Whether its time has run out. The removal starts here rather than ends.
     pub fn expired(&self) -> bool {
         self.expires_at
             .map(|at| SystemTime::now() >= at)
             .unwrap_or(false)
     }
 
-    /// The container's name, which is also how [`Computer::attach`] finds it.
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// What this box's viewers ask, and what opens them.
-    ///
-    /// The way to learn the password under [`Auth::Password`], where no URL
-    /// carries it by design. `None` where the gate is open.
     pub fn credentials(&self) -> Option<&Credentials> {
         self.host.gate().1
     }
 
-    /// What this box can show. A constant for the image it was started from.
     pub fn support(&self) -> &DesktopSupport {
         &self.support
     }
 
-    /// Screen 0, which the image starts for itself.
     pub fn primary(&self) -> &Screen {
         &self.primary
     }
 
-    /// Who holds which screen. Only meaningful where several callers share one
-    /// box; a single caller can ignore it entirely.
     pub fn leases(&self) -> &Screens {
         &self.screen_registry
     }
 
-    /// Start another screen and hand back a driver for it, under a lease.
-    ///
-    /// Held for this process, so a screen somebody else holds is refused. See
-    /// [`Computer::claim`] to hold one under a name of your own.
     pub async fn screen(&self, screen: ScreenId) -> Result<LeasedScreen> {
         self.take(screen, &process_holder(), 0).await
     }
 
-    /// Start a screen with no lease at all, for one caller with one box.
     pub async fn screen_unfenced(&self, screen: ScreenId) -> Result<Screen> {
         if screen.0 >= self.support.max_screens {
             return Err(Error::ScreenUnavailable {
@@ -1201,10 +900,6 @@ impl Computer {
         ))
     }
 
-    /// Take a screen under a lease, held under a name of your own.
-    ///
-    /// A returning holder is given the screen it already had, and the lease is
-    /// returned when the handle drops.
     pub async fn claim(&self, holder: &HolderId, fence: u64) -> Result<LeasedScreen> {
         let lease = self
             .screen_registry
@@ -1217,16 +912,12 @@ impl Computer {
                 leases: Arc::clone(&self.screen_registry),
             }),
             Err(error) => {
-                // The screen never started, so the lease would block whoever
-                // asks next until it ran out.
                 let _ = self.screen_registry.release(&lease);
                 Err(error)
             }
         }
     }
 
-    /// Take one particular screen, whoever holds it.
-    ///
     /// Succeeds when the fence is higher than the held one.
     pub async fn take(
         &self,
@@ -1258,10 +949,6 @@ impl Computer {
             .await
     }
 
-    /// Whether the screen and the browser answer now.
-    ///
-    /// The driver asks its own display server; the browser is asked for its
-    /// port.
     pub async fn probe(&self) -> DesktopPresence {
         let alive = Desktop::alive(&self.primary).await;
 
@@ -1279,9 +966,6 @@ impl Computer {
         }
     }
 
-    /// Wait until there is something on the screen to look at.
-    ///
-    /// Both halves: the display answers long before the browser has a window.
     pub async fn wait_until_ready(&self, within: Duration) -> Result<DesktopPresence> {
         let deadline = SystemTime::now() + within;
 
@@ -1300,37 +984,24 @@ impl Computer {
         }
     }
 
-    /// Where the browser answers *inside* the box, which is how [`Computer::probe`]
-    /// knows it came up.
-    ///
-    /// Not gated on `cdp`, which says whether a caller out here can reach the
-    /// debugger — a different question, and one a box on somebody else's host
-    /// answers no to while its browser is perfectly up. Gating this on it made
-    /// such a box never report ready.
+    /// Not gated on `cdp`, which is reachability from here, not whether the browser is up.
     fn devtools_port_in_box(&self) -> Option<u16> {
         self.support.browser.as_ref()?;
         self.profile.ports().devtools
     }
 
-    /// The machine this box runs on, for anything this API does not cover.
     pub fn machine(&self) -> &Arc<dyn Machine> {
         &self.machine
     }
 
-    /// The image contract this box speaks.
     pub fn profile(&self) -> &Arc<dyn Profile> {
         &self.profile
     }
 
-    /// Where to watch screen 0 in a browser, read-only.
     pub fn viewer_url(&self) -> Option<String> {
         self.primary.viewer_url()
     }
 
-    /// Chromium's DevTools, as reached from this machine.
-    ///
-    /// Screen 0's browser: the debugging port is one port, and the first
-    /// browser to start holds it. `None` where no ports were published.
     pub fn devtools(&self) -> Option<BrowserEndpoint> {
         let bridge = self.profile.ports().devtools_bridge?;
         let port = self.mapped.get(&bridge)?;
@@ -1340,98 +1011,76 @@ impl Computer {
         })
     }
 
-    /// Every port mapping the runtime made, as the port inside the box to the
-    /// port out here.
     pub fn ports(&self) -> &PortMap {
         &self.mapped
     }
 
-    /// Open a URL in screen 0's browser.
     pub async fn open_url(&self, url: &str) -> Result<()> {
         self.primary.open_url(url).await
     }
 
-    /// Replace screen 0's wallpaper with these image bytes.
     pub async fn set_wallpaper(&self, image: &[u8]) -> Result<()> {
         self.primary.set_wallpaper(image).await
     }
 
-    /// The browser, driven through the DevTools protocol rather than through the
-    /// screen.
-    ///
-    /// Works on a box with no display. `None` where no ports were published.
     pub fn browser(&self) -> Option<Devtools> {
         self.devtools()
             .as_ref()
             .and_then(|endpoint| Devtools::from_endpoint(endpoint).ok())
     }
 
-    /// Hand screen 0 to a person, and hold the input back until they are done.
     pub async fn hand_over(&self) -> Result<Takeover> {
         self.primary.hand_over().await
     }
 
-    /// Let a person click while this keeps driving. See [`Screen::share`].
     pub async fn share(&self) -> Result<Takeover> {
         self.primary.share().await
     }
 
-    /// Whether somebody is driving screen 0, asked of the box itself.
     pub async fn person_driving(&self) -> bool {
         self.primary.person_driving().await
     }
 
-    /// How many people are watching screen 0, and how many are on the input.
     pub async fn viewers(&self) -> Result<Viewers> {
         self.primary.viewers().await
     }
 
-    /// Start recording screen 0. See [`Screen::start_recording`].
     pub async fn start_recording(&self, fps: Option<u32>) -> Result<String> {
         self.primary.start_recording(fps).await
     }
 
-    /// Stop it, and answer with the path of the finished file inside the box.
     pub async fn stop_recording(&self) -> Result<String> {
         self.primary.stop_recording().await
     }
 
-    /// Where screen 0 is recording to, or `None` if it is not.
     pub async fn recording(&self) -> Result<Option<String>> {
         self.primary.recording().await
     }
 
-    /// What is on screen 0's clipboard.
     pub async fn clipboard(&self) -> Result<String> {
         self.primary.clipboard().await
     }
 
-    /// Put text on screen 0's clipboard, ready to paste with `ctrl+v`.
     pub async fn set_clipboard(&self, text: &str) -> Result<()> {
         self.primary.set_clipboard(text).await
     }
 
-    /// What is on one of screen 0's selections.
     pub async fn selection(&self, selection: Selection) -> Result<String> {
         self.primary.selection(selection).await
     }
 
-    /// Screen 0's selection as one of the types its owner offers.
     pub async fn clipboard_bytes(&self, selection: Selection, target: &str) -> Result<Vec<u8>> {
         self.primary.clipboard_bytes(selection, target).await
     }
 
-    /// The types screen 0's selection can be read as.
     pub async fn clipboard_targets(&self, selection: Selection) -> Result<Vec<String>> {
         self.primary.clipboard_targets(selection).await
     }
 
-    /// Record screen 0 as video, into a file inside the box.
     pub async fn record(&self, duration: Duration, path: &str) -> Result<()> {
         self.primary.record(duration, path).await
     }
 
-    /// Put bytes on screen 0's selection, offered as this type.
     pub async fn set_clipboard_bytes(
         &self,
         selection: Selection,
@@ -1443,23 +1092,18 @@ impl Computer {
             .await
     }
 
-    /// Put text on one of screen 0's selections.
     pub async fn set_selection(&self, selection: Selection, text: &str) -> Result<()> {
         self.primary.set_selection(selection, text).await
     }
 
-    /// Wait until the person on screen 0 has closed their tab.
     pub async fn wait_until_free(&self, within: Duration) -> Result<Viewers> {
         self.primary.wait_until_free(within).await
     }
 
-    /// End a takeover on screen 0 — including one started by a process that
-    /// has since exited.
     pub async fn reclaim(&self) -> Result<()> {
         self.primary.reclaim().await
     }
 
-    /// Run a command in the box, with no display attached.
     pub async fn exec<I, S>(&self, argv: I) -> Result<ExecResult>
     where
         I: IntoIterator<Item = S>,
@@ -1472,7 +1116,6 @@ impl Computer {
         self.host.exec(&argv).await
     }
 
-    /// Run a command against one screen's display.
     pub async fn exec_on<I, S>(&self, screen: ScreenId, argv: I) -> Result<ExecResult>
     where
         I: IntoIterator<Item = S>,
@@ -1485,7 +1128,6 @@ impl Computer {
         self.host.run(&argv, screen).await
     }
 
-    /// Put bytes in the box.
     pub async fn write_file(&self, path: impl AsRef<Path>, bytes: &[u8]) -> Result<()> {
         self.touch();
         self.machine
@@ -1493,14 +1135,11 @@ impl Computer {
             .await
     }
 
-    /// Take bytes out of the box.
     pub async fn read_file(&self, path: impl AsRef<Path>) -> Result<Vec<u8>> {
         self.touch();
         self.machine.read_file(&self.name, path.as_ref()).await
     }
 
-    /// A whole file in, without holding it in memory where the runtime can
-    /// move it directly.
     pub async fn upload(&self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
         self.touch();
         self.machine
@@ -1508,7 +1147,6 @@ impl Computer {
             .await
     }
 
-    /// A whole file out, the same way.
     pub async fn download(&self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
         self.touch();
         self.machine
@@ -1516,9 +1154,6 @@ impl Computer {
             .await
     }
 
-    /// Run a command, and give up on it after `within`.
-    ///
-    /// [`Computer::exec`] uses [`machine::DEFAULT_TIMEOUT`].
     pub async fn exec_within<I, S>(&self, argv: I, within: Duration) -> Result<ExecResult>
     where
         I: IntoIterator<Item = S>,
@@ -1531,25 +1166,17 @@ impl Computer {
         self.host.run_within(&argv, &BTreeMap::new(), within).await
     }
 
-    /// What the box itself has said, which is where a screen that never came
-    /// up explains itself.
     pub async fn logs(&self) -> Result<String> {
         self.machine.logs(&self.name).await
     }
 
-    /// Take the box down.
-    ///
-    /// Dropping the handle does this too, without reporting whether it worked.
     pub async fn shutdown(mut self) -> Result<()> {
         let outcome = self.machine.remove(&self.name).await;
 
-        // Cleared whatever the runtime answered, so the drop below does not
-        // remove it a second time.
+        // Cleared whatever the runtime answered, so the drop does not remove it again.
         self.cleanup = None;
         outcome
     }
-
-    // Screen 0, without reaching through `primary()`.
 
     pub async fn screenshot(&self) -> Result<Vec<u8>> {
         self.primary.screenshot().await
@@ -1603,16 +1230,12 @@ impl Computer {
         self.primary.wait_until_still(settle, within).await
     }
 
-    /// Type into screen 0. `delay` is the gap between keystrokes, or full
-    /// speed for `None`.
-    pub async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
-        self.primary.type_text(text, delay).await
+    pub fn type_text(&self, text: impl Into<String>) -> Typing<'_> {
+        Typing::new(&self.primary, text)
     }
 
-    /// Chords pressed in turn on screen 0, with `held` down across all of
-    /// them.
-    pub async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        self.primary.key(chords, held).await
+    pub fn press(&self, keys: impl Keys) -> Press<'_> {
+        Press::new(&self.primary, keys)
     }
 
     pub async fn scroll(&self, at: impl Into<Point>, by: Delta) -> Result<()> {
@@ -1623,25 +1246,14 @@ impl Computer {
         self.primary.cursor().await
     }
 
-    /// Where screen 0's pointer is, putting it somewhere first if that is the
-    /// only way to find out. See [`Desktop::find_cursor`].
     pub async fn find_cursor(&self) -> Result<Point> {
         self.primary.find_cursor().await
     }
 
-    /// What the accessibility tree says is on the screen.
-    ///
-    /// A native window only. A page is read through [`Page`], which knows
-    /// more about one than any tree does.
     pub async fn nodes(&self, app: Option<&str>, depth: Option<u32>) -> Result<Vec<Node>> {
         self.primary.nodes(app, depth).await
     }
 
-    /// Widgets matching a query, best first.
-    ///
-    /// Matches a widget's own name and the words of any label beside it: a form
-    /// field usually has no name of its own, and the word a caller knows it by
-    /// is in the label next to it.
     pub async fn find_nodes(&self, query: &NodeQuery, limit: Option<usize>) -> Result<Vec<Node>> {
         self.primary.find_nodes(query, limit).await
     }
@@ -1650,9 +1262,6 @@ impl Computer {
         self.primary.focus_node(query).await
     }
 
-    /// Run a widget's own action, which is not a click: no pointer moves, and
-    /// an application watching the pointer sees nothing. [`Node::at`] carries
-    /// the rectangle where a real click is wanted instead.
     pub async fn invoke_node(&self, query: &NodeQuery, action: Option<&str>) -> Result<Node> {
         self.primary.invoke_node(query, action).await
     }
@@ -1679,12 +1288,6 @@ impl Drop for Computer {
             return;
         };
 
-        // Spawned and not waited on: a drop cannot await, and the container
-        // runtime outlives this process.
-        //
-        // Whether it *finished* is unknowable from here — but whether it
-        // started is not, and a command that never started is a box nobody
-        // will ever take away.
         if let Err(error) = std::process::Command::new(&cleanup.program)
             .args(&cleanup.args)
             .stdout(std::process::Stdio::null())
@@ -1744,8 +1347,8 @@ impl Desktop for Computer {
         Desktop::type_text(&self.primary, text, delay).await
     }
 
-    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        Desktop::key(&self.primary, chords, held).await
+    async fn press(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        Desktop::press(&self.primary, chords, held).await
     }
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {
@@ -1774,9 +1377,6 @@ impl Desktop for Computer {
 }
 
 pub struct Screen {
-    /// Behind the trait, not the X11 type: which display server is under a
-    /// screen is the image's business, and nothing above here should have to
-    /// be edited to add a second one.
     driver: Arc<dyn Desktop>,
     profile: Arc<dyn Profile>,
     runtimes: ProfileRuntimes,
@@ -1797,8 +1397,7 @@ impl Screen {
     ) -> Self {
         Self {
             driver: driver.open(Arc::clone(&host), id),
-            // Screen 0 always has ports; a screen past the limit is refused by
-            // `Computer::screen` before it reaches here.
+            // A screen past the limit is refused by `Computer::screen` before it reaches here.
             ports: profile.ports().screen(id).unwrap_or(ScreenPorts {
                 display_number: id.0 + 1,
                 view: 0,
@@ -1818,7 +1417,6 @@ impl Screen {
         self.id
     }
 
-    /// The display this screen is on — `:1` for screen 0.
     pub fn display(&self) -> String {
         self.ports.display()
     }
@@ -1831,14 +1429,10 @@ impl Screen {
         self.driver.as_ref()
     }
 
-    /// Whether the owner may act, and where a takeover is recorded.
     pub fn control(&self) -> &Arc<ControlGate> {
         self.driver.control()
     }
 
-    /// Watch this screen in a browser, read-only.
-    ///
-    /// `None` where no ports were published.
     pub fn viewer_url(&self) -> Option<String> {
         self.mapped.get(&self.ports.view).map(|port| {
             self.profile
@@ -1846,8 +1440,6 @@ impl Screen {
         })
     }
 
-    /// The input-accepting viewer, which exists only while somebody has been
-    /// handed the screen. See [`Screen::hand_over`].
     pub fn control_url(&self) -> Option<String> {
         self.mapped.get(&self.ports.control).map(|port| {
             self.profile
@@ -1855,10 +1447,6 @@ impl Screen {
         })
     }
 
-    /// Open a URL in this screen's browser.
-    ///
-    /// A new tab, raised in front of the last one, so coordinates from an
-    /// earlier screenshot now belong to a page that is no longer on screen.
     pub async fn open_url(&self, url: &str) -> Result<()> {
         self.runtimes
             .browser
@@ -1866,21 +1454,14 @@ impl Screen {
             .await
     }
 
-    /// Replace this screen's wallpaper with these image bytes.
-    ///
-    /// The display stack detects the image format from its contents.
     pub async fn set_wallpaper(&self, image: &[u8]) -> Result<()> {
         if image.is_empty() {
             return Err(Error::denied("a wallpaper cannot be empty"));
         }
 
-        // Asked before the upload: a profile with no wallpaper support would
-        // otherwise take the whole image into the box and then refuse it.
         self.runtimes.wallpaper.supported()?;
 
-        // The file stays: swaybg reads it after swaymsg has already returned,
-        // and reads it again whenever sway restarts the background. One path
-        // per screen, overwritten, so it cannot grow.
+        // Kept: swaybg reads it after swaymsg returns, and again whenever sway restarts it.
         let path = PathBuf::from(format!("/tmp/computer/wallpaper-{}.image", self.id.0));
         self.host.touch();
         self.host
@@ -1893,8 +1474,6 @@ impl Screen {
             .await
     }
 
-    /// Returns once the window has held still for `settle`: a window exists
-    /// well before the program behind it has drawn.
     pub async fn launch(&self, launch: &Launch) -> Result<Window> {
         if launch.command.is_empty() {
             return Err(Error::invalid("an app with no command cannot be started"));
@@ -1928,9 +1507,6 @@ impl Screen {
             .await
     }
 
-    /// Answers with the window as it ended up, which is not always what was
-    /// asked for: a window manager clamps a move to the screen, and honours a
-    /// resize only within the size hints the program gave it.
     pub async fn arrange(&self, window: &str, how: Arrange) -> Result<Window> {
         self.runtimes.app.supported()?;
         self.runtimes
@@ -1953,11 +1529,6 @@ impl Screen {
             .await
     }
 
-    /// For the windows nothing here started: a dialog a click raised, or a
-    /// second window a program opened for itself.
-    ///
-    /// Held still means placed, not painted: a dialog with a caret blinking in
-    /// it never stops drawing, and `launch` is the one that waits for paint.
     pub async fn wait_for_window(&self, class: &str, within: Duration) -> Result<Window> {
         self.runtimes.app.supported()?;
         self.runtimes
@@ -1973,26 +1544,14 @@ impl Screen {
             .await
     }
 
-    /// Give the screen to a person, and stop sending input until they give it
-    /// back.
-    ///
-    /// A second server on a second port, so a viewer already connected to the
-    /// read-only stream is not handed the keyboard with it.
     pub async fn hand_over(&self) -> Result<Takeover> {
         self.open_control(true).await
     }
 
-    /// Let a person click while the owner keeps driving.
-    ///
-    /// The same server with the gate left open. Both sides send to one display,
-    /// which merges them, so their input can interleave mid-gesture.
     pub async fn share(&self) -> Result<Takeover> {
         self.open_control(false).await
     }
 
-    /// How many people are watching, and how many are on the input.
-    ///
-    /// Counted from live connections: both servers keep listening either way.
     pub async fn viewers(&self) -> Result<Viewers> {
         self.runtimes
             .screen
@@ -2000,33 +1559,18 @@ impl Screen {
             .await
     }
 
-    /// Start recording this screen, and answer with the path inside the box
-    /// that the recording is being written to.
-    ///
-    /// Open-ended, apart from [`Screen::record`], which runs for a duration
-    /// fixed before it starts and holds the call for all of it. A caller that
-    /// does not know how long the work will take wants this one.
-    ///
-    /// Encoded in the box: the frames never cross the wire, so this costs the
-    /// same from another host as from this one. Needs a box built with
-    /// [`Builder::video`], which is where the encoder comes from.
     pub async fn start_recording(&self, fps: Option<u32>) -> Result<String> {
         self.recorder(Recording::Start, fps)
             .await?
             .ok_or_else(|| Error::denied("the box did not say where it was recording"))
     }
 
-    /// Stop it, and answer with the path of the finished file.
-    ///
-    /// The encoder is ended rather than killed, and this waits for it: an mp4
-    /// cut off mid-write has no index and plays in nothing.
     pub async fn stop_recording(&self) -> Result<String> {
         self.recorder(Recording::Stop, None)
             .await?
             .ok_or_else(|| Error::denied("the box did not say what it had recorded"))
     }
 
-    /// Where this screen is recording to, or `None` if it is not.
     pub async fn recording(&self) -> Result<Option<String>> {
         self.recorder(Recording::Status, None).await
     }
@@ -2044,9 +1588,6 @@ impl Screen {
             .await
     }
 
-    /// Wait until nobody is on the input any more.
-    ///
-    /// Read the screen again afterwards. It may look nothing like it did.
     pub async fn wait_until_free(&self, within: Duration) -> Result<Viewers> {
         let deadline = SystemTime::now() + within;
 
@@ -2066,12 +1607,7 @@ impl Screen {
     }
 
     async fn open_control(&self, exclusive: bool) -> Result<Takeover> {
-        // Minted before the server opens, so the box records who opened it.
-        //
-        // From the CSPRNG, not the clock: this token is what the input guard
-        // refuses on, so anyone who can work one out can drive a screen during
-        // somebody else's takeover. The screen number stays for the person
-        // reading the file; the entropy is the rest.
+        // From the CSPRNG: whoever can guess this token can drive the takeover.
         let token = format!("takeover-{}-{}", self.id.0, Secret::generate()?.expose());
 
         self.runtimes
@@ -2101,21 +1637,11 @@ impl Screen {
         })
     }
 
-    /// Whether somebody has been handed this screen.
-    ///
-    /// Asked of the box, which holds the token, rather than of this process,
-    /// which holds only its own gate.
     pub async fn person_driving(&self) -> bool {
         servers::x11::port_listening(self.host.as_ref(), self.id, self.ports.control).await
     }
 
-    /// End a takeover this process did not start.
-    ///
-    /// Closes the input-accepting server and reopens the gate. Nothing reaches
-    /// this on a timeout or a retry: the person is still holding a keyboard.
     pub async fn reclaim(&self) -> Result<()> {
-        // Forced: the takeover this ends is one the process never started,
-        // so it holds no token to prove anything with.
         self.runtimes
             .screen
             .reclaim(self.host.as_ref(), self.profile.as_ref(), self.id)
@@ -2125,65 +1651,38 @@ impl Screen {
         Ok(())
     }
 
-    /// The screen's own idea of its size, read from the X server rather than
-    /// from what the box was asked for.
     pub async fn geometry(&self) -> Result<(u32, u32)> {
         self.driver.geometry().await
     }
 
-    /// The clipboard, or the refusal a box without one gives.
     fn clipboard_port(&self) -> Result<&dyn Clipboard> {
         self.driver.as_clipboard().ok_or(Error::Unsupported {
             gaps: vec!["clipboard"],
         })
     }
 
-    /// What is on this screen's clipboard.
-    ///
-    /// Each screen has its own selections.
     pub async fn clipboard(&self) -> Result<String> {
         self.selection(Selection::Clipboard).await
     }
 
-    /// What is on one of this screen's selections.
-    ///
-    /// `CLIPBOARD` is copy and paste. `PRIMARY` is what dragging the mouse over
-    /// text fills, which a middle click pastes.
     pub async fn selection(&self, selection: Selection) -> Result<String> {
         self.clipboard_port()?.text(selection).await
     }
 
-    /// Put text on this screen's clipboard, ready to paste.
-    ///
-    /// Staged as a file in the box, because a command line is no place for a
-    /// document.
     pub async fn set_clipboard(&self, text: &str) -> Result<()> {
         self.set_selection(Selection::Clipboard, text).await
     }
 
-    /// Where this screen's sound card listens, for a client inside the box.
-    ///
-    /// PulseAudio writes its socket under the caller's runtime directory, which
-    /// an exec does not share. Everything reaches it through this path.
     pub fn audio_socket(&self) -> String {
-        // One daemon for the box: PulseAudio is a singleton per user, so a
-        // second one for a second screen refuses to start.
+        // PulseAudio is a singleton per user, so every screen shares one daemon.
         "/tmp/computer/pulse.socket".to_string()
     }
 
-    /// What a recorder listens to on this screen.
-    ///
-    /// The sink's monitor. `default` finds no source on a box whose only card is
-    /// a sink that goes nowhere.
+    /// The sink's monitor: `default` finds no source when the only card is a null sink.
     pub fn audio_source(&self) -> String {
         format!("screen{}.monitor", self.ports.display_number)
     }
 
-    /// Record this screen as video, into a file inside the box.
-    ///
-    /// Needs `ffmpeg` from [`bundle::Extras::video`], and takes sound from a
-    /// card where [`bundle::Extras::audio`] put one. The call runs for the whole
-    /// duration.
     pub async fn record(&self, duration: Duration, path: &str) -> Result<()> {
         let recorder = self
             .host
@@ -2219,8 +1718,7 @@ impl Screen {
         argv.push("-i".to_string());
         argv.push(self.display());
 
-        // Sound only where there is a card: `ffmpeg` fails on an input that
-        // is not there, and loses the video with it.
+        // ffmpeg fails on a missing input, and loses the video with it.
         let sound = self
             .host
             .exec(&["sh".into(), "-c".into(), "command -v pactl".into()])
@@ -2232,8 +1730,6 @@ impl Screen {
             argv.push("-i".to_string());
             argv.push(self.audio_source());
 
-            // Through `env` rather than a shell, which would be one more
-            // thing to quote correctly.
             let mut with_sound = vec![
                 "env".to_string(),
                 format!("PULSE_SERVER=unix:{}", self.audio_socket()),
@@ -2246,7 +1742,6 @@ impl Screen {
         argv.push(seconds.to_string());
         argv.push(path.to_string());
 
-        // Longer than the recording, because the recording is the wait.
         let result = self
             .host
             .run_within(&argv, &BTreeMap::new(), duration + Duration::from_secs(30))
@@ -2261,18 +1756,14 @@ impl Screen {
         }
     }
 
-    /// The selection as one of the types its owner offers, such as `image/png`.
-    /// [`Screen::clipboard_targets`] lists them.
     pub async fn clipboard_bytes(&self, selection: Selection, target: &str) -> Result<Vec<u8>> {
         self.clipboard_port()?.bytes(selection, target).await
     }
 
-    /// The types this selection can be read as.
     pub async fn clipboard_targets(&self, selection: Selection) -> Result<Vec<String>> {
         self.clipboard_port()?.targets(selection).await
     }
 
-    /// Put bytes on a selection, offered as this type.
     pub async fn set_clipboard_bytes(
         &self,
         selection: Selection,
@@ -2289,7 +1780,6 @@ impl Screen {
         port.set_bytes_from(selection, target, &path).await
     }
 
-    /// Put text on one of this screen's selections.
     pub async fn set_selection(&self, selection: Selection, text: &str) -> Result<()> {
         let path = format!("/tmp/computer/{}-{}", selection.name(), self.id.0);
         let port = self.clipboard_port()?;
@@ -2305,9 +1795,6 @@ impl Screen {
         self.driver.screenshot().await
     }
 
-    /// A window is looked up here rather than in the display server, because
-    /// a window is a rectangle once it has been found and both servers can
-    /// already crop to one.
     pub async fn capture(&self, shot: &Shot) -> Result<Vec<u8>> {
         if let Some(percent) = shot.scale {
             if percent == 0 || percent > MAGNIFY {
@@ -2320,9 +1807,6 @@ impl Screen {
         let area = match &shot.of {
             Of::Screen => None,
             Of::Region(area) => Some(*area),
-            // Looked up now rather than trusted from an earlier listing: a
-            // window moves, and a capture of where it used to be is a picture
-            // of whatever took its place.
             Of::Window(id) => Some(self.window_rect(id).await?),
         };
 
@@ -2357,9 +1841,6 @@ impl Screen {
         self.driver.click(at.into(), button).await
     }
 
-    /// Shift-click extends a selection and ctrl-click adds to one. Pressing
-    /// the key first does not: the press ends with the command that made it,
-    /// so the click which follows arrives unmodified.
     pub async fn click_with(
         &self,
         at: impl Into<Point>,
@@ -2394,27 +1875,16 @@ impl Screen {
             .await
     }
 
-    /// What to do instead of guessing at a sleep: a menu opening, a dialog
-    /// drawing, a page painting. The watch runs inside the box, so it costs
-    /// one round trip however long it waits.
-    ///
-    /// A screen with something animating on it never holds still, and reaches
-    /// the deadline instead.
     pub async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
         self.driver.wait_until_still(settle, within).await
     }
 
-    /// `delay` is the gap between keystrokes, or full speed for `None`.
-    pub async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
-        self.driver.type_text(text, delay).await
+    pub fn type_text(&self, text: impl Into<String>) -> Typing<'_> {
+        Typing::new(self.driver.as_ref(), text)
     }
 
-    /// Chords pressed in turn, with `held` down across all of them.
-    ///
-    /// A chord releases what it pressed, so `alt+tab` twice toggles between
-    /// two windows; holding alt across two tabs reaches the third.
-    pub async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        self.driver.key(chords, held).await
+    pub fn press(&self, keys: impl Keys) -> Press<'_> {
+        Press::new(self.driver.as_ref(), keys)
     }
 
     pub async fn scroll(&self, at: impl Into<Point>, by: Delta) -> Result<()> {
@@ -2425,24 +1895,14 @@ impl Screen {
         self.driver.cursor().await
     }
 
-    /// Where the pointer is, putting it somewhere first if that is the only
-    /// way to find out. See [`Desktop::find_cursor`].
     pub async fn find_cursor(&self) -> Result<Point> {
         self.driver.find_cursor().await
     }
 
-    /// What the accessibility tree says is on the screen.
-    ///
-    /// Every application on this screen, or one named by `app`.
     pub async fn nodes(&self, app: Option<&str>, depth: Option<u32>) -> Result<Vec<Node>> {
         self.driver.nodes(app, depth).await
     }
 
-    /// Widgets matching a query, best first.
-    ///
-    /// Matches a widget's own name and the words of any label beside it: a form
-    /// field usually has no name of its own, and the word a caller knows it by
-    /// is in the label next to it.
     pub async fn find_nodes(&self, query: &NodeQuery, limit: Option<usize>) -> Result<Vec<Node>> {
         self.driver.find_nodes(query, limit).await
     }
@@ -2451,9 +1911,6 @@ impl Screen {
         self.driver.focus_node(query).await
     }
 
-    /// Run a widget's own action, which is not a click: no pointer moves, and
-    /// an application watching the pointer sees nothing. [`Node::at`] carries
-    /// the rectangle where a real click is wanted instead.
     pub async fn invoke_node(&self, query: &NodeQuery, action: Option<&str>) -> Result<Node> {
         self.driver.invoke_node(query, action).await
     }
@@ -2515,8 +1972,8 @@ impl Desktop for Screen {
         self.driver.type_text(text, delay).await
     }
 
-    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        self.driver.key(chords, held).await
+    async fn press(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        self.driver.press(chords, held).await
     }
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {
@@ -2527,8 +1984,7 @@ impl Desktop for Screen {
         self.driver.cursor().await
     }
 
-    /// Forwarded, or the trait default would answer here and the driver's own
-    /// would never run.
+    /// Forwarded, or the trait default would run instead of the driver's own.
     async fn find_cursor(&self) -> Result<Point> {
         self.driver.find_cursor().await
     }
@@ -2550,10 +2006,6 @@ impl Desktop for Screen {
     }
 }
 
-/// A screen held under a lease.
-///
-/// Dereferences to the [`Screen`]. The lease is returned on drop, and a
-/// stale release is refused.
 pub struct LeasedScreen {
     screen: Screen,
     lease: ScreenLease,
@@ -2569,7 +2021,6 @@ impl LeasedScreen {
         &self.screen
     }
 
-    /// Give the screen back now, and say whether the release was accepted.
     pub fn release(self) -> Result<()> {
         self.leases.release(&self.lease)
     }
@@ -2585,13 +2036,10 @@ impl std::ops::Deref for LeasedScreen {
 
 impl Drop for LeasedScreen {
     fn drop(&mut self) {
-        // Refused where somebody newer holds it: a slow holder's release must
-        // not tear down the screen its replacement is working on.
         let _ = self.leases.release(&self.lease);
     }
 }
 
-/// A person is driving. The owner may look, and may not touch.
 pub struct Takeover {
     host: Arc<MachineHost>,
     profile: Arc<dyn Profile>,
@@ -2614,7 +2062,6 @@ impl std::fmt::Debug for Takeover {
 }
 
 impl Takeover {
-    /// Where the person connects. `None` when ports were not published.
     pub fn url(&self) -> Option<&str> {
         self.url.as_deref()
     }
@@ -2623,24 +2070,18 @@ impl Takeover {
         self.screen
     }
 
-    /// Whether the owner's input is being held back, or both are driving.
     pub fn exclusive(&self) -> bool {
         self.exclusive
     }
 
-    /// Take the screen back, and close the input-accepting viewer.
-    ///
-    /// Refused where somebody else has been handed the screen since.
     pub async fn end(self) -> Result<()> {
-        // Checked here first, because this process may know it was replaced …
         if !self.control.hand_back(&self.token) {
             return Err(Error::denied(
                 "this takeover is no longer the one running; somebody else has the screen",
             ));
         }
 
-        // … and checked again in the box, because a replacement started by
-        // another process is one this gate never heard about.
+        // Checked again in the box: a takeover another process started never reached this gate.
         self.screen_runtime
             .release(
                 self.host.as_ref(),
@@ -2652,10 +2093,6 @@ impl Takeover {
     }
 }
 
-/// Remove every box on this machine whose deadline has passed.
-///
-/// Reads [`EXPIRY_LABEL`] from the runtime, so it finds boxes this process
-/// never opened. A runtime that cannot list by label answers `Unsupported`.
 pub async fn sweep_expired(machine: &dyn Machine, now: SystemTime) -> Result<Vec<String>> {
     if !machine.sweepable() {
         return Err(Error::Unsupported {
@@ -2671,8 +2108,6 @@ pub async fn sweep_expired(machine: &dyn Machine, now: SystemTime) -> Result<Vec
     let mut swept = Vec::new();
     for (name, deadline) in machine.labelled(EXPIRY_LABEL).await? {
         let Ok(at) = deadline.parse::<u64>() else {
-            // A label nobody here wrote. Left alone: this sweeps what it
-            // understands and nothing else.
             continue;
         };
 
@@ -2685,10 +2120,6 @@ pub async fn sweep_expired(machine: &dyn Machine, now: SystemTime) -> Result<Vec
     Ok(swept)
 }
 
-/// Who holds a screen when the caller did not say.
-///
-/// One holder per process, so two handles in one program share their
-/// screens and two programs do not.
 fn process_holder() -> HolderId {
     HolderId::new(format!("process-{}", std::process::id()))
 }
@@ -2700,16 +2131,12 @@ fn nanos() -> u128 {
         .unwrap_or(0)
 }
 
-/// One more than the last caller got.
-///
-/// A coarse clock puts two calls in the same tick, and two boxes asking for
-/// one name is a launch that fails on a conflict nobody caused.
+/// Names also need a counter: a coarse clock gives two calls the same tick.
 fn tick() -> u64 {
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// A name no other box on this machine holds.
 fn unique_name() -> String {
     format!(
         "computer-{}-{:x}-{}",

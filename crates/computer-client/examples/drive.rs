@@ -1,9 +1,4 @@
-//! Launch a box, drive it, fork it, read what happened, and take it away.
-//!
-//! ```bash
-//! cargo run -p computer-server
-//! cargo run -p computer-client --example drive
-//! ```
+//! Needs `cargo run -p computer-server` running.
 
 use computer_api::{Action, ActionBatch, ForkMode, ForkRequest, Want};
 use computer_client::{Client, frame_png};
@@ -70,7 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             png.len()
         );
 
-        // The same hash back means nothing moved, and no picture travels.
         let again = client.frame(&box_.id, 0, Some(&frame.hash)).await?;
         println!(
             "  asking again with the hash we hold: unchanged={}",
@@ -113,12 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {:>3} {:?} {:?}", entry.seq, entry.actor, entry.event);
     }
 
-    // A refusal arrives as one, rather than as a status code to interpret.
     match client
         .act_once(
             &box_.id,
             9,
-            Action::Key {
+            Action::Press {
                 chord: "a".into(),
                 then: Vec::new(),
                 held: Vec::new(),

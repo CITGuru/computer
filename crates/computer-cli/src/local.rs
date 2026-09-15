@@ -1,10 +1,3 @@
-//! Driving boxes with the SDK, in this process.
-//!
-//! The escape hatch behind `--local`: no server, no socket, nothing to start.
-//! It reaches a box on this machine and nothing else, so the commands that need
-//! a server to remember anything — a trace, and the fork built on one — are not
-//! here.
-
 use crate::{bare, flag, framing, positional, present, wheel};
 use computer::{Button, Computer, Delta, Point};
 use std::time::Duration;
@@ -48,8 +41,7 @@ pub async fn up(args: &[String]) -> computer::Result<()> {
         computer.open_url(url).await?;
     }
 
-    // The name on standard output, so `computer shot $(computer up)` works.
-    // Everything a person reads goes to standard error.
+    // Only the name goes to stdout, so `computer shot $(computer up)` works.
     println!("{}", computer.name());
     if let Some(url) = computer.viewer_url() {
         eprintln!("  watch it  {url}");
@@ -62,8 +54,7 @@ pub async fn up(args: &[String]) -> computer::Result<()> {
 }
 
 pub async fn list() -> computer::Result<()> {
-    // Through the runtime rather than through this crate: the boxes worth
-    // listing are the ones that outlived whatever opened them.
+    // Through the runtime: the boxes worth listing outlived whatever opened them.
     let output = tokio::process::Command::new("docker")
         .args([
             "ps",
@@ -98,7 +89,6 @@ pub async fn open(args: &[String]) -> computer::Result<()> {
     computer.open_url(positional(args, 1, "a URL")?).await
 }
 
-/// The pointer, grouped the way the server path groups it.
 pub async fn mouse(args: &[String]) -> computer::Result<()> {
     let op = positional(args, 1, "move, click, drag, scroll or at")?.to_string();
 
@@ -141,7 +131,7 @@ pub async fn keyboard(args: &[String]) -> computer::Result<()> {
 
     match op.as_str() {
         "type" => type_text(&rest).await,
-        "press" => key(&rest).await,
+        "press" => press(&rest).await,
         other => Err(computer::Error::denied(format!("no such op: {other}"))),
     }
 }
@@ -167,7 +157,6 @@ fn button(named: Option<&String>) -> Button {
     }
 }
 
-/// The `keyboard` flags that take a value.
 const TYPED: [&str; 2] = ["--delay", "--held"];
 
 pub async fn type_text(args: &[String]) -> computer::Result<()> {
@@ -181,10 +170,14 @@ pub async fn type_text(args: &[String]) -> computer::Result<()> {
         })?)),
     };
 
-    computer.type_text(&rest[1..].join(" "), delay).await
+    let typing = computer.type_text(rest[1..].join(" "));
+    match delay {
+        Some(delay) => typing.every(delay).await,
+        None => typing.await,
+    }
 }
 
-pub async fn key(args: &[String]) -> computer::Result<()> {
+pub async fn press(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let rest = bare(args, &TYPED);
 
@@ -193,7 +186,7 @@ pub async fn key(args: &[String]) -> computer::Result<()> {
         return Err(computer::Error::denied("expected a key to press"));
     }
 
-    computer.key(keys, &modifiers(args)?).await
+    computer.press(keys).holding(modifiers(args)?).await
 }
 
 pub async fn click(args: &[String]) -> computer::Result<()> {
@@ -214,7 +207,6 @@ pub async fn click(args: &[String]) -> computer::Result<()> {
     }
 }
 
-/// `--held shift,ctrl`, in the same spellings a chord takes.
 fn modifiers(args: &[String]) -> computer::Result<Vec<computer::Held>> {
     let Some(given) = flag(args, "--held") else {
         return Ok(Vec::new());
@@ -314,7 +306,6 @@ pub async fn release(args: &[String]) -> computer::Result<()> {
 pub async fn exec(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
 
-    // Everything after `--`, so the box's command keeps its own flags.
     let argv: Vec<&String> = args
         .iter()
         .position(|arg| arg == "--")
@@ -336,17 +327,12 @@ pub async fn exec(args: &[String]) -> computer::Result<()> {
 }
 
 pub async fn sweep() -> computer::Result<()> {
-    // The deadline is on the box itself, so this finds the ones whose program
-    // died before it could clean up — which no timer is watching any more.
     let machine = computer::DockerMachine::default();
     let swept = computer::sweep_expired(&machine, std::time::SystemTime::now()).await?;
 
     for name in &swept {
         println!("{name}");
     }
-    // Named, because `sweep` is the one command that stays here when
-    // --server points somewhere else: an operator who just aimed at a fleet
-    // should not read this line as the fleet having been swept.
     eprintln!("{} removed from this host's own runtime", swept.len());
     Ok(())
 }

@@ -1,13 +1,4 @@
-//! Build the animation in the README.
-//!
-//! ```text
 //! cargo run --example demo -- media/demo.gif
-//! ```
-//!
-//! Every frame is a real capture taken after a real call, and each one is
-//! captioned with the call that produced it, so the animation is the API
-//! working rather than a picture of it. The stitching happens inside the box,
-//! because the image has ImageMagick and the host is not required to.
 
 use computer::{Button, Computer, Delta, Point};
 use std::time::Duration;
@@ -39,9 +30,7 @@ async fn main() -> computer::Result<()> {
             let raw = format!("{FRAMES}/{:02}-raw.png", *frame);
             computer.write_file(&raw, &image).await?;
 
-            // Captioned in the box: a strip under the frame with the call that
-            // produced it. Two passes rather than one, because the caption has to
-            // sit on new canvas instead of over the desktop.
+            // Two passes, so the caption sits on new canvas under the frame.
             let captioned = format!("{FRAMES}/{:02}.png", *frame);
             let annotate = computer
                 .exec([
@@ -101,13 +90,13 @@ async fn main() -> computer::Result<()> {
     )
     .await?;
 
-    screen.key(&["ctrl+l".into()], &[]).await?;
+    screen.press("ctrl+l").await?;
     screen
-        .type_text("en.wikipedia.org/wiki/Rust_(programming_language)", None)
+        .type_text("en.wikipedia.org/wiki/Rust_(programming_language)")
         .await?;
     shot(
         Step {
-            caption: "computer.key(\"ctrl+l\").await?;  computer.type_text(url, None).await?;",
+            caption: "computer.key(\"ctrl+l\").await?;  computer.type_text(url).await?;",
             settle: 900,
         },
         screen,
@@ -115,7 +104,7 @@ async fn main() -> computer::Result<()> {
     )
     .await?;
 
-    screen.key(&["enter".into()], &[]).await?;
+    screen.press("enter").await?;
     shot(
         Step {
             caption: "computer.key(\"enter\").await?;",
@@ -163,10 +152,10 @@ async fn main() -> computer::Result<()> {
     )
     .await?;
 
-    screen.key(&["escape".into()], &[]).await?;
+    screen.press("escape").await?;
     computer.set_clipboard("driven from rust").await?;
-    screen.key(&["ctrl+l".into()], &[]).await?;
-    screen.key(&["ctrl+v".into()], &[]).await?;
+    screen.press("ctrl+l").await?;
+    screen.press("ctrl+v").await?;
     shot(
         Step {
             caption: "computer.set_clipboard(text).await?;  computer.key(\"ctrl+v\").await?;",
@@ -177,8 +166,6 @@ async fn main() -> computer::Result<()> {
     )
     .await?;
 
-    // A second screen, and the frame comes from that one: the box has eight,
-    // each with its own X server, browser and pointer.
     let second = computer.screen(computer::ScreenId(1)).await?;
     second.open_url("https://doc.rust-lang.org/book/").await?;
     shot(

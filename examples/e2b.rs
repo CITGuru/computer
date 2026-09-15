@@ -1,16 +1,9 @@
-//! The same desktop, in an E2B sandbox instead of on this host.
-//!
 //! ```text
 //! export E2B_API_KEY=...
 //! cargo run --features e2b --example e2b -- <template-id> [--keep]
 //! ```
 //!
-//! `--keep` leaves the sandbox running so the viewer URL is worth opening.
-//! Without it the box goes away at the end and the URL dies with it.
-//!
-//! Build the template once. E2B builds templates and this crate builds
-//! container images, and its builder is a Docker subset that this image does
-//! not clear unchanged, so `images/context.py` derives one that does:
+//! `--keep` leaves the sandbox running. Build the template once with:
 //!
 //! ```text
 //! python3 images/context.py images/desktop /tmp/e2b-ctx --for e2b
@@ -18,16 +11,6 @@
 //!     -c "/usr/local/bin/computer-desktop" --ready-cmd "true" \
 //!     --cpu-count 2 --memory-mb 2048
 //! ```
-//!
-//! Three things differ, and none of them is the driving:
-//!
-//! 1. A port is published as a subdomain rather than forwarded to a host port,
-//!    so the viewer URL is the sandbox's own host.
-//! 2. DevTools does not reach. The profile withdraws the claim rather than
-//!    publishing a port nothing out here can open.
-//! 3. The screen still has no password, and a sandbox URL is on the internet.
-//!    `public_viewer(true)` below is what trades a watchable screen for that,
-//!    and it is off by default.
 
 use computer::sandboxes::e2b::{self, cloud::Cloud};
 use computer::{Button, Computer, Point, X11Profile};
@@ -79,8 +62,6 @@ async fn main() -> computer::Result<()> {
     println!("  geometry: {geometry:?}");
 
     if keep {
-        // The deadline is what stops a kept box from running forever, so it is
-        // worth saying out loud rather than leaving to be discovered.
         println!("\n  left running as {}", computer.name());
         println!("  it goes away on its own when its deadline runs out");
         return Ok(());

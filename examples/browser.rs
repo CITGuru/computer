@@ -1,14 +1,7 @@
-//! Driving the browser through DevTools instead of pointing at it.
-//!
 //! ```text
 //! cargo run --example browser                # a new box
 //! cargo run --example browser -- <box-name>  # one that is already up
 //! ```
-//!
-//! Nothing here touches the screen. `Page.navigate` goes to a URL whether or
-//! not the address bar is where the last screenshot showed it, and
-//! `Runtime.evaluate` answers questions about the page that no screenshot can
-//! answer. Both work on a box with no display at all.
 
 use computer::Computer;
 use std::time::Duration;
@@ -41,13 +34,11 @@ async fn main() -> computer::Result<()> {
     println!("  title: {}", page.title().await?);
     println!("  url:   {}", page.url().await?);
 
-    // A question no screenshot can answer.
     let links = page
         .evaluate("Array.from(document.links).map(a => a.href)")
         .await?;
     println!("  links: {links}");
 
-    // The page as the browser renders it: no window frame, no address bar.
     let shot = page.screenshot().await?;
     std::fs::write("page.png", &shot).ok();
     println!("  captured {} bytes → page.png", shot.len());

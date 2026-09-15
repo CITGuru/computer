@@ -1,5 +1,3 @@
-//! `computer` — a desktop in a box, from the command line.
-
 mod daemon;
 mod embed;
 mod local;
@@ -151,7 +149,6 @@ to keep one: it holds the trace a fork reads, sweeps boxes past their deadline,
 and can be reached from off this host.
 ";
 
-/// Runs one command and answers with what to print if it failed.
 pub async fn run() -> Result<(), String> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let local = take(&mut args, "--local");
@@ -185,7 +182,6 @@ pub async fn run() -> Result<(), String> {
     outcome
 }
 
-/// Serve the Model Context Protocol on this process's own streams.
 async fn mcp(named: Option<String>, args: &[String]) -> Result<(), String> {
     if let Some(odd) = args.iter().find(|arg| *arg != "--stdio") {
         return Err(format!("unknown option for mcp: {odd}\n\n{USAGE}"));
@@ -291,7 +287,6 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
     outcome.map_err(|error| error.to_string())
 }
 
-/// Take a flag out, so what is left is positional.
 fn mine(args: &[String]) -> usize {
     args.iter()
         .position(|arg| arg == "--")
@@ -318,7 +313,6 @@ fn value(args: &mut Vec<String>, name: &str) -> Option<String> {
     Some(args.remove(at))
 }
 
-/// A flag's value, where flags are `--name value`.
 pub fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter()
         .position(|arg| arg == name)
@@ -398,7 +392,6 @@ fn heading(word: &str, notches: i32) -> Option<(i32, i32)> {
     }
 }
 
-/// What was scrolled, however it was spelled.
 pub fn wheel(args: &[String]) -> computer::Result<Wheel> {
     let word = |at: usize| args.get(at).map(String::as_str).unwrap_or_default();
     let count = |at: usize| -> computer::Result<i32> {
@@ -444,7 +437,6 @@ fn instead(word: &str, or: &str) -> computer::Error {
     ))
 }
 
-/// What a direction with no distance means.
 const NOTCHES: i32 = 3;
 
 fn pixels(args: &[String], at: usize, what: &str) -> computer::Result<u32> {
@@ -453,7 +445,6 @@ fn pixels(args: &[String], at: usize, what: &str) -> computer::Result<u32> {
         .map_err(|_| computer::Error::denied(format!("{what} must be a whole number of pixels")))
 }
 
-/// A count that can go the other way, which a coordinate cannot.
 fn signed(args: &[String], at: usize, what: &str) -> computer::Result<i32> {
     positional(args, at, what)?.parse().map_err(|_| {
         computer::Error::denied(format!(
@@ -462,16 +453,13 @@ fn signed(args: &[String], at: usize, what: &str) -> computer::Result<i32> {
     })
 }
 
-/// A positional argument, or a usage failure that names what was wanted.
 pub fn positional<'a>(args: &'a [String], at: usize, what: &str) -> computer::Result<&'a str> {
     args.get(at)
         .map(String::as_str)
         .ok_or_else(|| computer::Error::denied(format!("expected {what}\n\n{USAGE}")))
 }
 
-/// The positional arguments alone, with the flags and the values they take
-/// removed, so a flag may stand anywhere on the line rather than only after
-/// the last positional. `valued` names the flags that take a value.
+/// Positional arguments only, so a flag may stand anywhere on the line.
 pub fn bare(args: &[String], valued: &[&str]) -> Vec<String> {
     let mut kept = Vec::new();
     let mut rest = args.iter();

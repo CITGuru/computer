@@ -1,13 +1,3 @@
-//! Where a box comes from, and how it is reached.
-//!
-//! [`Machine`] starts a box, publishes its ports, runs commands in it, moves
-//! files in and out, and takes it away. [`ScreenHost`] is the other half of the
-//! coupling: one command against one display.
-//!
-//! [`DockerMachine`] runs containers through `docker`, `podman` or `nerdctl`.
-//! [`MicroVm`](crate::microvm::MicroVm) runs microVMs. Everything above them is
-//! written once.
-
 use crate::ScreenId;
 use crate::bundle;
 use crate::error::{Error, Result};
@@ -20,32 +10,17 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Container port to host port, for everything the box published.
+/// Container port to host port.
 pub type PortMap = BTreeMap<u16, u16>;
 
-/// A place that can hold a desktop.
 #[async_trait]
 pub trait Machine: Send + Sync {
-    /// What to call this in an error message.
     fn runtime(&self) -> &str;
 
-    /// Whether the runtime answers at all.
-    ///
-    /// Asked before anything is created, so a runtime that is down reports
-    /// itself rather than a box that would not start.
     async fn preflight(&self) -> Result<()>;
 
-    /// Make sure the image exists, building or fetching it if it does not.
-    ///
-    /// Takes the whole configuration: what is installed into an image is part
-    /// of which image it is.
     async fn ensure_image(&self, config: &Config) -> Result<()>;
 
-    /// Which contract this image says it implements, if it says.
-    ///
-    /// Read from the image's labels before anything starts, so an image and the
-    /// profile driving it can be checked against each other. `None` where the
-    /// runtime cannot be asked.
     async fn image_contract(&self, _image: &str) -> Option<String> {
         None
     }
@@ -54,19 +29,10 @@ pub trait Machine: Send + Sync {
 
     async fn running(&self, name: &str) -> Result<bool>;
 
-    /// The mapping again, for a box this process did not start.
-    ///
-    /// Empty where nothing was published, which makes every URL `None`.
     async fn ports(&self, name: &str) -> PortMap;
 
-    /// The environment the box was started with, which is where the screen
-    /// size is recorded.
     async fn env(&self, name: &str) -> BTreeMap<String, String>;
 
-    /// Run a command with this environment set.
-    ///
-    /// An environment rather than a screen: which variables a screen needs is
-    /// the image's answer, not this trait's.
     async fn exec(
         &self,
         name: &str,
@@ -77,10 +43,7 @@ pub trait Machine: Send + Sync {
     async fn read_file(&self, name: &str, path: &Path) -> Result<Vec<u8>>;
     async fn write_file(&self, name: &str, path: &Path, bytes: &[u8]) -> Result<()>;
 
-    /// A whole file in, without holding it in memory.
-    ///
-    /// The default reads it into this process. A runtime that can move bytes
-    /// directly should override this.
+    /// Reads into memory; a runtime that can move bytes directly should override this.
     async fn upload(&self, name: &str, from: &Path, to: &Path) -> Result<()> {
         let bytes = tokio::fs::read(from)
             .await
@@ -88,7 +51,6 @@ pub trait Machine: Send + Sync {
         self.write_file(name, to, &bytes).await
     }
 
-    /// A whole file out, without holding it in memory.
     async fn download(&self, name: &str, from: &Path, to: &Path) -> Result<()> {
         let bytes = self.read_file(name, from).await?;
         tokio::fs::write(to, bytes)
@@ -96,23 +58,12 @@ pub trait Machine: Send + Sync {
             .map_err(|error| Error::denied(format!("{}: {error}", to.display())))
     }
 
-    /// What the box itself has said, which is where a screen that never came
-    /// up explains itself.
     async fn logs(&self, name: &str) -> Result<String>;
 
-    /// Take the box away, and its volumes with it. Not recoverable.
-    ///
-    /// Named apart from [`Machine::halt`], which a box comes back from: one
-    /// word for both is how a caller destroys what it meant to put down.
+    /// Not recoverable, unlike [`Machine::halt`].
     async fn remove(&self, name: &str) -> Result<()>;
 
-    /// End every process, keeping the filesystem.
-    ///
-    /// The box comes back through [`Machine::wake`] with its files but not its
-    /// memory: the desktop starts again from the beginning, so the windows
-    /// that were open are not.
-    ///
-    /// The default refuses, as [`Machine::pause`] does.
+    /// Keeps the filesystem but not memory.
     async fn halt(&self, name: &str) -> Result<()> {
         let _ = name;
         Err(Error::Unsupported {
@@ -120,11 +71,7 @@ pub trait Machine: Send + Sync {
         })
     }
 
-    /// Start a halted box, and answer with the ports it now has.
-    ///
-    /// The map is the point. A container runtime publishes on a host port it
-    /// chooses, and chooses again every time the box starts — so every URL
-    /// built from the old map is wrong the moment this returns.
+    /// A container runtime picks new host ports on every start, so the old map is stale.
     async fn wake(&self, name: &str) -> Result<PortMap> {
         let _ = name;
         Err(Error::Unsupported {
@@ -132,14 +79,7 @@ pub trait Machine: Send + Sync {
         })
     }
 
-    /// Freeze every process, keeping memory and published ports.
-    ///
-    /// Apart from stopping, which ends the processes and, on a container
-    /// runtime, hands back different host ports when they start again. A
-    /// paused box comes back as the box it was.
-    ///
-    /// The default refuses: a substrate that cannot freeze one must say so
-    /// rather than leave the caller thinking the box costs nothing.
+    /// Keeps memory and published ports, unlike [`Machine::halt`].
     async fn pause(&self, name: &str) -> Result<()> {
         let _ = name;
         Err(Error::Unsupported {
@@ -154,77 +94,42 @@ pub trait Machine: Send + Sync {
         })
     }
 
-    /// Whether the box is frozen. `false` where the runtime cannot freeze one.
     async fn paused(&self, name: &str) -> Result<bool> {
         let _ = name;
         Ok(false)
     }
 
-    /// Every box this runtime holds that carries the label, and its value.
-    ///
-    /// The default is empty, and [`Machine::sweepable`] says which that means.
     async fn labelled(&self, _label: &str) -> Result<Vec<(String, String)>> {
         Ok(Vec::new())
     }
 
-    /// Whether what this publishes can be reached beyond this host.
-    ///
-    /// Asked of the `Machine` because it is the only thing that knows: a bind
-    /// address is a container idea, and a sandbox that publishes a hostname per
-    /// port has no host side at all. The default is the safe answer, so an
-    /// implementation that has not thought about it is not treated as though it
-    /// had.
     fn reach(&self, config: &Config) -> crate::Reach {
         config.bind.reach()
     }
 
-    /// Whether this runtime can be asked what it holds.
     fn sweepable(&self) -> bool {
         false
     }
 
-    /// A command that takes the box away with no async runtime in the room.
-    ///
     /// `Drop` cannot await. `None` means a dropped handle leaks the box.
     fn reaper(&self, name: &str) -> Option<(String, Vec<String>)>;
 }
 
-/// Something that can run a command against one screen.
-///
-/// The whole coupling between a driver and whatever holds the desktop: a
-/// container answers it with `docker exec`, a test from a script.
 #[async_trait]
 pub trait ScreenHost: Send + Sync {
     async fn run(&self, argv: &[String], screen: ScreenId) -> Result<ExecResult>;
 }
 
-/// How long any one command may take before it is given up on.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// One box, as something a driver can drive.
-///
-/// A command, which display it goes to, and how long it may take.
 pub struct MachineHost {
     machine: Arc<dyn Machine>,
-    /// The only place a screen becomes an environment. Below here nothing
-    /// knows that screens exist.
     profile: Arc<dyn Profile>,
     name: String,
     timeout: Duration,
-    /// When something last ran in this box, as nanoseconds since the epoch.
-    ///
-    /// Everything reaches the box through here: a driver call, an exec, a copy.
+    /// Nanoseconds since the epoch.
     active_at: Arc<std::sync::atomic::AtomicU64>,
-    /// The host a person is told to use, and the scheme to reach it with.
-    ///
-    /// Kept beside the box rather than worked out at each call: a URL built
-    /// from the bind is right only for loopback, and by the time a `Screen`
-    /// wants one the configuration that knew better is gone.
     advertised: (crate::Scheme, String),
-    /// The gate in front of this box's viewers, and what opens it.
-    ///
-    /// Held here because a `Screen` builds URLs and a screen created long
-    /// after launch has to build the same ones as the first.
     gate: (crate::Auth, Option<crate::Credentials>),
 }
 
@@ -245,29 +150,19 @@ impl MachineHost {
         }
     }
 
-    /// What this box's viewers ask of whoever connects.
     pub fn gated_by(mut self, auth: crate::Auth, credentials: Option<crate::Credentials>) -> Self {
         self.gate = (auth, credentials);
         self
     }
 
-    /// What this box's viewers ask, and what opens them.
-    ///
-    /// The credentials are how a caller tells a person the password under
-    /// [`crate::Auth::Password`], where by design no URL carries it.
     pub fn gate(&self) -> (crate::Auth, Option<&crate::Credentials>) {
         (self.gate.0, self.gate.1.as_ref())
     }
 
-    /// The credential a read-only URL carries, where the gate puts it there.
-    ///
-    /// `None` for an open box and for a browser prompt: a password in a URL is
-    /// the one shape [`crate::Auth::Password`] exists to avoid.
     pub fn view_ticket(&self) -> Option<&crate::Secret> {
         self.ticket(|pair| &pair.view)
     }
 
-    /// The credential a control URL carries. See [`MachineHost::view_ticket`].
     pub fn control_ticket(&self) -> Option<&crate::Secret> {
         self.ticket(|pair| &pair.control)
     }
@@ -282,13 +177,11 @@ impl MachineHost {
         }
     }
 
-    /// Where the ports this box published are reached from.
     pub fn advertised_at(mut self, scheme: crate::Scheme, host: impl Into<String>) -> Self {
         self.advertised = (scheme, host.into());
         self
     }
 
-    /// A published port, as a person is told it.
     pub fn address(&self, port: u16) -> crate::Address {
         crate::Address {
             scheme: self.advertised.0,
@@ -297,24 +190,20 @@ impl MachineHost {
         }
     }
 
-    /// When something last ran in this box.
     pub fn active_at(&self) -> Arc<std::sync::atomic::AtomicU64> {
         Arc::clone(&self.active_at)
     }
 
-    /// How long the box has had nothing asked of it.
     pub fn idle_for(&self) -> Duration {
         let last = self.active_at.load(std::sync::atomic::Ordering::Relaxed);
         Duration::from_nanos(now_nanos().saturating_sub(last))
     }
 
-    /// Count this moment as activity, for work that did not go through here.
     pub fn touch(&self) {
         self.active_at
             .store(now_nanos(), std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Give every command through this host a different ceiling.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -324,10 +213,7 @@ impl MachineHost {
         self.timeout
     }
 
-    /// Run something, and give up on it after `within`.
-    ///
-    /// A command that ran out of time is reported as one rather than as exit
-    /// 124, which a program can also choose to exit with.
+    /// A timeout is reported as `timed_out`, since a program can exit 124 itself.
     pub async fn run_within(
         &self,
         argv: &[String],
@@ -358,7 +244,6 @@ impl MachineHost {
         &self.profile
     }
 
-    /// Run something with no display attached.
     pub async fn exec(&self, argv: &[String]) -> Result<ExecResult> {
         self.run_within(argv, &BTreeMap::new(), self.timeout).await
     }
@@ -372,11 +257,6 @@ impl ScreenHost for MachineHost {
     }
 }
 
-/// Take away a scratch file a transfer went through.
-///
-/// Best effort: the transfer already succeeded or failed on its own terms, and
-/// a file left behind changes neither. It is still said out loud, because
-/// enough of them left behind is a disk that fills for a reason nothing names.
 async fn discard(path: &Path) {
     if let Err(error) = tokio::fs::remove_file(path).await
         && error.kind() != std::io::ErrorKind::NotFound
@@ -385,10 +265,6 @@ async fn discard(path: &Path) {
     }
 }
 
-/// The runtime's words for a box that is not running, in ours.
-///
-/// It names a container id the caller never saw and says nothing about what to
-/// do about it, and it is what every command into a stopped box comes back as.
 fn if_stopped(name: &str, stderr: &str) -> Option<Error> {
     stderr
         .contains("is not running")
@@ -406,7 +282,6 @@ fn now_nanos() -> u64 {
         .unwrap_or(0)
 }
 
-/// A container, through `docker`, `podman` or `nerdctl`.
 pub struct DockerMachine {
     cli: Arc<dyn ContainerCli>,
 }
@@ -426,12 +301,7 @@ impl DockerMachine {
         &self.cli
     }
 
-    /// Make the directory a write is about to land in.
-    ///
-    /// `cp` refuses a target whose parent is missing, so without this `upload`
-    /// and `write_file` disagree about the same path. The outcome is not
-    /// checked: the copy is the real test, and it reports the failure with the
-    /// runtime's own words.
+    /// `cp` refuses a target whose parent is missing.
     async fn ensure_parent(&self, name: &str, path: &Path) {
         if let Some(parent) = path.parent() {
             let _ = self
@@ -444,8 +314,6 @@ impl DockerMachine {
         }
     }
 
-    /// `pause`, `unpause`, `stop` or `start` — one word, one container, and
-    /// nothing to read on success. Every runtime here spells them the same.
     async fn freeze(&self, verb: &str, name: &str) -> Result<()> {
         let result = self.cli.run(&[arg(verb), arg(name)]).await?;
 
@@ -458,9 +326,8 @@ impl DockerMachine {
         Ok(())
     }
 
-    /// `docker cp`, rather than an encoding round trip: base64 flags differ
-    /// between coreutils and BusyBox, and an argument list has a size ceiling
-    /// that a screenshot walks straight through.
+    /// Not base64 over exec: its flags differ between coreutils and BusyBox,
+    /// and an argument list has a ceiling a screenshot exceeds.
     async fn copy(&self, from: &str, to: &str) -> Result<()> {
         let result = self.cli.run(&[arg("cp"), arg(from), arg(to)]).await?;
 
@@ -470,16 +337,8 @@ impl DockerMachine {
         Ok(())
     }
 
-    /// A staging path no other call will pick.
-    ///
-    /// `docker cp` moves bytes host-side through a file this process names, so
-    /// the name has to be unique per call: two reads of one box that shared it
-    /// deleted each other's bytes between the copy and the read, and every
-    /// concurrent pair failed.
-    ///
-    /// It lives in a directory this process owns at `0700`, because `cp`
-    /// writes wherever the path leads — and in a shared `/tmp`, a path chosen
-    /// before we look is a path somebody else can make a symlink.
+    /// Unique per call, or concurrent reads delete each other's bytes; under a
+    /// `0700` directory, so the path cannot be a planted symlink.
     fn scratch(&self, name: &str, tag: &str) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let ticket = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -536,8 +395,7 @@ impl Machine for DockerMachine {
             .await
             .ok()?;
 
-        // `inspect` prints an empty line for a label the image does not carry,
-        // and "<no value>" where it carries none at all.
+        // A missing label prints an empty line, or "<no value>".
         let declared = said.stdout_utf8().trim().to_string();
         (said.code == 0 && !declared.is_empty() && declared != "<no value>").then_some(declared)
     }
@@ -577,9 +435,7 @@ impl Machine for DockerMachine {
     async fn wake(&self, name: &str) -> Result<PortMap> {
         self.freeze("start", name).await?;
 
-        // Read after starting, never before: the runtime picks the host ports
-        // as it starts, and the ones it picked last time are somebody else's
-        // now.
+        // The previous host ports may belong to someone else now.
         Ok(self.ports(name).await)
     }
 
@@ -689,7 +545,6 @@ impl Machine for DockerMachine {
     }
 
     async fn upload(&self, name: &str, from: &Path, to: &Path) -> Result<()> {
-        // Disk to disk: `docker cp` streams, so nothing is held in memory.
         self.ensure_parent(name, to).await;
         self.copy(
             &from.display().to_string(),
@@ -806,9 +661,6 @@ mod tests {
         );
     }
 
-    /// Two reads of one box used to stage through one path, so the first
-    /// call's `discard` deleted the second's bytes between the copy and the
-    /// read. Every concurrent pair failed.
     #[tokio::test]
     async fn test_two_reads_of_one_box_do_not_stage_through_one_path() {
         let cli = Arc::new(ScriptedCli::new());
@@ -831,8 +683,6 @@ mod tests {
         );
     }
 
-    /// `cp` refuses a target whose parent is missing, so an `upload` that did
-    /// not make it disagreed with `write_file` about the same path.
     #[tokio::test]
     async fn test_upload_makes_the_directory_write_file_would_have_made() {
         let cli = Arc::new(ScriptedCli::new());

@@ -1,12 +1,4 @@
-//! What a desktop is, and how a caller addresses one.
-//!
-//! Nothing here may depend on `computer`: that edge runs the other way once a
-//! builder can take a spec. Defaults and limits belong to whatever compiles a
-//! spec rather than to the description — an X11 image allows eight screens and
-//! a macOS guest allows one.
-//!
-//! `deny_unknown_fields` throughout: a misspelled key that is quietly ignored
-//! hands back a box missing the thing it was misspelled for.
+// `deny_unknown_fields` throughout: a misspelled key must not be silently ignored.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -17,7 +9,6 @@ use std::collections::BTreeMap;
 pub struct Spec {
     #[serde(default)]
     pub desktop: Desktop,
-    /// Named applications, which need a catalog behind them to install.
     #[serde(default)]
     pub apps: BTreeMap<String, App>,
     #[serde(default)]
@@ -25,8 +16,7 @@ pub struct Spec {
 }
 
 impl Spec {
-    /// Through [`serde_json::Value`], whose maps are ordered, so two callers
-    /// who wrote the keys in a different order still get the same digest.
+    /// Through [`serde_json::Value`], so key order does not change the digest.
     pub fn digest(&self) -> String {
         let canonical = serde_json::to_value(self)
             .and_then(|value| serde_json::to_string(&value))
@@ -43,13 +33,10 @@ impl Spec {
 pub struct Desktop {
     #[serde(default)]
     pub server: DisplayServer,
-    /// One size for every screen. Per-screen geometry would be a promise no
-    /// image here can keep.
     #[serde(default)]
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
-    /// Screen 0 always starts, so `None` is one screen.
     #[serde(default)]
     pub screens: Option<u32>,
     #[serde(default)]
@@ -69,40 +56,22 @@ pub enum DisplayServer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Feature {
-    /// Chinese, Japanese, Korean and emoji. Without it those pages render as
-    /// empty boxes and the screenshot still looks like a working page.
     WideFonts,
     Audio,
     Video,
     Dock,
-    /// X11 programs on a Wayland desktop, through Xwayland.
-    ///
-    /// Opt-in: about seventy megabytes resident, paid whether or not an X11
-    /// program is ever started.
     X11Apps,
-    /// The accessibility tree, so a native window is reachable by the names of
-    /// its widgets rather than by its pixels. The browser is unaffected: a page
-    /// is read through DevTools, which answers better and costs nothing here.
-    ///
-    /// Opt-in: about twenty megabytes resident across four processes, paid
-    /// whether or not anything reads a tree. It cannot be turned on for a box
-    /// that is already running — an application joins the tree only if it
-    /// started after the bus did.
+    /// Not for a running box: an app joins the tree only if it started after the bus.
     Accessibility,
 }
 
-/// One named program. Every field is optional, so a caller can name an app
-/// the catalog knows and override one part of it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct App {
     #[serde(default)]
     pub packages: Vec<String>,
-    /// Refused from a caller unless `policy.custom_sources` is set: a source
-    /// is a URL the image build fetches and a key it then trusts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<Source>,
-    /// The whole argv: some programs do not start without their flags.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub command: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -114,21 +83,15 @@ pub struct App {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
-    /// Armoured, and dearmoured when the image is built.
     pub key_url: String,
-    /// Without the `signed-by` this crate fills in.
+    /// Without the `signed-by`, which this crate fills in.
     pub list: String,
 }
 
-/// Which window belongs to an app — not whether it has drawn, since a splash
-/// carries the same class as the program that owns it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum WindowMatch {
-    /// X11 `WM_CLASS`, or a Wayland `app_id`. Preferred: a title moves with
-    /// the open document.
     Class(String),
-    /// For a program that sets no useful class.
     Title(String),
 }
 
@@ -141,11 +104,8 @@ pub struct Policy {
     pub auth: Auth,
     #[serde(default)]
     pub bind: Bind,
-    /// The host to put in a viewer URL, where it is not the one bound to.
     #[serde(default)]
     pub advertise: Option<String>,
-    /// Off by default: choosing where packages come from is wider reach than
-    /// choosing packages, and the image build is what pays for it.
     #[serde(default)]
     pub custom_sources: bool,
 }
@@ -183,15 +143,10 @@ pub enum Bind {
     Any,
 }
 
-/// Where the box runs and for how long.
-///
-/// Deliberately not part of [`Spec`]: two identical desktops that differ only
-/// in a memory limit are one desktop, and hashing the placement in would build
-/// the same image twice.
+/// Not part of [`Spec`], so a placement change does not rebuild the image.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Placement {
-    /// `docker`, `podman` or `nerdctl`.
     #[serde(default)]
     pub runtime: Option<String>,
     #[serde(default)]
@@ -207,6 +162,17 @@ pub struct Placement {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_press_takes_one_chord_or_several() {
+        assert_eq!("ctrl+a".chords(), ["ctrl+a"]);
+        assert_eq!("enter".to_string().chords(), ["enter"]);
+        assert_eq!(["tab", "tab"].chords(), ["tab", "tab"]);
+        assert_eq!(vec!["a".to_string()].chords(), ["a"]);
+
+        let several: &[&str] = &["up", "down"];
+        assert_eq!(several.chords(), ["up", "down"]);
+    }
 
     #[test]
     fn test_the_digest_follows_the_spec_not_the_formatting() {
@@ -263,8 +229,6 @@ mod tests {
     }
 }
 
-/// Top-left origin, device pixels, and the same coordinates the frame came
-/// back in — a click against a scaled screenshot lands somewhere else.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Point {
     pub x: u32,
@@ -292,41 +256,19 @@ pub enum Button {
     Middle,
 }
 
-/// One widget, as the toolkit that drew it describes it.
-///
-/// Not a page element: a web page is read through DevTools, which knows more
-/// about it than any accessibility tree does. This is how a *native* window is
-/// reached — a file dialog, a settings panel, an installer — where the only
-/// alternative is a coordinate worked out from a screenshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Node {
-    /// Addresses it until the tree next changes, which is all an id is for:
-    /// telling two matches apart in one answer, not holding on to one between
-    /// calls. Every call that acts takes a query instead.
+    /// Valid only until the tree next changes.
     pub id: String,
-    /// The application that published it.
     pub app: String,
-    /// The toolkit's own word: `push button`, `text`, `label`, `menu item`.
     pub role: String,
-    /// Often empty on a field, whose words sit in the label beside it. See
-    /// `labelled`.
     pub name: String,
-    /// What invoking it would run, in the toolkit's own spelling: GTK writes
-    /// `click` where Qt writes `Press`. Read these rather than assuming one.
     #[serde(default)]
     pub actions: Vec<String>,
     #[serde(default)]
     pub states: Vec<String>,
-    /// The words of the label that names it, where the match came through one.
-    /// A GTK entry's own name is empty and "Street" is a separate label beside
-    /// it, so this is how a caller can tell which field it was handed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labelled: Option<String>,
-    /// Its middle, in screen coordinates — the same space a click takes, so a
-    /// node found here can be pressed by the pointer instead of invoked.
-    ///
-    /// Absent where the widget has never been drawn, which is normal for a
-    /// menu item in a menu nobody has opened.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
     #[serde(default)]
@@ -337,33 +279,18 @@ pub struct Node {
     pub value: Option<String>,
 }
 
-/// How a call names the node it means.
-///
-/// A query rather than an id, because an id dies with the widget behind it: a
-/// caller that reads the tree and then acts on what it read is acting on
-/// whatever took that place. Finding and acting are one call.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodeQuery {
-    /// Matched against a widget's name and against the words of any label
-    /// beside it, best match first.
     pub query: String,
-    /// One of the toolkit's role words, where the query alone is ambiguous:
-    /// "Street" names both a label and the field it labels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
-    /// Match the whole of the words rather than any part of them.
     #[serde(default)]
     pub exact: bool,
-    /// One application's tree rather than every application's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
 }
 
-/// Copy and paste uses the clipboard. Dragging the mouse over text fills the
-/// primary selection, which a middle click pastes. They hold different text,
-/// and reading one when you meant the other returns text that looks correct
-/// and is not.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Selection {
@@ -373,7 +300,6 @@ pub enum Selection {
 }
 
 impl Selection {
-    /// The name `xclip` takes.
     pub fn name(self) -> &'static str {
         match self {
             Self::Clipboard => "clipboard",
@@ -382,9 +308,40 @@ impl Selection {
     }
 }
 
-/// Shift-click extends a selection, ctrl-click adds to one, alt-drag moves a
-/// window. No amount of pressing the key first fakes one: the press ends with
-/// the command that made it.
+pub trait Keys {
+    fn chords(self) -> Vec<String>;
+}
+
+impl Keys for &str {
+    fn chords(self) -> Vec<String> {
+        vec![self.to_string()]
+    }
+}
+
+impl Keys for String {
+    fn chords(self) -> Vec<String> {
+        vec![self]
+    }
+}
+
+impl Keys for Vec<String> {
+    fn chords(self) -> Vec<String> {
+        self
+    }
+}
+
+impl<T: AsRef<str>> Keys for &[T] {
+    fn chords(self) -> Vec<String> {
+        self.iter().map(|one| one.as_ref().to_string()).collect()
+    }
+}
+
+impl<T: AsRef<str>, const N: usize> Keys for [T; N] {
+    fn chords(self) -> Vec<String> {
+        self.iter().map(|one| one.as_ref().to_string()).collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Held {
@@ -395,8 +352,6 @@ pub enum Held {
 }
 
 impl Held {
-    /// The same spellings the chord parser takes, so a caller does not learn
-    /// two vocabularies for one key.
     pub fn named(word: &str) -> Option<Self> {
         match word.trim().to_ascii_lowercase().as_str() {
             "shift" => Some(Self::Shift),
@@ -433,16 +388,10 @@ impl Rect {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Window {
-    /// An X11 window id, or a sway container id.
     pub id: String,
-    /// What the title bar says, which moves: a text editor's becomes the name
-    /// of the file the moment one is saved.
     pub title: String,
-    /// What the program calls itself, which does not. The thing to match on
-    /// when looking for an application rather than for a document.
     #[serde(default)]
     pub class: String,
-    /// Its top-left corner, not its middle.
     #[serde(default)]
     pub at: Point,
     #[serde(default)]
@@ -454,7 +403,6 @@ pub struct Window {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "how", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Arrange {
-    /// Put its top-left corner here.
     At {
         to: Point,
     },
@@ -463,8 +411,7 @@ pub enum Arrange {
         height: u32,
     },
     Maximise,
-    /// Out of the way without closing it. Sway has no such state, so there it
-    /// is the scratchpad, which `Restore` brings it back from.
+    /// Sway has no such state, so there it is the scratchpad.
     Minimise,
     Restore,
 }

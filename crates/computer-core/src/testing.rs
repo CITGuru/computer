@@ -1,9 +1,3 @@
-//! Doubles, so code that drives a desktop can be tested without one.
-//!
-//! Each records what it was asked for and answers from a script, so a decision
-//! about where to click is checked in milliseconds. The container tests are
-//! left to prove the image.
-
 use crate::error::{Error, Result};
 use crate::machine::MachineHost;
 use crate::machine::ScreenHost;
@@ -25,7 +19,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// An [`ScreenHost`] that records every command and answers from a queue.
 pub struct ScriptedHost {
     calls: Mutex<Vec<(ScreenId, Vec<String>)>>,
     replies: Mutex<VecDeque<ExecResult>>,
@@ -39,7 +32,6 @@ impl Default for ScriptedHost {
 }
 
 impl ScriptedHost {
-    /// Answers every command with a clean exit and no output.
     pub fn new() -> Self {
         Self {
             calls: Mutex::new(Vec::new()),
@@ -48,8 +40,6 @@ impl ScriptedHost {
         }
     }
 
-    /// Queue one answer. They are handed out in order, and the fallback takes
-    /// over once the queue is empty.
     pub fn replying(self, result: ExecResult) -> Self {
         if let Ok(mut replies) = self.replies.lock() {
             replies.push_back(result);
@@ -57,7 +47,6 @@ impl ScriptedHost {
         self
     }
 
-    /// Queue a clean exit carrying this on standard output.
     pub fn saying(self, stdout: impl Into<String>) -> Self {
         self.replying(ExecResult {
             stdout: stdout.into().into_bytes(),
@@ -65,7 +54,6 @@ impl ScriptedHost {
         })
     }
 
-    /// Queue a failure.
     pub fn failing(self, code: i32, stderr: impl Into<String>) -> Self {
         self.replying(ExecResult {
             code,
@@ -74,13 +62,11 @@ impl ScriptedHost {
         })
     }
 
-    /// What every command after the queue gets.
     pub fn otherwise(mut self, result: ExecResult) -> Self {
         self.fallback = result;
         self
     }
 
-    /// Every command sent, in order.
     pub fn calls(&self) -> Vec<Vec<String>> {
         self.calls
             .lock()
@@ -88,7 +74,6 @@ impl ScriptedHost {
             .unwrap_or_default()
     }
 
-    /// Which screen each command went to.
     pub fn screens(&self) -> Vec<ScreenId> {
         self.calls
             .lock()
@@ -100,7 +85,6 @@ impl ScriptedHost {
         self.calls().pop()
     }
 
-    /// The last command as one string, for a readable assertion.
     pub fn last_line(&self) -> String {
         self.last().unwrap_or_default().join(" ")
     }
@@ -128,10 +112,6 @@ impl ScreenHost for ScriptedHost {
     }
 }
 
-/// A [`Desktop`] with no display server behind it.
-///
-/// A second implementation of the trait, showing what a driver has to supply
-/// without an X server, a compositor or a container behind it.
 pub struct ScriptedDesktop {
     screen: ScreenId,
     control: Arc<ControlGate>,
@@ -151,7 +131,6 @@ impl ScriptedDesktop {
         self.screen
     }
 
-    /// What it was asked to do, in order.
     pub fn acted(&self) -> Vec<String> {
         self.acted
             .lock()
@@ -200,7 +179,7 @@ impl Desktop for ScriptedDesktop {
         }
     }
 
-    async fn key(&self, chords: &[String], held: &[Held]) -> Result<()> {
+    async fn press(&self, chords: &[String], held: &[Held]) -> Result<()> {
         match held.is_empty() {
             true => self.act(format!("key {}", chords.join(" "))),
             false => self.act(format!(
@@ -218,8 +197,6 @@ impl Desktop for ScriptedDesktop {
         self.act(format!("scroll {} {} {}", at.x, at.y, by.dy))
     }
 
-    /// The shape a display server that lets no client read the global pointer
-    /// has to use: a named gap, not a coordinate nobody measured.
     async fn cursor(&self) -> Result<Point> {
         Err(Error::Unsupported {
             gaps: vec!["cursor"],
@@ -239,8 +216,6 @@ impl Desktop for ScriptedDesktop {
     }
 }
 
-/// A [`DesktopFactory`] that hands out [`ScriptedDesktop`]s and remembers which
-/// screens it was asked for.
 pub struct ScriptedDriver {
     server: DisplayServer,
     opened: Mutex<Vec<ScreenId>>,
@@ -253,9 +228,7 @@ impl Default for ScriptedDriver {
 }
 
 impl ScriptedDriver {
-    /// Claims to be Wayland, because X11 is the one the default already
-    /// covers: a test that swaps the driver and still reads X11 has proved
-    /// nothing.
+    /// Wayland, because a test that swaps the driver and still reads X11 proves nothing.
     pub fn new() -> Self {
         Self {
             server: DisplayServer::Wayland,
@@ -268,7 +241,6 @@ impl ScriptedDriver {
         self
     }
 
-    /// Which screens were opened through it, in order.
     pub fn opened(&self) -> Vec<ScreenId> {
         self.opened
             .lock()
@@ -290,10 +262,7 @@ impl DesktopFactory for ScriptedDriver {
     }
 }
 
-/// An image contract that shares nothing with the built-in one.
-///
-/// Every value differs from [`crate::X11Profile`]'s, so a test that swaps
-/// the profile fails on any value the code took from the wrong one.
+/// Every value differs from [`crate::X11Profile`]'s, so one read from the wrong profile fails.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScriptedProfile;
 
@@ -333,8 +302,7 @@ impl Profile for ScriptedProfile {
             display: Some(Display {
                 width,
                 height,
-                // Corrected from the driver at launch, so this is deliberately
-                // the wrong answer: it proves which of the two is reported.
+                // Deliberately wrong: launch corrects it from the driver.
                 server: DisplayServer::X11,
             }),
             input: true,
@@ -382,7 +350,6 @@ impl Profile for ScriptedProfile {
     }
 }
 
-/// A [`ContainerCli`] that records arguments and never starts anything.
 pub struct ScriptedCli {
     inner: ScriptedHost,
     program: String,
@@ -441,10 +408,6 @@ impl ContainerCli for ScriptedCli {
     }
 }
 
-/// A [`MicroVmApi`] that records what it was asked for and creates nothing.
-///
-/// What the mapping decided — the ports forwarded, the command that brought
-/// the screen up — checked without booting a machine.
 pub struct ScriptedMicroVm {
     inner: ScriptedHost,
     plans: Mutex<Vec<Plan>>,
@@ -466,7 +429,6 @@ impl ScriptedMicroVm {
             plans: Mutex::new(Vec::new()),
             removed: Mutex::new(Vec::new()),
             running: Mutex::new(true),
-            // Nothing handed over yet, which is where a hypervisor starts.
             images: Mutex::new(Vec::new()),
         }
     }
@@ -486,7 +448,6 @@ impl ScriptedMicroVm {
         self
     }
 
-    /// Say this image has already been handed over.
     pub fn holding(self, image: impl Into<String>) -> Self {
         if let Ok(mut images) = self.images.lock() {
             images.push(image.into());
@@ -494,7 +455,6 @@ impl ScriptedMicroVm {
         self
     }
 
-    /// Answer [`MicroVmApi::running`] with this.
     pub fn stopped(self) -> Self {
         if let Ok(mut running) = self.running.lock() {
             *running = false;
@@ -502,7 +462,6 @@ impl ScriptedMicroVm {
         self
     }
 
-    /// What was asked for, in order.
     pub fn plans(&self) -> Vec<Plan> {
         self.plans
             .lock()
@@ -564,8 +523,6 @@ impl MicroVmApi for ScriptedMicroVm {
         argv: &[String],
         env: &BTreeMap<String, String>,
     ) -> Result<ExecResult> {
-        // The screen travels in the environment rather than the argument
-        // list, so it is recorded where a test can see it.
         let mut recorded = argv.to_vec();
         if let Some(display) = env.get("DISPLAY") {
             recorded.push(format!("DISPLAY={display}"));
@@ -585,17 +542,10 @@ impl MicroVmApi for ScriptedMicroVm {
     }
 }
 
-/// An [`E2bApi`] that records what was asked and answers from a script.
-///
-/// A sandbox is a network call away, so a wrong argument list would otherwise
-/// cost an account, a template and a boot to find.
 pub struct ScriptedE2b {
     inner: ScriptedHost,
     plans: Mutex<Vec<SandboxPlan>>,
-    /// Name to sandbox, for both what was created here and what was said to
-    /// exist already.
     known: Mutex<BTreeMap<String, Sandbox>>,
-    /// Sandbox ID to its metadata, which is what a sweep reads.
     metadata: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
     commands: Mutex<Vec<Vec<String>>>,
     killed: Mutex<Vec<String>>,
@@ -640,8 +590,6 @@ impl ScriptedE2b {
         self
     }
 
-    /// Say a sandbox of this name is already running, as one left by another
-    /// process would be.
     pub fn holding(self, name: impl Into<String>, id: impl Into<String>) -> Self {
         let name = name.into();
         let sandbox = Sandbox {
@@ -662,7 +610,6 @@ impl ScriptedE2b {
         self
     }
 
-    /// What was asked for, in order.
     pub fn plans(&self) -> Vec<SandboxPlan> {
         self.plans
             .lock()
@@ -670,7 +617,6 @@ impl ScriptedE2b {
             .unwrap_or_default()
     }
 
-    /// Every command run in a sandbox, in order.
     pub fn commands(&self) -> Vec<Vec<String>> {
         self.commands
             .lock()
@@ -685,7 +631,6 @@ impl ScriptedE2b {
             .unwrap_or_default()
     }
 
-    /// Every deadline pushed out, which is what a lazy refresh is measured by.
     pub fn refreshes(&self) -> Vec<String> {
         self.refreshed
             .lock()
@@ -693,7 +638,6 @@ impl ScriptedE2b {
             .unwrap_or_default()
     }
 
-    /// Every name looked up through the control plane.
     pub fn found(&self) -> Vec<String> {
         self.found
             .lock()
@@ -781,8 +725,6 @@ impl E2bApi for ScriptedE2b {
             commands.push(argv.to_vec());
         }
 
-        // The screen travels in the environment, so it is recorded where a
-        // test can see it.
         let mut recorded = argv.to_vec();
         if let Some(display) = env.get("DISPLAY") {
             recorded.push(format!("DISPLAY={display}"));
@@ -807,19 +749,10 @@ impl E2bApi for ScriptedE2b {
     }
 }
 
-/// A [`RemoteApi`] with no cloud behind it.
-///
-/// A vendor adapter is mostly a request body and a response shape, and both
-/// are testable with no account: point the machine at this and every decision
-/// above it — the boot, the lazy deadline, the sweep — is checked in
-/// milliseconds.
 pub struct ScriptedRemote {
     inner: ScriptedHost,
     plans: Mutex<Vec<RemotePlan>>,
-    /// Name to sandbox, for both what was created here and what was said to
-    /// exist already.
     known: Mutex<BTreeMap<String, RemoteSandbox>>,
-    /// Sandbox ID to its metadata, which is what a sweep reads.
     metadata: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
     commands: Mutex<Vec<Vec<String>>>,
     files: Mutex<BTreeMap<String, Vec<u8>>>,
@@ -868,15 +801,11 @@ impl ScriptedRemote {
         self
     }
 
-    /// A vendor whose control plane cannot be listed, which is the half of the
-    /// seam that decides whether a sweep is offered at all.
     pub fn unlistable(mut self) -> Self {
         self.listable = false;
         self
     }
 
-    /// Say a sandbox of this name is already running, as one left by another
-    /// process would be.
     pub fn holding(self, name: impl Into<String>, id: impl Into<String>) -> Self {
         let name = name.into();
         let sandbox = Self::sandbox(id.into(), [6080, 6081]);
@@ -888,7 +817,6 @@ impl ScriptedRemote {
         self
     }
 
-    /// Put a key on a sandbox, as a caller's label travels.
     pub fn metadata(&self, id: &str, key: impl Into<String>, value: impl Into<String>) {
         if let Ok(mut all) = self.metadata.lock() {
             all.entry(id.to_string())
@@ -903,7 +831,6 @@ impl ScriptedRemote {
             .with_token("scripted")
     }
 
-    /// What was asked for, in order.
     pub fn plans(&self) -> Vec<RemotePlan> {
         self.plans
             .lock()
@@ -911,7 +838,6 @@ impl ScriptedRemote {
             .unwrap_or_default()
     }
 
-    /// Every command run in a sandbox, in order.
     pub fn commands(&self) -> Vec<Vec<String>> {
         self.commands
             .lock()
@@ -926,7 +852,6 @@ impl ScriptedRemote {
             .unwrap_or_default()
     }
 
-    /// Every deadline pushed out, which is what a lazy refresh is measured by.
     pub fn refreshes(&self) -> Vec<String> {
         self.refreshed
             .lock()
@@ -934,7 +859,6 @@ impl ScriptedRemote {
             .unwrap_or_default()
     }
 
-    /// Every name looked up through the control plane.
     pub fn found(&self) -> Vec<String> {
         self.found
             .lock()
@@ -942,7 +866,6 @@ impl ScriptedRemote {
             .unwrap_or_default()
     }
 
-    /// What a write left at this path.
     pub fn written(&self, path: &str) -> Option<Vec<u8>> {
         self.files.lock().ok()?.get(path).cloned()
     }
@@ -1027,8 +950,6 @@ impl RemoteApi for ScriptedRemote {
             commands.push(argv.to_vec());
         }
 
-        // The screen travels in the environment, so it is recorded where a
-        // test can see it.
         let mut recorded = argv.to_vec();
         if let Some(display) = env.get("DISPLAY") {
             recorded.push(format!("DISPLAY={display}"));

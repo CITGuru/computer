@@ -1,24 +1,3 @@
-//! A box in somebody else's cloud, whoever that is.
-//!
-//! [`DockerMachine`](crate::DockerMachine) needs a container runtime here and
-//! [`MicroVm`](crate::MicroVm) needs a hypervisor here. Both put the desktop
-//! where the program runs. A sandbox vendor does not, so a service on a small
-//! host can hand out desktops with no `/dev/kvm` and no capacity planning of
-//! its own, and the boundary is still a kernel the box does not share.
-//!
-//! Every such vendor answers the same shape: create a sandbox, run a command
-//! in it, move a file, kill it, and publish its ports at an address of the
-//! vendor's own. [`RemoteApi`] is that shape. Implement it and
-//! [`RemoteMachine`] gives you a [`Machine`](crate::Machine), with what this
-//! process started, the lazy deadline and the name-to-ID join a sweep needs
-//! already written.
-//!
-//! Driving is identical. Three claims are not: a port is an address the vendor
-//! chose, DevTools does not reach, and the image is one the vendor built.
-//! [`e2b`](super::e2b) is the worked example of all three.
-//!
-//! # Writing one
-//!
 //! ```no_run
 //! # extern crate computer_core as computer;
 //! use computer::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
@@ -53,9 +32,6 @@
 //! # let _ = frame;
 //! # computer.shutdown().await }
 //! ```
-//!
-//! [`crate::testing::ScriptedRemote`] tests one with no account and no
-//! network. `examples/custom_sandbox.rs` is a whole vendor in one file.
 
 pub mod api;
 pub mod machine;
@@ -68,11 +44,8 @@ pub use profile::{Remote, RemoteProfile};
 use crate::profile::Profile;
 use std::sync::Arc;
 
-/// A machine and the profile that goes with it.
-///
-/// They share the cell the sandbox lands in, which is what lets a profile
-/// built before the box exists format a URL containing an ID nobody had yet.
-/// Building them apart gets that wrong quietly, so this is the door.
+/// The pair shares the cell the sandbox lands in, so a profile built before
+/// the box exists can format a URL with the ID assigned later.
 pub fn pair(
     api: Arc<dyn RemoteApi>,
     image: Arc<dyn Profile>,

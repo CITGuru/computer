@@ -1,5 +1,3 @@
-//! The boxes this server is holding, and the lock that keeps a batch whole.
-
 use crate::error::{ApiError, ApiResult};
 use computer::{Computer, ScreenId};
 use computer_types::Spec;
@@ -10,32 +8,22 @@ use tokio::sync::{Mutex, RwLock};
 
 pub struct Entry {
     pub id: String,
-    /// Kept whole rather than as its digest alone, because a launch has to
-    /// resolve an app name against the apps this box was asked for.
     pub spec: Spec,
     pub created_at: SystemTime,
     pub screens: u32,
     pub width: u32,
     pub height: u32,
     pub computer: Computer,
-    /// A batch must not interleave with another caller's: a click landing
-    /// between somebody else's move and click goes to the wrong place, and the
-    /// frame that comes back looks like it worked.
-    ///
-    /// Per screen rather than per box, so two agents on two screens of one box
-    /// do not queue behind each other.
+    /// Per screen, so a batch never interleaves with another caller's on that screen.
     locks: Mutex<BTreeMap<u32, Arc<Mutex<()>>>>,
 }
 
 impl Entry {
-    /// What names this box's spec, for a caller comparing two boxes.
     pub fn spec_digest(&self) -> String {
         self.spec.digest()
     }
 
-    /// Refuses a screen this box does not have, because the map below is keyed
-    /// by whatever number arrives and nothing prunes it: an unchecked number
-    /// lets a caller grow it a lock at a time.
+    /// Refuses unknown screens: nothing prunes the lock map, so any number would grow it.
     pub async fn screen_lock(&self, screen: u32) -> ApiResult<Arc<Mutex<()>>> {
         self.check(screen)?;
 
@@ -54,9 +42,7 @@ impl Entry {
         Ok(())
     }
 
-    /// Screen 0 is the box's own, already started. The rest start on first
-    /// ask, and are taken unfenced because this server is the only thing
-    /// holding them — its own lock is the serialisation, not a lease.
+    /// Extra screens are taken unfenced: this server's lock serialises them, not a lease.
     pub async fn desktop(&self, screen: u32) -> ApiResult<Box<dyn AsDesktop + Send + '_>> {
         self.check(screen)?;
 
@@ -141,16 +127,6 @@ impl Registry {
         self.boxes.read().await.values().cloned().collect()
     }
 
-    /// Put a box back under the same id with a handle that reaches it.
-    ///
-    /// For a box that was stopped and started: the runtime published it on new
-    /// host ports, so the handle held here points at ports that are somebody
-    /// else's now. Everything else about the box — the spec it was made from,
-    /// when it was made — is carried across.
-    ///
-    /// A request already holding the old `Arc<Entry>` keeps the dead handle
-    /// and the old batch locks with it. Both were already useless: the box was
-    /// stopped underneath it.
     pub async fn replace(&self, id: &str, computer: Computer) -> ApiResult<Arc<Entry>> {
         let mut boxes = self.boxes.write().await;
 
@@ -173,16 +149,11 @@ impl Registry {
         Ok(entry)
     }
 
-    /// Stop holding a box without taking it away.
-    ///
-    /// For one that has already gone: stopping it again would ask a runtime to
-    /// remove what it does not have, and answer an error nobody can act on.
     pub async fn forget(&self, id: &str) {
         self.boxes.write().await.remove(id);
     }
 
-    /// Through the machine rather than `Computer::shutdown`, which needs the
-    /// handle by value while other requests may still be holding one.
+    /// Not `Computer::shutdown`: it needs the handle by value, and requests may hold one.
     pub async fn remove(&self, id: &str) -> ApiResult<()> {
         let entry = self
             .boxes

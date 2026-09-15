@@ -98,7 +98,7 @@ computer.click((640, 400), Button::Left).await?;
 computer.double_click((640, 400), Button::Left).await?;
 computer.drag((100, 100), (400, 300), Button::Left).await?;
 computer.type_text("hello").await?;
-computer.key("ctrl+shift+p").await?;
+computer.press("ctrl+shift+p").await?;
 computer.scroll((640, 400), Delta::down(3)).await?;
 computer.scroll((640, 400), Delta::right(3)).await?;
 let pointer = computer.cursor().await?;
@@ -111,10 +111,10 @@ Common key names work as expected. For example, the crate converts `enter` to `R
 From the command line the same gesture has a shorter spelling, and the point is optional:
 
 ```bash
-computer scroll <box> down            # three notches, at the middle of the screen
-computer scroll <box> right 6
-computer scroll <box> 640 400 up 2    # at a point
-computer scroll <box> 640 400 -2 -2   # both axes at once
+computer mouse <box> scroll down            # three notches, at the middle of the screen
+computer mouse <box> scroll right 6
+computer mouse <box> scroll 640 400 up 2    # at a point
+computer mouse <box> scroll 640 400 -2 -2   # both axes at once
 ```
 
 ### Important coordinate rules
@@ -601,8 +601,8 @@ A window is looked up when the capture is taken, not when it was listed — a wi
 `scaled` is a percentage of full size. It is what stops an agent paying for a megabyte on every step: a 1280×800 desktop halves to about two thirds of the bytes with the text still readable, and quarters to a third of them. On X11 the reduction averages pixels rather than interpolating, because blurring flat colours into gradients makes a *larger* PNG than the full-size picture it was meant to save.
 
 ```bash
-computer shot <box> out.png --window 42 --scale 50
-computer shot <box> out.png --at 100,80 --size 400x300
+computer screenshot <box> out.png --window 42 --scale 50
+computer screenshot <box> out.png --at 100,80 --size 400x300
 ```
 
 ## Hold a modifier, and wait for the drawing to stop
@@ -623,8 +623,8 @@ screen.wait_until_still(Duration::from_millis(400), Duration::from_secs(10)).awa
 The watch runs inside the box, so it costs one round trip however long it waits. A screen with something animating on it never settles and reaches the deadline instead, which is why one is asked for.
 
 ```bash
-computer click <box> 640 400 left --held shift,ctrl
-computer still <box> --settle 400 --within 10000
+computer mouse <box> click 640 400 left --held shift,ctrl
+computer wait <box> --settle 400 --within 10000
 ```
 
 Modifiers are X11 only. Holding a key across a click on Wayland needs a virtual keyboard that this image's pointer does not make, so the Wayland driver refuses rather than dropping the modifier and clicking anyway.

@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Parse the scripts this crate carries as text rather than as code.
-
-The page scripts are Rust string constants and the accessibility reader is a
-file the image copies in, so nothing compiles either: a typo reaches a caller as
-a failed `find` against a real browser or a real box, which is the one place
-neither a test nor clippy looks.
-"""
+"""Parse the page scripts and the accessibility reader, which nothing compiles."""
 
 import re
 import subprocess
@@ -27,8 +21,7 @@ def main():
     src = open(SOURCE).read()
     scripts = dict(constants(src))
 
-    # What `describe()` does, and the reason it is worth checking: the splice is
-    # a string replacement that a compiler never sees.
+    # `describe()` splices SELECTOR in by string replacement, which no compiler sees.
     scripts["DESCRIBE"] = scripts["DESCRIBE"].replace("SELECTOR_FN", scripts["SELECTOR"])
 
     failed = False
@@ -45,8 +38,7 @@ def main():
             print(ran.stderr.strip()[:800], file=sys.stderr)
             failed = True
 
-    # The reader is compiled rather than run: it connects to a bus on import,
-    # and there is none out here.
+    # Compiled, not run: it connects to a bus on import.
     reader = subprocess.run(
         [sys.executable, "-c", f"compile(open({READER!r}).read(), {READER!r}, 'exec')"],
         capture_output=True,
