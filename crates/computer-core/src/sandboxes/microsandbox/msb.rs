@@ -1,9 +1,3 @@
-//! microsandbox through the command it installs.
-//!
-//! Arguments in, text out. That keeps the part worth testing — which flags a
-//! plan turns into, and what the answers mean — a pure function, checkable
-//! with no hypervisor on the machine.
-
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use crate::microvm::{ImageLoader, MicroVm, MicroVmApi, Plan};
@@ -12,7 +6,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Where microsandbox puts its command when nothing added it to `PATH`.
 pub const DEFAULT_HOME: &str = ".microsandbox/bin/msb";
 
 pub struct Msb {
@@ -32,8 +25,6 @@ impl Msb {
         }
     }
 
-    /// `msb` on the path, or where the installer puts it.
-    ///
     /// microsandbox installs into a directory it does not add to `PATH`.
     pub fn found() -> Self {
         let installed = std::env::var("HOME")
@@ -79,7 +70,6 @@ impl Msb {
     }
 }
 
-/// The arguments that create one machine, as a pure function.
 pub fn create_args(plan: &Plan) -> Vec<String> {
     let mut args = vec!["create".to_string(), "-n".to_string(), plan.name.clone()];
 
@@ -88,13 +78,10 @@ pub fn create_args(plan: &Plan) -> Vec<String> {
         args.push(cpus.to_string());
     }
     if let Some(mib) = plan.memory_mib {
-        // Mebibytes, which is what the flag takes.
         args.push("-m".to_string());
         args.push(mib.to_string());
     }
     if !plan.network {
-        // The interface goes entirely, which is stronger than a
-        // container's empty network namespace.
         args.push("--no-net".to_string());
     }
 
@@ -103,8 +90,7 @@ pub fn create_args(plan: &Plan) -> Vec<String> {
         args.push(format!("{key}={value}"));
     }
     for (host, guest) in &plan.ports {
-        // Loopback, like everywhere else in this crate: the screen has no
-        // password on it.
+        // The screen has no password on it.
         args.push("-p".to_string());
         args.push(format!("127.0.0.1:{host}:{guest}"));
     }
@@ -116,7 +102,6 @@ pub fn create_args(plan: &Plan) -> Vec<String> {
     args
 }
 
-/// Whether `msb ls` says this machine is running.
 pub fn parse_running(output: &str, name: &str) -> bool {
     output
         .lines()
@@ -127,7 +112,6 @@ pub fn parse_running(output: &str, name: &str) -> bool {
         .any(|(listed, status)| listed == name && status == "running")
 }
 
-/// Whether `msb image ls` holds this reference.
 pub fn parse_has_image(output: &str, image: &str) -> bool {
     output
         .lines()
@@ -155,8 +139,6 @@ impl MicroVmApi for Msb {
 
     async fn create(&self, plan: &Plan) -> Result<()> {
         if plan.replace {
-            // A name left by a run that did not clean up is this same
-            // machine; refusing would strand it.
             let _ = self.run(&Self::argv(&["rm", "-f", "-q", &plan.name])).await;
         }
 
@@ -254,7 +236,6 @@ impl MicroVmApi for Msb {
     }
 
     async fn copy_in(&self, name: &str, from: &Path, to: &str) -> Result<()> {
-        // Disk to disk: `msb cp` streams, so nothing is held in memory.
         let copied = self
             .run(&Self::argv(&[
                 "cp",
@@ -316,7 +297,6 @@ impl ImageLoader for Msb {
     }
 }
 
-/// A microVM machine backed by the installed `msb`.
 pub fn machine() -> MicroVm {
     MicroVm::new(Arc::new(Msb::found()))
         .named("microsandbox")

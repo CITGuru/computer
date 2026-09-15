@@ -50,17 +50,12 @@
       const url = `${protocol}://${window.location.host}${prefix}${path}`;
       const rfb = new RFB(document.getElementById("screen"), url);
 
-      // **This is a courtesy, not a lock.** The page decides it, so a page
-      // opened differently decides otherwise. Read-only is enforced by the
-      // server on the view port — `x11vnc -viewonly`, `wayvnc -d` — and the
-      // control port accepts input whatever is set here.
+      // A courtesy, not a lock: the view port's server enforces read-only.
       rfb.viewOnly = flag("view_only");
       rfb.scaleViewport = true;
       rfb.clipViewport = false;
 
-      // Without these, a wrong path, a viewer that never came up and a refused
-      // credential all render as the same black rectangle — indistinguishable
-      // from a desktop with nothing on it.
+      // Without these, every failure renders as a black rectangle.
       rfb.addEventListener("securityfailure", (event) =>
         fail(`The screen refused the connection: ${event.detail.reason}`),
       );

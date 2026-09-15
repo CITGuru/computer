@@ -1,10 +1,7 @@
-//! `computerd`: the server that outlives a command.
-
 use computer_server::{AppState, routes};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// Serves until Ctrl-C, then puts down whatever the store is still holding.
 pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(

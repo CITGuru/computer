@@ -1,20 +1,4 @@
-//! The same desktop, in a microVM instead of a container.
-//!
-//! ```text
 //! cargo run --example microvm
-//! ```
-//!
-//! Two things differ, and neither is the driving:
-//!
-//! 1. The image has to be handed over. A container runtime keeps its
-//!    images in a store only it can read, so the image this crate builds is
-//!    saved once and imported into the hypervisor's own store. An OCI
-//!    reference the hypervisor can pull works too; pass it instead.
-//! 2. Ports are chosen on this side. A hypervisor forwards the pairs it is
-//!    given, so free host ports are picked before the machine is created.
-//!
-//! Everything after that is the same code as the container path, because
-//! `Machine` is the only thing that knows where the box is.
 
 use computer::microvm::import_image;
 use computer::runtime::SystemDocker;
@@ -29,8 +13,7 @@ async fn main() -> computer::Result<()> {
     let docker: Arc<dyn ContainerCli> = Arc::new(SystemDocker::default());
     let tag = bundle::DESKTOP.tag();
 
-    // Once per image, not once per box: about a gigabyte moves through the
-    // disk on the way over.
+    // Once per image: about a gigabyte moves through the disk.
     if !computer::microvm::MicroVmApi::has_image(&hypervisor, &tag).await? {
         println!("building the image and handing it to the hypervisor …");
         bundle::ensure(docker.as_ref(), &tag).await?;

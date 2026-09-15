@@ -1,20 +1,8 @@
-//! The images, carried inside the binary.
-//!
-//! Each Dockerfile and its scripts are compiled into the crate, written to a
-//! scratch directory and built on first use, so a caller needs nothing but a
-//! runtime to put the result in. The image is also the one this code was
-//! tested against, which a registry tag cannot promise.
-//!
-//! A [`Bundle`] is one image: its name, its files, and a fingerprint over
-//! them. Two images share this module, so the fingerprint is per bundle rather
-//! than over one fixed list.
-
 use crate::error::{Error, Result};
 use crate::runtime::ContainerCli;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Where this crate's image sources are, on the machine that compiled it.
 pub const IMAGES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/images");
 
 pub const DOCKERFILE: &str = include_str!("../images/desktop/Dockerfile");
@@ -33,6 +21,8 @@ pub const TERMINAL_DESKTOP: &str = include_str!("../images/desktop/terminal.desk
 pub const BROWSER_DESKTOP: &str = include_str!("../images/desktop/browser.desktop");
 pub const INPUT_GUARD: &str = include_str!("../images/desktop/input-guard.sh");
 
+pub const A11Y_PY: &str = include_str!("../images/desktop/a11y.py");
+
 pub const WAYLAND_DOCKERFILE: &str = include_str!("../images/wayland/Dockerfile");
 pub const WAYLAND_START_SH: &str = include_str!("../images/wayland/start.sh");
 pub const WAYLAND_SCREEN_SH: &str = include_str!("../images/wayland/screen.sh");
@@ -43,24 +33,18 @@ pub const POINTER_C: &str = include_str!("../images/wayland/pointer.c");
 pub const VIRTUAL_POINTER_XML: &str =
     include_str!("../images/wayland/wlr-virtual-pointer-unstable-v1.xml");
 
-/// What the X11 image is called, before its fingerprint.
 pub const IMAGE_NAME: &str = "computer-desktop";
 
-/// What the Wayland image is called, before its fingerprint.
 pub const WAYLAND_IMAGE_NAME: &str = "computer-wayland";
 
 const LOCAL_IMAGE_NAME: &str = "computer-local";
 
-/// One image this crate carries: what it is called, and what it is built from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bundle {
-    /// The tag's name, before the fingerprint and the architecture.
     pub name: &'static str,
-    /// Where each file goes in the build context, and the bytes that go there.
     pub files: &'static [(&'static str, &'static str)],
 }
 
-/// The X11 desktop: Xvfb, fluxbox, chromium, x11vnc and noVNC.
 pub static DESKTOP: Bundle = Bundle {
     name: IMAGE_NAME,
     files: &[
@@ -79,10 +63,10 @@ pub static DESKTOP: Bundle = Bundle {
         ("terminal.desktop", TERMINAL_DESKTOP),
         ("browser.desktop", BROWSER_DESKTOP),
         ("input-guard.sh", INPUT_GUARD),
+        ("a11y.py", A11Y_PY),
     ],
 };
 
-/// The Wayland desktop: sway headless, chromium, wayvnc and noVNC.
 pub static WAYLAND: Bundle = Bundle {
     name: WAYLAND_IMAGE_NAME,
     files: &[
@@ -94,15 +78,11 @@ pub static WAYLAND: Bundle = Bundle {
         ("sway.config", SWAY_CONFIG),
         ("pointer.c", POINTER_C),
         ("wlr-virtual-pointer-unstable-v1.xml", VIRTUAL_POINTER_XML),
+        ("a11y.py", A11Y_PY),
     ],
 };
 
 impl Bundle {
-    /// A hash of this image's files and what was asked of them, as the tag
-    /// they are built under.
-    ///
-    /// The tag follows the bytes, so an edit to the image builds a new image
-    /// rather than leaving an older one answering to the same name.
     pub fn fingerprint(&self, extras: &Extras) -> String {
         // FNV-1a, not a security hash: different files need different tags.
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -113,32 +93,24 @@ impl Bundle {
             }
         };
 
-        // The name as well as the bodies. Two images that happened to carry
-        // the same bytes are still two images, and one tag for both hands a
-        // caller whichever was built first.
+        // The name too: two images with the same bytes still need two tags.
         eat(self.name.as_bytes());
         for (path, body) in self.files {
             eat(path.as_bytes());
             eat(body.as_bytes());
         }
         eat(extras.build_arg().as_bytes());
-        // A repository changes what a package name resolves to.
         eat(extras.sources_arg().as_bytes());
         eat(extras.apps_arg().as_bytes());
 
         format!("{hash:016x}")
     }
 
-    /// What this builds to, with nothing extra installed.
     pub fn tag(&self) -> String {
         self.tag_with(&Extras::none())
     }
 
-    /// What this builds to, with these packages installed.
-    ///
-    /// The tag carries the architecture as well as the fingerprint: a runtime
-    /// builds for the machine it is on, and an image of the wrong architecture
-    /// answers every command with an exec format error.
+    /// Carries the architecture: a wrong-arch image fails every command with exec format error.
     pub fn tag_with(&self, extras: &Extras) -> String {
         format!(
             "{}:{}-{}",
@@ -148,16 +120,11 @@ impl Bundle {
         )
     }
 
-    /// Whether `tag` is one of this bundle's.
     pub fn owns(&self, tag: &str) -> bool {
         tag.starts_with(&format!("{}:", self.name))
     }
 
-    /// Where this image is unpacked before it is built.
-    ///
-    /// Named for the crate version and the image: the constants and the files
-    /// only agree within one release, and two images sharing a directory would
-    /// each build the other's context.
+    /// Per version and per image: files and constants only agree within one release.
     pub fn scratch_dir(&self) -> PathBuf {
         std::env::temp_dir().join(format!(
             "computer-rs-image-{}-{}",
@@ -166,7 +133,6 @@ impl Bundle {
         ))
     }
 
-    /// Write this image out, and return the directory to build from.
     pub async fn materialize(&self) -> Result<PathBuf> {
         let dir = self.scratch_dir();
         tokio::fs::create_dir_all(&dir)
@@ -179,14 +145,8 @@ impl Bundle {
         Ok(dir)
     }
 
-    /// Build it under `tag`, with these packages installed.
-    ///
-    /// Minutes on a cold cache: the image installs a display server, a window
-    /// manager and a browser.
     pub async fn build(&self, cli: &dyn ContainerCli, tag: &str, extras: &Extras) -> Result<()> {
         let dir = self.materialize().await?;
-        // Minutes on a cold cache, with nothing on the caller's terminal in
-        // between: a build with no word at the start reads as a hang.
         tracing::info!(image = %tag, from = %dir.display(), "building the image");
         let mut args = vec!["build".to_string(), "--tag".to_string(), tag.to_string()];
 
@@ -194,8 +154,6 @@ impl Bundle {
             args.push("--build-arg".to_string());
             args.push(format!("EXTRA_PACKAGES={}", extras.build_arg()));
 
-            // An empty argument would change the build command of every
-            // image that never needed one.
             if !extras.sources.is_empty() {
                 args.push("--build-arg".to_string());
                 args.push(format!("EXTRA_SOURCES={}", extras.sources_arg()));
@@ -240,7 +198,6 @@ fn directory_entries(directory: &Path, entries: &mut Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
-/// Resolve a local build context and derive the image tag from its contents.
 pub(crate) fn directory_image(directory: &Path, extras: &Extras) -> Result<(PathBuf, String)> {
     let root = fs::canonicalize(directory).map_err(|error| directory_error(directory, error))?;
     let metadata = fs::metadata(&root).map_err(|error| directory_error(&root, error))?;
@@ -338,23 +295,13 @@ async fn build_directory(
     Ok(())
 }
 
-/// Extra apt packages to install into the image.
-///
-/// Opt-in, and part of the tag: two boxes asking for different packages are
-/// two different images, so neither can be handed the other's.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Extras {
     pub packages: Vec<String>,
-    /// Not every program is in Debian: VS Code ships from Microsoft's own
-    /// archive, so a package list alone cannot reach it.
     pub sources: Vec<AptSource>,
     pub launchers: Vec<Launcher>,
 }
 
-/// One app the dock offers.
-///
-/// For the person looking at the desktop, who would otherwise have installed
-/// applications and no way to open one. `Screen::launch` is the other path.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Launcher {
     pub name: String,
@@ -365,7 +312,6 @@ pub struct Launcher {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AptSource {
-    /// Names the keyring and list files, so two sources do not collide.
     pub name: String,
     pub key_url: String,
     pub list: String,
@@ -378,8 +324,6 @@ impl Extras {
 
     pub fn with(packages: impl IntoIterator<Item = impl Into<String>>) -> Self {
         let mut packages: Vec<String> = packages.into_iter().map(Into::into).collect();
-        // Sorted, so the same set asked for in two orders is one image rather
-        // than two builds of the same thing.
         packages.sort();
         packages.dedup();
         Self {
@@ -403,47 +347,31 @@ impl Extras {
         }
     }
 
-    /// Fonts for the writing systems the base image cannot draw.
-    ///
-    /// Without them, a page in Chinese, Japanese or Korean renders as empty
-    /// boxes, and so does emoji.
+    /// CJK and emoji, which the base image draws as empty boxes.
     pub fn wide_fonts() -> Self {
         Self::with(["fonts-noto-cjk", "fonts-noto-color-emoji"])
     }
 
-    /// A sound card, so the box has somewhere to play.
-    ///
-    /// A sound server with a sink that goes nowhere. Nothing to listen to
-    /// live, and something for a recording to capture.
     pub fn audio() -> Self {
         Self::with(["pulseaudio", "pulseaudio-utils"])
     }
 
-    /// A recorder, so a screen can be captured as video rather than as frames.
     pub fn video() -> Self {
         Self::with(["ffmpeg"])
     }
 
-    /// A dock along the bottom, so the box reads as a desk rather than a
-    /// framebuffer with a browser on it.
-    ///
-    /// Opt-in, because it is a trade: a dock is roughly sixty pixels of every
-    /// screenshot spent on something that is not the work, and a box driven by
-    /// a program would rather have the pixels. A box a person looks at would
-    /// rather have the desk.
-    ///
-    /// `hsetroot` comes with it and is the load-bearing half. tint2 composites
-    /// its rounded corners against the root pixmap, and finds that pixmap
-    /// through an atom that ImageMagick does not publish — so without it the
-    /// corners come out as dark squares.
+    /// `hsetroot` too: without it tint2 draws its rounded corners as dark squares.
     pub fn dock() -> Self {
         Self::with(["tint2", "hsetroot"])
     }
 
-    /// Xwayland, so the Wayland image can run X11 programs. Ten megabytes of
-    /// image, and seventy resident while it runs.
     pub fn x11_apps() -> Self {
         Self::with(["xwayland"])
+    }
+
+    /// `libatk-adaptor` is the bridge: without it a GTK app publishes an empty tree.
+    pub fn accessibility() -> Self {
+        Self::with(["at-spi2-core", "libatk-adaptor", "python3-pyatspi"])
     }
 
     pub fn everything() -> Self {
@@ -467,13 +395,11 @@ impl Extras {
         self.packages.is_empty() && self.sources.is_empty() && self.launchers.is_empty()
     }
 
-    /// The value the image's `EXTRA_PACKAGES` build argument takes.
     pub fn build_arg(&self) -> String {
         self.packages.join(" ")
     }
 
-    /// One record per line: name, class, command, tab-separated. The command
-    /// is the rest of the line, so its own words need no quoting.
+    /// Tab-separated, one per line; the command is the rest of the line, unquoted.
     pub fn apps_arg(&self) -> String {
         self.launchers
             .iter()
@@ -498,13 +424,11 @@ async fn write(path: &Path, body: &str) -> Result<()> {
         .map_err(|error| Error::transport(format!("{}: {error}", path.display()), false))
 }
 
-/// Whether the runtime already has this image.
 pub async fn present(cli: &dyn ContainerCli, tag: &str) -> Result<bool> {
     let args = vec!["image".to_string(), "inspect".to_string(), tag.to_string()];
     Ok(cli.run(&args).await?.code == 0)
 }
 
-/// Fetch an image the caller named themselves.
 pub async fn pull(cli: &dyn ContainerCli, tag: &str) -> Result<()> {
     let args = vec!["pull".to_string(), tag.to_string()];
 
@@ -519,15 +443,10 @@ pub async fn pull(cli: &dyn ContainerCli, tag: &str) -> Result<()> {
     Ok(())
 }
 
-/// Make sure the X11 image exists under `tag`, building it if it does not.
 pub async fn ensure(cli: &dyn ContainerCli, tag: &str) -> Result<()> {
     ensure_with(cli, tag, &Extras::none(), Some(&DESKTOP)).await
 }
 
-/// Make sure `tag` exists, building it from `bundle` or fetching it.
-///
-/// Which one applies is asked rather than read off the tag, so an image
-/// this crate does not carry is never built under somebody else's name.
 pub async fn ensure_with(
     cli: &dyn ContainerCli,
     tag: &str,
@@ -626,7 +545,6 @@ mod tests {
 
     #[test]
     fn test_the_fingerprint_covers_every_file_in_the_image() {
-        // Each file changes the tag, or an edit to it builds nothing new.
         let full = DESKTOP.fingerprint(&Extras::none());
         for one in [
             DOCKERFILE,

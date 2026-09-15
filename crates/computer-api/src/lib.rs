@@ -1,16 +1,6 @@
-//! The HTTP contract: what a client sends, and what it gets back.
-//!
-//! Nothing here may reach for a web framework or for the engine. Both ends of
-//! the wire depend on these types, and a client that has to compile a server's
-//! dependencies to send a request is a client nobody uses.
-//!
-//! Every type goes both ways. The server never sends a request and never reads
-//! a reply, so half of each pair is unused here — but a client does both, and a
-//! protocol only one end can construct is not one.
-
 pub use computer_types::{
-    App, Arrange, Auth, Bind, Button, Desktop, DisplayServer, Feature, Held, Placement, Point,
-    Policy, Rect, Selection, Spec, Window,
+    App, Arrange, Auth, Bind, Button, Desktop, DisplayServer, Feature, Held, Node, NodeQuery,
+    Placement, Point, Policy, Rect, Selection, Spec, Window,
 };
 use serde::{Deserialize, Serialize};
 
@@ -41,15 +31,16 @@ pub struct BoxView {
 #[serde(rename_all = "snake_case")]
 pub enum BoxState {
     Ready,
+    /// Calls that reach into a paused box hang rather than fail.
+    Paused,
+    /// Starting it again gives a fresh desktop on new ports.
+    Stopped,
     Gone,
 }
 
-/// What `/v1/health` answers, so a client can tell this apart from whatever
-/// else happens to be listening on the port it guessed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Health {
     pub ok: bool,
-    /// Names the server, because `{"ok": true}` is a thing many services say.
     pub service: String,
 }
 
@@ -60,9 +51,6 @@ pub struct BoxList {
     pub boxes: Vec<BoxView>,
 }
 
-/// One step an agent takes. `at` is optional wherever the pointer is already
-/// where it should be, so a move and a click in one batch need not repeat the
-/// coordinate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
@@ -74,9 +62,6 @@ pub enum Action {
         at: Option<Point>,
         #[serde(default)]
         button: Button,
-        /// Modifiers held down around it: shift to extend a selection, ctrl
-        /// to add to one. A `key` action first does not do this — the press
-        /// ends with the command that made it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         held: Vec<Held>,
     },
@@ -96,13 +81,18 @@ pub enum Action {
     },
     Type {
         text: String,
+        /// Milliseconds between keystrokes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delay_ms: Option<u64>,
     },
-    Key {
+    Press {
         chord: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        then: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        held: Vec<Held>,
     },
-    /// In notches: positive `dy` down, positive `dx` right. Whatever sits
-    /// under the point is what moves, so this reaches a list or a sidebar
-    /// without focusing it first.
+    /// In notches: positive `dy` down, positive `dx` right.
     Scroll {
         at: Point,
         #[serde(default)]
@@ -111,8 +101,6 @@ pub enum Action {
         dy: i32,
     },
     OpenUrl {
-        /// Where to put it. `blank` opens a tab, as a link with
-        /// `target="_blank"` does; `current` navigates the one on screen.
         #[serde(default)]
         target: OpenIn,
         url: String,
@@ -120,28 +108,20 @@ pub enum Action {
     Wait {
         ms: u64,
     },
-    /// A screen with something animating on it never holds still and reaches
-    /// the deadline, which is why one is asked for.
     WaitStill {
         #[serde(default)]
         settle_ms: Option<u64>,
         #[serde(default)]
         within_ms: Option<u64>,
     },
-    /// Act on the element a query names, in the page the screen is showing.
-    ///
-    /// The same operations as `POST …/page/element`, so a form is one batch
-    /// rather than a call per field: the screen lock is held across the whole
-    /// of it, and one frame comes back instead of one per step.
-    ///
-    /// Nested rather than flattened: `deny_unknown_fields` and `flatten` do
-    /// not work together, and a misspelled key silently dropped is worse than
-    /// a word of nesting.
+    /// Nested because `deny_unknown_fields` does not work with `flatten`.
     OnPage {
         what: OnElement,
     },
-    /// A name, not a command: an argv posted to a driving endpoint would be
-    /// `exec` in disguise.
+    OnNode {
+        what: OnNode,
+    },
+    /// `app` is a catalog name: an argv here would be `exec` in disguise.
     Launch {
         app: String,
         #[serde(default)]
@@ -149,17 +129,49 @@ pub enum Action {
     },
 }
 
-/// What the page in front is showing.
-///
-/// Text rather than a picture of text, and links with the addresses behind
-/// them: a frame says where to click, and this says what it says.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OnNode {
+    Tree {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depth: Option<u32>,
+    },
+    Find {
+        node: NodeQuery,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+    },
+    Focus {
+        node: NodeQuery,
+    },
+    Invoke {
+        node: NodeQuery,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<String>,
+    },
+    Set {
+        node: NodeQuery,
+        value: String,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeResult {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes: Vec<Node>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<Node>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageText {
     pub url: String,
     pub title: String,
-    /// The rendered text, whitespace collapsed and cut at `limit`.
     pub text: String,
-    /// Whether the cut lost anything.
     pub truncated: bool,
     pub links: Vec<Link>,
 }
@@ -170,30 +182,22 @@ pub struct Link {
     pub href: String,
 }
 
-/// One thing on a page a caller can act on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Element {
     pub text: String,
     pub tag: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// The shortest selector that names this element and nothing else.
-    ///
-    /// Every tool that takes a query takes one of these, and it is unambiguous
-    /// where words are not. Absent where the page offers nothing identifying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
-    /// What the page calls it, where that is not what it says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// Whether its middle is inside the window.
     #[serde(default)]
     pub visible: bool,
-    /// The middle of it, in the viewport's coordinates, not the screen's.
-    ///
-    /// Absent where the middle is outside the viewport. Such an element is
-    /// still worth naming — `click_element` scrolls to it — but there is no
-    /// point on the page to press.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
     pub width: u32,
@@ -206,49 +210,45 @@ pub struct Element {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum OnElement {
-    /// Bring it into view and click its middle.
     Click {
         query: String,
         #[serde(default)]
         button: Button,
+        #[serde(default)]
+        double: bool,
     },
-    /// Put text in a field, as typing rather than as an assignment.
-    Fill { query: String, text: String },
-    /// What a dropdown offers.
-    Options { query: String },
-    /// Choose one of them, by its visible words.
-    Choose { query: String, option: String },
-    /// Hand a file input paths, which are the box's own.
-    Upload { query: String, paths: Vec<String> },
-    /// Wait until something matching the query is on the page, or gone.
-    ///
-    /// The alternative is a sleep, which is either short enough to act too
-    /// early or long enough to be paid on every step.
+    Fill {
+        query: String,
+        text: String,
+    },
+    Options {
+        query: String,
+    },
+    Choose {
+        query: String,
+        option: String,
+    },
+    Upload {
+        query: String,
+        paths: Vec<String>,
+    },
     WaitFor {
         query: String,
         #[serde(default)]
         gone: bool,
         #[serde(default)]
         within_ms: Option<u64>,
-        /// Anything else worth stopping for, such as the text a page shows
-        /// when what was asked for is never going to arrive. Waiting the full
-        /// timeout for a success that a failure has already ruled out is the
-        /// common way to spend it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         or: Vec<String>,
-        /// Match the whole of an element's words rather than any part of them.
         #[serde(default)]
         exact: bool,
     },
-    /// Put the pointer over something without pressing anything.
-    Hover { query: String },
-    /// Back, forward or again through this page's own history.
-    History { go: Where },
-    /// Move the page, or one scrollable thing on it.
-    ///
-    /// `to` is `by`, `top` or `bottom`; `by` takes `dx`/`dy` in pixels. Not
-    /// the same as the `scroll` action, which sends wheel clicks at a screen
-    /// point and moves whatever sits under the pointer.
+    Hover {
+        query: String,
+    },
+    History {
+        go: Where,
+    },
     Scroll {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         query: Option<String>,
@@ -282,42 +282,30 @@ pub enum ScrollTo {
 pub struct ElementResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element: Option<Element>,
-    /// Where the page was afterwards.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// Whether that is somewhere else. A click that did nothing and a click
-    /// that navigated read the same without this.
     #[serde(default)]
     pub navigated: bool,
-    /// Which query a wait stopped for, where it was given more than one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matched: Option<String>,
-    /// What a dropdown offered, where the operation asked.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<String>,
-    /// Where a scroll ended up. The same answer twice means it did not move,
-    /// which is how a page that loads more on arrival says there is no more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
 }
 
-/// How a page should be read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reading {
-    /// Headings, lists, tables and inline links kept.
     #[default]
     Markdown,
-    /// Rendered text, whitespace collapsed.
     Text,
-    /// The document's own HTML, for what the readers above do not carry.
     Raw,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AwaitWindow {
-    /// What the program calls itself, as `windows` reports it.
     pub class: String,
     #[serde(default)]
     pub within_ms: Option<u64>,
@@ -334,15 +322,10 @@ pub enum Want {
 #[serde(deny_unknown_fields)]
 pub struct ActionBatch {
     pub actions: Vec<Action>,
-    /// How long to leave the screen alone before capturing. Waited inside the
-    /// box, where a client's guess at a sleep cannot be wrong about the
-    /// network.
     #[serde(default)]
     pub settle_ms: Option<u64>,
     #[serde(default)]
     pub want: Vec<Want>,
-    /// The frame hash the caller already holds. A screen that has not moved
-    /// answers `unchanged` and carries no picture.
     #[serde(default)]
     pub have_frame: Option<String>,
 }
@@ -350,44 +333,56 @@ pub struct ActionBatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchResult {
     pub results: Vec<ActionResult>,
-    /// The index of the action that stopped the batch, if one did. Everything
-    /// after it was not attempted: a click that follows a move which failed
-    /// lands wherever the pointer happened to be, and nothing in the frame
-    /// afterwards says so.
     pub stopped_at: Option<usize>,
     pub frame: Option<Frame>,
     pub cursor: Option<Point>,
-    /// What any `launch` in this batch drew, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<Window>,
-    /// What any `open_url` in this batch left open, in order.
-    ///
-    /// Empty on a box that publishes no DevTools port: the tab is opened
-    /// through the browser in the box, which never learns the id the debugger
-    /// would have given it.
+    /// Empty on a box that publishes no DevTools port.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tabs: Vec<Tab>,
 }
 
-/// Where an `open_url` puts the page.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenIn {
-    /// A tab of its own, raised in front. Whatever coordinates a caller worked
-    /// out before this belong to a page that is no longer on screen.
     #[default]
     Blank,
-    /// The tab already showing, which keeps every other tab where it was.
     Current,
 }
 
-/// One of a browser's pages.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Find {
+    pub query: String,
+    pub limit: Option<usize>,
+    pub scroll: Option<bool>,
+    pub exact: Option<bool>,
+    pub role: Option<String>,
+    pub tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Evaluate {
+    pub expression: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Evaluated {
+    pub json: String,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tab {
     pub id: String,
     pub title: String,
     pub url: String,
-    /// Whether this is the one on screen.
     pub visible: bool,
 }
 
@@ -399,36 +394,62 @@ pub struct ActionResult {
     pub error: Option<ErrorBody>,
 }
 
-/// The default is the whole screen at full size, which is what `frame`
-/// answered before any of this existed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Shot {
-    /// One window, by the id `windows` reports. Looked up at capture time, so
-    /// a window that has moved is still captured where it is now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<String>,
     /// Ignored when a window is named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<Rect>,
-    /// A percentage of full size, 1 to 400. A picture of a desktop is a
-    /// megabyte a caller pays for on every step, and most of what it needs to
-    /// read survives being halved.
+    /// A percentage of full size, 1 to 400.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scale: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pointer: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
 }
 
 impl Shot {
     pub fn is_whole(&self) -> bool {
-        self.window.is_none() && self.region.is_none() && self.scale.is_none()
+        self.window.is_none() && self.region.is_none() && self.scale.is_none() && !self.pointer
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageShot {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<Picture>,
+    /// JPEG only, 1 to 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Picture {
+    #[default]
+    Png,
+    Jpeg,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Captured {
+    pub format: Picture,
+    pub bytes: usize,
+    pub image_base64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {
     pub hash: String,
     pub unchanged: bool,
-    /// Omitted when `unchanged`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png_base64: Option<String>,
 }
@@ -464,8 +485,6 @@ pub struct ExecRequest {
     pub timeout_ms: Option<u64>,
 }
 
-/// Text rather than base64: an agent reads this. Binary belongs in a file,
-/// read back through `GET /boxes/{id}/files`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecResponse {
     pub code: i32,
@@ -490,8 +509,6 @@ pub struct ReadFile {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TakeoverRequest {
-    /// `false` hands the screen over exclusively and holds this API's input
-    /// back. `true` lets both drive, and both can race.
     #[serde(default)]
     pub shared: bool,
 }
@@ -510,6 +527,20 @@ pub struct ViewersView {
     pub person_driving: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecordingView {
+    pub recording: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StartRecording {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardView {
     pub text: String,
@@ -523,9 +554,7 @@ pub struct SetClipboard {
     pub selection: Selection,
 }
 
-/// `Person` marks custody, never input. A person's keystrokes arrive over VNC
-/// and never reach this server, so what is recorded is the interval a screen
-/// was theirs.
+/// `Person` marks custody, never input: a person's keystrokes go over VNC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Actor {
@@ -537,11 +566,7 @@ pub enum Actor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TraceEvent {
-    /// Carries the spec whole, so a box can be rebuilt from its record after
-    /// the box itself is gone.
-    ///
-    /// Boxed: a trace holds thousands of entries and every one of them would
-    /// otherwise be sized to hold a spec.
+    /// Boxed: a trace holds thousands of entries.
     BoxCreated {
         spec_digest: String,
         spec: Box<Spec>,
@@ -550,13 +575,9 @@ pub enum TraceEvent {
         height: u32,
         screens: u32,
     },
-    /// Removed by something other than a request: its deadline passed, or the
-    /// runtime stopped holding it.
     Gone {
         why: String,
     },
-    /// Found running after a restart. Everything before it is gone: the trace
-    /// lived in this process and the box did not.
     Adopted {
         runtime: String,
     },
@@ -565,8 +586,6 @@ pub enum TraceEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         up_to: Option<u64>,
     },
-    /// One action, with what it did. The action is carried whole so the run can
-    /// be replayed against a fresh box.
     Acted {
         screen: u32,
         action: Action,
@@ -574,12 +593,7 @@ pub enum TraceEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<ErrorBody>,
     },
-    /// The screen changed. Written only when it did, so a caller polling a
-    /// still screen adds nothing, and no frame entry between a takeover's two
-    /// ends means nothing visible happened while it was held.
-    ///
-    /// The actor is whoever held the screen, not whoever changed it: an agent
-    /// can act during a handover, so a person-held frame may show its work.
+    /// The actor is whoever held the screen, not whoever changed it.
     Frame {
         screen: u32,
     },
@@ -588,7 +602,6 @@ pub enum TraceEvent {
         code: i32,
         timed_out: bool,
     },
-    /// Replayable: the name and arguments are the whole launch.
     AppLaunched {
         screen: u32,
         app: String,
@@ -604,6 +617,14 @@ pub enum TraceEvent {
         path: String,
         bytes: usize,
     },
+    BoxPaused,
+    BoxResumed,
+    BoxStopped,
+    BoxStarted,
+    PageCaptured {
+        full: bool,
+        bytes: usize,
+    },
     ClipboardSet {
         screen: u32,
         selection: Selection,
@@ -612,8 +633,6 @@ pub enum TraceEvent {
         screen: u32,
         selection: Selection,
     },
-    /// From here until `TakeoverEnded` the screen was a person's, and this
-    /// API's input was refused.
     TakeoverStarted {
         screen: u32,
         exclusive: bool,
@@ -630,9 +649,6 @@ pub struct TraceEntry {
     pub at_ms: u64,
     pub actor: Actor,
     pub event: TraceEvent,
-    /// The frame this entry left behind, by content. Fetch it from
-    /// `/v1/boxes/{id}/trace/frames/{hash}`, which answers 404 once it has
-    /// aged out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frame: Option<String>,
 }
@@ -640,7 +656,6 @@ pub struct TraceEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceView {
     pub entries: Vec<TraceEntry>,
-    /// Pass back as `after` to continue. `None` where the end was reached.
     pub next: Option<u64>,
 }
 
@@ -649,11 +664,8 @@ pub struct TraceView {
 pub struct ForkRequest {
     #[serde(default)]
     pub mode: ForkMode,
-    /// Replay up to and including this trace sequence. `None` replays all of
-    /// it.
     #[serde(default)]
     pub up_to: Option<u64>,
-    /// Where the copy runs. `None` puts it where the original was.
     #[serde(default)]
     pub placement: Option<Placement>,
 }
@@ -661,11 +673,8 @@ pub struct ForkRequest {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForkMode {
-    /// Launch from the same spec and do again what was done. Works wherever a
-    /// box runs, and reconstructs rather than copies — see [`ReplayReport`].
     #[default]
     Replay,
-    /// Copy the running machine. Needs a substrate that can freeze one.
     Snapshot,
 }
 
@@ -676,30 +685,17 @@ pub struct ForkResult {
     pub replay: ReplayReport,
 }
 
-/// What the replay managed.
-///
-/// A replay reconstructs, it does not copy. The same actions against a page
-/// that has since changed, or a slower network, or a dialog that appeared this
-/// time, land somewhere else — so this reports what was attempted rather than
-/// promising the two boxes match.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplayReport {
     pub attempted: usize,
     pub ok: usize,
-    /// The source trace sequence that failed, if one did. Nothing after it was
-    /// attempted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_at: Option<u64>,
-    /// Whether the replay ran out of time before reaching the end.
     pub truncated: bool,
-    /// Recorded work this replay could not reproduce. A trace keeps what was
-    /// done, not always the bytes it was done with, so a fork can be short of
-    /// the original in ways no failure reports.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<Skipped>,
 }
 
-/// One piece of the source's history the fork does not carry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skipped {
     pub seq: u64,
@@ -728,6 +724,19 @@ impl ErrorCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_pointer_is_not_the_plain_whole_screen() {
+        assert!(Shot::default().is_whole());
+        assert!(
+            !Shot {
+                pointer: true,
+                ..Shot::default()
+            }
+            .is_whole(),
+            "the plain path cannot draw one, so a pointer shot must not take it"
+        );
+    }
 
     #[test]
     fn test_a_wait_without_an_alternative_is_still_a_wait() {
@@ -816,6 +825,18 @@ mod tests {
     }
 
     #[test]
+    fn test_a_click_on_an_element_is_single_unless_asked() {
+        let once: OnElement =
+            serde_json::from_str(r#"{"op":"click","query":"Report.pdf"}"#).expect("parses");
+        assert!(matches!(once, OnElement::Click { double: false, .. }));
+
+        let twice: OnElement =
+            serde_json::from_str(r#"{"op":"click","query":"Report.pdf","double":true}"#)
+                .expect("parses");
+        assert!(matches!(twice, OnElement::Click { double: true, .. }));
+    }
+
+    #[test]
     fn test_a_wait_matches_loosely_unless_told_otherwise() {
         let sent: OnElement =
             serde_json::from_str(r#"{"op":"wait_for","query":"Public rate"}"#).expect("parses");
@@ -835,6 +856,8 @@ mod tests {
             text: "Top".to_string(),
             tag: "a".to_string(),
             kind: None,
+            role: None,
+            states: Vec::new(),
             selector: None,
             label: None,
             visible: false,

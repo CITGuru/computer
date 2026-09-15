@@ -1,11 +1,3 @@
-//! The server's half of launching from a spec.
-//!
-//! Translation lives in the engine — [`computer::spec`] — so a caller with the
-//! SDK and no server gets the same box from the same spec. What is added here
-//! belongs to an API rather than to a desktop: an id for a name, a lifetime
-//! that outlives the request holding the handle, and the label a restart reads
-//! the whole spec back from.
-
 use crate::error::ApiError;
 use crate::recover::{BOX_LABEL, BoxLabel};
 use computer::Builder;
@@ -23,13 +15,9 @@ pub fn plan(
     let mut builder = Builder::from_spec(spec)?
         .place(placement)?
         .name(name)
-        // The box's lifetime belongs to this API, not to whichever request
-        // happens to be holding a handle. Without this a dropped handle takes
-        // a caller's box away mid-session.
+        // The box outlives the request, so a dropped handle must not take it away.
         .keep_on_drop(true);
 
-    // Written on the box rather than held in this process, so a restart can
-    // find it again and know what it was.
     let label = BoxLabel {
         digest: spec.digest(),
         spec: spec.clone(),

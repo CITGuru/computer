@@ -1,9 +1,3 @@
-//! A box on a hypervisor, checked without one.
-//!
-//! A microVM boots a kernel, which takes seconds and a hypervisor to do. What
-//! is worth testing is the mapping: which ports were forwarded, what brought
-//! the screen up, and what happens to an image a hypervisor cannot read.
-
 use computer::machine::Machine;
 use computer::microvm::{MicroVm, MicroVmApi, free_port, plan_for, port_pairs};
 use computer::testing::ScriptedMicroVm;
@@ -11,8 +5,6 @@ use computer::{Computer, Config, Error, image};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// The configuration a box actually starts with: ports, boot command and
-/// environment all resolved from its profile.
 fn resolved() -> Config {
     Computer::builder().config().expect("the built-in profile")
 }
@@ -21,7 +13,6 @@ fn micro(api: Arc<ScriptedMicroVm>) -> MicroVm {
     MicroVm::new(api as Arc<dyn MicroVmApi>).named("microsandbox")
 }
 
-/// An image the caller named, which is nothing this crate builds.
 fn image_named(image: &str) -> Config {
     Config {
         image: image.to_string(),
@@ -30,7 +21,6 @@ fn image_named(image: &str) -> Config {
     }
 }
 
-/// One of ours, which lives in a container runtime's store.
 fn bundled_image(image: &str) -> Config {
     Config {
         image: image.to_string(),
@@ -93,7 +83,6 @@ async fn a_command_carries_the_environment_it_was_given() {
 
 #[tokio::test]
 async fn a_container_image_is_refused_with_the_way_out_named() {
-    // A hypervisor that has been handed nothing, which is where one starts.
     let machine = micro(Arc::new(ScriptedMicroVm::new()));
 
     let error = machine
@@ -147,8 +136,6 @@ async fn a_machine_that_will_not_boot_is_removed_rather_than_left_running() {
     let api = Arc::new(ScriptedMicroVm::new().failing(1, "no X server on :1"));
     let machine = micro(Arc::clone(&api));
 
-    // No network, so the boot is the first command run rather than the route
-    // check.
     let offline = Config {
         network: false,
         ..resolved()
@@ -207,7 +194,6 @@ async fn a_whole_box_runs_on_a_hypervisor_the_same_way_it_runs_in_a_container() 
     let display = computer.support().display.expect("a screen");
     assert_eq!((display.width, display.height), (1600, 900));
 
-    // And it drives through the same calls.
     computer.type_text("on a microVM").await.expect("typing");
     assert_eq!(
         api.last_line(),

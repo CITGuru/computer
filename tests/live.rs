@@ -1,17 +1,4 @@
-//! Against a real container. Ignored by default.
-//!
-//! ```text
-//! cargo test --test live -- --ignored --nocapture
-//! ```
-//!
-//! The rest of the suite proves the mapping against a scripted runtime, which
-//! says nothing about the image. This proves the image: that the build
-//! produces a box where an X server comes up, a browser starts, a second
-//! screen can be added, a person can be handed the keyboard, and files go in
-//! and come back out.
-//!
-//! One box for the whole test, because opening one costs seconds and every
-//! step below is independent of the others.
+//! Against a real container: `cargo test --test live -- --ignored`.
 
 use computer::{
     Arrange, Button, Computer, Delta, Held, Point, ProfileBuilder, Rect, ScreenId, Shot, X11Profile,
@@ -33,12 +20,6 @@ async fn a_real_box_does_everything_the_readme_claims() {
     outcome.expect("every step");
 }
 
-/// A local build context, reached the way a custom image is meant to reach one.
-///
-/// The profile carries the directory, so the image and the contract it
-/// implements arrive together rather than as two things a caller pairs by
-/// hand. One box, because a fourth desktop running beside the others is what
-/// makes this suite flake.
 #[tokio::test]
 #[ignore = "needs a container runtime and builds the Ubuntu image"]
 async fn a_local_image_directory_can_be_driven() {
@@ -47,8 +28,6 @@ async fn a_local_image_directory_can_be_driven() {
         .image_dir(&directory)
         .build();
 
-    // Named on the builder, the same directory has to resolve to the same
-    // image: one path is the profile's own, the other overrides it.
     let by_profile = Computer::builder()
         .profile(Arc::new(profile))
         .config()
@@ -191,7 +170,6 @@ async fn captures(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// The width and height a PNG declares in its own header.
 fn png_size(png: &[u8]) -> Option<(u32, u32)> {
     let width = u32::from_be_bytes(png.get(16..20)?.try_into().ok()?);
     let height = u32::from_be_bytes(png.get(20..24)?.try_into().ok()?);
@@ -208,7 +186,6 @@ async fn a_click_can_hold_a_modifier_and_a_wait_can_end_itself() {
     outcome.expect("every step");
 }
 
-/// A page that writes down which modifiers each click arrived with.
 const WITNESS: &str = "data:text/html,\
 <body%20style=\"margin:0\"><div%20id=\"pad\"%20style=\"width:100%25;height:100vh\"></div>";
 
@@ -229,7 +206,6 @@ async fn held_and_still(computer: &Computer) -> computer::Result<()> {
     page.wait_for_load(Duration::from_secs(20)).await?;
     page.bring_to_front().await?;
 
-    // Both the thing being tested and the thing needed to test it.
     screen
         .wait_until_still(Duration::from_millis(400), Duration::from_secs(15))
         .await?;
@@ -247,8 +223,7 @@ async fn held_and_still(computer: &Computer) -> computer::Result<()> {
     println!("  clicks arrived as: {seen}");
     assert_eq!(
         seen.as_str(),
-        // The page names them in its own order, not the order they were asked
-        // for, so this says both arrived rather than which came first.
+        // The page lists modifiers in its own order, not the order asked for.
         Some("none shift shift+ctrl none"),
         "a modifier did not reach the page, or one was left held afterwards"
     );
@@ -271,11 +246,7 @@ async fn an_element_can_be_clicked_with_any_button() {
     outcome.expect("every step");
 }
 
-/// A page that writes down which button each press arrived with, and whether
-/// the press it answers asked for a context menu.
-///
-/// `preventDefault` on the menu: Chromium would otherwise draw one over the
-/// pad, and the next press would land on the menu rather than on the page.
+/// `preventDefault`: a Chromium menu over the pad would take the next press.
 const BUTTONS: &str = r#"
     window.seen = [];
     const pad = document.getElementById('pad');
@@ -299,8 +270,7 @@ async fn buttons_on_an_element(computer: &Computer) -> computer::Result<()> {
     println!("  presses arrived as: {seen}");
     assert_eq!(
         seen.as_str(),
-        // `button` is the DOM's own numbering and `buttons` its mask, which do
-        // not agree: middle is 1 in one and 4 in the other.
+        // `button` and the `buttons` mask number middle as 1 and 4.
         Some("0/1 2/2 menu 1/4"),
         "a button did not reach the page as itself"
     );
@@ -309,7 +279,6 @@ async fn buttons_on_an_element(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// A page wide enough and tall enough to move on either axis.
 const WIDE: &str = "data:text/html,<div%20style=\"width:4000px;height:4000px\"></div>";
 
 #[tokio::test]
@@ -326,8 +295,7 @@ async fn wheel(computer: &Computer) -> computer::Result<()> {
     let mut page = devtools.open_page(WIDE, Duration::from_secs(30)).await?;
     page.wait_for_load(Duration::from_secs(20)).await?;
 
-    // A coordinate addresses the page in front, and opening this put one
-    // behind it.
+    // Coordinates reach the page in front, and this one opened behind it.
     page.bring_to_front().await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -391,8 +359,6 @@ async fn a_window_goes_where_it_is_put() {
 async fn window_control(computer: &Computer) -> computer::Result<()> {
     let screen = computer.primary();
 
-    // Already on screen, so this returns at once. The wait is for the windows
-    // nothing here started, and this proves it finds one either way.
     let browser = screen
         .wait_for_window("chromium", Duration::from_secs(20))
         .await?;
@@ -457,8 +423,7 @@ async fn window_control(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// A decorated window is placed by its frame, and its contents land a title
-/// bar below where the move asked for.
+/// A window is placed by its frame, so its contents land a title bar lower.
 fn near(got: u32, wanted: u32) -> bool {
     got.abs_diff(wanted) <= 64
 }
@@ -474,8 +439,6 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
         "the X server must be the size the descriptor claims"
     );
 
-    // A real capture: only the magic says it is a PNG, since a stub would
-    // return bytes too.
     let frame = screen.screenshot().await?;
     assert_eq!(
         frame.first_chunk::<4>(),
@@ -487,7 +450,6 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     screen.set_wallpaper(&frame).await?;
     println!("  wallpaper changed from uploaded image bytes");
 
-    // A real pointer, moved and then measured, since no frame shows it.
     screen.click(Point::new(640, 400), Button::Left).await?;
     assert_eq!(screen.cursor().await?, Point::new(640, 400));
 
@@ -495,12 +457,10 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     assert_eq!(screen.cursor().await?, Point::new(100, 120));
 
     screen.type_text("computer-rs").await?;
-    screen.key("ctrl+a").await?;
+    screen.press("ctrl+a").await?;
     screen.scroll(Point::new(640, 400), Delta::down(2)).await?;
     println!("  typed, chorded and scrolled");
 
-    // The URL goes to the browser already running on that screen, not to a
-    // second instance fighting it for the profile lock.
     computer.open_url("https://example.com").await?;
     tokio::time::sleep(Duration::from_secs(4)).await;
     let after = screen.screenshot().await?;
@@ -519,8 +479,7 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     second_screen(computer).await?;
     the_last_screen(computer).await?;
 
-    // Last, because it checks that every flag in the descriptor means
-    // something, and it only means anything against a real box.
+    // Last, because the descriptor's flags only mean anything against a real box.
     leases(computer).await?;
 
     let audit = computer::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
@@ -529,7 +488,6 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// A screen is held, so a second caller cannot be handed the same one.
 async fn leases(computer: &Computer) -> computer::Result<()> {
     let screen = computer.screen(ScreenId(2)).await?;
     assert_eq!(screen.display(), ":3");
@@ -543,7 +501,6 @@ async fn leases(computer: &Computer) -> computer::Result<()> {
         "two callers were handed one screen, which is what a lease prevents"
     );
 
-    // Given back on drop, so the next caller can have it.
     let taken = screen.id();
     drop(screen);
     drop(other);
@@ -556,17 +513,12 @@ async fn leases(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// The clipboard is claimed by the descriptor, so it has to be real.
 async fn clipboard(computer: &Computer) -> computer::Result<()> {
-    // Arbitrary text, including the characters that would end an argument if
-    // this went through a command line instead of a file.
     let text = "clipboard \"round trip\", with a newline\nand a $dollar";
 
     computer.set_clipboard(text).await?;
     assert_eq!(computer.clipboard().await?, text);
 
-    // PRIMARY is a different selection rather than another name for the same
-    // one: a caller that wrote to one and read the other sees stale text.
     let selected = "what the mouse dragged over";
     computer
         .set_selection(computer::Selection::Primary, selected)
@@ -582,8 +534,6 @@ async fn clipboard(computer: &Computer) -> computer::Result<()> {
         "writing PRIMARY must not disturb CLIPBOARD"
     );
 
-    // A picture is offered as image/png, which a text-only clipboard could
-    // not carry.
     let picture = computer.screenshot().await?;
     computer
         .set_clipboard_bytes(computer::Selection::Clipboard, "image/png", &picture)
@@ -606,7 +556,6 @@ async fn clipboard(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// The last screen the image allows, and the one past it.
 async fn the_last_screen(computer: &Computer) -> computer::Result<()> {
     let last = computer.screen(ScreenId(7)).await?;
     assert_eq!(last.display(), ":8");
@@ -647,12 +596,7 @@ async fn files(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// The DevTools endpoint has to answer from here, not merely inside the box.
-///
-/// Chromium binds the debugging port to loopback whatever
-/// `--remote-debugging-address` says, so a host port forwarded straight onto it
-/// accepts the connection and closes it. That empty reply reads as a browser
-/// without DevTools, and the probe inside the box passes the whole time.
+/// Chromium binds DevTools to loopback, so a bare forward accepts and closes.
 async fn devtools(computer: &Computer) -> computer::Result<()> {
     let endpoint = computer.devtools().expect("a published endpoint");
     let port: u16 = endpoint
@@ -674,9 +618,7 @@ async fn devtools(computer: &Computer) -> computer::Result<()> {
         .await
         .expect("a request");
 
-    // Read with a limit rather than to end of file. Chromium answers with a
-    // Content-Length and then holds the connection open, so waiting for it to
-    // close waits for ever.
+    // Chromium holds the connection open after Content-Length, so read to a limit.
     let mut answer = String::new();
     let mut buffer = [0u8; 4096];
     loop {
@@ -697,12 +639,6 @@ async fn devtools(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// Which page a coordinate actually addresses.
-///
-/// The desktop API points at pixels, the browser thinks in pages, and nothing
-/// joins them: `open_url` opens a *new* tab and raises it, so coordinates from
-/// an earlier screenshot now belong to a page that is gone — and the click
-/// lands on the new one with nothing in the next frame to say so.
 async fn which_page_the_pixels_belong_to(
     computer: &Computer,
     page: &mut computer::Page,
@@ -713,7 +649,6 @@ async fn which_page_the_pixels_belong_to(
         "a page told to come forward is the one the screen is showing"
     );
 
-    // Anything else opening takes the screen, which is the whole hazard.
     computer.open_url("https://example.net").await?;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -734,7 +669,6 @@ async fn which_page_the_pixels_belong_to(
         "the page in front is the one that was just opened"
     );
 
-    // And back, which is what a caller does before using coordinates again.
     page.bring_to_front().await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(page.visible().await?);
@@ -746,16 +680,10 @@ async fn which_page_the_pixels_belong_to(
     Ok(())
 }
 
-/// The browser, driven through the protocol rather than through the screen.
-///
-/// None of this touches the display: it is the half of the box that works when
-/// there is no screen at all.
 async fn browser(computer: &Computer) -> computer::Result<()> {
     let browser = computer.browser().expect("a published DevTools port");
 
-    // `open_page`, not `open` then wait: a tab that exists is showing
-    // about:blank, whose readyState is already complete, so a wait right after
-    // opening is answered by the blank page.
+    // `open_page`: a new tab's about:blank is already complete and would answer a wait.
     let mut page = browser
         .open_page("https://example.com", Duration::from_secs(20))
         .await?;
@@ -763,13 +691,11 @@ async fn browser(computer: &Computer) -> computer::Result<()> {
     assert_eq!(page.title().await?, "Example Domain");
     assert!(page.url().await?.starts_with("https://example.com"));
 
-    // A question no screenshot can answer.
     let links = page
         .evaluate("Array.from(document.links).map(a => a.href).length")
         .await?;
     assert_eq!(links.as_u64(), Some(1));
 
-    // The page as the browser renders it, with no window frame around it.
     let shot = page.screenshot().await?;
     assert_eq!(
         shot.first_chunk::<4>(),
@@ -781,7 +707,6 @@ async fn browser(computer: &Computer) -> computer::Result<()> {
     page.wait_for_load(Duration::from_secs(20)).await?;
     assert!(page.url().await?.starts_with("https://example.org"));
 
-    // A navigation the browser refuses is a failure, not a silent no-op.
     assert!(
         page.navigate("http://no-such-host.invalid").await.is_err(),
         "a refused navigation left the caller looking at the old page"
@@ -898,13 +823,11 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     let takeover = computer.hand_over().await?;
     println!("  handed over: {:?}", takeover.url());
 
-    // Looking is still allowed while a person drives …
     computer
         .screenshot()
         .await
         .expect("the run is not paused, it just may not touch anything");
 
-    // … and touching is not.
     let refused = computer.click(Point::new(1, 1), Button::Left).await;
     assert!(refused.is_err(), "the gate let a click through");
 
@@ -916,8 +839,7 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
         "the control viewer is not listening, so nobody can take the keyboard"
     );
 
-    // A second handle, opened while the person still has the screen. The
-    // gate is per process, so this one has to ask the box.
+    // The gate is per process, so a second handle has to ask the box.
     let other = Computer::attach(computer.name())
         .await
         .expect("the same box, a fresh handle");
@@ -931,8 +853,6 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     );
     println!("  a second handle found the person and stood back");
 
-    // The box keeps the token, so a release carrying an invented one is
-    // refused even after the caller that took the screen has exited.
     let replacement = computer.hand_over().await?;
     assert!(
         replacement.url().is_some(),
@@ -945,8 +865,6 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     replacement.end().await?;
     let takeover = computer.hand_over().await?;
 
-    // The box refuses the bypass as well as the API: an owner that runs
-    // xdotool through exec meets the guard on the path.
     let bypass = computer
         .exec(["xdotool", "mousemove", "--", "1", "1"])
         .await?;
@@ -957,14 +875,10 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
         bypass.stderr_utf8()
     );
 
-    // Reads are still allowed, because a run that may not act may still watch.
     let watching = computer.exec(["xdotool", "getdisplaygeometry"]).await?;
     assert!(watching.ok(), "observation must survive a takeover");
     println!("  the box itself refused a shell that tried to drive");
 
-    // Nobody has actually connected, so the count says so even though the
-    // server is up. A run that waited on "the server is listening" would wait
-    // for a person who left long ago.
     let viewers = computer.viewers().await?;
     assert!(
         !viewers.person_present(),
@@ -977,7 +891,6 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
         .await
         .expect("the owner drives again");
 
-    // Shared: the same server, and the gate left open.
     let shared = computer.share().await?;
     assert!(!shared.exclusive());
     computer
@@ -987,8 +900,6 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     shared.end().await?;
     println!("  shared control lets the owner keep driving");
 
-    // Released means released: the second server is gone and the read-only
-    // one is untouched.
     let still_there = computer
         .exec(["bash", "-c", "echo > /dev/tcp/127.0.0.1/6081"])
         .await?;
@@ -1006,11 +917,7 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// Whether the box refuses a release carrying a token it never recorded.
-///
-/// The token lives in the box rather than in the caller, so the refusal
-/// survives a caller that has exited — which is the case that matters, because
-/// that caller's gate went with it.
+/// The token lives in the box, so a stale release is refused after its caller exits.
 async fn takeover_ends_stale(computer: &Computer) -> bool {
     let refused = computer
         .exec(["computer-screen", "release", "0", "a-token-nobody-issued"])
@@ -1026,8 +933,6 @@ async fn second_screen(computer: &Computer) -> computer::Result<()> {
     let frame = second.screenshot().await?;
     assert_eq!(frame.first_chunk::<4>(), Some(&[0x89, b'P', b'N', b'G']));
 
-    // Two screens, two pointers. A position set on one must not appear on the
-    // other, or they are the same display under two names.
     second.move_to(Point::new(20, 30)).await?;
     computer.primary().move_to(Point::new(700, 500)).await?;
 
@@ -1039,10 +944,6 @@ async fn second_screen(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// A box that nobody touches goes away on its own.
-///
-/// Its own test rather than a step in the long one, because it has to sit
-/// still for the idle period, and the long test is never still.
 #[tokio::test]
 #[ignore = "needs a container runtime"]
 async fn an_idle_box_takes_itself_away() {
@@ -1058,7 +959,6 @@ async fn an_idle_box_takes_itself_away() {
     let name = computer.name().to_string();
     let machine = Arc::clone(computer.machine());
 
-    // Busy: the deadline moves with every call, so this must not go away.
     for _ in 0..3 {
         tokio::time::sleep(Duration::from_secs(2)).await;
         computer.screenshot().await.expect("a frame");
@@ -1068,7 +968,6 @@ async fn an_idle_box_takes_itself_away() {
         "a box being worked on was taken away under its caller"
     );
 
-    // Quiet: nothing is asked of it, and it goes.
     tokio::time::sleep(idle + Duration::from_secs(4)).await;
     assert!(
         !machine.running(&name).await.expect("a state"),

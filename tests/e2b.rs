@@ -1,10 +1,3 @@
-//! A box in a sandbox, checked without one.
-//!
-//! What is worth testing here is the wiring: that a `Computer` on an E2B
-//! sandbox drives the same way a container does, that a port becomes a
-//! subdomain rather than a host port, and that the two claims which stop being
-//! true off this host are withdrawn rather than left standing.
-
 use computer::machine::Machine;
 use computer::sandboxes::e2b::{self, E2bApi, Sandbox, SandboxPlan};
 use computer::testing::ScriptedE2b;
@@ -12,8 +5,6 @@ use computer::{Auth, Button, Computer, Config, Delta, Point, ScreenId, X11Profil
 use std::sync::Arc;
 use std::time::Duration;
 
-/// The configuration a box starts with when nobody named an image, which is
-/// the one this crate builds for a container runtime.
 fn bundled(profile: Arc<dyn computer::Profile>) -> Config {
     Computer::builder()
         .profile(profile)
@@ -21,13 +12,9 @@ fn bundled(profile: Arc<dyn computer::Profile>) -> Config {
         .expect("a resolved configuration")
 }
 
-/// A box on a scripted sandbox, launched the way a caller would.
 async fn launched(api: Arc<ScriptedE2b>, public_viewer: bool) -> Computer {
     let (machine, profile) = e2b::pair(Arc::clone(&api) as Arc<dyn E2bApi>, Arc::new(X11Profile));
 
-    // A public viewer is reachable from the internet, so it goes through the
-    // same gate as `publish_on(Bind::Any)` rather than being an honour system
-    // beside it. `Token` because a sandbox URL is handed to a person as a link.
     let auth = match public_viewer {
         true => Auth::Token,
         false => Auth::Open,

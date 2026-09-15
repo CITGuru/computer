@@ -1,37 +1,21 @@
-//! Checking that the claims are true.
-//!
-//! [`crate::DesktopSupport`] is written when the descriptor is designed rather than
-//! when the capability is built, so a flag can stay true beside a method that
-//! answers `Unsupported`, or an image with no tool behind it. The compiler
-//! cannot catch that: it guarantees the method exists, not that it works.
-//!
-//! [`audit`] calls each claimed capability against a running box and reports
-//! the ones nothing serves. Both live tests end with one.
-
 use crate::error::Result;
 use crate::{Computer, Delta, Point};
 use std::time::Duration;
 
-/// A claim that nothing serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unmet {
     pub claim: &'static str,
     pub detail: String,
 }
 
-/// What the descriptor claimed, and what answered.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Audit {
-    /// Claims that were exercised and worked.
     pub met: Vec<&'static str>,
-    /// Claims that were exercised and did not.
     pub unmet: Vec<Unmet>,
-    /// Claims nothing here can check, and why not.
     pub skipped: Vec<Unmet>,
 }
 
 impl Audit {
-    /// Whether every claim that could be checked was true.
     pub fn ok(&self) -> bool {
         self.unmet.is_empty()
     }
@@ -75,17 +59,13 @@ impl std::fmt::Display for Audit {
     }
 }
 
-/// Exercise every capability the box claims.
-///
-/// The screen is left as it was found, apart from the pointer and clipboard.
+/// Leaves the screen as found, apart from the pointer and clipboard.
 pub async fn audit(computer: &Computer) -> Audit {
     let mut audit = Audit::default();
     let support = computer.support().clone();
     let screen = computer.primary();
 
     if let Some(display) = support.display {
-        // A capture, and the size it claims. A frame that comes back at another
-        // size makes every coordinate in the descriptor wrong.
         let outcome = async {
             let frame = screen.screenshot().await?;
             if frame.first_chunk::<4>() != Some(&[0x89, b'P', b'N', b'G']) {
@@ -106,8 +86,7 @@ pub async fn audit(computer: &Computer) -> Audit {
     }
 
     if support.input {
-        // Moved and then measured: a driver that delivers no input still
-        // answers every call successfully.
+        // A driver that delivers no input still answers every call successfully.
         let outcome = async {
             let at = Point::new(7, 11);
             screen.move_to(at).await?;
@@ -138,8 +117,7 @@ pub async fn audit(computer: &Computer) -> Audit {
     }
 
     if support.clipboard {
-        // A round trip, because a write that reports success and a read that
-        // answers the previous value look identical from one side.
+        // A write that reports success can still leave the previous value.
         let token = format!("audit-{}", std::process::id());
         let outcome = async {
             screen.set_clipboard(&token).await?;
@@ -166,7 +144,6 @@ pub async fn audit(computer: &Computer) -> Audit {
         audit.check("viewer", outcome);
 
         if viewer.takeover {
-            // Started and ended, so the audit leaves the screen as it found it.
             let outcome = async {
                 let takeover = screen.hand_over().await?;
                 let refused = screen.click(Point::new(1, 1), crate::Button::Left).await;
@@ -185,8 +162,6 @@ pub async fn audit(computer: &Computer) -> Audit {
     }
 
     if support.max_screens > 1 {
-        // Not exercised: each screen is an X server, a window manager and a
-        // browser. `tests/image.rs` checks the count against the script.
         audit.skip(
             "max_screens",
             format!(

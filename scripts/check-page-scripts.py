@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""Parse the scripts this crate evaluates inside a page.
-
-They are Rust string constants, so nothing compiles them: a typo in one reaches
-a caller as a failed `find` against a real browser, which is the one place
-neither a test nor clippy looks.
-"""
+"""Parse the page scripts and the accessibility reader, which nothing compiles."""
 
 import re
 import subprocess
 import sys
 
 SOURCE = "crates/computer-core/src/cdp.rs"
+READER = "crates/computer-core/images/desktop/a11y.py"
 
 
 def constants(src):
@@ -25,8 +21,7 @@ def main():
     src = open(SOURCE).read()
     scripts = dict(constants(src))
 
-    # What `describe()` does, and the reason it is worth checking: the splice is
-    # a string replacement that a compiler never sees.
+    # `describe()` splices SELECTOR in by string replacement, which no compiler sees.
     scripts["DESCRIBE"] = scripts["DESCRIBE"].replace("SELECTOR_FN", scripts["SELECTOR"])
 
     failed = False
@@ -42,6 +37,17 @@ def main():
         if ran.returncode != 0:
             print(ran.stderr.strip()[:800], file=sys.stderr)
             failed = True
+
+    # Compiled, not run: it connects to a bus on import.
+    reader = subprocess.run(
+        [sys.executable, "-c", f"compile(open({READER!r}).read(), {READER!r}, 'exec')"],
+        capture_output=True,
+        text=True,
+    )
+    print(f"{'a11y.py':9} {'ok' if reader.returncode == 0 else 'FAILED'}")
+    if reader.returncode != 0:
+        print(reader.stderr.strip()[:800], file=sys.stderr)
+        failed = True
 
     sys.exit(1 if failed else 0)
 

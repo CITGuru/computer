@@ -1,8 +1,5 @@
 //! A computer in a box.
 //!
-//! The API lives in `computer-core` and is re-exported whole from here; the
-//! `computer` and `computerd` commands are built from here too.
-//!
 //! ```no_run
 //! use computer::{Button, Computer, Point};
 //!

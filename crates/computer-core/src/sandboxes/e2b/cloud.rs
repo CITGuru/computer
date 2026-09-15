@@ -1,14 +1,3 @@
-//! E2B over its own HTTP API.
-//!
-//! The only part of this vendor behind a feature, and the only part that needs
-//! a client: the control plane is `https` on somebody else's host, so there is
-//! no shelling out to a command that already knows how to reach it.
-//!
-//! Two planes, two hosts, two credentials. The control plane creates, lists,
-//! kills and extends, and takes an API key. `envd` inside the sandbox runs
-//! commands and moves files, and takes the token the control plane handed back
-//! when the sandbox was created.
-
 use super::api::{DEFAULT_DOMAIN, DEFAULT_USER, E2bApi, NAME_KEY, Sandbox, SandboxPlan, api_url};
 use super::wire;
 use crate::error::{Error, Result};
@@ -24,36 +13,27 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-/// The key the control plane authenticates with.
 pub const API_KEY_ENV: &str = "E2B_API_KEY";
-/// The domain sandboxes live on, for a deployment that is not `e2b.app`.
 pub const DOMAIN_ENV: &str = "E2B_DOMAIN";
 
 const API_KEY_HEADER: &str = "X-API-Key";
-/// What envd authenticates a data-plane call with. Lowercase because
-/// `HeaderName::from_static` takes it that way; the wire does not care.
+/// Lowercase because `HeaderName::from_static` panics otherwise.
 const ENVD_TOKEN_HEADER: &str = "x-access-token";
-/// What the proxy in front of a secure sandbox demands. A browser cannot send
-/// it, which is why a secure sandbox has no viewer URL.
+/// A browser cannot send it, so a secure sandbox has no viewer URL.
 const TRAFFIC_TOKEN_HEADER: &str = "e2b-traffic-access-token";
 
 const CONNECT_JSON: &str = "application/connect+json";
 const CONNECT_VERSION: &str = "Connect-Protocol-Version";
 
-/// How long any one exchange may take.
-///
-/// Above [`crate::machine::DEFAULT_TIMEOUT`], so the bound a caller sees is the
-/// one the runner applies rather than one buried in a client.
+/// Above [`crate::machine::DEFAULT_TIMEOUT`], so the runner's bound is the one
+/// a caller sees.
 pub const TIMEOUT: Duration = Duration::from_secs(150);
 
 pub struct Cloud {
     key: String,
     domain: String,
     http: Client,
-    /// Who envd runs commands as. An account that is not in the template
-    /// answers every exec with a refusal, so it is named rather than assumed.
     user: String,
-    /// A command that kills a sandbox from `Drop`, where the caller named one.
     reaper: Option<(String, Vec<String>)>,
 }
 
@@ -77,7 +57,6 @@ impl Cloud {
         })
     }
 
-    /// The key from the environment, as every E2B tool reads it.
     pub fn from_env() -> Result<Self> {
         let key = std::env::var(API_KEY_ENV).map_err(|_| Error::Unavailable {
             runtime: "e2b".to_string(),
@@ -88,21 +67,12 @@ impl Cloud {
         Self::at(key, domain)
     }
 
-    /// Run commands as this user instead of [`DEFAULT_USER`].
-    ///
-    /// For a template built on a base that has its own account — E2B's own
-    /// images use `user` — rather than on the one this crate carries.
     pub fn as_user(mut self, user: impl Into<String>) -> Self {
         self.user = user.into();
         self
     }
 
-    /// Kill a dropped box with this command, `{}` standing for the sandbox ID.
-    ///
-    /// Unset, a dropped handle leaves the sandbox running until its deadline.
-    /// That is survivable here in a way it is not on a hypervisor — the
-    /// deadline is what stops a leak — so it is the default rather than a
-    /// dependency on a CLI being installed.
+    /// `{}` stands for the sandbox ID. Unset, the deadline is what stops a leak.
     pub fn reaping_with<I, S>(mut self, program: impl Into<String>, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -112,7 +82,6 @@ impl Cloud {
         self
     }
 
-    /// `e2b sandbox kill <id>`, for a host with the CLI on its path.
     pub fn reaping_with_cli(self) -> Self {
         self.reaping_with("e2b", ["sandbox", "kill", "{}"])
     }
@@ -123,7 +92,6 @@ impl Cloud {
             .header(API_KEY_HEADER, &self.key)
     }
 
-    /// A data-plane request, carrying both tokens a secure sandbox wants.
     fn envd(&self, method: Method, sandbox: &Sandbox, path: &str) -> Result<RequestBuilder> {
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -157,7 +125,6 @@ impl Cloud {
             .map_err(|error| Error::transport(chain(&error), error.is_timeout()))
     }
 
-    /// The body of an answer, or the status turned into the right refusal.
     async fn body(&self, response: Response) -> Result<Vec<u8>> {
         let status = response.status();
         let bytes = response
@@ -183,11 +150,7 @@ impl Cloud {
         })
     }
 
-    /// Every sandbox the control plane will list.
-    ///
-    /// The metadata filter is sent as a hint and the answer is filtered again
-    /// in [`wire::carrying`]: the parameter is one encoded string, and a
-    /// filter the server does not understand answers with everything.
+    /// The filter is only a hint; [`wire::carrying`] filters the answer again.
     async fn listing(&self, key: &str, value: Option<&str>) -> Result<Value> {
         let query = value
             .map(|value| format!("?metadata={}", wire::metadata_query(key, value)))
@@ -198,12 +161,7 @@ impl Cloud {
     }
 }
 
-/// An error and everything under it, as one line.
-///
-/// `reqwest` reports "error sending request for url (…)" and keeps what
-/// actually happened — a reset, a closed connection, a name that would not
-/// resolve — one `source()` down. On its own that message sends a caller
-/// nowhere.
+/// `reqwest` keeps the real cause one `source()` below its top-level message.
 fn chain(error: &dyn std::error::Error) -> String {
     let mut message = error.to_string();
     let mut under = error.source();
@@ -220,7 +178,6 @@ fn bad_header(error: InvalidHeaderValue) -> Error {
     Error::denied(format!("a token that cannot be a header: {error}"))
 }
 
-/// A status, as the variant that says what the caller does next.
 fn from_status(status: StatusCode, detail: &str) -> Error {
     let detail = detail.trim().to_string();
 
@@ -229,8 +186,7 @@ fn from_status(status: StatusCode, detail: &str) -> Error {
             Error::denied(format!("e2b refused the key: {detail}"))
         }
         StatusCode::NOT_FOUND => Error::Gone(detail),
-        // A sandbox past its deadline answers through the proxy as a bad
-        // gateway, which is gone rather than broken.
+        // A sandbox past its deadline answers through the proxy as 502.
         StatusCode::BAD_GATEWAY => Error::Gone(detail),
         StatusCode::TOO_MANY_REQUESTS
         | StatusCode::SERVICE_UNAVAILABLE
@@ -239,10 +195,7 @@ fn from_status(status: StatusCode, detail: &str) -> Error {
     }
 }
 
-/// A boundary no payload will contain.
-///
-/// The counter matters more than the clock: two uploads in the same
-/// nanosecond are one call apart, not one tick.
+/// The counter, not the clock, keeps two uploads in one nanosecond apart.
 fn boundary() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -271,8 +224,7 @@ impl E2bApi for Cloud {
             });
         }
 
-        // Health is unauthenticated, so a bad key would otherwise arrive at
-        // the first create as a sandbox that would not start.
+        // Health is unauthenticated, so the key is checked with a listing.
         let listed = self
             .send(self.control(Method::GET, "/v2/sandboxes"))
             .await?;
@@ -308,9 +260,7 @@ impl E2bApi for Cloud {
             return Ok(None);
         };
 
-        // A listing reports IDs and metadata and no credentials, so nothing
-        // found that way could be driven. Connect answers with both tokens,
-        // and resumes a sandbox that was paused.
+        // A listing carries no tokens; connect does, and resumes a paused box.
         let answer = self
             .json(
                 self.control(Method::POST, &format!("/sandboxes/{id}/connect"))
@@ -327,7 +277,6 @@ impl E2bApi for Cloud {
             .send(self.control(Method::DELETE, &format!("/sandboxes/{id}")))
             .await?;
 
-        // Already gone is the outcome asked for.
         match response.status() {
             status if status.is_success() => Ok(()),
             StatusCode::NOT_FOUND => Ok(()),
@@ -426,13 +375,8 @@ impl E2bApi for Cloud {
     }
 }
 
-/// A machine and its profile, on the key in the environment.
-///
-/// The whole wiring for the common case: `E2B_API_KEY`, the built-in X11
-/// image, and a sandbox that is secure — so the desktop is driveable from here
-/// and has no viewer URL. Call
-/// [`public_viewer`](crate::sandboxes::remote::RemoteMachine::public_viewer)
-/// on the machine to trade that.
+/// The sandbox is secure, so it has no viewer URL until
+/// [`public_viewer`](crate::sandboxes::remote::RemoteMachine::public_viewer).
 pub fn pair_from_env() -> Result<(
     crate::sandboxes::remote::RemoteMachine,
     std::sync::Arc<crate::sandboxes::remote::RemoteProfile>,

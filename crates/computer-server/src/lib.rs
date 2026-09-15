@@ -1,5 +1,3 @@
-//! A REST API over `computer` boxes.
-
 pub mod auth;
 pub mod error;
 pub mod extract;
@@ -25,17 +23,14 @@ use std::sync::{Arc, Mutex};
 pub struct AppState {
     pub registry: Registry,
     pub replies: Replies,
-    /// `None` leaves the API open, which only loopback allows.
     pub token: Option<computer::Secret>,
     pub store: Arc<dyn Store>,
     pub frames: Arc<dyn Frames>,
     seen: Mutex<HashMap<(String, u32), String>>,
-    /// What to reach the container runtime through.
     pub cli: Option<Arc<dyn ContainerCli>>,
 }
 
 impl Default for AppState {
-    /// In memory. A daemon that is to keep its state somewhere says where.
     fn default() -> Self {
         Self::on(Arc::new(Memory::default()))
     }
@@ -60,7 +55,6 @@ impl AppState {
         }
     }
 
-    /// Where the environment says, or in memory.
     pub async fn from_env() -> Result<Self, String> {
         let named = std::env::var("COMPUTER_STORAGE_BACKEND").unwrap_or_default();
 
@@ -128,26 +122,22 @@ impl AppState {
         )
     }
 
-    /// Gated, or left open where `None` — see [`auth::allowed`].
     pub fn gated(mut self, token: Option<computer::Secret>) -> Self {
         self.token = token;
         self
     }
 
-    /// What to reach the container runtime through. `None` is this host's own.
     pub fn through(mut self, cli: Option<Arc<dyn ContainerCli>>) -> Self {
         self.cli = cli;
         self
     }
 
-    /// Records, and logs rather than fails.
     pub async fn record(&self, id: &str, actor: Actor, event: TraceEvent) {
         if let Err(why) = self.store.append(id, actor, event, None).await {
             tracing::warn!(box_ = %id, %why, "a trace entry was not written");
         }
     }
 
-    /// Answers whether the screen had moved.
     pub async fn note_frame(
         &self,
         id: &str,
@@ -183,7 +173,6 @@ impl AppState {
         true
     }
 
-    /// Whether anything has been written about this box.
     pub async fn traced(&self, id: &str) -> bool {
         self.store
             .entries(id, None, 1)
@@ -199,7 +188,6 @@ impl AppState {
     }
 }
 
-/// A setting the named backend cannot do without.
 fn need(name: &str) -> Result<String, String> {
     std::env::var(name)
         .ok()

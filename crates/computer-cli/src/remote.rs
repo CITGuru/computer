@@ -1,11 +1,12 @@
-//! Driving boxes through a server.
-
-use crate::{USAGE, flag, framing, positional, present, wheel};
+use crate::{USAGE, bare, flag, framing, positional, present, wheel};
 use computer_api::{
-    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Held, OpenIn, Rect, Shot, Window,
+    Action, ActionBatch, Arrange, BatchResult, Evaluate, Find, ForkMode, ForkRequest, Held,
+    OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, Shot, Where, Window,
 };
-use computer_client::{Client, frame_png};
-use computer_types::{Button, Desktop, Feature, Placement, Point, Selection, Spec};
+use computer_client::{Client, captured_image, frame_png};
+use computer_types::{
+    Button, Desktop, DisplayServer, Feature, NodeQuery, Placement, Point, Selection, Spec,
+};
 use std::time::Duration;
 
 type Done = Result<(), String>;
@@ -27,6 +28,15 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
     }
     if present(args, "--wide-fonts") {
         desktop.features.push(Feature::WideFonts);
+    }
+    if present(args, "--accessibility") {
+        desktop.features.push(Feature::Accessibility);
+    }
+    if present(args, "--video") {
+        desktop.features.push(Feature::Video);
+    }
+    if present(args, "--wayland") {
+        desktop.server = DisplayServer::Wayland;
     }
 
     let mut placement = Placement::default();
@@ -62,8 +72,7 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
             .map_err(|error| error.to_string())?;
     }
 
-    // The id on standard output, so `computer shot $(computer up)` works.
-    // Everything a person reads goes to standard error.
+    // Only the id goes to stdout, so `computer shot $(computer up)` works.
     println!("{}", created.id);
     if let Some(url) = &created.viewer_url {
         eprintln!("  watch it  {url}");
@@ -74,15 +83,110 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
 
 pub async fn list(client: &Client) -> Done {
     for found in client.list().await.map_err(|e| e.to_string())? {
+        let state = match found.state {
+            computer_api::BoxState::Ready => String::new(),
+            other => format!("\t{other:?}"),
+        };
+
         println!(
-            "{}\t{}x{}\t{} screen(s)",
+            "{}\t{}x{}\t{} screen(s){state}",
             found.id, found.width, found.height, found.screens
         );
     }
     Ok(())
 }
 
-pub async fn shot(client: &Client, args: &[String]) -> Done {
+pub async fn describe(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let found = client.get(id).await.map_err(|e| e.to_string())?;
+
+    println!("id        {}", found.id);
+    println!("state     {:?}", found.state);
+    println!("screens   {}", found.screens);
+    println!("size      {}x{}", found.width, found.height);
+    println!("spec      {}", found.spec_digest);
+    println!("created   {}", stamped(found.created_at_ms));
+    match found.expires_at_ms {
+        Some(at) => println!("expires   {}", stamped(at)),
+        None => println!("expires   never"),
+    }
+    if let Some(url) = &found.viewer_url {
+        println!("viewer    {url}");
+    }
+    if let Some(url) = &found.devtools_url {
+        println!("devtools  {url}");
+    }
+
+    Ok(())
+}
+
+fn stamped(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    match chrono_free(secs) {
+        Some(when) => when,
+        None => format!("{ms}ms"),
+    }
+}
+
+fn chrono_free(secs: i64) -> Option<String> {
+    if secs < 0 {
+        return None;
+    }
+
+    let days = secs / 86_400;
+    let rest = secs % 86_400;
+    let (hour, minute, second) = (rest / 3600, (rest % 3600) / 60, rest % 60);
+
+    // Days since 1970 to a civil date, by Howard Hinnant's algorithm.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = era * 400 + yoe + i64::from(month <= 2);
+
+    Some(format!(
+        "{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}Z"
+    ))
+}
+
+pub async fn stop(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    client.stop(id).await.map_err(|e| e.to_string())?;
+
+    eprintln!("stopped; its files are kept. bring it back with: computer resume {id}");
+    Ok(())
+}
+
+pub async fn pause(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    client.pause(id).await.map_err(|e| e.to_string())?;
+
+    eprintln!("frozen; wake it with: computer resume {id}");
+    Ok(())
+}
+
+pub async fn resume(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+
+    let was = client.get(id).await.map_err(|e| e.to_string())?;
+    let found = client.resume(id).await.map_err(|e| e.to_string())?;
+
+    if was.state == computer_api::BoxState::Stopped {
+        match &found.viewer_url {
+            Some(url) => eprintln!("  watch it  {url}"),
+            None => eprintln!("  no viewer port is published"),
+        }
+        eprintln!("  it was stopped, so the desktop started again with nothing open");
+    }
+
+    Ok(())
+}
+
+pub async fn screenshot(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let out = named(args).unwrap_or("screen.png");
     let shot = asked(args)?;
@@ -103,9 +207,8 @@ pub async fn shot(client: &Client, args: &[String]) -> Done {
     Ok(())
 }
 
-/// The file to write, which is the first argument that is not part of a flag.
 pub fn named(args: &[String]) -> Option<&str> {
-    let flags = ["--window", "--at", "--size", "--scale"];
+    let flags = ["--window", "--at", "--size", "--scale", "--tab"];
     let mut rest = args.iter().skip(1);
 
     while let Some(arg) = rest.next() {
@@ -138,24 +241,37 @@ fn asked(args: &[String]) -> Result<Shot, String> {
             _ => None,
         },
         scale: shot.scale,
+        pointer: present(args, "--pointer"),
+        tab: flag(args, "--tab").map(str::to_string),
     })
 }
 
 pub async fn open(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let url = positional(args, 1, "a URL").map_err(|e| e.to_string())?;
-    act(
+    let target = match flag(args, "--target") {
+        Some("current") => OpenIn::Current,
+        Some("blank") | None => OpenIn::Blank,
+        Some(other) => return Err(format!("no such target: {other}")),
+    };
+
+    let result = acted(
         client,
         id,
         Action::OpenUrl {
             url: url.to_string(),
-            target: OpenIn::Blank,
+            target,
         },
     )
-    .await
+    .await?;
+
+    for tab in &result.tabs {
+        println!("{}", tab.id);
+    }
+
+    Ok(())
 }
 
-/// Open an app by name, and wait until it has drawn.
 pub async fn app(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let app = positional(args, 1, "an app").map_err(|e| e.to_string())?;
@@ -171,7 +287,6 @@ pub async fn app(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-/// The app names this server can open.
 pub async fn apps(client: &Client) -> Done {
     for name in client.catalog().await.map_err(|e| e.to_string())? {
         println!("{name}");
@@ -179,21 +294,109 @@ pub async fn apps(client: &Client) -> Done {
     Ok(())
 }
 
-/// What is on a screen, whoever opened it.
-pub async fn windows(client: &Client, args: &[String]) -> Done {
-    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-
-    for window in client.windows(id, 0).await.map_err(|e| e.to_string())? {
-        println!("{}", shown(&window));
+fn counted<T: std::str::FromStr>(
+    args: &[String],
+    name: &str,
+    what: &str,
+) -> Result<Option<T>, String> {
+    match flag(args, name) {
+        Some(given) => given
+            .parse()
+            .map(Some)
+            .map_err(|_| format!("{name} takes {what}")),
+        None => Ok(None),
     }
+}
+
+fn shown_node(node: &computer_api::Node) -> String {
+    let named = match (&node.labelled, node.name.is_empty()) {
+        (Some(label), _) => format!("labelled {label:?}"),
+        (None, false) => format!("{:?}", node.name),
+        (None, true) => "unnamed".to_string(),
+    };
+    let where_ = match node.at {
+        Some(at) => format!("{},{} {}x{}", at.x, at.y, node.width, node.height),
+        None => "not drawn".to_string(),
+    };
+    let does = match node.actions.is_empty() {
+        true => String::new(),
+        false => format!("  {}", node.actions.join("/")),
+    };
+
+    format!("{:14} {named:24} {where_:18} {}{does}", node.role, node.app)
+}
+
+pub async fn widget(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "find, tree, press, fill or focus").map_err(|e| e.to_string())?;
+
+    let query = |at: usize| -> Result<NodeQuery, String> {
+        Ok(NodeQuery {
+            query: positional(args, at, "the words on the widget")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+            role: flag(args, "--role").map(str::to_string),
+            exact: present(args, "--exact"),
+            app: flag(args, "--app").map(str::to_string),
+        })
+    };
+
+    let what = match op {
+        "find" => OnNode::Find {
+            node: query(2)?,
+            limit: counted(args, "--limit", "a number of matches")?,
+        },
+        "tree" => OnNode::Tree {
+            app: flag(args, "--app").map(str::to_string),
+            depth: counted(args, "--depth", "a number of levels")?,
+        },
+        "press" => OnNode::Invoke {
+            node: query(2)?,
+            action: flag(args, "--action").map(str::to_string),
+        },
+        "fill" => OnNode::Set {
+            node: query(2)?,
+            value: positional(args, 3, "a value")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+        },
+        "focus" => OnNode::Focus { node: query(2)? },
+        other => return Err(format!("no such op: {other}")),
+    };
+
+    let result = client
+        .on_node(id, 0, &what)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for node in &result.nodes {
+        println!("{}", shown_node(node));
+    }
+    if result.nodes.is_empty() && result.node.is_none() {
+        println!("nothing in the tree matched");
+    }
+    if let Some(node) = &result.node {
+        match &result.action {
+            Some(action) => println!("{action}: {}", shown_node(node)),
+            None => println!("{}", shown_node(node)),
+        }
+    }
+
     Ok(())
 }
 
 pub async fn window(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-    let what = positional(args, 1, "active, wait or a window id").map_err(|e| e.to_string())?;
+    let what =
+        positional(args, 1, "list, active, wait or a window id").map_err(|e| e.to_string())?;
 
     let window = match what {
+        "list" => {
+            for window in client.windows(id, 0).await.map_err(|e| e.to_string())? {
+                println!("{}", shown(&window));
+            }
+            return Ok(());
+        }
         "active" => match client
             .active_window(id, 0)
             .await
@@ -230,9 +433,7 @@ pub async fn window(client: &Client, args: &[String]) -> Done {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                // Answered with whatever holds the keyboard afterwards: a
-                // window manager is free to refuse a raise, and this is the
-                // only thing that says whether it did.
+                // A window manager may refuse a raise, so answer with what holds focus after.
                 match client
                     .active_window(id, 0)
                     .await
@@ -242,7 +443,6 @@ pub async fn window(client: &Client, args: &[String]) -> Done {
                     None => return Ok(()),
                 }
             }
-            // Nothing to answer with: the window it named is gone.
             "close" => {
                 return client
                     .close_window(id, 0, window)
@@ -294,29 +494,107 @@ fn shown(window: &Window) -> String {
     )
 }
 
+const TYPED: [&str; 2] = ["--delay", "--held"];
+
 pub async fn type_text(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let rest = bare(args, &TYPED);
+
     act(
         client,
         id,
         Action::Type {
-            text: args[1..].join(" "),
+            text: rest[1..].join(" "),
+            delay_ms: counted(args, "--delay", "a number of milliseconds")?,
         },
     )
     .await
 }
 
-pub async fn key(client: &Client, args: &[String]) -> Done {
+pub async fn press(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-    let chord = positional(args, 1, "a chord").map_err(|e| e.to_string())?;
+    let rest = bare(args, &TYPED);
+
+    let mut keys = rest.get(1..).unwrap_or_default().iter();
+    let chord = keys
+        .next()
+        .ok_or_else(|| "expected a key to press".to_string())?
+        .clone();
+
     act(
         client,
         id,
-        Action::Key {
-            chord: chord.to_string(),
+        Action::Press {
+            chord,
+            then: keys.cloned().collect(),
+            held: modifiers(args)?,
         },
     )
     .await
+}
+
+pub async fn mouse(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "move, click, drag, scroll or at").map_err(|e| e.to_string())?;
+
+    let mut rest = args.to_vec();
+    rest.remove(1);
+
+    match op {
+        "click" => click(client, &rest).await,
+        "scroll" => scroll(client, &rest).await,
+        "move" => {
+            let to = point(&rest, 1)?;
+            act(client, id, Action::Move { to }).await
+        }
+        "drag" => {
+            act(
+                client,
+                id,
+                Action::Drag {
+                    from: point(&rest, 1)?,
+                    to: point(&rest, 3)?,
+                    button: button(rest.get(5)),
+                    held: modifiers(&rest)?,
+                },
+            )
+            .await
+        }
+        "at" => {
+            let at = client.cursor(id, 0).await.map_err(|e| e.to_string())?;
+            println!("{},{}", at.x, at.y);
+            Ok(())
+        }
+        other => Err(format!("no such op: {other}")),
+    }
+}
+
+pub async fn keyboard(client: &Client, args: &[String]) -> Done {
+    let op = positional(args, 1, "type or press").map_err(|e| e.to_string())?;
+
+    let mut rest = args.to_vec();
+    rest.remove(1);
+
+    match op {
+        "type" => type_text(client, &rest).await,
+        "press" => press(client, &rest).await,
+        other => Err(format!("no such op: {other}")),
+    }
+}
+
+fn point(args: &[String], at: usize) -> Result<Point, String> {
+    Ok(Point {
+        x: number(args, at, "an x coordinate")?,
+        y: number(args, at + 1, "a y coordinate")?,
+    })
+}
+
+fn button(named: Option<&String>) -> Button {
+    match named.map(String::as_str) {
+        Some("right") => Button::Right,
+        Some("middle") => Button::Middle,
+        _ => Button::Left,
+    }
 }
 
 pub async fn click(client: &Client, args: &[String]) -> Done {
@@ -324,22 +602,16 @@ pub async fn click(client: &Client, args: &[String]) -> Done {
     let x = number(args, 1, "an x coordinate")?;
     let y = number(args, 2, "a y coordinate")?;
 
-    let button = match args.get(3).map(String::as_str) {
-        Some("right") => Button::Right,
-        Some("middle") => Button::Middle,
-        _ => Button::Left,
+    let button = button(args.get(3));
+    let held = modifiers(args)?;
+    let at = Some(Point { x, y });
+
+    let action = match args.iter().any(|arg| arg == "--double") {
+        true => Action::DoubleClick { at, button },
+        false => Action::Click { at, button, held },
     };
 
-    act(
-        client,
-        id,
-        Action::Click {
-            at: Some(Point { x, y }),
-            button,
-            held: modifiers(args)?,
-        },
-    )
-    .await
+    act(client, id, action).await
 }
 
 pub async fn scroll(client: &Client, args: &[String]) -> Done {
@@ -348,8 +620,6 @@ pub async fn scroll(client: &Client, args: &[String]) -> Done {
 
     let at = match turn.at {
         Some((x, y)) => Point { x, y },
-        // Asked for rather than assumed: a box can be any size, and a wheel
-        // turned outside the screen reaches nothing.
         None => {
             let found = client.get(id).await.map_err(|e| e.to_string())?;
             Point {
@@ -371,7 +641,64 @@ pub async fn scroll(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-pub async fn still(client: &Client, args: &[String]) -> Done {
+pub async fn record(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "start, stop or status").map_err(|e| e.to_string())?;
+    let rest = bare(args, &["--fps"]);
+
+    match op {
+        "start" => {
+            let view = client
+                .start_recording(
+                    id,
+                    0,
+                    counted(args, "--fps", "a number of frames a second")?,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            eprintln!("recording; stop it with `computer record {id} stop`");
+            println!("{}", view.path.unwrap_or_default());
+            Ok(())
+        }
+        "stop" => {
+            let view = client
+                .stop_recording(id, 0)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let Some(inside) = view.path else {
+                return Err("the box did not say what it had recorded".to_string());
+            };
+
+            let out = rest
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| "recording.mp4".to_string());
+
+            let bytes = client
+                .read_file(id, &inside)
+                .await
+                .map_err(|e| e.to_string())?;
+            std::fs::write(&out, &bytes).map_err(|why| format!("{out}: {why}"))?;
+
+            println!("{} bytes → {out}", bytes.len());
+            Ok(())
+        }
+        "status" => {
+            let view = client.recording(id, 0).await.map_err(|e| e.to_string())?;
+
+            match view.path {
+                Some(path) => println!("recording {path}"),
+                None => println!("idle"),
+            }
+            Ok(())
+        }
+        other => Err(format!("no such op: {other}")),
+    }
+}
+
+pub async fn wait(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let ms = |name| -> Result<Option<u64>, String> {
         match flag(args, name) {
@@ -394,7 +721,6 @@ pub async fn still(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-/// `--held shift,ctrl`, in the same spellings a chord takes.
 fn modifiers(args: &[String]) -> Result<Vec<Held>, String> {
     let Some(given) = flag(args, "--held") else {
         return Ok(Vec::new());
@@ -478,7 +804,6 @@ pub async fn release(client: &Client, args: &[String]) -> Done {
 pub async fn exec(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
 
-    // Everything after `--`, so the box's command keeps its own flags.
     let argv: Vec<String> = args
         .iter()
         .position(|arg| arg == "--")
@@ -577,6 +902,14 @@ fn summarise(event: &computer_api::TraceEvent) -> String {
         E::AppLaunched { screen, app, .. } => format!("screen {screen}  opened {app}"),
         E::FileWritten { path, bytes } => format!("wrote {bytes} bytes to {path}"),
         E::FileRead { path, bytes } => format!("read {bytes} bytes from {path}"),
+        E::BoxPaused => "frozen".to_string(),
+        E::BoxResumed => "woken".to_string(),
+        E::BoxStopped => "stopped".to_string(),
+        E::BoxStarted => "started again, on new ports".to_string(),
+        E::PageCaptured { full, bytes } => match full {
+            true => format!("captured the whole page, {bytes} bytes"),
+            false => format!("captured the page in view, {bytes} bytes"),
+        },
         E::ClipboardSet { selection, .. } => format!("set the {selection:?} selection"),
         E::ClipboardRead { selection, .. } => format!("read the {selection:?} selection"),
         E::TakeoverStarted { screen, .. } => format!("screen {screen} handed to a person"),
@@ -604,6 +937,16 @@ fn op_of(what: &computer_api::OnElement) -> &'static str {
     }
 }
 
+fn node_op_of(what: &OnNode) -> &'static str {
+    match what {
+        OnNode::Tree { .. } => "tree",
+        OnNode::Find { .. } => "find",
+        OnNode::Focus { .. } => "focus",
+        OnNode::Invoke { .. } => "invoke",
+        OnNode::Set { .. } => "set",
+    }
+}
+
 fn name_of(action: &Action) -> String {
     match action {
         Action::Move { to } => format!("move to {},{}", to.x, to.y),
@@ -615,11 +958,15 @@ fn name_of(action: &Action) -> String {
         Action::Drag { from, to, .. } => {
             format!("drag {},{} → {},{}", from.x, from.y, to.x, to.y)
         }
-        Action::Type { text } => format!("type {text:?}"),
-        Action::Key { chord } => format!("key {chord}"),
+        Action::Type { text, .. } => format!("type {text:?}"),
+        Action::Press { chord, then, .. } => match then.is_empty() {
+            true => format!("press {chord}"),
+            false => format!("press {chord} and {} more", then.len()),
+        },
         Action::Scroll { dy, .. } => format!("scroll {dy}"),
         Action::OpenUrl { url, .. } => format!("open {url}"),
         Action::OnPage { what } => format!("page {}", op_of(what)),
+        Action::OnNode { what } => format!("widget {}", node_op_of(what)),
         Action::Launch { app, args } => match args.is_empty() {
             true => format!("open {app}"),
             false => format!("open {app} {}", args.join(" ")),
@@ -629,8 +976,11 @@ fn name_of(action: &Action) -> String {
     }
 }
 
-/// Do it, and say nothing when it worked.
 async fn act(client: &Client, id: &str, action: Action) -> Done {
+    acted(client, id, action).await.map(|_| ())
+}
+
+async fn acted(client: &Client, id: &str, action: Action) -> Result<BatchResult, String> {
     let result = client
         .act(
             id,
@@ -652,7 +1002,7 @@ async fn act(client: &Client, id: &str, action: Action) -> Done {
             .as_ref()
             .map(|error| error.message.clone())
             .unwrap_or_else(|| "it was refused".to_string())),
-        None => Ok(()),
+        None => Ok(result),
     }
 }
 
@@ -661,4 +1011,336 @@ fn number(args: &[String], at: usize, what: &str) -> Result<u32, String> {
         .map_err(|e| e.to_string())?
         .parse()
         .map_err(|_| format!("{what} must be a whole number of pixels"))
+}
+
+const UPLOADS: &str = "/tmp/computer/uploads";
+
+const VALUED: [&str; 9] = [
+    "--quality",
+    "--tab",
+    "--button",
+    "--role",
+    "--limit",
+    "--within",
+    "--or",
+    "--format",
+    "--timeout",
+];
+
+pub async fn browser(client: &Client, args: &[String]) -> Done {
+    let rest = bare(args, &VALUED);
+    let id = positional(&rest, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(
+        &rest,
+        1,
+        "read, find, click, fill, select, options, upload, wait, hover, eval, \
+         screenshot, tabs, switch, close, back, forward or reload",
+    )
+    .map_err(|e| e.to_string())?;
+
+    let tab = flag(args, "--tab");
+    let query = |at: usize| -> Result<String, String> {
+        Ok(positional(&rest, at, "a query")
+            .map_err(|e| e.to_string())?
+            .to_string())
+    };
+
+    match op {
+        "read" => return read_page(client, id, args).await,
+        "find" => return find_on_page(client, id, args, &rest).await,
+        "eval" => return evaluate_on_page(client, id, args, &rest).await,
+        "screenshot" => return capture_page(client, id, args, &rest).await,
+        "tabs" => return list_tabs(client, id).await,
+        "switch" => {
+            let which = query(2)?;
+            client
+                .focus_tab(id, &which)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("switched to {which}");
+            return Ok(());
+        }
+        "close" => {
+            let which = query(2)?;
+            client
+                .close_tab(id, &which)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("closed {which}");
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let what = match op {
+        "click" => OnElement::Click {
+            query: query(2)?,
+            button: match flag(args, "--button") {
+                Some("right") => Button::Right,
+                Some("middle") => Button::Middle,
+                _ => Button::Left,
+            },
+            double: present(args, "--double"),
+        },
+        "fill" => OnElement::Fill {
+            query: query(2)?,
+            text: positional(&rest, 3, "a value")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+        },
+        "select" => OnElement::Choose {
+            query: query(2)?,
+            option: positional(&rest, 3, "an option")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+        },
+        "options" => OnElement::Options { query: query(2)? },
+        "upload" => OnElement::Upload {
+            query: query(2)?,
+            paths: handed(client, id, args, &rest).await?,
+        },
+        "wait" => OnElement::WaitFor {
+            query: query(2)?,
+            gone: present(args, "--gone"),
+            within_ms: counted(args, "--within", "a number of milliseconds")?,
+            or: flag(args, "--or")
+                .map(|given| {
+                    given
+                        .split(',')
+                        .map(str::trim)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            exact: present(args, "--exact"),
+        },
+        "hover" => OnElement::Hover { query: query(2)? },
+        "back" => OnElement::History { go: Where::Back },
+        "forward" => OnElement::History { go: Where::Forward },
+        "reload" => OnElement::History { go: Where::Reload },
+        other => return Err(format!("no such op: {other}")),
+    };
+
+    let result = client
+        .on_element(id, &what, 600, tab)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for option in &result.options {
+        println!("{option}");
+    }
+    if let Some(element) = &result.element {
+        println!("{}", shown_element(element));
+    }
+    if let Some(matched) = &result.matched {
+        println!("matched {matched:?}");
+    }
+    match &result.url {
+        Some(url) if result.navigated || op == "reload" => println!("{url}"),
+        Some(_) if matches!(op, "click" | "back" | "forward") => {
+            println!("the page did not move")
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+async fn read_page(client: &Client, id: &str, args: &[String]) -> Done {
+    let format = match flag(args, "--format") {
+        Some("text") => Reading::Text,
+        Some("raw") => Reading::Raw,
+        Some("markdown") | None => Reading::Markdown,
+        Some(other) => return Err(format!("no such format: {other}")),
+    };
+
+    let read = client
+        .page(
+            id,
+            format,
+            counted(args, "--limit", "a number of characters")?,
+            None,
+            flag(args, "--tab"),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!("{}", read.text);
+    if read.truncated {
+        eprintln!("(truncated)");
+    }
+
+    Ok(())
+}
+
+async fn find_on_page(client: &Client, id: &str, args: &[String], rest: &[String]) -> Done {
+    let found = client
+        .find(
+            id,
+            &Find {
+                query: rest.get(2).cloned().unwrap_or_default(),
+                limit: counted(args, "--limit", "a number of matches")?,
+                scroll: Some(present(args, "--scroll")),
+                exact: Some(present(args, "--exact")),
+                role: flag(args, "--role").map(str::to_string),
+                tab: flag(args, "--tab").map(str::to_string),
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if found.is_empty() {
+        println!("nothing in view matched");
+    }
+    for element in &found {
+        println!("{}", shown_element(element));
+    }
+
+    Ok(())
+}
+
+async fn handed(
+    client: &Client,
+    id: &str,
+    args: &[String],
+    rest: &[String],
+) -> Result<Vec<String>, String> {
+    let named = rest.get(3..).unwrap_or_default();
+    if named.is_empty() {
+        return Err("expected a file to upload".to_string());
+    }
+
+    if present(args, "--in-box") {
+        return Ok(named.to_vec());
+    }
+
+    let mut inside = Vec::with_capacity(named.len());
+    for path in named {
+        let bytes = std::fs::read(path).map_err(|why| format!("{path}: {why}"))?;
+
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("{path} has no file name"))?;
+        let there = format!("{UPLOADS}/{name}");
+
+        client
+            .write_file(id, &there, &bytes)
+            .await
+            .map_err(|e| e.to_string())?;
+        inside.push(there);
+    }
+
+    Ok(inside)
+}
+
+async fn capture_page(client: &Client, id: &str, args: &[String], rest: &[String]) -> Done {
+    let format = match flag(args, "--format") {
+        Some("png") => Some(Picture::Png),
+        Some("jpeg" | "jpg") => Some(Picture::Jpeg),
+        None => None,
+        Some(other) => return Err(format!("no such format: {other}")),
+    };
+
+    let taken = client
+        .page_screenshot(
+            id,
+            &PageShot {
+                full: present(args, "--full"),
+                format,
+                quality: counted(args, "--quality", "a quality between 1 and 100")?,
+                tab: flag(args, "--tab").map(str::to_string),
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let image = captured_image(&taken).map_err(|e| e.to_string())?;
+
+    // --full answers JPEG by default, so the extension follows the format.
+    let out = rest.get(2).cloned().unwrap_or_else(|| {
+        match taken.format {
+            Picture::Jpeg => "page.jpg",
+            Picture::Png => "page.png",
+        }
+        .to_string()
+    });
+
+    std::fs::write(&out, &image).map_err(|error| format!("{out}: {error}"))?;
+
+    eprintln!("{} bytes → {out}", image.len());
+    Ok(())
+}
+
+async fn evaluate_on_page(client: &Client, id: &str, args: &[String], rest: &[String]) -> Done {
+    let what = Evaluate {
+        expression: positional(rest, 2, "an expression")
+            .map_err(|e| e.to_string())?
+            .to_string(),
+        timeout_ms: counted(args, "--timeout", "a number of milliseconds")?,
+        limit: counted(args, "--limit", "a number of characters")?,
+    };
+
+    let answered = client
+        .evaluate(id, &what, flag(args, "--tab"))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!("{}", answered.json);
+    if answered.truncated {
+        eprintln!("(truncated)");
+    }
+
+    Ok(())
+}
+
+async fn list_tabs(client: &Client, id: &str) -> Done {
+    let tabs = client.tabs(id).await.map_err(|e| e.to_string())?;
+
+    if tabs.is_empty() {
+        println!("no pages are open");
+    }
+    for tab in &tabs {
+        println!(
+            "{}{} {:?} {}",
+            tab.id,
+            match tab.visible {
+                true => " (on screen)",
+                false => "",
+            },
+            tab.title,
+            tab.url
+        );
+    }
+
+    Ok(())
+}
+
+fn shown_element(element: &computer_api::Element) -> String {
+    let where_ = match element.at {
+        Some(at) => format!("{},{}", at.x, at.y),
+        None => "out of view".to_string(),
+    };
+
+    format!(
+        "{}{} {:?}{} {} {}x{}{}{}",
+        element.tag,
+        element.kind.as_deref().unwrap_or(""),
+        element.text,
+        match element.role.as_deref() {
+            Some(role) => format!(" role={role}"),
+            None => String::new(),
+        },
+        where_,
+        element.width,
+        element.height,
+        match element.states.is_empty() {
+            true => String::new(),
+            false => format!(" [{}]", element.states.join(" ")),
+        },
+        match element.selector.as_deref() {
+            Some(selector) => format!("  {selector}"),
+            None => String::new(),
+        }
+    )
 }

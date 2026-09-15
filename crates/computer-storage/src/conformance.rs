@@ -1,5 +1,3 @@
-//! What every backend must do, asserted once.
-
 use crate::now_ms;
 use crate::{Blobs, BoxRecord, Frames, Store};
 use computer_api::{Actor, Placement, Spec, TraceEvent};
@@ -145,7 +143,6 @@ pub async fn store(store: &dyn Store) {
     );
 }
 
-/// What a sweep must be able to do.
 pub async fn pruning(store: &dyn Store) {
     for _ in 0..3 {
         store
@@ -212,7 +209,6 @@ pub async fn pruning(store: &dyn Store) {
     store.forget_box("box_p").await.expect("forgotten");
 }
 
-/// Dropping named frames rather than a whole box's.
 pub async fn dropping(frames: &dyn Frames) {
     frames.put("box_d", "aaa", b"first").await.expect("held");
     frames.put("box_d", "bbb", b"second").await.expect("held");

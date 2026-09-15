@@ -1,12 +1,3 @@
-//! Driving the browser through the DevTools protocol.
-//!
-//! [`Devtools`] manages default-context targets and isolated [`BrowserGroup`]s.
-//! [`Page`] drives one target without display coordinates.
-//!
-//! The WebSocket client is written here rather than taken as a dependency,
-//! for one connection to loopback, and negotiates no compression extension.
-//! Anything this does not wrap is reachable through [`Page::call`].
-
 use crate::error::{Error, Result};
 use crate::{BrowserEndpoint, Button, Point};
 use serde::{Deserialize, Serialize};
@@ -17,22 +8,51 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-/// How long any one exchange with the browser may take.
 pub const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How many unread events a page keeps before it starts dropping the oldest.
 pub const EVENT_QUEUE: usize = 512;
 
-/// One page, window or worker the browser will let us attach to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub id: String,
     pub kind: String,
     pub title: String,
     pub url: String,
-    /// Where to attach. The host in it is the browser's own idea of where it
-    /// is, which is not where a client out here reaches it.
     pub ws_path: String,
+}
+
+/// `/json/list` HTML-escapes titles.
+fn unescaped(title: &str) -> String {
+    const NAMED: [(&str, char); 5] = [
+        ("amp;", '&'),
+        ("lt;", '<'),
+        ("gt;", '>'),
+        ("quot;", '"'),
+        ("#39;", '\''),
+    ];
+
+    let mut pieces = title.split('&');
+    let mut out = String::with_capacity(title.len());
+    out.push_str(pieces.next().unwrap_or_default());
+
+    for piece in pieces {
+        let named = NAMED
+            .iter()
+            .find_map(|(entity, plain)| piece.strip_prefix(entity).map(|tail| (*plain, tail)));
+
+        match named {
+            Some((plain, tail)) => {
+                out.push(plain);
+                out.push_str(tail);
+            }
+            None => {
+                out.push('&');
+                out.push_str(piece);
+            }
+        }
+    }
+
+    out
 }
 
 impl Target {
@@ -46,11 +66,12 @@ impl Target {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
-            title: value
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            title: unescaped(
+                value
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
             url: value
                 .get("url")
                 .and_then(Value::as_str)
@@ -60,7 +81,6 @@ impl Target {
         })
     }
 
-    /// Whether this is a page rather than a worker or an extension.
     pub fn is_page(&self) -> bool {
         self.kind == "page"
     }
@@ -72,7 +92,6 @@ fn websocket_path(url: &str) -> Option<String> {
     Some(format!("/{path}"))
 }
 
-/// The browser's DevTools endpoint, as reached from this machine.
 #[derive(Debug, Clone)]
 pub struct Devtools {
     host: String,
@@ -89,7 +108,6 @@ impl Devtools {
         }
     }
 
-    /// From what [`crate::Computer::devtools`] reports.
     pub fn from_endpoint(endpoint: &BrowserEndpoint) -> Result<Self> {
         let authority = endpoint
             .http_url
@@ -108,12 +126,10 @@ impl Devtools {
         Ok(Self::new(host, port))
     }
 
-    /// What the browser says it is.
     pub async fn version(&self) -> Result<Value> {
         self.get("/json/version").await
     }
 
-    /// Every target the browser will attach to.
     pub async fn targets(&self) -> Result<Vec<Target>> {
         let listed = self.get("/json/list").await?;
         Ok(listed
@@ -122,7 +138,6 @@ impl Devtools {
             .unwrap_or_default())
     }
 
-    /// The pages, in the order the browser reports them.
     pub async fn pages(&self) -> Result<Vec<Target>> {
         Ok(self
             .targets()
@@ -155,11 +170,7 @@ impl Devtools {
         })
     }
 
-    /// Open a page and wait until it is really there.
-    ///
-    /// `/json/new?url=` answers as soon as the tab exists, and that tab shows
-    /// `about:blank`, which is already loaded. `Page.navigate` answers once the
-    /// navigation has committed.
+    /// `/json/new?url=` answers before the page loads, so this navigates and waits.
     pub async fn open_page(&self, url: &str, within: Duration) -> Result<Page> {
         let target = self.open("about:blank").await?;
         let mut page = self.attach(&target).await?;
@@ -169,15 +180,6 @@ impl Devtools {
         Ok(page)
     }
 
-    /// Take the logged-in state for these origins out of the browser.
-    ///
-    /// An origin is `https://example.com` — scheme and host, no path. Only
-    /// what belongs to one of them comes out, so a session for one site never
-    /// carries another site's cookies along with it.
-    ///
-    /// [`Carry`] says what to take. What could not be taken is named in
-    /// [`Session::incomplete`] rather than left to be discovered by a box that
-    /// comes up signed out.
     pub async fn export_session(&self, origins: &[String], carry: Carry) -> Result<Session> {
         let mut session = Session {
             origins: origins.to_vec(),
@@ -207,13 +209,8 @@ impl Devtools {
             return Ok(session);
         }
 
-        // Storage is per origin and only reachable from a page on it, so each
-        // one is visited. A site that will not load is said so rather than
-        // silently contributing nothing.
         for origin in origins {
-            // A tab already on this origin if there is one, because session
-            // storage belongs to a tab: a fresh one carries none of what the
-            // first one holds.
+            // Session storage belongs to a tab, so reuse one already on this origin.
             let (mut page, ours) = match self.page_on(origin).await {
                 Some(page) => (page, false),
                 None => {
@@ -271,7 +268,6 @@ impl Devtools {
                 }
             }
 
-            // Only what this opened: a tab the caller was using is left alone.
             if ours {
                 page.close().await.ok();
             }
@@ -280,15 +276,7 @@ impl Devtools {
         Ok(session)
     }
 
-    /// Put one back.
-    ///
-    /// Ignores anything the session does not claim: a cookie whose domain no
-    /// listed origin covers, and storage for an origin that is not in it.
-    /// Without that filter a vault entry could hand one site's cookies to
-    /// another.
-    /// Hands back the tabs it left open. Session storage belongs to a tab, so
-    /// one restored into a tab nobody keeps is one nobody has: a caller that
-    /// asked for it should go on working in these.
+    /// Returns the tabs left open: session storage lives only as long as its tab.
     pub async fn import_session(&self, session: &Session) -> Result<Vec<Page>> {
         let cookies: Vec<Value> = session
             .cookies
@@ -320,8 +308,7 @@ impl Devtools {
             let (mut page, ours) = match self.page_on(origin).await {
                 Some(page) => (page, false),
                 None => match self.open_page(origin, TIMEOUT).await {
-                    // Left open where session storage went into it: closing
-                    // the tab would throw away what was just put there.
+                    // Closing it would discard the session storage just written.
                     Ok(page) => (page, temporary.is_none()),
                     Err(_) => continue,
                 },
@@ -346,8 +333,6 @@ impl Devtools {
                 true => {
                     page.close().await.ok();
                 }
-                // Either the caller's own tab or one holding session storage,
-                // and both are theirs to use.
                 false => held.push(page),
             }
         }
@@ -355,7 +340,6 @@ impl Devtools {
         Ok(held)
     }
 
-    /// A tab already showing this origin, if one is.
     async fn page_on(&self, origin: &str) -> Option<Page> {
         for target in self.pages().await.ok()? {
             if target.url.starts_with(origin) {
@@ -366,11 +350,6 @@ impl Devtools {
         None
     }
 
-    /// Put a query to a search engine, and hand back the results page.
-    ///
-    /// The URL is built rather than written by a caller: a query with `&` or
-    /// `#` in it, pasted into a template, searches for something other than
-    /// what was asked for.
     pub async fn search(
         &self,
         query: &str,
@@ -380,31 +359,21 @@ impl Devtools {
         self.open_page(&provider.url_for(query), within).await
     }
 
-    /// Close pages beyond the newest `keep`, and answer how many went.
-    ///
-    /// `open_url` raises a new tab every time, by design — a person opening a
-    /// link expects one. A program doing it fifty times leaves fifty behind,
-    /// and a browser holding them all gets slower at everything.
-    ///
-    /// Never the visible one, whatever its age: it is the page the screen is
-    /// showing and a caller is probably reading it.
+    /// Never closes the visible page.
     pub async fn tidy(&self, keep: usize) -> Result<usize> {
         let pages = self.pages().await?;
         if pages.len() <= keep {
             return Ok(0);
         }
 
-        // By id, not by URL: a run comparing two pages of one site has several
-        // tabs holding the same address, and a caller holding an id for one of
-        // them would watch it go.
+        // By id: several tabs can share a URL.
         let showing = match self.visible_page().await {
             Ok(Some(page)) => Some(page.target().id.clone()),
             _ => None,
         };
 
         let mut closed = 0;
-        // Newest first, as the debugger lists them, so the tail is what has
-        // been sitting there longest.
+        // The debugger lists newest first.
         for target in pages.into_iter().skip(keep) {
             if showing.as_deref() == Some(target.id.as_str()) {
                 continue;
@@ -428,7 +397,6 @@ impl Devtools {
         Ok(None)
     }
 
-    /// Attach to the first page, opening one if the browser has none.
     pub async fn first_page(&self) -> Result<Page> {
         let target = match self.pages().await?.into_iter().next() {
             Some(target) => target,
@@ -437,7 +405,6 @@ impl Devtools {
         self.attach(&target).await
     }
 
-    /// Create an isolated cookie and storage context.
     pub async fn create_group(&self) -> Result<BrowserGroup> {
         let result = self
             .browser_call("Target.createBrowserContext", json!({}))
@@ -449,7 +416,6 @@ impl Devtools {
         })
     }
 
-    /// List non-default browser contexts.
     pub async fn groups(&self) -> Result<Vec<BrowserGroup>> {
         let result = self
             .browser_call("Target.getBrowserContexts", json!({}))
@@ -571,7 +537,6 @@ impl Devtools {
     }
 }
 
-/// An isolated cookie and storage context inside screen 0's Chromium.
 #[derive(Debug)]
 pub struct BrowserGroup {
     devtools: Devtools,
@@ -642,7 +607,6 @@ impl BrowserGroup {
         })?
     }
 
-    /// Dispose the context and its pages. Repeated handles close idempotently.
     pub async fn close(self) -> Result<()> {
         let result = self
             .devtools
@@ -709,7 +673,6 @@ fn required_string(result: &Value, field: &str, method: &str) -> Result<String> 
         .ok_or_else(|| Error::denied(format!("{method} returned no {field}")))
 }
 
-/// A message the browser sent that nobody asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
     pub method: String,
@@ -835,24 +798,11 @@ impl Drop for Connection {
     }
 }
 
-/// What a session should carry.
-///
-/// Cookies and local storage by default, because that is where a login
-/// normally is. The other two are asked for: one because the site said it
-/// should not outlive a tab, the other because it is expensive and imperfect.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Carry {
     pub cookies: bool,
     pub local_storage: bool,
-    /// A site putting a token here has chosen that the login dies with the
-    /// tab. Carrying it overrides that, so it is named rather than assumed —
-    /// and it also holds the throwaway state of a redirect part-way through,
-    /// which is worth nothing once restored.
     pub session_storage: bool,
-    /// Where Firebase keeps a login, so without it those sites come back
-    /// signed out. Only what survives being written as JSON: a value holding
-    /// a blob or a key that cannot be cloned is left, and named in
-    /// [`Session::incomplete`].
     pub indexed_db: bool,
 }
 
@@ -868,7 +818,6 @@ impl Default for Carry {
 }
 
 impl Carry {
-    /// Nothing, to add to.
     pub fn none() -> Self {
         Self {
             cookies: false,
@@ -878,8 +827,6 @@ impl Carry {
         }
     }
 
-    /// Everything this can take. Not everything a browser holds — see
-    /// [`Session::incomplete`].
     pub fn all() -> Self {
         Self {
             cookies: true,
@@ -894,43 +841,22 @@ impl Carry {
     }
 }
 
-/// A logged-in state, taken out of one box so another can be given it.
-///
-/// Cookies and local storage, which is where a session actually lives. Not the
-/// profile directory: that is a third of a gigabyte, tied to the Chromium
-/// build that wrote it, and holds the whole of a browser's history besides.
-///
-/// **This is the account.** A password may sit behind a second factor; a
-/// session has already passed one, so whoever holds this file is the user.
-/// It carries no `Display` and no `Debug` that would put it in a log.
+/// Holds live credentials, so `Debug` prints counts only.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Session {
-    /// The origins this was taken from, and the only ones it may be put back
-    /// into. A session for one site restored into another is an account handed
-    /// to a stranger.
     pub origins: Vec<String>,
     pub cookies: Vec<Cookie>,
-    /// Local storage, per origin. Where most applications keep their token.
     pub storage: BTreeMap<String, BTreeMap<String, String>>,
-    /// Session storage, per origin, where it was asked for.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub session_storage: BTreeMap<String, BTreeMap<String, String>>,
-    /// Databases, per origin, where they were asked for.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub databases: BTreeMap<String, Vec<Database>>,
-    /// What was asked for, so an import puts back the same kinds.
     #[serde(default)]
     pub carried: Carry,
-    /// What could not be taken, and why.
-    ///
-    /// A session that is quietly short of what a site needs is worse than one
-    /// that fails: the box comes up looking signed in and is not. Anything
-    /// left behind says so here.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub incomplete: Vec<String>,
 }
 
-/// One database, as much of it as JSON can hold.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Database {
     pub name: String,
@@ -941,18 +867,15 @@ pub struct Database {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserStore {
     pub name: String,
-    /// The path a record's key is read from, where the store has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_path: Option<Value>,
     #[serde(default)]
     pub auto_increment: bool,
-    /// Records as `[key, value]`. The key is carried separately because a
-    /// store without a key path does not keep one inside its value.
+    /// `[key, value]`: a store without a key path keeps no key in its value.
     pub records: Vec<Value>,
 }
 
 impl std::fmt::Debug for Session {
-    /// Counts, never contents.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("Session")
@@ -966,11 +889,6 @@ impl std::fmt::Debug for Session {
     }
 }
 
-/// One cookie, as the protocol gives and takes it.
-///
-/// Every flag round-trips: a `Secure` cookie restored without its flag is sent
-/// over plain HTTP, and a `SameSite` one restored without its own is sent
-/// where the site said not to.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Cookie {
     pub name: String,
@@ -989,23 +907,13 @@ pub struct Cookie {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SearchProvider {
-    /// Its plain endpoint, which renders results as ordinary HTML.
-    ///
-    /// The default because it is the one a reader gets anything from. It also
-    /// refuses a shell that asks too often — a browser it serves, `curl` it
-    /// answers with a puzzle about ducks.
     #[default]
     DuckDuckGo,
-    /// Answers, but as an application rather than a document: results arrive
-    /// after script runs, behind a consent page in much of the world.
     Google,
-    /// Answers, and sometimes to a different question. A quoted name here
-    /// returned land records for an Indian state.
     Bing,
 }
 
 impl SearchProvider {
-    /// Where to send this query.
     pub fn url_for(&self, query: &str) -> String {
         let query = encode(query);
 
@@ -1025,12 +933,6 @@ impl SearchProvider {
     }
 }
 
-/// Percent-encode one query.
-///
-/// By hand because the crate carries no URL library, and wrongly by hand is
-/// how a search for a quoted phrase becomes a search for something else: `&`
-/// starts another parameter, `#` ends the URL, and a space is not a `+`
-/// everywhere it is written as one.
 fn encode(query: &str) -> String {
     let mut out = String::with_capacity(query.len());
 
@@ -1047,35 +949,68 @@ fn encode(query: &str) -> String {
     out
 }
 
-/// One attached target.
 pub struct Page {
     connection: Connection,
     target: Target,
 }
 
-/// What a read carries when the caller names no numbers.
-///
-/// Defaults, not limits: a library imposes no ceiling on its caller, and a
-/// deployment that needs one puts it in front — see `computer-server`.
 const TEXT_DEFAULT: usize = 100_000;
 const LINKS_DEFAULT: usize = 100;
 
-/// How often a wait asks whether the page has caught up.
 const POLL: Duration = Duration::from_millis(120);
+
+/// Lets the protocol's own timeout answer first.
+const GRACE: Duration = Duration::from_millis(250);
+
+pub const JPEG_QUALITY: u32 = 70;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageShot {
+    pub full: bool,
+    pub format: Picture,
+    pub quality: u32,
+}
+
+impl Default for PageShot {
+    fn default() -> Self {
+        Self {
+            full: false,
+            format: Picture::Png,
+            quality: JPEG_QUALITY,
+        }
+    }
+}
+
+impl PageShot {
+    pub fn whole() -> Self {
+        Self {
+            full: true,
+            format: Picture::Jpeg,
+            ..Self::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Picture {
+    #[default]
+    Png,
+    Jpeg,
+}
+
+impl Picture {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Png => "png",
+            Self::Jpeg => "jpeg",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scroll {
-    /// This far from where it is now. Positive `y` moves down the page.
-    By {
-        x: i32,
-        y: i32,
-    },
-    /// To this position, counted from the top.
-    To {
-        x: i32,
-        y: i32,
-    },
-    /// As far down as it goes. What a page that loads more on arrival wants.
+    By { x: i32, y: i32 },
+    To { x: i32, y: i32 },
     Bottom,
     Top,
 }
@@ -1085,19 +1020,15 @@ impl Scroll {
         match self {
             Self::By { x, y } => format!("{{ x: null, dx: {x}, dy: {y} }}"),
             Self::To { x, y } => format!("{{ x: {x}, y: {y} }}"),
-            // Larger than any document, since the browser clamps it and
-            // `scrollHeight` on the wrong element is a different number.
+            // The browser clamps it; `scrollHeight` of the wrong element would fall short.
             Self::Bottom => "{ x: 0, y: 1e9 }".to_string(),
             Self::Top => "{ x: 0, y: 0 }".to_string(),
         }
     }
 }
 
-/// How many matches a find carries when the caller names no number.
 const FOUND_DEFAULT: usize = 20;
 
-/// What the protocol calls a mouse button, and the bit a page reads out of
-/// `event.buttons` while that button is down.
 fn button_parts(button: Button) -> (&'static str, u8) {
     match button {
         Button::Left => ("left", 1),
@@ -1106,53 +1037,32 @@ fn button_parts(button: Button) -> (&'static str, u8) {
     }
 }
 
-/// One thing on a page a caller can act on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Element {
-    /// What it says, which is usually what a caller was looking for.
     pub text: String,
-    /// Its tag, lowercased: `button`, `input`, `select`, `a`.
     pub tag: String,
-    /// An `input`'s type, where it has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    /// The shortest selector that names this element and nothing else.
-    ///
-    /// Takes the place of the words a caller found it by: every method here
-    /// accepts a selector as its query, and one of these is unambiguous where
-    /// words are not. `None` where the page offers nothing that identifies it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub states: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selector: Option<String>,
-    /// What the page calls it, where that is not what it says: a field with no
-    /// words of its own still has a name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// Whether its middle is inside the window.
     #[serde(default)]
     pub visible: bool,
-    /// The middle of it, in the viewport's coordinates, which is what
-    /// [`Page::click`] takes and is not where it sits on the screen.
-    ///
-    /// `None` where the middle is outside the viewport. A coordinate for
-    /// something scrolled out of view points somewhere else, and an unsigned
-    /// one cannot even be written down: an element above the fold has a
-    /// negative offset.
+    /// Viewport coordinates, not screen ones; `None` when the middle is off the viewport.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
     pub width: u32,
     pub height: u32,
-    /// A disabled control is worth knowing about before it is clicked and
-    /// nothing happens.
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 }
 
-/// Elements matching a query, best first.
-///
-/// A CSS selector where the query is one, a `name`, `id` or placeholder where
-/// it names a field, and visible words otherwise: an agent knows a button says
-/// "Sign in" and rarely knows its class.
 const MATCH: &str = r#"(q, exact) => {
   const seen = new Set();
   const out = [];
@@ -1167,15 +1077,20 @@ const MATCH: &str = r#"(q, exact) => {
 
   try { document.querySelectorAll(q).forEach(add); } catch (e) {}
 
-  // A field is usually named rather than worded: `custname` is what a form
-  // calls it, and a bare word is not a selector that finds it.
   for (const by of ['[name=', '[id=', '[placeholder=', '[aria-label=']) {
     try { document.querySelectorAll(by + JSON.stringify(q) + ']').forEach(add); } catch (e) {}
   }
 
   const want = q.trim().toLowerCase();
+  const icon = el => {
+    const parts = [];
+    for (const img of el.querySelectorAll('img[alt], area[alt], input[alt]')) parts.push(img.alt);
+    for (const named of el.querySelectorAll('svg > title, svg > desc')) parts.push(named.textContent);
+    return parts.join(' ');
+  };
   const words = el => (el.innerText || el.value || el.getAttribute('aria-label') ||
-                       el.getAttribute('placeholder') || el.getAttribute('title') || '')
+                       el.getAttribute('placeholder') || el.getAttribute('title') ||
+                       icon(el) || '')
                         .replace(/\s+/g, ' ').trim().toLowerCase();
   const clickable = 'a,button,input,select,textarea,[role=button],[role=link],[onclick]';
 
@@ -1186,11 +1101,7 @@ const MATCH: &str = r#"(q, exact) => {
   for (const pass of passes) {
     for (const el of document.querySelectorAll(clickable)) if (pass(el)) add(el);
 
-    // The innermost of them only. An ancestor's innerText holds all of its
-    // descendants', so a substring match walks out to <body> — which comes
-    // first in document order and would be the one answer a wait acts on.
-    // Clickables are swept above and already held, so a button whose label
-    // sits in a span still beats the span.
+    // Innermost only: an ancestor's innerText contains its descendants'.
     const hits = [];
     for (const el of document.querySelectorAll('*')) if (pass(el)) hits.push(el);
     for (const el of hits) {
@@ -1199,17 +1110,39 @@ const MATCH: &str = r#"(q, exact) => {
     }
   }
 
-  // Not sorted by position: the passes above are the ranking, and a form
-  // containing a button sits higher on the page than the button does. Sorting
-  // by top would hand back the form.
+  // Not sorted by position: a form sits above its own button.
   return out;
 }"#;
 
-/// The shortest selector that names one element and nothing else.
-///
-/// Confirmed rather than generated: a selector matching two elements looks
-/// precise and is worse than the words it replaces, because an action on it
-/// silently reaches the wrong one.
+pub fn selector_for(role: &str) -> Option<&'static str> {
+    let selector = match role {
+        "button" => {
+            "button, [role=button], input[type=button], input[type=submit], \
+                     input[type=reset], input[type=image], summary"
+        }
+        "link" => "a[href], area[href], [role=link]",
+        "textbox" => {
+            "input[type=text], input[type=search], input[type=email], \
+                      input[type=url], input[type=tel], input[type=password], \
+                      input:not([type]), textarea, [role=textbox], [contenteditable=true]"
+        }
+        "checkbox" => "input[type=checkbox], [role=checkbox], [role=switch]",
+        "radio" => "input[type=radio], [role=radio]",
+        "combobox" => "select, [role=combobox], [role=listbox]",
+        "option" => "option, [role=option]",
+        "heading" => "h1, h2, h3, h4, h5, h6, [role=heading]",
+        "image" => "img, svg, [role=img], [role=image]",
+        "tab" => "[role=tab]",
+        "dialog" => "dialog, [role=dialog], [role=alertdialog]",
+        _ => return None,
+    };
+
+    Some(selector)
+}
+
+pub const ROLES: &str = "button, link, textbox, checkbox, radio, combobox, option, heading, \
+                         image, tab, dialog";
+
 const SELECTOR: &str = r#"(el) => {
   const alone = q => {
     try { return document.querySelectorAll(q).length === 1; } catch (e) { return false; }
@@ -1217,7 +1150,6 @@ const SELECTOR: &str = r#"(el) => {
 
   if (el.id && alone('#' + CSS.escape(el.id))) return '#' + CSS.escape(el.id);
 
-  // What a page meant as a handle, before anything this has to invent.
   for (const by of ['data-testid', 'data-test', 'data-qa', 'name', 'aria-label',
                     'placeholder', 'title']) {
     const value = el.getAttribute(by);
@@ -1226,8 +1158,6 @@ const SELECTOR: &str = r#"(el) => {
     if (alone(q)) return q;
   }
 
-  // Outwards until it is unambiguous, so the answer is as short as the page
-  // allows rather than a path from the root every time.
   const step = node => {
     const tag = node.tagName.toLowerCase();
     const parent = node.parentElement;
@@ -1246,81 +1176,64 @@ const SELECTOR: &str = r#"(el) => {
   return undefined;
 }"#;
 
-/// [`DESCRIBE`] with [`SELECTOR`] put in place of its call.
-///
-/// One calls the other, and a script evaluated in a page carries no imports.
 fn describe() -> String {
-    // The name alone: the parens around it in DESCRIBE are what let the
-    // function it becomes be called, and replacing them too leaves an arrow
-    // literal invoked where it stands, which does not parse.
+    // Only the name: the parens around it in DESCRIBE make it callable.
     DESCRIBE.replace("SELECTOR_FN", SELECTOR)
 }
 
-/// One element, as a caller sees it.
 const DESCRIBE: &str = r#"(el) => {
   const r = el.getBoundingClientRect();
   const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
-  // A coordinate is the viewport's, so one for an element off it points
-  // somewhere else — and an unsigned one cannot even hold a negative offset.
   const inside = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
 
-  // What the page calls it, which is not always what it says: a field with no
-  // words of its own still has a name a caller can recognise.
   const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
                 el.getAttribute('title') ||
                 (el.id && (document.querySelector('label[for=' + JSON.stringify(el.id) + ']') || {}).innerText) ||
                 undefined;
+
+  const aria = name => el.getAttribute('aria-' + name);
+  const off = el.disabled === true || aria('disabled') === 'true';
+
+  const states = [];
+  if (off) states.push('disabled');
+  if (aria('expanded') === 'true') states.push('expanded');
+  if (aria('expanded') === 'false') states.push('collapsed');
+  if (el.checked === true || aria('checked') === 'true') states.push('checked');
+  if (aria('selected') === 'true') states.push('selected');
 
   return {
     text: (el.innerText || el.value || el.getAttribute('aria-label') || '')
             .replace(/\s+/g, ' ').trim().slice(0, 200),
     tag: el.tagName.toLowerCase(),
     kind: el.getAttribute('type') || undefined,
+    role: el.getAttribute('role') || undefined,
+    states,
     selector: (SELECTOR_FN)(el),
     label: label === undefined ? undefined : String(label).replace(/\s+/g, ' ').trim().slice(0, 200),
     at: inside ? { x, y } : undefined,
     visible: inside,
     width: Math.round(r.width),
     height: Math.round(r.height),
-    enabled: !el.disabled,
+    enabled: !off,
     value: el.value === undefined ? undefined : String(el.value).slice(0, 200),
   };
 }"#;
 
-/// How a page should be read.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reading {
-    /// Headings, lists, tables and inline links kept. The default, because a
-    /// reader that flattens them cannot tell a heading from body text.
     #[default]
     Markdown,
-    /// Rendered text, whitespace collapsed. The cheapest answer to "what does
-    /// this say".
     Text,
-    /// The document's own HTML. An escape hatch for what the readers above do
-    /// not carry, and megabytes where they are kilobytes.
     Raw,
 }
 
-/// Rendered text, scripts and styles removed.
-///
-/// Navigation stays: telling a site's chrome from its content is a heuristic,
-/// and a wrong one silently drops the page.
 const TEXT: &str = r#"
-  // The live tree, not a copy of it: `innerText` is what the page renders, and
-  // a detached clone has no layout — it falls back to every character in the
-  // document, including whatever is hidden. Scripts and styles are not
-  // rendered either, so nothing has to be stripped.
+  // The live tree: a detached clone has no layout, so innerText includes hidden text.
   const root = document.querySelector('main, article') || document.body;
   return (root ? root.innerText : '').replace(/\s+/g, ' ').trim();
 "#;
 
-/// The document as markdown.
-///
-/// A walk rather than a library: nothing may be fetched into the box to read a
-/// page, and the shapes worth keeping — headings, lists, tables, code, links —
-/// are few enough to name.
 const MARKDOWN: &str = r#"
   const skip = new Set(['SCRIPT','STYLE','NOSCRIPT','SVG','TEMPLATE','IFRAME','CANVAS']);
   const inline = t => t.replace(/\s+/g, ' ');
@@ -1331,9 +1244,6 @@ const MARKDOWN: &str = r#"
     if (node.nodeType !== 1 || skip.has(node.tagName)) return;
     if (node.getAttribute && node.getAttribute('aria-hidden') === 'true') return;
 
-    // What the page is not showing is not what it says: a wizard keeps its
-    // later steps in the document, and a reader that returns them describes a
-    // page nobody is looking at.
     const shown = getComputedStyle(node);
     if (shown.display === 'none' || shown.visibility === 'hidden') return;
 
@@ -1351,8 +1261,7 @@ const MARKDOWN: &str = r#"
         out.push('\n\n'); kids(); return;
       case 'UL': case 'OL': out.push('\n'); kids(); out.push('\n'); return;
       case 'LI': {
-        // Written after its content, so an item that renders to nothing
-        // leaves no bullet behind.
+        // The bullet is filled in afterwards so an empty item leaves none.
         const mark = out.length;
         out.push('');
         Array.from(node.childNodes).forEach(c => walk(c, depth + 1));
@@ -1362,8 +1271,6 @@ const MARKDOWN: &str = r#"
       }
       case 'A': {
         const href = node.getAttribute('href') || '';
-        // `innerText` is empty for anything not rendered — a collapsed menu,
-        // a hidden tab — and those links would come out as bare bullets.
         const words = inline(node.innerText || node.textContent || '').trim();
         if (!words) return;
         out.push(href.startsWith('http') ? '[' + words + '](' + href + ')' : words);
@@ -1389,12 +1296,6 @@ const MARKDOWN: &str = r#"
     }
   };
 
-  // `main` and `article` are not guesses: HTML defines them as the document's
-  // content, and a page that marks one has already said which part matters.
-  // Wikipedia otherwise spends a reader's whole budget on its language
-  // sidebar before the article begins. Nothing is dropped where neither
-  // exists — telling chrome from content without them is a real heuristic,
-  // and a wrong one loses the page.
   const root = document.querySelector('main, article') || document.body;
   if (root) walk(root, 0);
   return out.join('')
@@ -1404,17 +1305,11 @@ const MARKDOWN: &str = r#"
     .trim();
 "#;
 
-/// What a page is showing.
-///
-/// Text rather than a picture of text, and links with the addresses behind
-/// them: a frame says where to click, and this says what it says.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageText {
     pub url: String,
     pub title: String,
-    /// Rendered text, whitespace collapsed and cut at the caller's limit.
     pub text: String,
-    /// Whether the cut lost anything.
     pub truncated: bool,
     pub links: Vec<Link>,
 }
@@ -1430,74 +1325,75 @@ impl Page {
         &self.target
     }
 
-    /// Any method in the protocol, and whatever it answers.
-    ///
-    /// Events arriving meanwhile are queued rather than returned.
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
         self.connection.call(method, params).await
     }
 
-    /// How many events were dropped because the queue was full.
-    ///
-    /// The oldest go first, so a caller can tell nothing happened from not
-    /// having listened.
     pub fn dropped_events(&self) -> usize {
         self.connection.dropped
     }
 
-    /// Everything the browser reported that nobody asked for, oldest first.
     pub fn take_events(&mut self) -> Vec<Event> {
         self.connection.dropped = 0;
         self.connection.events.drain(..).collect()
     }
 
-    /// Wait for one event, keeping everything else that arrives meanwhile.
     pub async fn next_event(&mut self, method: &str, within: Duration) -> Result<Event> {
         self.connection.next_event(method, within).await
     }
 
-    /// Go to a URL, whatever the address bar happens to show.
     pub async fn navigate(&mut self, url: &str) -> Result<()> {
         self.call("Page.enable", json!({})).await?;
         let answer = self.call("Page.navigate", json!({ "url": url })).await?;
 
-        // A navigation the browser refused answers with an error text rather
-        // than a failure, and treating that as success leaves the caller
-        // looking at the previous page believing it is the new one.
+        // A refused navigation answers with `errorText`, not an error.
         match answer.get("errorText").and_then(Value::as_str) {
             Some(error) => Err(Error::denied(format!("{url}: {error}"))),
             None => Ok(()),
         }
     }
 
-    /// Put this page in front, so screen coordinates address it.
-    ///
-    /// The desktop API points at pixels rather than pages: a click goes to
-    /// whichever tab is frontmost.
     pub async fn bring_to_front(&mut self) -> Result<()> {
         self.call("Page.bringToFront", json!({})).await.map(|_| ())
     }
 
-    /// Whether this page is the one on screen.
-    ///
-    /// Asked of the page rather than worked out from the order tabs are listed
-    /// in.
     pub async fn visible(&mut self) -> Result<bool> {
         Ok(self.evaluate("document.visibilityState").await? == "visible")
     }
 
-    /// Run JavaScript in the page, and bring the value back.
     pub async fn evaluate(&mut self, javascript: &str) -> Result<Value> {
-        let answer = self
-            .call(
-                "Runtime.evaluate",
-                json!({
-                    "expression": javascript,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                }),
-            )
-            .await?;
+        self.evaluate_within(javascript, None).await
+    }
+
+    pub async fn evaluate_within(
+        &mut self,
+        javascript: &str,
+        within: Option<Duration>,
+    ) -> Result<Value> {
+        let mut params = json!({
+            "expression": javascript,
+            "returnByValue": true,
+            "awaitPromise": true,
+        });
+
+        let Some(within) = within else {
+            return self.evaluated(params).await;
+        };
+
+        // The protocol's timeout bounds only synchronous work; the wall clock bounds the rest.
+        params["timeout"] = json!(within.as_millis() as u64);
+
+        match tokio::time::timeout(within + GRACE, self.evaluated(params)).await {
+            Ok(answer) => answer,
+            Err(_) => Err(Error::Timeout {
+                after: within,
+                detail: "the expression was still running".to_string(),
+            }),
+        }
+    }
+
+    async fn evaluated(&mut self, params: Value) -> Result<Value> {
+        let answer = self.call("Runtime.evaluate", params).await?;
 
         if let Some(thrown) = answer.get("exceptionDetails") {
             return Err(Error::denied(format!("the page threw: {thrown}")));
@@ -1509,15 +1405,6 @@ impl Page {
             .unwrap_or(Value::Null))
     }
 
-    /// What this page is showing.
-    ///
-    /// Read in the page rather than over the wire: a document is megabytes of
-    /// markup, and what a reader wants is what it renders.
-    ///
-    /// `limit` and `max_links` default when they are `None`. A caller deciding
-    /// whether a page is worth reading asks for a few hundred characters
-    /// rather than paying for all of it; one that wants the whole thing says
-    /// so.
     pub async fn read(
         &mut self,
         format: Reading,
@@ -1528,14 +1415,8 @@ impl Page {
         let links = max_links.unwrap_or(LINKS_DEFAULT);
 
         let body = match format {
-            // Structure survives: a heading stays a heading, a list stays a
-            // list, and a link keeps its address beside its words rather than
-            // in a separate list nothing can place back in context.
             Reading::Markdown => MARKDOWN,
             Reading::Text => TEXT,
-            // The document as it came. An escape hatch for what the reader
-            // above did not carry — a `meta` tag, embedded JSON-LD — and
-            // costly enough that it is nobody's default.
             Reading::Raw => "return document.documentElement.outerHTML;",
         };
 
@@ -1567,17 +1448,11 @@ impl Page {
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
-    /// Close it.
-    ///
-    /// Whoever opened a page closes it. Nothing does so on drop, because a
-    /// close is a round trip and a drop cannot wait for one — so a program
-    /// that opens a page per step and never says this leaves the browser
-    /// holding every one of them.
+    /// Not done on drop: a close is a round trip that a drop cannot wait for.
     pub async fn close(&mut self) -> Result<()> {
         self.call("Page.close", json!({})).await.map(|_| ())
     }
 
-    /// The current URL, asked of the page rather than read off a screenshot.
     pub async fn url(&mut self) -> Result<String> {
         Ok(self
             .evaluate("location.href")
@@ -1614,14 +1489,23 @@ impl Page {
         }
     }
 
-    /// A capture from the browser rather than from the screen.
-    ///
-    /// The page as it renders: no window frame, no address bar, no pointer, and
-    /// the same on a box with no display.
     pub async fn screenshot(&mut self) -> Result<Vec<u8>> {
-        let answer = self
-            .call("Page.captureScreenshot", json!({ "format": "png" }))
-            .await?;
+        self.capture(&PageShot::default()).await
+    }
+
+    pub async fn capture(&mut self, shot: &PageShot) -> Result<Vec<u8>> {
+        let mut params = json!({ "format": shot.format.name() });
+
+        if let Some(map) = params.as_object_mut() {
+            if shot.format == Picture::Jpeg {
+                map.insert("quality".to_string(), json!(shot.quality));
+            }
+            if shot.full {
+                map.insert("captureBeyondViewport".to_string(), json!(true));
+            }
+        }
+
+        let answer = self.call("Page.captureScreenshot", params).await?;
 
         let encoded = answer
             .get("data")
@@ -1631,17 +1515,20 @@ impl Page {
         base64_decode(encoded).ok_or_else(|| Error::denied("the capture is not valid base64"))
     }
 
-    /// A click in the page's own coordinates, where `0,0` is the top left of the
-    /// viewport.
-    ///
-    /// A right click opens the page's own context menu, not the browser's: a
-    /// menu the window manager draws is outside the page and no screenshot of
-    /// the viewport holds it.
     pub async fn click(&mut self, at: Point, button: Button) -> Result<()> {
+        self.press(at, button, 1).await
+    }
+
+    /// Presses counting 1 then 2: anything else miscounts or raises no `dblclick`.
+    pub async fn double_click(&mut self, at: Point, button: Button) -> Result<()> {
+        self.press(at, button, 1).await?;
+        self.press(at, button, 2).await
+    }
+
+    async fn press(&mut self, at: Point, button: Button, count: u32) -> Result<()> {
         let (name, mask) = button_parts(button);
 
-        // The protocol does not derive `buttons` from `button`, and a page
-        // that reads `event.buttons` to tell which one is down sees none.
+        // The protocol does not derive `buttons` from `button`.
         for (kind, buttons) in [("mousePressed", mask), ("mouseReleased", 0)] {
             self.call(
                 "Input.dispatchMouseEvent",
@@ -1651,7 +1538,7 @@ impl Page {
                     "y": at.y,
                     "button": name,
                     "buttons": buttons,
-                    "clickCount": 1,
+                    "clickCount": count,
                 }),
             )
             .await?;
@@ -1659,20 +1546,6 @@ impl Page {
         Ok(())
     }
 
-    /// Elements matching `query`, best match first.
-    ///
-    /// Exact words beat a substring, and something clickable beats a `div`
-    /// that happens to contain them.
-    ///
-    /// `scroll` brings the best match into view before anything is measured.
-    /// Without it a match below the fold is described where it sits in a
-    /// document the window is not showing, and its coordinates address
-    /// nothing.
-    ///
-    /// A CSS selector where the query is one, and visible text otherwise: an
-    /// agent knows a button says "Sign in" and rarely knows its class.
-    /// `exact` matches the whole of an element's words rather than any part of
-    /// them, for a caller that knows the label it is looking for.
     pub async fn find(
         &mut self,
         query: &str,
@@ -1684,10 +1557,6 @@ impl Page {
             .evaluate(&format!(
                 r#"(() => {{
                      const found = ({MATCH})({}, {exact}).slice(0, {});
-                     // Scrolled before it is measured, not after: a coordinate
-                     // is the viewport's, so one taken for an element below
-                     // the fold points past the bottom of the window and a
-                     // click on it lands nowhere.
                      if ({scroll} && found[0]) {{
                        found[0].scrollIntoView({{ block: 'center', inline: 'center' }});
                      }}
@@ -1705,15 +1574,6 @@ impl Page {
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
-    /// Move the page, or one scrollable thing on it.
-    ///
-    /// The desktop's own scroll sends wheel clicks at a screen point, so it
-    /// needs a coordinate and moves whatever sits under the pointer. This
-    /// moves the page itself, in pixels.
-    ///
-    /// Answers with where it ended up, which is how a caller tells that it
-    /// arrived: a page that loads more as you reach the bottom returns the
-    /// same position twice when there is no more to load.
     pub async fn scroll(&mut self, what: Option<&str>, how: Scroll) -> Result<(i32, i32)> {
         let target = match what {
             Some(query) => format!("({MATCH})({}, false).find(Boolean)", json!(query)),
@@ -1743,14 +1603,6 @@ impl Page {
         Ok(moved)
     }
 
-    /// Wait until something matching `query` is on the page.
-    ///
-    /// The alternative is a sleep, which is either short enough to act too
-    /// early or long enough to be paid on every step. A page that answers a
-    /// click by fetching says nothing when it starts and everything when the
-    /// result appears.
-    ///
-    /// `gone` waits for the opposite — a spinner leaving, a dialog closing.
     pub async fn wait_for(
         &mut self,
         query: &str,
@@ -1762,11 +1614,6 @@ impl Page {
             .map(|(_, found)| found)
     }
 
-    /// [`Self::wait_for`], stopping for any of `or` as well.
-    ///
-    /// Answers with which query matched, so a caller waiting for a price or
-    /// for "sold out" knows which arrived. Waiting out a full timeout for
-    /// something a failure has already ruled out is how the time goes.
     pub async fn wait_for_any(
         &mut self,
         query: &str,
@@ -1787,9 +1634,6 @@ impl Page {
                 _ => {}
             }
 
-            // Only ever an arrival: a caller waiting for one thing to go and
-            // another to appear is waiting for two different shapes, and would
-            // not be able to tell which answer it had.
             for other in or {
                 if let Some(one) = self
                     .find(other, Some(1), None, Some(exact))
@@ -1820,10 +1664,6 @@ impl Page {
         }
     }
 
-    /// Back through this page's own history.
-    ///
-    /// Not the same as opening the previous URL again: that discards whatever
-    /// the page had put in it, and a form half filled in comes back empty.
     pub async fn back(&mut self) -> Result<()> {
         self.step_history(-1).await
     }
@@ -1867,10 +1707,6 @@ impl Page {
             .map(|_| ())
     }
 
-    /// Put the pointer over something without pressing anything.
-    ///
-    /// A menu that opens on hover has no click to send: the thing worth
-    /// clicking does not exist until the pointer arrives.
     pub async fn hover(&mut self, query: &str) -> Result<Element> {
         let (element, at) = self.reachable(query).await?;
 
@@ -1887,21 +1723,18 @@ impl Page {
         Ok(element)
     }
 
-    /// Bring one into view and click its middle.
-    ///
-    /// Its own coordinates rather than a caller's: a point worked out from a
-    /// screenshot is stale the moment the page moves under it, and a click
-    /// against a stale point lands on whatever took that place.
     pub async fn click_on(&mut self, query: &str, button: Button) -> Result<Element> {
         let (element, at) = self.reachable(query).await?;
         self.click(at, button).await?;
         Ok(element)
     }
 
-    /// Put `text` in a field, as typing rather than as an assignment.
-    ///
-    /// A page watching for keystrokes — a search box filtering as you type, a
-    /// form validating a field — sees nothing when a value is only assigned.
+    pub async fn double_click_on(&mut self, query: &str, button: Button) -> Result<Element> {
+        let (element, at) = self.reachable(query).await?;
+        self.double_click(at, button).await?;
+        Ok(element)
+    }
+
     pub async fn fill(&mut self, query: &str, text: &str) -> Result<()> {
         let (_, at) = self.reachable(query).await?;
         self.click(at, Button::Left).await?;
@@ -1915,7 +1748,6 @@ impl Page {
         self.type_text(text).await
     }
 
-    /// What a dropdown offers.
     pub async fn options(&mut self, query: &str) -> Result<Vec<String>> {
         let listed = self
             .evaluate(&format!(
@@ -1928,11 +1760,6 @@ impl Page {
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
-    /// Choose one of them, by its visible words.
-    ///
-    /// Through the element rather than through the screen: a native dropdown
-    /// opens a menu the compositor owns, which a screenshot does not show and
-    /// a click cannot reach.
     pub async fn choose(&mut self, query: &str, option: &str) -> Result<()> {
         let chose = self
             .evaluate(&format!(
@@ -1963,11 +1790,7 @@ impl Page {
         }
     }
 
-    /// Hand files to a file input.
-    ///
-    /// The paths are the box's own. A file chooser is the operating system's
-    /// window, not the page's, so nothing on screen can be clicked to fill one
-    /// in — this sets the input directly.
+    /// Paths are inside the box.
     pub async fn upload(&mut self, query: &str, paths: &[String]) -> Result<()> {
         let handle = self
             .call(
@@ -1996,11 +1819,6 @@ impl Page {
         .map(|_| ())
     }
 
-    /// The first match, brought into view.
-    /// [`Self::reach`], and where to press it.
-    ///
-    /// Scrolling is what usually puts a coordinate there, and a thing it
-    /// cannot reach — fixed off-screen, or collapsed to nothing — has none.
     async fn reachable(&mut self, query: &str) -> Result<(Element, Point)> {
         let element = self.reach(query).await?;
 
@@ -2037,7 +1855,6 @@ impl Page {
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
-    /// Type text into whatever the page has focused.
     pub async fn type_text(&mut self, text: &str) -> Result<()> {
         for character in text.chars() {
             self.call("Input.insertText", json!({ "text": character.to_string() }))
@@ -2058,7 +1875,6 @@ struct HttpAnswer {
     body: String,
 }
 
-/// Enough HTTP to talk to a debugger on loopback.
 async fn read_http(socket: &mut TcpStream) -> Result<HttpAnswer> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
@@ -2070,8 +1886,6 @@ async fn read_http(socket: &mut TcpStream) -> Result<HttpAnswer> {
             Ok(Err(error)) => return Err(Error::transport(error.to_string(), true)),
         }
 
-        // `Connection: close` means end of file marks the end of the body, but
-        // a body that already arrived whole should not wait for the close.
         if let Some(answer) = parse_http(&raw) {
             if answer.complete {
                 return Ok(HttpAnswer {
@@ -2121,10 +1935,7 @@ fn parse_http(raw: &[u8]) -> Option<ParsedHttp> {
     })
 }
 
-/// The websocket upgrade.
-///
-/// The accept header is not checked: this is a debugger on loopback that we
-/// opened, and a wrong answer shows up as a frame that will not parse.
+/// Does not check `Sec-WebSocket-Accept`: loopback only, and a bad answer fails to parse.
 async fn handshake(host: &str, port: u16, path: &str) -> Result<TcpStream> {
     let mut socket = connect(host, port).await?;
 
@@ -2142,8 +1953,7 @@ async fn handshake(host: &str, port: u16, path: &str) -> Result<TcpStream> {
         .await
         .map_err(|error| Error::transport(error.to_string(), true))?;
 
-    // Read exactly the head, and not a byte more: whatever follows the blank
-    // line is the first frame, and swallowing it here would lose it.
+    // Byte by byte: anything past the head is the first frame.
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
     while !head.ends_with(b"\r\n\r\n") {
@@ -2177,10 +1987,9 @@ async fn send_close(socket: &mut TcpStream) -> Result<()> {
         .map_err(|error| Error::transport(error.to_string(), true))
 }
 
-/// A client frame, which the protocol requires to be masked.
 async fn send_text(socket: &mut TcpStream, text: &str) -> Result<()> {
     let payload = text.as_bytes();
-    let mut frame = vec![0x81u8]; // FIN, text
+    let mut frame = vec![0x81u8];
 
     let mask_bit = 0x80;
     match payload.len() {
@@ -2210,7 +2019,6 @@ async fn send_text(socket: &mut TcpStream, text: &str) -> Result<()> {
         .map_err(|error| Error::transport(error.to_string(), true))
 }
 
-/// The next text message, answering pings and skipping anything else.
 async fn read_text(socket: &mut TcpStream) -> Result<String> {
     let mut assembled = Vec::new();
 
@@ -2252,7 +2060,6 @@ async fn read_text(socket: &mut TcpStream) -> Result<String> {
         }
 
         match opcode {
-            // Continuation, text, binary: all part of a message.
             0x0..=0x2 => {
                 assembled.extend_from_slice(&payload);
                 if final_frame {
@@ -2260,7 +2067,6 @@ async fn read_text(socket: &mut TcpStream) -> Result<String> {
                         .map_err(|error| Error::transport(error.to_string(), false));
                 }
             }
-            // A ping, which has to be answered to keep the connection open.
             0x9 => {
                 let mut pong = vec![0x8au8, 0x80 | payload.len() as u8];
                 let mask = nonce()[..4].to_vec();
@@ -2296,13 +2102,9 @@ async fn read_exact(socket: &mut TcpStream, into: &mut [u8]) -> Result<()> {
     }
 }
 
-/// Sixteen bytes nobody can predict from the last sixteen.
-///
-/// Not a cryptographic nonce: the mask exists so a proxy cannot be tricked
-/// into caching a frame, and this connection goes to loopback.
+/// Not cryptographic: the mask only guards proxies, and this is loopback.
 fn nonce() -> [u8; 16] {
-    // A counter as well as the clock: two calls in the same tick would
-    // otherwise mask two frames with the same key.
+    // The counter keeps two calls in one clock tick apart.
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     let mut seed = SystemTime::now()
@@ -2315,7 +2117,6 @@ fn nonce() -> [u8; 16] {
 
     let mut bytes = [0u8; 16];
     for byte in bytes.iter_mut() {
-        // xorshift64. Small, deterministic from the clock, and enough.
         seed ^= seed << 13;
         seed ^= seed >> 7;
         seed ^= seed << 17;
@@ -2389,7 +2190,6 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// A URL as a query string value.
 fn escape(url: &str) -> String {
     let mut out = String::with_capacity(url.len());
     for byte in url.bytes() {
@@ -2413,16 +2213,13 @@ fn escape(url: &str) -> String {
     out
 }
 
-/// What a page answers when its databases are read.
 #[derive(Deserialize)]
 struct IdbRead {
     databases: Vec<Database>,
-    /// What the page could not hand over, in its own words.
     #[serde(default)]
     skipped: Vec<String>,
 }
 
-/// Everything in one kind of web storage, as JSON.
 async fn read_items(page: &mut Page, which: &str) -> Option<BTreeMap<String, String>> {
     let read = page
         .evaluate(&format!(
@@ -2447,16 +2244,7 @@ async fn write_items(page: &mut Page, which: &str, items: &BTreeMap<String, Stri
     .ok();
 }
 
-/// Read every database an origin holds.
-///
-/// Through the page rather than the protocol: the debugger can read a database
-/// but has no way to write one, so a restore has to run here anyway — and a
-/// reader that took a different route would carry what the writer cannot put
-/// back.
-///
-/// Only what JSON holds. A value carrying a blob, a stream or a key that
-/// cannot be cloned is left behind and named, because a login that comes back
-/// short is worse when nothing says so.
+/// Through the page: the protocol can read IndexedDB but not write it.
 const IDB_EXPORT: &str = r#"(async () => {
   const skipped = [];
   const databases = [];
@@ -2471,7 +2259,6 @@ const IDB_EXPORT: &str = r#"(async () => {
         const r = indexedDB.open(name);
         r.onsuccess = () => ok(r.result);
         r.onerror = () => no(r.error);
-        // Something else holding it open at an older version blocks this.
         r.onblocked = () => no(new Error('blocked'));
       });
     } catch (e) {
@@ -2492,8 +2279,6 @@ const IDB_EXPORT: &str = r#"(async () => {
         const records = [];
         for (let i = 0; i < values.length; i++) {
           try {
-            // The round trip a restore will make, made here: a value that
-            // cannot survive it is found now rather than lost silently.
             JSON.stringify(values[i]);
             records.push([keys[i], values[i]]);
           } catch (e) {
@@ -2519,13 +2304,11 @@ const IDB_EXPORT: &str = r#"(async () => {
   return JSON.stringify({ databases, skipped });
 })()"#;
 
-/// Put them back, creating the stores an upgrade needs.
 const IDB_IMPORT: &str = r#"(async (databases) => {
   for (const wanted of databases) {
     const db = await new Promise((ok, no) => {
       const r = indexedDB.open(wanted.name, wanted.version);
-      // Stores can only be made here, which is why the version comes with the
-      // session: opening at a lower one would never reach this.
+      // Stores can only be created on upgrade, hence the saved version.
       r.onupgradeneeded = () => {
         for (const store of wanted.stores) {
           if (r.result.objectStoreNames.contains(store.name)) continue;
@@ -2545,8 +2328,7 @@ const IDB_IMPORT: &str = r#"(async (databases) => {
       const tx = db.transaction(store.name, 'readwrite');
       const os = tx.objectStore(store.name);
       for (const [key, value] of store.records) {
-        // A store with a key path keeps the key inside the value, and putting
-        // one alongside is an error rather than an override.
+        // Passing a key to a store with a key path is an error.
         os.keyPath === null ? os.put(value, key) : os.put(value);
       }
       await new Promise(ok => { tx.oncomplete = ok; tx.onerror = ok; tx.onabort = ok; });
@@ -2557,10 +2339,6 @@ const IDB_IMPORT: &str = r#"(async (databases) => {
   return 'ok';
 })"#;
 
-/// Whether a cookie domain belongs to an origin.
-///
-/// A leading dot means the domain and everything under it, which is how a
-/// cookie set for `.example.com` reaches `www.example.com`.
 fn covers(origin: &str, domain: &str) -> bool {
     let host = origin
         .split("//")
@@ -2569,9 +2347,7 @@ fn covers(origin: &str, domain: &str) -> bool {
         .split('/')
         .next()
         .unwrap_or_default()
-        // A cookie is scoped to a host, never to a port: one set on
-        // `127.0.0.1:8000` is sent to `127.0.0.1:9000` as well, and an origin
-        // compared with its port still attached matches nothing.
+        // Cookies are scoped to a host, never a port.
         .split(':')
         .next()
         .unwrap_or_default();
@@ -2590,8 +2366,7 @@ fn cookie_in(value: &Value) -> Option<Cookie> {
             .and_then(Value::as_str)
             .unwrap_or("/")
             .to_string(),
-        // -1 is the protocol's "when the browser closes", which is not a time
-        // and must not be written back as one.
+        // -1 means a session cookie, not a time.
         expires: value
             .get("expires")
             .and_then(Value::as_f64)
@@ -2642,17 +2417,12 @@ mod tests {
 
     #[test]
     fn test_a_port_is_not_part_of_a_cookies_home() {
-        // Every origin in the first tests was portless, which is why this was
-        // wrong for a while: a session on a development server exported
-        // nothing at all.
         assert!(covers("http://127.0.0.1:8000", "127.0.0.1"));
         assert!(covers("https://example.com:8443", "example.com"));
     }
 
     #[test]
     fn test_one_site_does_not_cover_another() {
-        // The failure this exists to prevent: a session for one site carrying
-        // another's cookies, which is an account handed to a stranger.
         assert!(!covers("https://example.com", "evil.com"));
         assert!(!covers("https://example.com", "notexample.com"));
         assert!(!covers("https://example.com.evil.com", "example.com"));
@@ -2689,8 +2459,6 @@ mod tests {
         let carry = Carry::default();
 
         assert!(carry.cookies && carry.local_storage);
-        // Both are asked for: one overrides what a site decided, the other is
-        // expensive and imperfect.
         assert!(!carry.session_storage && !carry.indexed_db);
     }
 
@@ -2722,8 +2490,6 @@ mod tests {
 
     #[test]
     fn test_a_session_cookie_is_not_given_a_time() {
-        // -1 is the protocol's "until the browser closes". Written back as a
-        // time it is 1969, and the cookie is expired on arrival.
         let cookie = cookie_in(&json!({
             "name": "s", "value": "v", "domain": "example.com", "path": "/", "expires": -1.0
         }))
@@ -2765,9 +2531,6 @@ mod tests {
 
     #[test]
     fn test_a_query_cannot_start_another_parameter() {
-        // The failure this exists to prevent: `&` unescaped turns the rest of
-        // the query into somebody else's parameter, and the search runs on
-        // half of what was asked for.
         let url = SearchProvider::Google.url_for("cats & dogs");
 
         assert!(url.ends_with("q=cats+%26+dogs"), "{url}");
@@ -2829,6 +2592,19 @@ mod tests {
         assert_eq!(base64_encode(b"Ma"), "TWE=");
         assert_eq!(base64_encode(b"M"), "TQ==");
         assert_eq!(base64_decode("TWFu").as_deref(), Some(&b"Man"[..]));
+    }
+
+    #[test]
+    fn test_a_listed_title_comes_back_as_the_page_wrote_it() {
+        assert_eq!(unescaped("M&#39;Diq"), "M'Diq");
+        assert_eq!(unescaped("Sea &amp; Spa"), "Sea & Spa");
+        assert_eq!(unescaped("&lt;b&gt; &quot;x&quot;"), "<b> \"x\"");
+        assert_eq!(
+            unescaped("R&D &unknown; &"),
+            "R&D &unknown; &",
+            "what is not one of the five it escapes is left alone"
+        );
+        assert_eq!(unescaped("plain"), "plain");
     }
 
     #[test]
@@ -2947,6 +2723,118 @@ mod tests {
     }
 
     #[test]
+    fn test_a_double_click_is_two_presses_and_the_second_counts_two() {
+        let source = include_str!("cdp.rs");
+        let method = source
+            .split("pub async fn double_click(")
+            .nth(1)
+            .expect("double_click is there");
+
+        assert!(method.contains("self.press(at, button, 1)"));
+        assert!(method.contains("self.press(at, button, 2)"));
+    }
+
+    #[test]
+    fn test_a_role_covers_every_way_a_page_builds_one() {
+        let button = selector_for("button").expect("button is known");
+
+        for way in ["button", "[role=button]", "input[type=submit]", "summary"] {
+            assert!(button.contains(way), "a button is also written {way}");
+        }
+
+        assert!(selector_for("link").expect("link").contains("a[href]"));
+        assert!(
+            selector_for("textbox")
+                .expect("textbox")
+                .contains("textarea"),
+            "a textbox is not only an input"
+        );
+    }
+
+    #[test]
+    fn test_a_role_nobody_serves_is_refused_and_the_rest_are_named() {
+        assert!(selector_for("gizmo").is_none());
+
+        for role in ROLES.split(',').map(str::trim) {
+            assert!(
+                selector_for(role).is_some(),
+                "{role} is offered but not served"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_a_deadline_is_bounded_by_the_clock_and_not_only_the_protocol() {
+        assert!(
+            GRACE < Duration::from_secs(1),
+            "the outer wait is the caller's answer, so it follows close behind"
+        );
+    }
+
+    #[test]
+    fn test_an_icon_button_is_found_by_what_its_icon_says() {
+        assert!(MATCH.contains("img[alt], area[alt], input[alt]"));
+        assert!(
+            MATCH.contains("svg > title, svg > desc"),
+            "an svg names itself in a child element, not an attribute"
+        );
+        assert!(
+            MATCH.contains("el.getAttribute('title') ||\n                       icon(el)"),
+            "and it is the last resort, after everything the element says itself"
+        );
+    }
+
+    #[test]
+    fn test_an_inert_element_is_not_called_enabled() {
+        assert!(
+            DESCRIBE.contains("aria('disabled') === 'true'"),
+            "a div says it is disabled through aria, not through a property"
+        );
+        assert!(
+            DESCRIBE.contains("enabled: !off"),
+            "and enabled follows that rather than the property alone"
+        );
+    }
+
+    #[test]
+    fn test_a_disclosure_that_is_shut_says_so() {
+        assert!(DESCRIBE.contains("states.push('collapsed')"));
+        assert!(
+            DESCRIBE.contains("aria('expanded') === 'false'"),
+            "collapsed is not the absence of expanded: one says there is a \
+             disclosure and it is shut, the other says there is none"
+        );
+    }
+
+    #[test]
+    fn test_a_role_is_read_and_never_inferred() {
+        assert!(DESCRIBE.contains("el.getAttribute('role')"));
+        assert!(!DESCRIBE.contains("'button' :"));
+    }
+
+    #[test]
+    fn test_states_come_back_as_words() {
+        let inert = r#"[{"text":"Next","tag":"div","role":"button",
+                         "states":["disabled","collapsed"],"visible":true,
+                         "width":10,"height":10,"enabled":false}]"#;
+        let found: Vec<Element> = serde_json::from_str(inert).expect("it parses");
+
+        assert_eq!(found[0].role.as_deref(), Some("button"));
+        assert_eq!(found[0].states, vec!["disabled", "collapsed"]);
+        assert!(!found[0].enabled);
+    }
+
+    #[test]
+    fn test_an_element_with_neither_still_parses() {
+        let plain = r#"[{"text":"Go","tag":"button","visible":true,
+                         "width":10,"height":10,"enabled":true}]"#;
+        let found: Vec<Element> = serde_json::from_str(plain).expect("it parses");
+
+        assert!(found[0].role.is_none());
+        assert!(found[0].states.is_empty());
+    }
+
+    #[test]
     fn test_a_selector_is_confirmed_before_it_is_handed_out() {
         assert!(
             SELECTOR.contains("querySelectorAll(q).length === 1"),
@@ -2987,8 +2875,6 @@ mod tests {
 
     #[test]
     fn test_a_substring_match_takes_the_innermost_of_them() {
-        // What used to hand back <body>: every ancestor's innerText holds its
-        // descendants', and document order puts the outermost first.
         assert!(
             MATCH.contains("el.contains(other)"),
             "an ancestor that matches only through a descendant is dropped"
@@ -3009,9 +2895,6 @@ mod tests {
 
     #[test]
     fn test_an_element_out_of_view_still_parses() {
-        // What a match above the fold used to send: `getBoundingClientRect`
-        // is the viewport's, so its middle is negative, and one such match
-        // used to fail the whole listing rather than itself.
         let above = r#"[{"text":"Top","tag":"a","at":null,"width":10,"height":10,"enabled":true}]"#;
         let found: Vec<Element> = serde_json::from_str(above).expect("it parses");
 
@@ -3034,8 +2917,6 @@ mod tests {
 
     #[test]
     fn test_a_coordinate_is_only_reported_from_inside_the_window() {
-        // The guard in DESCRIBE, which is what stops a negative one being
-        // written down at all.
         assert!(
             DESCRIBE.contains("x < innerWidth") && DESCRIBE.contains("y < innerHeight"),
             "a coordinate is measured against the window it was taken in"

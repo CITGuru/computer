@@ -1,23 +1,3 @@
-//! Boxes on a hypervisor.
-//!
-//! A microVM boots a kernel of its own, which is a stronger boundary than a
-//! namespace and a slower start. [`MicroVm`] implements [`Machine`], so the
-//! driver, the screens, the takeover gate and the descriptor above it are the
-//! same code a container uses.
-//!
-//! [`MicroVmApi`] is the seam: create, running, remove, exec, read, write, and
-//! whether an image is held. Who implements it lives in
-//! [`crate::sandboxes`]: a vendor has its own command, its own idea of an
-//! image and its own answers, and none of that belongs in the abstraction.
-//!
-//! Three things belong to this module. Free host ports are found before the
-//! machine is created, because a hypervisor forwards the pairs it is given.
-//! The screen is brought up with `computer-desktop --once`, because a machine
-//! lives until it is stopped. And the image has to be handed over:
-//! [`import_image`] loads one built by a container runtime, an OCI reference
-//! is pulled by the hypervisor itself, and [`export_rootfs`] flattens an image
-//! for a hypervisor that keeps no store.
-
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use crate::machine::{Machine, PortMap};
@@ -28,37 +8,24 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-/// What to create, decided before anything exists.
-///
-/// A plain value, so the mapping is testable with no hypervisor.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Plan {
     pub name: String,
-    /// An OCI reference the runtime can pull, or a root filesystem directory.
     pub image: String,
     pub cpus: Option<u8>,
-    /// Mebibytes, which is the unit hypervisor builders take.
     pub memory_mib: Option<u64>,
     pub network: bool,
     pub env: BTreeMap<String, String>,
-    /// Host port to guest port. Chosen here: a hypervisor forwards the pairs
-    /// it is given and has no "pick me a free one".
+    /// Chosen here: a hypervisor forwards the pairs it is given and picks none.
     pub ports: Vec<(u16, u16)>,
-    /// Take over a machine of this name left by a run that did not clean up,
-    /// rather than refusing and stranding it.
     pub replace: bool,
 }
 
-/// The one seam between this crate and a hypervisor.
 #[async_trait]
 pub trait MicroVmApi: Send + Sync {
-    /// Whether the runtime is installed and answering.
     async fn available(&self) -> Result<()>;
 
-    /// Whether the hypervisor already holds this image.
-    ///
-    /// Defaults to yes: most references are ones the runtime fetches itself, and
-    /// a wrong no would refuse a machine that would have started.
+    /// Defaults to yes: a wrong no would refuse a machine that would have started.
     async fn has_image(&self, _image: &str) -> Result<bool> {
         Ok(true)
     }
@@ -77,10 +44,7 @@ pub trait MicroVmApi: Send + Sync {
     async fn read(&self, name: &str, path: &str) -> Result<Vec<u8>>;
     async fn write(&self, name: &str, path: &str, bytes: &[u8]) -> Result<()>;
 
-    /// Move a whole file in without carrying it through this process.
-    ///
-    /// The default reads it into memory first. A runtime that copies disk to
-    /// disk should override this.
+    /// The default reads the file into memory; override where the runtime copies disk to disk.
     async fn copy_in(&self, name: &str, from: &Path, to: &str) -> Result<()> {
         let bytes = tokio::fs::read(from)
             .await
@@ -95,22 +59,17 @@ pub trait MicroVmApi: Send + Sync {
             .map_err(|error| Error::denied(format!("{}: {error}", to.display())))
     }
 
-    /// What the machine has said. Empty where the runtime keeps no log.
     async fn logs(&self, _name: &str) -> Result<String> {
         Ok(String::new())
     }
 }
 
-/// A free port on this host, or none.
-///
-/// Bound and released, so there is a gap before the hypervisor takes it. A
-/// collision shows up as a machine that will not start.
+/// Bound and released, so another process can take it before the hypervisor does.
 pub fn free_port() -> Option<u16> {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
     listener.local_addr().ok().map(|address| address.port())
 }
 
-/// Everything the box needs published, as host-to-guest pairs.
 pub fn port_pairs(guests: &[u16], pick: impl Fn() -> Option<u16>) -> Vec<(u16, u16)> {
     guests
         .iter()
@@ -118,12 +77,9 @@ pub fn port_pairs(guests: &[u16], pick: impl Fn() -> Option<u16>) -> Vec<(u16, u
         .collect()
 }
 
-/// What a desktop needs when the caller names no ceiling.
-///
 /// microsandbox gives 512 MiB by default, in which chromium dies.
 pub const DESKTOP_MEMORY_MIB: u64 = 2048;
 
-/// How long to wait for a guest to find its way out before starting a browser.
 pub const NETWORK_WAIT: Duration = Duration::from_secs(15);
 
 pub fn plan_for(name: &str, config: &Config, ports: Vec<(u16, u16)>) -> Plan {
@@ -143,7 +99,6 @@ pub fn plan_for(name: &str, config: &Config, ports: Vec<(u16, u16)>) -> Plan {
     }
 }
 
-/// `"2g"`, `"512m"`, `"1073741824"` as mebibytes, rounded up.
 pub fn mebibytes(limit: &str) -> Option<u64> {
     let limit = limit.trim().to_ascii_lowercase();
     let (digits, scale) = match limit.chars().last()? {
@@ -168,20 +123,15 @@ pub fn mebibytes(limit: &str) -> Option<u64> {
     digits.parse::<u64>().ok().map(|value| value * scale)
 }
 
-/// Boxes on a hypervisor.
 pub struct MicroVm {
     api: Arc<dyn MicroVmApi>,
     runtime: String,
-    /// What was published, per machine. The hypervisor was told these pairs,
-    /// so this side already knows them and does not ask for them back.
     published: Mutex<BTreeMap<String, PortMap>>,
     started_with: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
     reaper: Option<(String, Vec<String>)>,
 }
 
 impl MicroVm {
-    /// Make the directory a write is about to land in, so `upload` and
-    /// `write_file` agree about the same path.
     async fn ensure_parent(&self, name: &str, path: &Path) {
         if let Some(parent) = path.parent() {
             let _ = self
@@ -205,10 +155,7 @@ impl MicroVm {
         self
     }
 
-    /// A command that removes a machine with no async runtime in the room.
-    ///
-    /// `{}` in an argument becomes the machine's name. Without one, a dropped
-    /// handle leaves the machine running.
+    /// `{}` in an argument becomes the machine's name.
     pub fn reaping_with<I, S>(mut self, program: impl Into<String>, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -246,10 +193,6 @@ impl MicroVm {
         self.api.exec(name, argv, &BTreeMap::new()).await
     }
 
-    /// Wait until the guest has a route out, or give up quietly.
-    ///
-    /// A machine with no network is still a usable desktop; the wait is so the
-    /// browser does not start into a network about to change under it.
     async fn wait_for_network(&self, name: &str) {
         let deadline = SystemTime::now() + NETWORK_WAIT;
 
@@ -281,7 +224,6 @@ impl Machine for MicroVm {
     async fn ensure_image(&self, config: &Config) -> Result<()> {
         let image = config.image.as_str();
 
-        // A directory is a root filesystem, and it has to be there already.
         let path = Path::new(image);
         if image.starts_with('.') || image.starts_with('/') {
             return match tokio::fs::metadata(path).await {
@@ -293,9 +235,7 @@ impl Machine for MicroVm {
             };
         }
 
-        // A container runtime keeps its images where a hypervisor cannot
-        // read them, so this refuses before booting rather than failing later
-        // as "no such image".
+        // A hypervisor cannot read a container runtime's images; refuse before booting.
         if (config.bundle.is_some() || config.image_dir.is_some())
             && !self.api.has_image(image).await?
         {
@@ -309,7 +249,6 @@ impl Machine for MicroVm {
             });
         }
 
-        // Anything else is a reference the hypervisor pulls for itself.
         Ok(())
     }
 
@@ -318,15 +257,11 @@ impl Machine for MicroVm {
         self.api.create(&plan).await?;
         self.remember(name, &plan);
 
-        // The network first, then the browser. A machine's interface comes up
-        // after the machine does, and chromium started before it answers the
-        // first navigation with ERR_NETWORK_CHANGED.
+        // chromium started before the interface is up fails with ERR_NETWORK_CHANGED.
         if config.network {
             self.wait_for_network(name).await;
         }
 
-        // A machine does not run its image's command, so an empty boot command
-        // here is a box that starts with no screen in it.
         if config.boot.is_empty() {
             let _ = self.api.remove(name).await;
             return Err(Error::Unsupported {
@@ -359,8 +294,6 @@ impl Machine for MicroVm {
     }
 
     async fn env(&self, name: &str) -> BTreeMap<String, String> {
-        // What this process asked for. A machine somebody else started
-        // answers with nothing, and the descriptor falls back to the image.
         self.started_with
             .lock()
             .ok()
@@ -405,7 +338,7 @@ impl Machine for MicroVm {
         self.api.logs(name).await
     }
 
-    async fn stop(&self, name: &str) -> Result<()> {
+    async fn remove(&self, name: &str) -> Result<()> {
         self.api.remove(name).await
     }
 
@@ -420,11 +353,6 @@ impl Machine for MicroVm {
     }
 }
 
-/// Turn a built container image into a root filesystem a hypervisor can boot.
-///
-/// For a hypervisor with no image store of its own; where there is one,
-/// [`import_image`] hands the image over whole. Needs the container runtime
-/// and `tar`, and about a gigabyte of disk.
 pub async fn export_rootfs(
     cli: &dyn ContainerCli,
     image: &str,
@@ -453,8 +381,6 @@ pub async fn export_rootfs(
         });
     }
 
-    // `--output` rather than standard output: the filesystem is hundreds of
-    // megabytes.
     let exported = cli
         .run(&[
             "export".to_string(),
@@ -495,11 +421,6 @@ pub async fn export_rootfs(
     Ok(into)
 }
 
-/// Hand a locally built container image to a hypervisor that keeps its own
-/// image store.
-///
-/// `docker save` writes a tar archive and the hypervisor's loader reads it.
-/// About a gigabyte moves through the disk, so do this once per image.
 pub async fn import_image(
     cli: &dyn ContainerCli,
     loader: &dyn ImageLoader,
@@ -531,7 +452,6 @@ pub async fn import_image(
     outcome
 }
 
-/// A hypervisor that can be handed an image archive.
 #[async_trait]
 pub trait ImageLoader: Send + Sync {
     async fn load(&self, archive: &Path, tag: &str) -> Result<()>;

@@ -1,9 +1,3 @@
-//! Talking to a `computer-server`.
-//!
-//! Every endpoint is here, because REST being the complete surface is the
-//! promise the server makes — a client that had to reach past it for one verb
-//! would mean the promise was not kept.
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::*;
@@ -12,20 +6,15 @@ use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The server understood and refused, and said why.
     #[error("{}: {}", .0.code.as_str(), .0.message)]
     Refused(ErrorBody),
-    /// Never reached it, or it never finished.
     #[error("transport: {0}")]
     Transport(String),
-    /// It answered something this client cannot read, which is a version skew
-    /// rather than a refusal.
     #[error("{status} answered with {body}")]
     Unreadable { status: u16, body: String },
 }
 
 impl Error {
-    /// Whether sending it again could work.
     pub fn retryable(&self) -> bool {
         match self {
             Self::Refused(body) => body.retryable,
@@ -44,9 +33,6 @@ pub struct Client {
 }
 
 impl Client {
-    /// `http://127.0.0.1:8080`, with or without a trailing slash.
-    /// Which server this talks to, for a caller that resolved one rather than
-    /// naming it and has to say which it found.
     pub fn base(&self) -> &str {
         &self.base
     }
@@ -64,8 +50,6 @@ impl Client {
         self
     }
 
-    /// Checks what answered, not merely that something did: a client that
-    /// guesses a port has to tell this apart from whatever else is on it.
     pub async fn health(&self) -> Result<()> {
         let health: Health = self
             .send(reqwest::Method::GET, "/v1/health", None, &[])
@@ -108,8 +92,37 @@ impl Client {
             .await
     }
 
-    /// Takes the confirmation header for you: the caller reached for a method
-    /// called `delete`, which is the confirmation the header exists to get.
+    pub async fn stop(&self, id: &str) -> Result<BoxView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/stop"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn pause(&self, id: &str) -> Result<BoxView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/pause"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    /// A stopped box starts on new ports, so read the URLs from the answer.
+    pub async fn resume(&self, id: &str) -> Result<BoxView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/resume"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     pub async fn delete(&self, id: &str) -> Result<()> {
         self.nothing(
             reqwest::Method::DELETE,
@@ -136,13 +149,13 @@ impl Client {
         .await
     }
 
-    /// What the page in front is showing, as text.
     pub async fn page(
         &self,
         id: &str,
         format: Reading,
         limit: Option<usize>,
         max_links: Option<usize>,
+        tab: Option<&str>,
     ) -> Result<PageText> {
         let format = match format {
             Reading::Markdown => "markdown",
@@ -150,6 +163,9 @@ impl Client {
             Reading::Raw => "raw",
         };
         let mut path = format!("/v1/boxes/{id}/page?format={format}");
+        if let Some(tab) = tab {
+            path.push_str(&format!("&tab={}", query_value(tab)));
+        }
         if let Some(limit) = limit {
             path.push_str(&format!("&limit={limit}"));
         }
@@ -160,33 +176,24 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// What on the page matches, best first.
-    pub async fn find(
-        &self,
-        id: &str,
-        query: &str,
-        limit: Option<usize>,
-        scroll: Option<bool>,
-        exact: Option<bool>,
-    ) -> Result<Vec<Element>> {
-        let mut path = format!("/v1/boxes/{id}/page/find?q={}", query_value(query));
-        if let Some(limit) = limit {
-            path.push_str(&format!("&limit={limit}"));
-        }
-        if let Some(scroll) = scroll {
-            path.push_str(&format!("&scroll={scroll}"));
-        }
-        if let Some(exact) = exact {
-            path.push_str(&format!("&exact={exact}"));
+    pub async fn find(&self, id: &str, what: &Find) -> Result<Vec<Element>> {
+        let mut path = format!("/v1/boxes/{id}/page/find?q={}", query_value(&what.query));
+
+        for (name, given) in [
+            ("limit", what.limit.map(|n| n.to_string())),
+            ("scroll", what.scroll.map(|on| on.to_string())),
+            ("exact", what.exact.map(|on| on.to_string())),
+            ("role", what.role.clone()),
+            ("tab", what.tab.clone()),
+        ] {
+            if let Some(given) = given {
+                path.push_str(&format!("&{name}={}", query_value(&given)));
+            }
         }
 
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// `settle_ms` is how long the page is given to stop moving before the URL
-    /// it ended on is read. Zero measures immediately.
-    ///
-    /// `tab` names which page, or the one on screen where it names none.
     pub async fn on_element(
         &self,
         id: &str,
@@ -208,7 +215,36 @@ impl Client {
         .await
     }
 
-    /// Every page this box has open, and which of them is on screen.
+    pub async fn on_node(&self, id: &str, screen: u32, what: &OnNode) -> Result<NodeResult> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/screens/{screen}/desktop/node"),
+            Some(serde_json::to_value(what).map_err(|error| Error::Transport(error.to_string()))?),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn evaluate(
+        &self,
+        id: &str,
+        what: &Evaluate,
+        tab: Option<&str>,
+    ) -> Result<Evaluated> {
+        let query = match tab {
+            Some(tab) => vec![("tab", tab.to_string())],
+            None => Vec::new(),
+        };
+
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/page/evaluate"),
+            Some(serde_json::to_value(what).map_err(|error| Error::Transport(error.to_string()))?),
+            &query,
+        )
+        .await
+    }
+
     pub async fn tabs(&self, id: &str) -> Result<Vec<Tab>> {
         self.send(
             reqwest::Method::GET,
@@ -219,7 +255,6 @@ impl Client {
         .await
     }
 
-    /// Bring one to the front.
     pub async fn focus_tab(&self, id: &str, tab: &str) -> Result<()> {
         self.nothing(
             reqwest::Method::POST,
@@ -240,7 +275,6 @@ impl Client {
         .await
     }
 
-    /// The app names this server can open.
     pub async fn catalog(&self) -> Result<Vec<String>> {
         let apps: std::collections::BTreeMap<String, serde_json::Value> = self
             .send(reqwest::Method::GET, "/v1/catalog", None, &[])
@@ -249,7 +283,6 @@ impl Client {
         Ok(apps.into_keys().collect())
     }
 
-    /// What is on a screen, whoever opened it.
     pub async fn windows(&self, id: &str, screen: u32) -> Result<Vec<Window>> {
         self.send(
             reqwest::Method::GET,
@@ -336,7 +369,6 @@ impl Client {
         .await
     }
 
-    /// One action and a look, which is most of what an agent ever asks for.
     pub async fn act_once(&self, id: &str, screen: u32, action: Action) -> Result<BatchResult> {
         self.act(
             id,
@@ -355,8 +387,6 @@ impl Client {
         self.capture(id, screen, &Shot::default(), have).await
     }
 
-    /// A `Shot` naming nothing is the whole screen at full size, which is what
-    /// `frame` asks for.
     pub async fn capture(
         &self,
         id: &str,
@@ -381,6 +411,12 @@ impl Client {
         if let Some(scale) = shot.scale {
             asked.push(format!("scale={scale}"));
         }
+        if shot.pointer {
+            asked.push("pointer=true".to_string());
+        }
+        if let Some(tab) = &shot.tab {
+            asked.push(format!("tab={}", query_value(tab)));
+        }
 
         let path = match asked.is_empty() {
             true => format!("/v1/boxes/{id}/screens/{screen}/frame"),
@@ -388,6 +424,21 @@ impl Client {
         };
 
         self.send(reqwest::Method::GET, &path, None, &[]).await
+    }
+
+    pub async fn page_screenshot(&self, id: &str, shot: &PageShot) -> Result<Captured> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/page/screenshot"),
+            Some(serde_json::json!({
+                "full": shot.full,
+                "format": shot.format,
+                "quality": shot.quality,
+                "tab": shot.tab,
+            })),
+            &[],
+        )
+        .await
     }
 
     pub async fn cursor(&self, id: &str, screen: u32) -> Result<Point> {
@@ -455,6 +506,41 @@ impl Client {
         self.send(
             reqwest::Method::GET,
             &format!("/v1/boxes/{id}/screens/{screen}/viewers"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn recording(&self, id: &str, screen: u32) -> Result<RecordingView> {
+        self.send(
+            reqwest::Method::GET,
+            &format!("/v1/boxes/{id}/screens/{screen}/recording"),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn start_recording(
+        &self,
+        id: &str,
+        screen: u32,
+        fps: Option<u32>,
+    ) -> Result<RecordingView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/screens/{screen}/recording"),
+            Some(serde_json::json!({ "fps": fps })),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn stop_recording(&self, id: &str, screen: u32) -> Result<RecordingView> {
+        self.send(
+            reqwest::Method::DELETE,
+            &format!("/v1/boxes/{id}/screens/{screen}/recording"),
             None,
             &[],
         )
@@ -535,7 +621,6 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
-    /// A frame out of a trace, as the PNG itself.
     pub async fn trace_frame(&self, id: &str, hash: &str) -> Result<Vec<u8>> {
         let response = self
             .request(
@@ -629,19 +714,15 @@ impl Client {
     }
 }
 
-/// The picture out of a frame, where one came. `None` where the caller already
-/// held it.
-///
-/// A free function rather than a method: `Frame` belongs to `computer-api`.
+/// `None` where the caller already held the frame.
 pub fn frame_png(frame: &Frame) -> Result<Option<Vec<u8>>> {
     frame.png_base64.as_deref().map(decode).transpose()
 }
 
-/// Percent-encodes one query value.
-///
-/// A path is the caller's, and `&`, `#` or `?` in one ends the value early:
-/// the request then names a different file and the wrong bytes come back as a
-/// success.
+pub fn captured_image(taken: &Captured) -> Result<Vec<u8>> {
+    decode(&taken.image_base64)
+}
+
 fn query_value(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
 

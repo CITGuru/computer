@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
-#
-# Start or stop one screen's whole stack: compositor, browser, viewer. Screen N
-# is `wayland-N+1` under its own runtime directory — one compositor per screen,
-# because a Wayland compositor is the display server and the window manager at
-# once.
-#
-# The verbs, the ports and the token protocol are the X11 image's. Only what is
-# under them differs, so the crate drives both through the same commands.
+# One compositor per screen, each in its own runtime directory.
 set -uo pipefail
 
 action="${1:?usage: computer-screen start|stop|control|release|open|viewers <screen> [url]}"
@@ -22,13 +15,9 @@ control_vnc=$((5901 + screen * 2))
 width="${COMPUTER_SCREEN_WIDTH:-1280}"
 height="${COMPUTER_SCREEN_HEIGHT:-800}"
 
-# A runtime directory per screen, not per box: a Wayland socket lives in one,
-# and two compositors sharing a directory would each claim `wayland-1`.
+# Per screen: two compositors sharing a directory would each claim `wayland-1`.
 runtime="/tmp/computer/run-${number}"
-# The same name on every screen. A socket is a file, unique only inside its
-# directory, and a compositor takes the first free name there — so the
-# directory is what tells screens apart. A number in the name would point
-# every screen after the first at nothing.
+# The same name on every screen: the directory, not the name, tells screens apart.
 wayland_display="wayland-1"
 sockfile="/tmp/computer/screen-${screen}.sway"
 control_token="/tmp/computer/screen-${screen}.control"
@@ -38,18 +27,10 @@ logs="/tmp/computer/screen-${number}"
 export XDG_RUNTIME_DIR="$runtime"
 export WAYLAND_DISPLAY="$wayland_display"
 
-# The gate in front of both viewers, as describes it.
-#
-# `open` is what a box on loopback has always been; the crate refuses to publish
-# an open viewer beyond loopback, so anything reachable arrives here gated.
 viewer_auth="${COMPUTER_VIEWER_AUTH:-open}"
 gate_dir="/tmp/computer/gate"
 
-# The websockify arguments for one door, left in `gate_args`.
-#
-# `token` drops the positional target: websockify reads it from the token file
-# instead, which is also what keeps the secret out of `ps` in here. BasicHTTPAuth
-# has no equivalent and takes its source on the command line.
+# `token` reads its target from the file, which keeps the secret out of `ps`.
 build_gate() {
   local door="$1" target="$2" secret file
   gate_args=("$target")
@@ -61,9 +42,7 @@ build_gate() {
     control) secret="${COMPUTER_CONTROL_SECRET:-}" ;;
   esac
 
-  # An empty secret would start a viewer that accepts everybody while the crate
-  # believes it is gated. Refused rather than defaulted: this is the failure the
-  # whole design exists to prevent.
+  # An empty secret would serve an open viewer the crate believes is gated.
   if [ -z "$secret" ]; then
     echo "viewer auth is ${viewer_auth} but the ${door} secret is unset" >&2
     return 1
@@ -73,8 +52,6 @@ build_gate() {
     token)
       mkdir -p "$gate_dir"
       file="${gate_dir}/${door}-${screen}"
-      # The file is the credential, so it is unreadable to anybody else before
-      # websockify is ever pointed at it.
       (umask 077; printf '%s: %s\n' "$secret" "$target" >"$file")
       gate_args=(--token-plugin TokenFile --token-source "$file")
       ;;
@@ -90,8 +67,6 @@ build_gate() {
 }
 
 await() {
-  # Bounded, because a compositor that has not answered in ten seconds is not
-  # slow — it is broken, and waiting longer only delays the report.
   local deadline=$((SECONDS + 10))
   while [ "$SECONDS" -lt "$deadline" ]; do
     if "$@" >/dev/null 2>&1; then return 0; fi
@@ -104,11 +79,7 @@ listening() {
   bash -c "echo > /dev/tcp/127.0.0.1/$1" 2>/dev/null
 }
 
-# Whether this screen's compositor answers now.
-#
-# Asked of sway rather than read off a socket file: a compositor that died
-# leaves the file behind, and every check that reads configuration passes while
-# the first screenshot fails.
+# Asked of sway: a dead compositor leaves its socket file behind.
 alive() {
   local sock
   sock=$(cat "$sockfile" 2>/dev/null) || return 1
@@ -116,10 +87,7 @@ alive() {
   swaymsg -s "$sock" -t get_version >/dev/null 2>&1
 }
 
-# How many browsers are on a viewer, not whether the server is up: websockify
-# holds its connection to wayvnc only while a client is attached, so an
-# established one is a person looking. From /proc, because `ss` and `netstat`
-# are packages this image would otherwise not need.
+# websockify holds its wayvnc connection only while a client is attached.
 established() {
   local hex
   hex=$(printf "%04X" "$1")
@@ -140,10 +108,7 @@ start() {
   chmod 700 "$runtime"
   rm -f "$sockfile"
 
-  # The geometry and the socket path go into the configuration, because sway
-  # reads no environment in it.
-  # Enabled by presence: an image built with the X11 apps feature carries
-  # Xwayland, and one without it must not be told to start what it lacks.
+  # Enabled by presence: an image without Xwayland must not be told to start it.
   xwayland=disable
   command -v Xwayland >/dev/null 2>&1 && xwayland=enable
 
@@ -153,23 +118,16 @@ start() {
       -e "s/%XWAYLAND%/${xwayland}/" \
       /etc/computer/sway.config > "${runtime}/sway.config"
 
-  # Headless, and told there are no input devices: sway on a real backend
-  # refuses to start without a seat, and there is no seat in a box.
+  # sway on a real backend refuses to start without a seat, and a box has none.
   WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
     sway --config "${runtime}/sway.config" >"${logs}-sway.log" 2>&1 &
 
   await alive || { echo "no compositor in ${runtime}" >&2; exit 1; }
 
-  # sway picks the name rather than taking it from the environment, and every
-  # later command connects through it — caught here instead of as a capture
-  # that returns no image.
   await test -S "${runtime}/${wayland_display}" \
     || { echo "the compositor is not on ${wayland_display}" >&2; exit 1; }
 
-  # A profile kept in a volume comes back with the lock the last box left in
-  # it, naming a container that is gone — and Chromium will not start on a
-  # profile another machine says it holds. Cleared only when the name is not
-  # this one: a lock written here is a browser that really is running.
+  # A profile kept in a volume brings back a lock naming a gone container; clear only foreign ones.
   lock="$profile/SingletonLock"
   if [ -L "$lock" ]; then
     case "$(readlink "$lock")" in
@@ -178,12 +136,9 @@ start() {
     esac
   fi
 
-  # One profile per screen. A shared profile makes one screen's login every
-  # screen's, and the singleton lock stops the second launch outright.
   computer-browser --user-data-dir="$profile" >"${logs}-browser.log" 2>&1 &
 
-  # `-d` is the read-only guarantee: a viewer told to be read-only by its own
-  # page stops being read-only when somebody opens the page differently.
+  # `-d` is the read-only guarantee; the page's own setting is a courtesy.
   wayvnc -d 127.0.0.1 "$view_vnc" >"${logs}-vnc.log" 2>&1 &
   build_gate view "127.0.0.1:${view_vnc}" || exit 1
   websockify --web=/usr/share/novnc "0.0.0.0:${view_port}" "${gate_args[@]}" \
@@ -207,25 +162,20 @@ stop() {
 }
 
 control() {
-  # The token makes a takeover endable by whoever started it and nobody else.
-  # Kept here rather than in the caller: a caller that exits takes its memory
-  # with it, and the next one would have no way to learn somebody is driving.
+  # The token lives in the box, so it outlives a caller that exits.
   token="${3:-}"
   mode="${4:-exclusive}"
   [ -n "$token" ] || { echo "usage: computer-screen control <screen> <token> [shared]" >&2; exit 2; }
 
   alive || { echo "screen ${screen} is not running" >&2; exit 1; }
 
-  # Already open, so the server stays and only the token changes hands.
-  # Recorded even here: skipping the write would leave the replaced holder's
-  # token in the file, letting them end the takeover that replaced them.
+  # Already open: record anyway, or the replaced holder could end this takeover.
   if listening "${control_port}"; then
     record_token
     exit 0
   fi
 
-  # No `-d`, so this one accepts input. A second server on a second port, never
-  # a mode switch on the one somebody is already watching.
+  # No `-d`: this one accepts input.
   wayvnc 127.0.0.1 "$control_vnc" >"${logs}-vnc-control.log" 2>&1 &
   build_gate control "127.0.0.1:${control_vnc}" || exit 1
   websockify --web=/usr/share/novnc "0.0.0.0:${control_port}" "${gate_args[@]}" \
@@ -237,9 +187,7 @@ control() {
   record_token
 }
 
-# **Only an exclusive takeover writes the token.** The file is what the input
-# guard refuses on, and a shared session is one where both sides are meant to
-# drive: recording a token there would lock out the owner it was sharing with.
+# A shared session writes no token, or the guard would lock out the owner.
 record_token() {
   if [ "$mode" = "shared" ]; then
     rm -f "$control_token"
@@ -249,10 +197,7 @@ record_token() {
 }
 
 release() {
-  # A stale release is refused rather than obeyed. A takeover that was replaced
-  # must not be endable by whoever it replaced: that would take the keyboard
-  # from the person driving now, and neither of them would be told why.
-  # `--force` is the deliberate way past it.
+  # A replaced takeover is not endable by whoever it replaced; `--force` is the way past.
   want="${3:-}"
   held=$(cat "$control_token" 2>/dev/null || true)
 
@@ -261,8 +206,6 @@ release() {
     exit 3
   fi
 
-  # Only the control pair. The read-only viewer stays up, so whoever was
-  # watching keeps watching.
   pkill -f "wayvnc .* ${control_vnc}$" || true
   pkill -f "websockify.*${control_port}" || true
   rm -f "$control_token"
@@ -272,9 +215,75 @@ open_url() {
   [ -n "$url" ] || { echo "usage: computer-screen open <screen> <url>" >&2; exit 2; }
   alive || { echo "screen ${screen} is not running" >&2; exit 1; }
 
-  # The same profile as the running browser, so this joins that window rather
-  # than fighting it for the singleton lock.
+  # The running browser's profile, so this joins it instead of fighting for the lock.
   computer-browser --user-data-dir="$profile" "$url" >>"${logs}-browser.log" 2>&1 &
+}
+
+recording_file="/tmp/computer/recording-${screen}.mp4"
+recording_pid="/tmp/computer/recording-${screen}.pid"
+recording_flag="/tmp/computer/recording-${screen}.on"
+
+# wlroots publishes no input ffmpeg can read, so the frames come from `grim`.
+# No pointer: a synthetic move's virtual device lives for one command.
+record() {
+  what="${3:-}"
+  fps="${4:-12}"
+
+  running() {
+    pid=$(cat "$recording_pid" 2>/dev/null || true)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  }
+
+  case "$what" in
+    start)
+      command -v ffmpeg >/dev/null 2>&1 \
+        || { echo "this box has no ffmpeg; open it with the video feature" >&2; exit 4; }
+      grim -t png - >/dev/null 2>&1 \
+        || { echo "screen ${screen} is not running" >&2; exit 1; }
+      running && { echo "screen ${screen} is already recording" >&2; exit 3; }
+
+      rm -f "$recording_file"
+      : > "$recording_flag"
+
+      pause=$(awk "BEGIN { printf \"%.4f\", 1 / $fps }")
+
+      # Wall-clock timestamps, because the loop keeps no exact cadence.
+      # $! after a pipeline is ffmpeg, the half to wait on.
+      (
+        while [ -e "$recording_flag" ]; do
+          grim -t ppm - || break
+          sleep "$pause"
+        done
+      ) | ffmpeg -nostdin -loglevel error -y \
+            -f image2pipe -use_wallclock_as_timestamps 1 -i - \
+            -c:v libx264 -preset ultrafast -pix_fmt yuv420p -vsync vfr \
+            -movflags frag_keyframe+empty_moov \
+            "$recording_file" >>"${logs}-record.log" 2>&1 &
+      echo $! > "$recording_pid"
+      echo "$recording_file"
+      ;;
+    stop)
+      running || { echo "screen ${screen} is not recording" >&2; exit 3; }
+      pid=$(cat "$recording_pid")
+
+      # Not a signal: an mp4 cut off mid-write has no index.
+      rm -f "$recording_flag"
+      for _ in $(seq 1 100); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+      rm -f "$recording_pid"
+      echo "$recording_file"
+      ;;
+    status)
+      running && echo "recording ${recording_file}" || echo "idle"
+      ;;
+    *)
+      echo "usage: computer-screen record <screen> start|stop|status [fps]" >&2
+      exit 2
+      ;;
+  esac
 }
 
 case "$action" in
@@ -284,5 +293,6 @@ case "$action" in
   control) control "$@" ;;
   release) release "$@" ;;
   open)    open_url ;;
-  *) echo "usage: computer-screen start|stop|control|release|open|viewers <screen> [url]" >&2; exit 2 ;;
+  record)  record "$@" ;;
+  *) echo "usage: computer-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
 esac

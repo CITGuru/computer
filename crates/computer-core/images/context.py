@@ -20,15 +20,9 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class Rules:
-    """What one vendor's builder cannot take."""
-
-    #: Instructions dropped entirely, with their line continuations.
     drop: tuple = ()
-    #: Build arguments to drop, along with the RUN lines that read them.
     drop_arg: tuple = ()
-    #: The uid the vendor runs as, where it is not the one the image builds as.
     run_as: int | None = None
-    #: Why each of the above, for whoever reads the output and wonders.
     because: dict = field(default_factory=dict)
 
 
@@ -52,7 +46,6 @@ RULES = {
 
 
 def home_of(dockerfile: str) -> str:
-    """The HOME the image gives its user, from the image rather than a guess."""
     for pattern in (r"^ENV\s+HOME=(\S+)", r"^WORKDIR\s+(\S+)"):
         found = re.search(pattern, dockerfile, re.MULTILINE)
         if found:
@@ -61,7 +54,6 @@ def home_of(dockerfile: str) -> str:
 
 
 def rewrite(dockerfile: str, rules: Rules) -> str:
-    """The same Dockerfile, with what this vendor cannot take taken out."""
     kept, dropping = [], False
 
     for line in dockerfile.splitlines(keepends=True):

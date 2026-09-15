@@ -1,10 +1,3 @@
-//! Extractors that fail the way everything else here fails.
-//!
-//! Axum's own rejections are plain text, so a client that parses errors would
-//! meet two shapes: the one every handler returns, and this one. A malformed
-//! body, a missing query parameter and a screen number that is not a number
-//! are all errors a client hits on its first requests.
-
 use crate::error::ApiError;
 use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{FromRequest, FromRequestParts};

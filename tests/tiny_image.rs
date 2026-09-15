@@ -1,12 +1,3 @@
-//! The small build context, checked against the one it was cut from.
-//!
-//! `images/tiny/` implements the X11 contract that `tests/image.rs` already
-//! proves, so this file does not restate it. It asks the two questions that
-//! cutting an image raises: is this still the same desktop, and does what was
-//! taken out reach anything that runs.
-//!
-//! Read as text. No Docker, no build, no daemon.
-
 use computer::bundle::{
     BROWSER_DESKTOP, BROWSER_SH, DOCKERFILE, EMBED_HTML, FLUXBOX_APPS, FLUXBOX_INIT, FLUXBOX_MENU,
     FLUXBOX_STYLE, INPUT_GUARD, LAUNCH_SH, SCREEN_SH, START_SH, TERMINAL_DESKTOP, TINT2RC,
@@ -28,12 +19,7 @@ fn read(name: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
-/// A script with its prose taken out.
-///
-/// Comments are where two copies of one script are allowed to differ: they are
-/// reflowed, rewritten and argued with, and none of it changes what runs. The
-/// shebang stays, because a script that lost one is a script the image cannot
-/// execute.
+/// Copies of a script may differ in comments, but not in the shebang.
 fn instructions(script: &str) -> Vec<&str> {
     script
         .lines()
@@ -43,10 +29,7 @@ fn instructions(script: &str) -> Vec<&str> {
         .collect()
 }
 
-/// The packages the last stage installs, in the order it lists them.
-///
-/// The earlier stages are thrown away, so what they install says nothing about
-/// what the box carries.
+/// Earlier stages are thrown away, so only the last stage's packages count.
 fn installed(dockerfile: &str) -> Vec<&str> {
     let last = dockerfile
         .rsplit("\nFROM ")
@@ -63,12 +46,10 @@ fn installed(dockerfile: &str) -> Vec<&str> {
         .collect()
 }
 
-/// The paths dpkg is told to drop on unpack.
 fn excluded(dockerfile: &str) -> Vec<&str> {
     quoted(dockerfile, "path-exclude ")
 }
 
-/// The paths kept back out of a wider exclusion.
 fn included(dockerfile: &str) -> Vec<&str> {
     quoted(dockerfile, "path-include ")
 }
@@ -110,9 +91,6 @@ fn the_scripts_are_the_ones_the_contract_is_proven_against() {
     }
 }
 
-/// The desk is dressed from these files, and a caller works out where to click
-/// from a picture of it. A menu, a dock or a viewer page that drifted here
-/// would move a window somewhere the other image does not have one.
 #[test]
 fn the_desk_is_dressed_the_same_way() {
     for (name, carried) in [
@@ -182,8 +160,6 @@ fn this_image_carries_every_binary_the_driver_calls() {
     let dockerfile = read("Dockerfile");
     let packages = installed(&dockerfile);
 
-    // The X11 driver and `screen.sh` shell these by name. A missing one is a
-    // refusal the caller reads as a broken tool rather than as a cut package.
     for package in [
         "xvfb",
         "x11vnc",
@@ -218,10 +194,7 @@ fn this_image_declares_the_contract_it_implements() {
     );
 }
 
-/// The whole method. `dpkg --purge --force-depends` empties the same files and
-/// leaves apt unable to solve, so the `EXTRA_PACKAGES` layer below fails on a
-/// dependency of a package nobody asked about. An exclusion drops the bytes and
-/// keeps the graph.
+/// `dpkg --purge --force-depends` leaves apt unable to solve; an exclusion keeps the graph.
 #[test]
 fn files_are_excluded_rather_than_purged() {
     let dockerfile = read("Dockerfile");
@@ -243,9 +216,6 @@ fn files_are_excluded_rather_than_purged() {
     );
 }
 
-/// What was taken out has to be what nothing opens. A path on `PATH` is the
-/// one exclusion that turns into a command not found at run time, long after
-/// the build said nothing.
 #[test]
 fn no_exclusion_reaches_a_directory_commands_are_run_from() {
     let dockerfile = read("Dockerfile");
@@ -266,7 +236,6 @@ fn no_exclusion_reaches_a_directory_commands_are_run_from() {
     }
 }
 
-/// Chromium reads a locale file at startup and does not start without one.
 #[test]
 fn cutting_the_locales_keeps_one() {
     let dockerfile = read("Dockerfile");
@@ -282,10 +251,7 @@ fn cutting_the_locales_keeps_one() {
     }
 }
 
-/// Debian's `novnc` is static JavaScript with a Node runtime and a Perl
-/// interpreter as dependencies. Taking the files instead is the largest single
-/// cut in this image, and it only holds while the package stays out of the
-/// stage that ships.
+/// Debian's `novnc` pulls in Node and Perl, so it must stay out of the stage that ships.
 #[test]
 fn the_viewer_arrives_as_files_rather_than_as_a_dependency_tree() {
     let dockerfile = read("Dockerfile");
@@ -305,8 +271,6 @@ fn the_viewer_arrives_as_files_rather_than_as_a_dependency_tree() {
     );
 }
 
-/// A caller swaps one directory for the other, so the build arguments the two
-/// take have to be the same arguments in the same order.
 #[test]
 fn this_image_takes_the_extras_the_desktop_image_takes() {
     assert_eq!(build_args(&read("Dockerfile")), build_args(DOCKERFILE));

@@ -1,9 +1,3 @@
-//! Opening a box, and what happens when it will not open.
-//!
-//! Against a scripted runtime, so the order of operations is pinned without a
-//! daemon: a box that is checked after it is created, or created after a
-//! failed image build, is a box whose failure arrives in the wrong shape.
-
 use computer::testing::{ScriptedCli, ScriptedDriver, ScriptedProfile};
 use computer::{Bind, Computer, DisplayServer, Error, ExecResult, HolderId, ScreenId, bundle};
 use std::sync::Arc;
@@ -28,11 +22,7 @@ fn failing(stderr: &str) -> ExecResult {
     }
 }
 
-/// version, image inspect, contract label, run, port — the whole opening
-/// sequence.
-///
-/// The label comes back empty, which is an image that declares nothing: the
-/// pairing check has nothing to refuse on and the launch carries on.
+/// version, image inspect, contract label, run, port — the whole opening sequence.
 fn a_working_runtime(ports: &str) -> Arc<ScriptedCli> {
     Arc::new(
         ScriptedCli::new()
@@ -78,8 +68,6 @@ async fn the_image_is_made_sure_of_before_a_container_is_created() {
     let calls = cli.calls();
     assert_eq!(calls[0][0], "version");
     assert_eq!(calls[1][..2], ["image".to_string(), "inspect".to_string()]);
-    // And again for the contract the image declares, which is asked before
-    // anything is created rather than after it fails to answer.
     assert_eq!(calls[2][..2], ["image".to_string(), "inspect".to_string()]);
     assert_eq!(calls[3][0], "run");
     assert!(calls[3].contains(&computer.name().to_string()));
@@ -110,8 +98,7 @@ async fn the_ports_the_runtime_mapped_are_the_ones_the_caller_is_handed() {
 
 #[tokio::test]
 async fn devtools_is_read_from_the_bridge_and_not_from_chromiums_own_port() {
-    // 9222 is mapped here and 9223 is not. Chromium holds 9222 on loopback
-    // inside the box, so a URL built from that mapping answers nothing.
+    // 9222 is mapped and 9223 is not; Chromium holds 9222 on loopback inside the box.
     let cli = a_working_runtime("9222/tcp -> 127.0.0.1:32770\n");
 
     let computer = Computer::builder()
@@ -422,13 +409,9 @@ async fn asking_for_extra_packages_asks_for_a_different_image() {
     );
 }
 
-// A paused clock: the reaper waits ten seconds between asks, and a test that
-// really waited would be the slowest thing in the suite by an order of
-// magnitude.
+// Paused clock: the reaper waits ten seconds between asks.
 #[tokio::test(start_paused = true)]
 async fn a_box_whose_life_ran_out_is_asked_for_again_when_the_first_ask_fails() {
-    // `rm` refused once — a runtime mid-restart — then accepted. A reaper that
-    // asked once would have left the box holding its memory for ever.
     let cli = Arc::new(
         ScriptedCli::new()
             .replying(ok())
@@ -452,8 +435,6 @@ async fn a_box_whose_life_ran_out_is_asked_for_again_when_the_first_ask_fails() 
     let name = computer.name().to_string();
     drop(computer);
 
-    // Past the deadline and one pause: the second ask is what proves it did
-    // not give up on the first refusal.
     tokio::time::sleep(Duration::from_secs(11)).await;
     tokio::task::yield_now().await;
 
@@ -501,8 +482,6 @@ async fn an_image_built_for_another_contract_is_refused_before_it_starts() {
 
 #[tokio::test]
 async fn an_image_that_declares_nothing_is_not_refused() {
-    // The last reply is the empty label: a caller's own image owes this crate
-    // no declaration, and absence is not a mismatch.
     let cli = Arc::new(
         ScriptedCli::new()
             .replying(ok())
@@ -621,7 +600,6 @@ async fn a_swapped_driver_takes_the_input_and_the_takeover_gate_with_it() {
 
 #[tokio::test]
 async fn sweeping_removes_the_boxes_whose_deadline_has_passed() {
-    // Two boxes labelled with deadlines: one last year, one next year.
     let listed = "old-box\t1000000000\nyoung-box\t4000000000\n";
     let cli = Arc::new(ScriptedCli::new().replying(saying(listed)));
     let machine = computer::DockerMachine::new(cli.clone() as Arc<dyn computer::ContainerCli>);
@@ -661,8 +639,6 @@ async fn a_label_nobody_here_wrote_is_left_alone() {
 
 #[tokio::test]
 async fn a_runtime_that_cannot_be_asked_what_it_holds_says_so() {
-    // A microVM machine cannot list by label, and an empty list would read
-    // as "nothing to sweep" rather than "cannot look".
     let api = Arc::new(computer::testing::ScriptedMicroVm::new());
     let machine = computer::MicroVm::new(api as Arc<dyn computer::microvm::MicroVmApi>);
 
@@ -851,9 +827,6 @@ async fn a_wayland_box_is_driven_through_the_compositor_and_says_so() {
         "a compositor is reached through its socket, not through a display \
          number"
     );
-    // `DISPLAY` rides along for Xwayland, and is not what carried this one:
-    // a command that reached the compositor through a display number would
-    // have gone in and moved nothing.
     assert!(!sent.contains(&"DISPLAY=:1".to_string()));
 }
 
@@ -894,14 +867,8 @@ async fn a_wayland_screen_refuses_a_cursor_it_never_measured() {
     );
 }
 
-/// The takeover token is what the image's input guard refuses on, so anyone who
-/// can work one out can drive a screen somebody else has been handed.
-///
-/// It used to be the process id, the clock and a counter — all three readable
-/// or guessable from another process on the same host.
 #[tokio::test]
 async fn a_takeover_token_cannot_be_worked_out_from_the_clock() {
-    /// The token as the box receives it, out of the `control` command's argv.
     async fn mint() -> String {
         let cli = a_working_runtime("");
         let computer = Computer::builder()
@@ -940,9 +907,7 @@ async fn a_takeover_token_cannot_be_worked_out_from_the_clock() {
         "the random half is hex: {first}"
     );
 
-    // Two mints inside one process, microseconds apart. A token built from the
-    // clock and a counter agrees on almost every character here; one drawn from
-    // the CSPRNG agrees on about one in sixteen.
+    // Two mints microseconds apart: clock-and-counter tokens would agree almost everywhere.
     let shared = one.chars().zip(two.chars()).filter(|(a, b)| a == b).count();
     assert!(
         shared < 32,
@@ -951,8 +916,6 @@ async fn a_takeover_token_cannot_be_worked_out_from_the_clock() {
     );
 }
 
-/// An open viewer is a desktop anyone who reaches the port can watch, and on
-/// the control port drive. The refusal is what makes the knob safe to have.
 #[tokio::test]
 async fn an_open_viewer_beyond_loopback_is_refused_before_a_box_exists() {
     for bind in [Bind::Any, Bind::Address("192.168.1.4".parse().unwrap())] {
@@ -975,9 +938,6 @@ async fn an_open_viewer_beyond_loopback_is_refused_before_a_box_exists() {
     }
 }
 
-/// The other half of the rule, and the reason it is not simply "no publishing":
-/// either gate satisfies it, and the caller picks which by how they hand the
-/// box out.
 #[tokio::test]
 async fn a_gated_viewer_beyond_loopback_is_allowed() {
     for auth in [computer::Auth::Password, computer::Auth::Token] {
@@ -995,8 +955,6 @@ async fn a_gated_viewer_beyond_loopback_is_allowed() {
     }
 }
 
-/// The refusal reads the reach and not "this is not the default", or a caller
-/// who spelled loopback out would go looking for a secret they do not need.
 #[tokio::test]
 async fn loopback_spelled_out_opens_like_the_default() {
     let cli = a_working_runtime("");
@@ -1011,10 +969,6 @@ async fn loopback_spelled_out_opens_like_the_default() {
         .expect("a box on loopback");
 }
 
-/// The deployment argues for: the box on loopback behind
-/// a proxy, and the URL naming the proxy. That name is not derivable from
-/// anything this crate holds, so a URL built from the bind is wrong for every
-/// box that is not reached at 127.0.0.1.
 #[tokio::test]
 async fn the_url_a_person_is_handed_names_the_advertised_host() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
@@ -1035,8 +989,6 @@ async fn the_url_a_person_is_handed_names_the_advertised_host() {
     );
 }
 
-/// The shape a link has to have to be worth handing out: everything a person
-/// needs is in the URL, and the two doors do not share a credential.
 #[tokio::test]
 async fn a_token_gate_puts_a_different_ticket_on_each_door() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n6081/tcp -> 127.0.0.1:32769\n");
@@ -1069,8 +1021,6 @@ async fn a_token_gate_puts_a_different_ticket_on_each_door() {
     );
 }
 
-/// The reason `Auth::Password` exists: the credential reaches the browser
-/// through a prompt, so it lands in no history, no referrer and no proxy log.
 #[tokio::test]
 async fn a_password_gate_puts_nothing_in_the_url() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
@@ -1095,8 +1045,6 @@ async fn a_password_gate_puts_nothing_in_the_url() {
     );
 }
 
-/// The credential has to be in the box before any screen starts, because a
-/// screen opened an hour later has to answer to the same one.
 #[tokio::test]
 async fn the_gate_reaches_the_box_as_environment() {
     let cli = a_working_runtime("");
@@ -1129,8 +1077,6 @@ async fn the_gate_reaches_the_box_as_environment() {
     )));
 }
 
-/// An open box is what every local box has always been, and it must not start
-/// carrying credentials nothing reads.
 #[tokio::test]
 async fn an_open_box_carries_no_credential_at_all() {
     let cli = a_working_runtime("");
@@ -1154,8 +1100,6 @@ async fn an_open_box_carries_no_credential_at_all() {
     );
 }
 
-/// `preview` is printed, and a preview that minted a credential would put a
-/// desktop in whatever printed it.
 #[tokio::test]
 async fn a_preview_mints_nothing_it_could_leak() {
     let previewed = Computer::builder()
@@ -1173,9 +1117,6 @@ async fn a_preview_mints_nothing_it_could_leak() {
     );
 }
 
-/// CDP has no authentication and cannot be given one, so it is the one door
-/// the gate cannot cover. Publishing it beyond loopback would hand whoever
-/// reaches it the whole browser.
 #[tokio::test]
 async fn devtools_is_withdrawn_rather_than_published_beyond_loopback() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
@@ -1213,8 +1154,6 @@ async fn devtools_is_withdrawn_rather_than_published_beyond_loopback() {
     );
 }
 
-/// The other half: on loopback the bridge is exactly as useful as it was, and
-/// withdrawing it there would break every local caller for nothing.
 #[tokio::test]
 async fn devtools_survives_on_loopback() {
     let cli = a_working_runtime("9223/tcp -> 127.0.0.1:32769\n");

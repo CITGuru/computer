@@ -1,5 +1,3 @@
-//! A directory on this host, addressed by key.
-
 use crate::{Blobs, Error, Result};
 use async_trait::async_trait;
 use std::io::ErrorKind;
@@ -19,7 +17,6 @@ impl LocalDir {
         }
     }
 
-    /// Where a key lives, refused if it could reach outside the root.
     fn path(&self, key: &str) -> Result<PathBuf> {
         let mut path = self.root.clone();
 
@@ -161,7 +158,6 @@ mod tests {
     use std::sync::atomic::AtomicU32;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// A directory of its own per test, taken away afterwards.
     struct Scratch(PathBuf);
 
     impl Scratch {

@@ -1,11 +1,4 @@
-//! Launch a box from a spec file, with no server in between.
-//!
-//! ```text
 //! cargo run --example from_spec -- examples/box.json
-//! ```
-//!
-//! The same spec the REST API takes. `computer-server` adds a name, a label and
-//! a lifetime that outlives the request; the desktop it describes is this.
 
 use computer::{Builder, Placement, ScreenId, Spec};
 

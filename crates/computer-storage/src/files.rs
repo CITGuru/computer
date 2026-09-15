@@ -1,22 +1,5 @@
-//! A store shaped like a directory, over a backend that need not be one.
-//!
-//! ```text
-//! boxes/{id}/main.json                     the record
-//! boxes/{id}/traces/{first}-{last}.jsonl   the history, in segments
-//! boxes/{id}/screens/{hash}.png            the frames
-//! ```
-//!
-//! The layout is the index: object storage has no append and no query, so a
-//! segment is named by the range it holds and the numbers are zero-padded
-//! because listing is lexical.
-//!
-//! Entries buffer, and an entry saying who held the screen does not. A process
-//! that dies with a buffer loses those entries after a reader has already been
-//! shown them, so call [`Store::flush`] before one ends.
-//!
-//! One writer per box: the next sequence is read from the highest segment once
-//! and held after, which is sound only because the daemon holding a box's live
-//! handle is the only thing that writes its trace.
+//! Segment numbers are zero-padded because listing is lexical.
+//! One writer per box: the next sequence is read once and then held.
 
 use crate::error::poisoned;
 use crate::{Blobs, BoxRecord, Error, Frames, Result, Store, now_ms};
@@ -28,22 +11,18 @@ use std::time::{Duration, Instant};
 
 const WIDTH: usize = 12;
 
-/// Entries a segment may hold before it goes down.
 const BATCH: usize = 64;
 
-/// How long the oldest buffered entry may wait.
 const LINGER: Duration = Duration::from_secs(5);
 
 pub struct Files<B> {
     blobs: B,
     next: Mutex<HashMap<String, u64>>,
-    /// Written and not yet put down, per box.
     held: Mutex<HashMap<String, Waiting>>,
 }
 
 struct Waiting {
     entries: Vec<TraceEntry>,
-    /// When the oldest of them was written.
     since: Instant,
 }
 
@@ -56,7 +35,6 @@ impl<B: Blobs> Files<B> {
         }
     }
 
-    /// Puts down what this box is holding, as one segment.
     async fn put_down(&self, id: &str) -> Result<()> {
         let taken = match self.held.lock().map_err(poisoned)?.remove(id) {
             Some(waiting) => waiting.entries,
@@ -91,7 +69,6 @@ impl<B: Blobs> Files<B> {
         Ok(())
     }
 
-    /// Whether this box has waited long enough or written enough.
     fn full(&self, id: &str) -> Result<bool> {
         let held = self.held.lock().map_err(poisoned)?;
 
@@ -135,7 +112,6 @@ impl<B: Blobs> Files<B> {
         read_segment(&self.blobs, key).await
     }
 
-    /// One past the last sequence any segment holds, or zero where none do.
     async fn highest(&self, id: &str) -> Result<u64> {
         let mut highest = None;
 
@@ -398,7 +374,6 @@ impl<B: Blobs + 'static> Frames for Files<B> {
     }
 }
 
-/// Whether losing this entry would lose a claim rather than a detail.
 fn custody(event: &TraceEvent) -> bool {
     matches!(
         event,
@@ -412,7 +387,6 @@ fn custody(event: &TraceEvent) -> bool {
     )
 }
 
-/// One segment's entries, in the order they were written.
 async fn read_segment<B: Blobs>(blobs: &B, key: &str) -> Result<Vec<TraceEntry>> {
     let Some(body) = blobs.get(key).await? else {
         return Ok(Vec::new());
@@ -467,7 +441,6 @@ fn segment(prefix: &str, first: u64, last: u64) -> String {
     )
 }
 
-/// The sequences a segment key claims to hold.
 fn range(prefix: &str, key: &str) -> Option<(u64, u64)> {
     let name = key.strip_prefix(prefix)?.strip_suffix(".jsonl")?;
     let (first, last) = name.split_once('-')?;
@@ -475,7 +448,6 @@ fn range(prefix: &str, key: &str) -> Option<(u64, u64)> {
     Some((first.parse().ok()?, last.parse().ok()?))
 }
 
-/// One path segment, refused if it could reach outside its own.
 fn part(part: &str) -> Result<&str> {
     let bad =
         part.is_empty() || part == "." || part == ".." || part.contains('/') || part.contains('\\');

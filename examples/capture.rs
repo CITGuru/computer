@@ -1,8 +1,4 @@
-//! Capture part of a screen, at a size.
-//!
-//! ```bash
 //! cargo run --example capture -- <box>
-//! ```
 
 use computer::{Computer, Of, Point, Rect, Shot};
 

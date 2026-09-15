@@ -1,5 +1,3 @@
-//! A bucket, addressed by key.
-
 use crate::{Blobs, Error, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -41,7 +39,6 @@ impl S3 {
         })
     }
 
-    /// A prefix inside the bucket, so one bucket can hold more than this.
     pub fn under(mut self, prefix: impl Into<String>) -> Self {
         let given = prefix.into();
 
@@ -76,7 +73,6 @@ impl S3 {
         format!("{}{key}", self.prefix)
     }
 
-    /// The path a key lives at, bucket included.
     fn path_of(&self, key: Option<&str>) -> String {
         match key {
             Some(key) => format!("/{}/{}", self.bucket, self.at(key)),
@@ -111,7 +107,6 @@ impl S3 {
             .map_err(|error| Error::Unavailable(format!("{url}: {error}")))
     }
 
-    /// The headers that authorise one request.
     fn sign(
         &self,
         method: &str,
@@ -159,7 +154,7 @@ impl S3 {
     }
 }
 
-/// The headers every request here signs, in the order the algorithm wants them.
+/// Sorted, as SigV4 requires.
 const SIGNED: &str = "host;x-amz-content-sha256;x-amz-date";
 
 #[async_trait]
@@ -268,7 +263,6 @@ fn hmac(key: &[u8], message: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-/// The chain the algorithm derives a per-day, per-region key with.
 fn signing_key(secret: &str, date: &str, region: &str, service: &str) -> Vec<u8> {
     let start = hmac(format!("AWS4{secret}").as_bytes(), date.as_bytes());
     let regional = hmac(&start, region.as_bytes());
@@ -287,12 +281,10 @@ fn canonical_query(query: &[(String, String)]) -> String {
     pairs.join("&")
 }
 
-/// A path, with each segment encoded and the separators left alone.
 fn encoded_path(path: &str) -> String {
     path.split('/').map(encode).collect::<Vec<_>>().join("/")
 }
 
-/// Everything outside the unreserved set, including the slash.
 fn encode(part: &str) -> String {
     let mut out = String::with_capacity(part.len());
 
@@ -318,7 +310,6 @@ fn host_of(endpoint: &str) -> String {
         .to_string()
 }
 
-/// The text inside every `<tag>` in a listing.
 fn tagged(body: &str, tag: &str) -> Vec<String> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");

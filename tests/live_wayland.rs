@@ -1,23 +1,9 @@
-//! The Wayland image against a real container. Ignored by default.
-//!
-//! ```text
-//! cargo test --test live_wayland -- --ignored --nocapture
-//! ```
-//!
-//! Nothing else in the suite builds this image. `tests/wayland_image.rs`
-//! reads it as text and proves the code and the files agree about names, ports
-//! and verbs; it cannot prove that sway comes up headless, that `wtype` finds
-//! a virtual keyboard, or that chromium starts on Ozone. Only this can, and
-//! only on a machine with a container runtime.
-//!
-//! One box for the whole test: opening one costs a build the first time and
-//! seconds after that, and every step below is independent of the others.
+//! The Wayland image against a real container: `cargo test --test live_wayland -- --ignored`.
 
 use computer::{Button, Computer, Delta, Point, Rect, ScreenId, Shot, WaylandProfile};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// The width and height a PNG declares in its own header.
 fn png_size(png: &[u8]) -> Option<(u32, u32)> {
     let width = u32::from_be_bytes(png.get(16..20)?.try_into().ok()?);
     let height = u32::from_be_bytes(png.get(20..24)?.try_into().ok()?);
@@ -52,8 +38,6 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
         "the compositor must be the size the descriptor claims"
     );
 
-    // A real capture: only the magic says it is a PNG, since a stub would
-    // return bytes too.
     let frame = screen.screenshot().await?;
     assert_eq!(
         frame.first_chunk::<4>(),
@@ -62,8 +46,6 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     );
     println!("  screenshot: {} bytes", frame.len());
 
-    // Cropping and scaling are grim's own flags here: this image carries no
-    // ImageMagick, so nothing else could do either.
     let region = screen
         .capture(&Shot::region(Rect::new(Point::new(100, 80), 400, 300)))
         .await?;
@@ -85,8 +67,7 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     screen.set_wallpaper(&frame).await?;
     println!("  wallpaper changed from uploaded image bytes");
 
-    // The pointer this driver moved, remembered because no Wayland protocol
-    // will report it.
+    // No Wayland protocol reports the pointer, so this is the driver's own memory.
     screen.move_to(Point::new(100, 120)).await?;
     assert_eq!(screen.cursor().await?, Point::new(100, 120));
 
@@ -96,23 +77,17 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     takeover(computer).await?;
     second_screen(computer).await?;
 
-    // Last, and the reason it is here at all: `DesktopSupport` is written when
-    // the descriptor is designed rather than when the capability is built, so
-    // a flag can stay true beside a method nothing serves. This image shipped
-    // exactly that — a pointer that returned success and moved nothing — and
-    // the audit is what asks every claim to prove itself against a real box.
+    // Last: every `DesktopSupport` claim has to prove itself against a real box.
     let audit = computer::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
     println!("  audit: {audit}");
 
     Ok(())
 }
 
-/// Chromium on Ozone, which is the flag this image exists to prove.
 async fn browser(computer: &Computer) -> computer::Result<()> {
     computer.open_url("https://example.com").await?;
 
-    // The window takes a moment to appear, and a screenshot before it does is
-    // a blank screen that reads as a broken browser.
+    // A screenshot before the window appears reads as a broken browser.
     tokio::time::sleep(Duration::from_secs(5)).await;
 
     let windows = computer
@@ -140,20 +115,12 @@ async fn browser(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// A page with room to scroll and something to type into.
-///
-/// The handlers go on afterwards through [`RECORDERS`] rather than in the URL:
-/// a `data:` URL has to be escaped character by character, and an escape that
-/// is wrong produces a page that loads and quietly records nothing.
+/// Handlers go on through [`RECORDERS`]: a mis-escaped `data:` URL records nothing.
 const PROBE: &str = "data:text/html,\
 <input%20autofocus%20style=\"width:90%25;font-size:40px\">\
 <div%20style=\"width:4000px;height:4000px\"></div>";
 
-/// What the page writes down about the input it receives.
-///
-/// `moves` counts only motion with a button held, because that is what makes a
-/// drag a drag: applications that track motion rather than the endpoints never
-/// see one that teleports.
+/// `moves` counts only motion with a button held, which is what makes a drag a drag.
 const RECORDERS: &str = r#"
     window.seen = { click: null, down: null, up: null, moves: 0, doubles: 0 };
     onclick     = e => { seen.click = e.clientX + ',' + e.clientY; };
@@ -164,10 +131,7 @@ const RECORDERS: &str = r#"
     "installed"
 "#;
 
-/// The x of a `clientX,clientY` the page wrote down.
-///
-/// The x rather than the pair: a screen coordinate and a viewport one differ
-/// by the browser's own chrome vertically, and by nothing horizontally.
+/// Only x: screen and viewport coordinates differ vertically by the browser chrome.
 fn column(recorded: &serde_json::Value) -> Option<u32> {
     recorded
         .as_str()?
@@ -176,14 +140,7 @@ fn column(recorded: &serde_json::Value) -> Option<u32> {
         .and_then(|part| part.parse().ok())
 }
 
-/// Input, checked by what it did rather than by what it returned.
-///
-/// Every tool in this path succeeds and does nothing: `sway`'s `seat cursor`
-/// returns zero against a seat with no pointer device, and `wtype` returns zero
-/// after dropping a keystroke. Reading exit codes passes against a box whose
-/// screen never moves, which is how this image once shipped with no working
-/// pointer — so the box is asked what happened through DevTools, which shares
-/// no path with the input being tested.
+/// Checked through DevTools: sway and `wtype` exit zero after doing nothing.
 async fn input(computer: &Computer) -> computer::Result<()> {
     let devtools = computer
         .browser()
@@ -191,8 +148,7 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     let mut page = devtools.open_page(PROBE, Duration::from_secs(30)).await?;
     page.wait_for_load(Duration::from_secs(20)).await?;
 
-    // The page a coordinate addresses is the one in front, and opening this
-    // put another behind it.
+    // Coordinates reach the page in front, and this one opened behind it.
     page.bring_to_front().await?;
     assert!(
         page.visible().await?,
@@ -215,9 +171,7 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     );
     println!("  the keyboard delivered every character");
 
-    // A chord, proving the modifiers are held and released around the key
-    // rather than sent as bare letters.
-    computer.key("ctrl+a").await?;
+    computer.press("ctrl+a").await?;
     computer.type_text("replaced").await?;
     let after = page
         .evaluate("document.querySelector('input').value")
@@ -229,7 +183,6 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     );
     println!("  a chord selected, and the typing replaced it");
 
-    // A click, at a point the page can report back.
     computer.click(Point::new(700, 400), Button::Left).await?;
     let clicked = page.evaluate("seen.click").await?;
     assert_eq!(
@@ -241,7 +194,6 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     );
     println!("  a click landed at {clicked}");
 
-    // A scroll, proving the wheel notches are axis events and not buttons.
     computer
         .scroll(Point::new(640, 500), Delta::down(5))
         .await?;
@@ -253,8 +205,7 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     );
     println!("  the wheel scrolled the page to {scrolled}");
 
-    // Modifiers are the X11 image's: holding a key across a click needs a
-    // virtual keyboard this compositor's pointer does not make.
+    // No held modifiers: this compositor's pointer makes no virtual keyboard.
     computer
         .primary()
         .wait_until_still(Duration::from_millis(300), Duration::from_secs(15))
@@ -270,7 +221,6 @@ async fn input(computer: &Computer) -> computer::Result<()> {
         "a modifier this compositor cannot hold has to be refused, not dropped"
     );
 
-    // A second axis on the same device, not a second pair of buttons.
     computer
         .scroll(Point::new(640, 500), Delta::right(5))
         .await?;
@@ -287,9 +237,6 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     );
     println!("  and sideways to {sideways}");
 
-    // A drag: pressed at one point, moved *while pressed*, released at
-    // another. The motion is the part worth checking — an application that
-    // tracks it rather than the endpoints never sees a drag that teleports.
     page.evaluate("seen.down = seen.up = null; seen.moves = 0; 'reset'")
         .await?;
     computer
@@ -310,8 +257,6 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     );
     println!("  a drag pressed at {down}, moved {moves} times, released at {up}");
 
-    // A double click, which is one gesture rather than two clicks: two runs
-    // are far enough apart that the page sees two singles.
     page.evaluate("seen.doubles = 0; 'reset'").await?;
     computer
         .double_click(Point::new(700, 400), Button::Left)
@@ -329,7 +274,6 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// The clipboard is claimed by the descriptor, so it has to be real.
 async fn clipboard(computer: &Computer) -> computer::Result<()> {
     let text = "clipboard \"round trip\", with a newline\nand a $dollar";
 
@@ -339,8 +283,6 @@ async fn clipboard(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// The read-only viewer and the control viewer are two servers, and the input
-/// gate is in the box rather than only in this process.
 async fn takeover(computer: &Computer) -> computer::Result<()> {
     let handed = computer.hand_over().await?;
     assert!(
@@ -356,7 +298,6 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
         "the gate in this process let the owner act during a takeover"
     );
 
-    // Past the API, which is the case the gate in this process cannot cover.
     let raw = computer
         .exec_on(ScreenId(0), ["computer-input", "move", "10", "10"])
         .await?;
@@ -368,7 +309,6 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     );
     println!("  the box refuses input, not only the SDK");
 
-    // A read stays open while a person drives.
     computer.screenshot().await?;
 
     handed.end().await?;
@@ -387,7 +327,6 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// A second compositor, in its own runtime directory.
 async fn second_screen(computer: &Computer) -> computer::Result<()> {
     let second = computer.screen(ScreenId(1)).await?;
     assert_eq!(second.geometry().await?, (1280, 800));

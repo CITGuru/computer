@@ -91,6 +91,11 @@ jobs:
       - run: sh -n scripts/install.sh
       - run: shellcheck -s sh scripts/install.sh
       - run: bash -n scripts/release.sh
+      - name: The scripts that go inside an image
+        run: |
+          for script in crates/computer-core/images/*/*.sh; do
+            bash -n "$script"
+          done
       - name: The scripts this crate evaluates inside a page
         run: python3 scripts/check-page-scripts.py
       - name: It knows this machine

@@ -1,15 +1,10 @@
-//! One command, one answer.
-
-/// What a command inside the box did.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ExecResult {
     pub code: i32,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
 
-    /// Not inferable from `code`. `timeout(1)` reports 124, and so does a
-    /// command that exited 124 on its own; the runner records which happened
-    /// rather than leaving every caller to guess the same way.
+    /// Not inferable from `code`: a command can exit 124 on its own.
     pub timed_out: bool,
 }
 

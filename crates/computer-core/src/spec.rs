@@ -1,13 +1,3 @@
-//! Turning a [`Spec`] into a [`Builder`].
-//!
-//! A spec says what desktop is wanted and says nothing about where it runs, so
-//! the same one travels between a container, a microVM and somebody else's
-//! cloud. [`Placement`] carries the other half.
-//!
-//! Defaults and limits are asked of the profile a spec selects rather than read
-//! off one image's constants: [`X11Profile`] runs eight screens and a macOS
-//! guest runs one, and neither number belongs in the description.
-
 use crate::apps;
 use crate::bundle::{self, Extras};
 use crate::{Auth, Bind, Builder, Computer, Error, Profile, Result, WaylandProfile, X11Profile};
@@ -16,16 +6,9 @@ use computer_types::{Placement, Spec};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// The shortest life a box can usefully be given.
-///
-/// The clock starts when a box is created, not when it is ready, and a box takes
-/// seconds to come up. Below this the deadline can pass while it is still
-/// starting, and the caller waits out the full ready timeout to be told the
-/// container went missing — which is true and useless.
+/// The clock starts at creation, and below this a box can expire while starting.
 const MIN_LIFE: u64 = 60;
 
-/// What a spec that left things open turns out to be, once an image has
-/// answered for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resolved {
     pub width: u32,
@@ -33,7 +16,6 @@ pub struct Resolved {
     pub screens: u32,
 }
 
-/// The numbers an image gives a spec that did not name them.
 pub fn resolve(spec: &Spec) -> Result<Resolved> {
     resolve_with(profile_for(spec.desktop.server).as_ref(), spec)
 }
@@ -46,10 +28,6 @@ pub fn profile_for(server: spec::DisplayServer) -> Arc<dyn Profile> {
 }
 
 impl Builder {
-    /// A builder for the desktop this spec describes.
-    ///
-    /// Sets nothing about where the box runs — see [`Builder::place`] — and
-    /// leaves the name, labels and drop behaviour to the caller.
     pub fn from_spec(spec: &Spec) -> Result<Self> {
         let profile = profile_for(spec.desktop.server);
         let resolved = resolve_with(profile.as_ref(), spec)?;
@@ -80,8 +58,7 @@ impl Builder {
                 });
             }
 
-            // An app the dock can offer needs both: a class to return to what
-            // is already open, and a command to start it with.
+            // The dock needs a class to find an open window and a command to start one.
             if let (Some(spec::WindowMatch::Class(class)), false) =
                 (app.window.clone(), app.command.is_empty())
             {
@@ -106,7 +83,6 @@ impl Builder {
         Ok(builder)
     }
 
-    /// Where the box runs, with what, and for how long.
     pub fn place(mut self, placement: &Placement) -> Result<Self> {
         placeable(placement)?;
 
@@ -131,9 +107,7 @@ impl Builder {
 }
 
 fn resolve_with(profile: &dyn Profile, spec: &Spec) -> Result<Resolved> {
-    // Resolved here as well as in `from_spec`, so a spec naming an app the
-    // catalog does not hold is refused by `resolve` too rather than only when
-    // something tries to build it.
+    // An unknown app is refused here too, not only when something builds it.
     apps::resolve_all(spec)?;
 
     let screens = spec.desktop.screens.unwrap_or(1);
@@ -185,6 +159,7 @@ fn packages_for(feature: spec::Feature) -> Vec<String> {
         spec::Feature::Video => Extras::video().packages,
         spec::Feature::Dock => Extras::dock().packages,
         spec::Feature::X11Apps => Extras::x11_apps().packages,
+        spec::Feature::Accessibility => Extras::accessibility().packages,
     }
 }
 
@@ -244,8 +219,6 @@ mod tests {
             panic!("a spec asking for more screens than the image runs was accepted");
         };
 
-        // Naming the image is the difference between a caller fixing their
-        // spec and a caller filing a bug.
         assert!(
             error.to_string().contains(X11Profile.name()),
             "the refusal names the image that refused: {error}"

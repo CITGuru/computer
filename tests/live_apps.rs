@@ -1,5 +1,3 @@
-//! Launching real apps in a real box. Ignored by default.
-
 use computer::{Arrange, Computer, Launch, Point, WaylandProfile};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -70,8 +68,7 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// A Wayland-native program: this image runs sway with `xwayland disable`, so
-/// an X11 app has no display here at all.
+/// sway runs with `xwayland disable` here, so an X11 app has no display.
 #[tokio::test]
 #[ignore = "needs a container runtime and installs a terminal"]
 async fn a_wayland_launch_waits_for_the_app_too() {
@@ -164,8 +161,6 @@ async fn wayland_exercise(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// An X11 program on the Wayland desktop. Without the feature the image has
-/// no X server, and GIMP fails to open a display rather than failing to draw.
 #[tokio::test]
 #[ignore = "needs a container runtime and builds a wayland image with Xwayland"]
 async fn an_x11_app_runs_on_wayland_when_the_feature_is_asked_for() {
@@ -211,10 +206,7 @@ async fn x11_on_wayland(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-/// Every name this crate ships, started for real.
-///
-/// Only running them says whether an entry holds: `xterm` sets no
-/// `_NET_WM_WINDOW_TYPE` and was invisible to a launch for a while.
+/// `xterm` sets no `_NET_WM_WINDOW_TYPE`; only running each name shows its entry holds.
 #[tokio::test]
 #[ignore = "needs a container runtime and installs the whole catalog"]
 async fn every_app_in_the_catalog_starts_and_draws() {

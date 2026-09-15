@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
-#
-# Start or stop one screen's whole stack: X server, window manager, browser,
-# viewer. Screen N is display :N+1 — never :0, which is a real console on a
-# real host.
-#
-# The control viewer is a second server on a second port, started only when
-# somebody asks for it: a person already watching the read-only stream cannot
-# be handed the input without changing where they are connected.
+# Screen N is display :N+1, never :0, which is a real console on a real host.
 set -uo pipefail
 
 action="${1:?usage: computer-screen start|stop|control|release|open|viewers <screen> [url]}"
@@ -24,26 +17,17 @@ width="${COMPUTER_SCREEN_WIDTH:-1280}"
 height="${COMPUTER_SCREEN_HEIGHT:-800}"
 
 control_token="/tmp/computer/screen-${screen}.control"
-# One daemon for the box, one sink per screen: PulseAudio is a singleton per
-# user, so a second daemon refuses to start and that screen gets no sound card.
+# PulseAudio is a singleton per user: one daemon for the box, one sink per screen.
 pulse_home="/tmp/computer/pulse"
 pulse_socket="/tmp/computer/pulse.socket"
 wm_home="/tmp/computer-wm-${number}"
 profile="${HOME:-/home/computer}/.browser-profiles/screen-${number}"
 logs="/tmp/computer/screen-${number}"
 
-# The gate in front of both viewers, as describes it.
-#
-# `open` is what a box on loopback has always been; the crate refuses to publish
-# an open viewer beyond loopback, so anything reachable arrives here gated.
 viewer_auth="${COMPUTER_VIEWER_AUTH:-open}"
 gate_dir="/tmp/computer/gate"
 
-# The websockify arguments for one door, left in `gate_args`.
-#
-# `token` drops the positional target: websockify reads it from the token file
-# instead, which is also what keeps the secret out of `ps` in here. BasicHTTPAuth
-# has no equivalent and takes its source on the command line.
+# `token` reads its target from the file, which keeps the secret out of `ps`.
 build_gate() {
   local door="$1" target="$2" secret file
   gate_args=("$target")
@@ -55,9 +39,7 @@ build_gate() {
     control) secret="${COMPUTER_CONTROL_SECRET:-}" ;;
   esac
 
-  # An empty secret would start a viewer that accepts everybody while the crate
-  # believes it is gated. Refused rather than defaulted: this is the failure the
-  # whole design exists to prevent.
+  # An empty secret would serve an open viewer the crate believes is gated.
   if [ -z "$secret" ]; then
     echo "viewer auth is ${viewer_auth} but the ${door} secret is unset" >&2
     return 1
@@ -67,8 +49,6 @@ build_gate() {
     token)
       mkdir -p "$gate_dir"
       file="${gate_dir}/${door}-${screen}"
-      # The file is the credential, so it is unreadable to anybody else before
-      # websockify is ever pointed at it.
       (umask 077; printf '%s: %s\n' "$secret" "$target" >"$file")
       gate_args=(--token-plugin TokenFile --token-source "$file")
       ;;
@@ -84,8 +64,6 @@ build_gate() {
 }
 
 await() {
-  # Bounded, because a display that has not answered in ten seconds is not
-  # slow — it is broken, and waiting longer only delays the report.
   local deadline=$((SECONDS + 10))
   while [ "$SECONDS" -lt "$deadline" ]; do
     if "$@" >/dev/null 2>&1; then return 0; fi
@@ -98,10 +76,7 @@ listening() {
   bash -c "echo > /dev/tcp/127.0.0.1/$1" 2>/dev/null
 }
 
-# How many browsers are on a viewer, not whether the server is up: websockify
-# holds its connection to x11vnc only while a client is attached, so an
-# established one is a person looking. From /proc, because `ss` and `netstat`
-# are packages this image would otherwise not need.
+# websockify holds its x11vnc connection only while a client is attached.
 established() {
   local hex
   hex=$(printf "%04X" "$1")
@@ -125,9 +100,7 @@ start() {
     >"${logs}-xvfb.log" 2>&1 &
   await xdpyinfo -display "$display" || { echo "no X server on $display" >&2; exit 1; }
 
-  # **Copied, not pointed at.** fluxbox rewrites its own apps file when a
-  # window is remembered, and /etc is read-only to the user the box runs as —
-  # so a config it cannot write is one it complains about on every start.
+  # Copied: fluxbox rewrites its apps file, and /etc is read-only to the box user.
   cp /etc/computer/fluxbox/init "$wm_home/.fluxbox/init"
   cp /etc/computer/fluxbox/menu "$wm_home/.fluxbox/menu"
   cp /etc/computer/fluxbox/apps "$wm_home/.fluxbox/apps"
@@ -139,11 +112,7 @@ start() {
   DISPLAY="$display" computer-wallpaper "$wm_home/wallpaper.jpg" \
     >>"${logs}-wm.log" 2>&1 || true
 
-  # Opt-in through `Extras::dock`: a box driven by a program wants the pixels,
-  # a box a person looks at wants the desk.
   if command -v tint2 >/dev/null 2>&1; then
-    # The list is whatever the image was built with, so the configuration is
-    # written here rather than baked in.
     apps=""
     for entry in /usr/share/applications/computer-app-*.desktop; do
       [ -e "$entry" ] || continue
@@ -151,7 +120,6 @@ start() {
 "
     done
 
-    # Two built-in launchers plus one per app.
     count=$(printf '%s' "$apps" | grep -c launcher_item_app || true)
     width=$(( (count + 2) * 52 + 28 ))
 
@@ -163,12 +131,7 @@ start() {
     DISPLAY="$display" tint2 -c "$dock" >"${logs}-dock.log" 2>&1 &
   fi
 
-  # One profile per screen. A shared profile makes one screen's login every
-  # screen's, and the singleton lock stops the second launch outright.
-  # A profile kept in a volume comes back with the lock the last box left in
-  # it, naming a container that is gone — and Chromium will not start on a
-  # profile another machine says it holds. Cleared only when the name is not
-  # this one: a lock written here is a browser that really is running.
+  # A profile kept in a volume brings back a lock naming a gone container; clear only foreign ones.
   lock="$profile/SingletonLock"
   if [ -L "$lock" ]; then
     case "$(readlink "$lock")" in
@@ -179,13 +142,7 @@ start() {
 
   DISPLAY="$display" computer-browser --user-data-dir="$profile" >"${logs}-browser.log" 2>&1 &
 
-  # The sink goes nowhere — nothing plays out of a box, and a recorder can
-  # still capture it.
-  #
-  # The socket is named rather than defaulted: PulseAudio puts it under
-  # whichever runtime directory the caller happens to have, so a daemon here
-  # and a client from an exec look in two places and the client reports
-  # "connection refused" beside a running daemon.
+  # The socket is named: PulseAudio otherwise puts it under the caller's runtime directory.
   if command -v pulseaudio >/dev/null 2>&1; then
     mkdir -p "$pulse_home"
 
@@ -198,7 +155,6 @@ start() {
       await test -S "$pulse_socket" || echo "no sound card" >>"${logs}-audio.log"
     fi
 
-    # One sink for this screen, and its monitor is what a recorder listens to.
     pactl -s "unix:${pulse_socket}" load-module module-null-sink \
       sink_name="screen${number}" \
       sink_properties="device.description=screen${number}" \
@@ -217,9 +173,7 @@ start() {
 
 stop() {
   pkill -f "Xvfb ${display} -screen" || true
-  # Matched on argv, not on the environment: `HOME=` is a shell assignment
-  # consumed before exec, so it never reaches /proc/PID/cmdline and a
-  # pattern built from it matches nothing.
+  # Matched on argv: `HOME=` is consumed by the shell and never reaches cmdline.
   pkill -f "fluxbox -rc ${wm_home}/.fluxbox/init" || true
   pkill -f -- "--user-data-dir=${profile}" || true
   pkill -f "tint2 -c ${wm_home}/tint2rc" || true
@@ -227,7 +181,7 @@ stop() {
   pkill -f "^x11vnc .* -rfbport ${control_vnc}" || true
   pkill -f "websockify.*${view_port}" || true
   pkill -f "websockify.*${control_port}" || true
-  # The sink goes; the daemon stays, because the other screens are using it.
+  # The daemon stays: the other screens use it.
   if [ -S "$pulse_socket" ]; then
     pactl -s "unix:${pulse_socket}" unload-module module-null-sink 2>/dev/null | true
   fi
@@ -235,9 +189,7 @@ stop() {
 }
 
 control() {
-  # The token makes a takeover endable by whoever started it and nobody else.
-  # Kept here rather than in the caller: a caller that exits takes its memory
-  # with it, and the next one would have no way to learn somebody is driving.
+  # The token lives in the box, so it outlives a caller that exits.
   token="${3:-}"
   mode="${4:-exclusive}"
   [ -n "$token" ] || { echo "usage: computer-screen control <screen> <token> [shared]" >&2; exit 2; }
@@ -245,9 +197,7 @@ control() {
   xdpyinfo -display "$display" >/dev/null 2>&1 \
     || { echo "screen ${screen} is not running" >&2; exit 1; }
 
-  # Already open, so the server is shared and only the token changes hands.
-  # Recorded even here: skipping the write would leave the replaced holder's
-  # token in the file, letting them end the takeover that replaced them.
+  # Already open: record anyway, or the replaced holder could end this takeover.
   if listening "${control_port}"; then
     record_token
     exit 0
@@ -266,9 +216,7 @@ control() {
   record_token
 }
 
-# Only an exclusive takeover writes the token. The file is what the input guard
-# refuses on, and a shared session means both sides drive — a token there would
-# lock out the owner it was sharing with.
+# A shared session writes no token, or the guard would lock out the owner.
 record_token() {
   if [ "$mode" = "shared" ]; then
     rm -f "$control_token"
@@ -278,9 +226,7 @@ record_token() {
 }
 
 release() {
-  # A replaced takeover must not be endable by whoever it replaced: that takes
-  # the keyboard from the person driving now, and tells neither of them why.
-  # `--force` is the deliberate way past.
+  # A replaced takeover is not endable by whoever it replaced; `--force` is the way past.
   want="${3:-}"
   held=$(cat "$control_token" 2>/dev/null || true)
 
@@ -289,8 +235,6 @@ release() {
     exit 3
   fi
 
-  # Only the control pair. The read-only viewer stays up, so whoever was
-  # watching keeps watching.
   pkill -f "^x11vnc .* -rfbport ${control_vnc}" || true
   pkill -f "websockify.*${control_port}" || true
   rm -f "$control_token"
@@ -301,10 +245,69 @@ open_url() {
   xdpyinfo -display "$display" >/dev/null 2>&1 \
     || { echo "screen ${screen} is not running" >&2; exit 1; }
 
-  # The same profile as the running browser, so this joins that window rather
-  # than fighting it for the singleton lock.
+  # The running browser's profile, so this joins it instead of fighting for the lock.
   DISPLAY="$display" computer-browser --user-data-dir="$profile" "$url" \
     >>"${logs}-browser.log" 2>&1 &
+}
+
+recording_file="/tmp/computer/recording-${screen}.mp4"
+recording_pid="/tmp/computer/recording-${screen}.pid"
+
+# Ended with SIGINT and waited on: killed outright, ffmpeg writes no index.
+record() {
+  what="${3:-}"
+  fps="${4:-12}"
+
+  running() {
+    pid=$(cat "$recording_pid" 2>/dev/null || true)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+  }
+
+  case "$what" in
+    start)
+      command -v ffmpeg >/dev/null 2>&1 \
+        || { echo "this box has no ffmpeg; open it with the video feature" >&2; exit 4; }
+      xdpyinfo -display "$display" >/dev/null 2>&1 \
+        || { echo "screen ${screen} is not running" >&2; exit 1; }
+      running && { echo "screen ${screen} is already recording" >&2; exit 3; }
+
+      rm -f "$recording_file"
+
+      # ffmpeg fails on a missing audio input and loses the video with it.
+      sound=()
+      if command -v pactl >/dev/null 2>&1 && [ -S "$pulse_socket" ]; then
+        sound=(-f pulse -i "screen${number}.monitor")
+      fi
+
+      PULSE_SERVER="unix:${pulse_socket}" ffmpeg -nostdin -loglevel error -y \
+        -f x11grab -draw_mouse 1 -framerate "$fps" -i "$display" \
+        "${sound[@]}" \
+        -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+        -movflags frag_keyframe+empty_moov \
+        "$recording_file" >>"${logs}-record.log" 2>&1 &
+      echo $! > "$recording_pid"
+      echo "$recording_file"
+      ;;
+    stop)
+      running || { echo "screen ${screen} is not recording" >&2; exit 3; }
+      pid=$(cat "$recording_pid")
+      kill -INT "$pid" 2>/dev/null || true
+      for _ in $(seq 1 100); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+      rm -f "$recording_pid"
+      echo "$recording_file"
+      ;;
+    status)
+      running && echo "recording ${recording_file}" || echo "idle"
+      ;;
+    *)
+      echo "usage: computer-screen record <screen> start|stop|status [fps]" >&2
+      exit 2
+      ;;
+  esac
 }
 
 case "$action" in
@@ -314,5 +317,6 @@ case "$action" in
   control) control "$@" ;;
   release) release "$@" ;;
   open)    open_url ;;
-  *) echo "usage: computer-screen start|stop|control|release|open|viewers <screen> [url]" >&2; exit 2 ;;
+  record)  record "$@" ;;
+  *) echo "usage: computer-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
 esac

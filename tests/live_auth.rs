@@ -1,14 +1,4 @@
-//! The viewer gate, against a real box. Ignored by default.
-//!
-//! ```text
-//! cargo test --test live_auth -- --ignored --nocapture
-//! ```
-//!
-//! The offline suite proves the crate writes the gate and the scripts read it.
-//! Only this proves the gate *refuses*: that a wrong credential does not open a
-//! desktop, and that the credential for one door does not open the other. A
-//! refusal nobody has watched happen is the failure this whole design exists to
-//! prevent.
+//! The viewer gate, against a real box: `cargo test --test live_auth -- --ignored`.
 
 use computer::{Auth, Computer, WaylandProfile};
 use std::path::Path;
@@ -40,11 +30,7 @@ fn curl(args: &[String]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
-/// A websocket handshake, as the browser would open one.
-///
-/// The status is what says whether the gate let it through: 101 is the upgrade,
-/// and anything else — including `000` for a connection closed without a
-/// reply — is a refusal.
+/// 101 is the upgrade; anything else, `000` included, is a refusal.
 fn upgrade(url: &str, credentials: Option<&str>) -> String {
     let mut args: Vec<String> = [
         "--http1.1",
@@ -117,8 +103,7 @@ async fn token_checks(computer: &Computer) -> Result<(), String> {
         }
     };
 
-    // The page is static noVNC and carries no desktop, so it is not what the
-    // token gates. The socket behind it is.
+    // The noVNC page is static; the socket behind it is what the token gates.
     check(
         "the page is served",
         page(&format!("http://{at}/vnc.html"), None),
@@ -142,8 +127,6 @@ async fn token_checks(computer: &Computer) -> Result<(), String> {
         return Err("no ticket at all opened the viewer".to_string());
     }
 
-    // The claim two credentials exist to make: a watch link does not become a
-    // control link by changing the port.
     let takeover = computer
         .hand_over()
         .await
@@ -202,8 +185,7 @@ async fn password_checks(computer: &Computer) -> Result<(), String> {
 
     let html = format!("http://{at}/vnc.html");
 
-    // `--web-auth` is what makes this cover the page. Without it the HTML is
-    // served to anyone and only the socket is gated.
+    // `--web-auth` gates the page too; without it only the socket is gated.
     let unasked = page(&html, None);
     println!("  the page with no credentials: {unasked}");
     if unasked != "401" {
@@ -240,10 +222,6 @@ async fn password_checks(computer: &Computer) -> Result<(), String> {
     Ok(())
 }
 
-/// The gate is one block shared by all three images, and the Wayland one puts a
-/// different compositor and a different VNC server behind the same websockify.
-/// Nothing about that should reach the gate, which is exactly why it is worth
-/// watching once rather than assumed.
 #[tokio::test]
 #[ignore = "needs a container runtime, and builds the Wayland image"]
 async fn the_wayland_image_gates_its_viewer_the_same_way() {
@@ -259,9 +237,6 @@ async fn the_wayland_image_gates_its_viewer_the_same_way() {
     outcome.expect("every step");
 }
 
-/// The Ubuntu image builds the same scripts from a local directory, and its
-/// `screen.sh` is byte-identical to the desktop one. Watched anyway, because
-/// "identical" is a claim about two files rather than about two images.
 #[tokio::test]
 #[ignore = "needs a container runtime, and builds the Ubuntu image"]
 async fn the_ubuntu_image_gates_its_viewer_the_same_way() {

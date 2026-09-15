@@ -31,7 +31,8 @@ cargo install --path crates/computer-mcp
 `find` · `wait_for` · `click_element` · `fill_field` · `dropdown` ·
 `upload_file` · `hover` · `history` · `scroll_page` ·
 `open_url` · `open_app` · `list_apps` · `click` · `type_text` · `press_key` ·
-`scroll` · `drag` · `run_command` · `hand_over` · `reclaim_screen` · `fork_box`
+`scroll` · `drag` · `widget` · `run_command` · `hand_over` · `reclaim_screen` ·
+`fork_box`
 
 **On a web page, act by name rather than by coordinate.** `find` says what is
 there; `click_element`, `fill_field`, `dropdown` and `upload_file` act on what
@@ -40,6 +41,15 @@ moves under it, and two of these have no coordinate at all: a file chooser is
 the operating system's window, and a native dropdown opens a menu no screenshot
 shows and no click reaches. `click`, `type_text` and `drag` remain for
 everything that is not a page.
+
+**In a native window, act by name too.** `widget` reads the accessibility tree —
+the roles and names a toolkit publishes about its own widgets — so a file dialog
+or a settings panel is reachable the same way a page is. It needs a box built
+with `Feature::Accessibility`, and it matches the label beside a field as well
+as the field's own name, because a form field usually has no name of its own.
+`press` there runs the widget's own action and sends no pointer event, so it
+reaches something covered or scrolled out of view; where an application is
+watching the pointer, `find` answers with a rectangle and `click` still works.
 
 **`wait_for` after anything that makes the page fetch.** A sleep is either
 short enough to act too early or long enough to be paid on every step, and a

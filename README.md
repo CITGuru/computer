@@ -98,7 +98,7 @@ computer.click((640, 400), Button::Left).await?;
 computer.double_click((640, 400), Button::Left).await?;
 computer.drag((100, 100), (400, 300), Button::Left).await?;
 computer.type_text("hello").await?;
-computer.key("ctrl+shift+p").await?;
+computer.press("ctrl+shift+p").await?;
 computer.scroll((640, 400), Delta::down(3)).await?;
 computer.scroll((640, 400), Delta::right(3)).await?;
 let pointer = computer.cursor().await?;
@@ -111,10 +111,10 @@ Common key names work as expected. For example, the crate converts `enter` to `R
 From the command line the same gesture has a shorter spelling, and the point is optional:
 
 ```bash
-computer scroll <box> down            # three notches, at the middle of the screen
-computer scroll <box> right 6
-computer scroll <box> 640 400 up 2    # at a point
-computer scroll <box> 640 400 -2 -2   # both axes at once
+computer mouse <box> scroll down            # three notches, at the middle of the screen
+computer mouse <box> scroll right 6
+computer mouse <box> scroll 640 400 up 2    # at a point
+computer mouse <box> scroll 640 400 -2 -2   # both axes at once
 ```
 
 ### Important coordinate rules
@@ -228,6 +228,50 @@ Groups do not create screens. Many group pages can run through CDP at the same t
 
 This API wraps CDP browser contexts, not Chrome's visual tab groups. Visual tab groups are part of the extension-only `chrome.tabGroups` API.
 
+## Drive a native window by widget name
+
+A web page has Chromium behind it, so `find` and `click_element` know what is on it. A file dialog, a settings panel or an installer has nothing but pixels, and a coordinate worked out from a screenshot is stale the moment the window moves. The accessibility tree is what the toolkit itself publishes about its widgets: their roles, their names, and what pressing one would do.
+
+Here's how to use the accessibility feature:
+
+```rust
+let computer = Computer::builder().accessibility().launch().await?;
+let screen = computer.primary();
+
+let street = NodeQuery { query: "Street".to_string(), ..NodeQuery::default() };
+
+for node in screen.find_nodes(&street, None).await? {
+    println!("{} {:?} at {:?}", node.role, node.name, node.at);
+}
+
+screen.set_node(&street, "12 Bishop Street").await?;
+screen.invoke_node(&NodeQuery { query: "OK".to_string(), ..NodeQuery::default() }, None).await?;
+```
+
+`find_nodes` answers best match first. `nodes()` reads a whole tree, `focus_node` gives one the keyboard, `set_node` assigns a value, and `invoke_node` runs the widget's own action.
+
+A query matches the words *beside* a widget as well as its own name. A GTK entry has no name of its own — "Street" is a separate label next to it — so searching names alone would find every button and no field. Where an application publishes no label relation, and most publish none at all, the pairing is geometric: the field to the right of the label, or the one below it. `Node::labelled` says when a match arrived that way, so you can tell which field you were handed.
+
+`invoke_node` is not a click. No pointer moves, which is why it reaches a widget that is covered or scrolled out of view, and why an application watching the pointer sees nothing of it. Each node carries `at`, so a real click is still one call away when the difference matters:
+
+```rust
+let found = screen.find_nodes(&street, Some(1)).await?;
+if let Some(at) = found.first().and_then(|node| node.at) {
+    screen.click(at, Button::Left).await?;
+}
+```
+
+The action name belongs to the toolkit, not to us: GTK spells it `click` where Qt spells it `Press`. `invoke_node` runs the first action unless you name one, and every node lists what it offers.
+
+From the command line:
+
+```bash
+computer up --accessibility
+computer widget <box> find "Street" --role text
+computer widget <box> fill "Street" "12 Bishop Street"
+computer widget <box> press "OK"
+```
+
 ## Configure a desktop
 
 Use the builder when you need settings other than the defaults:
@@ -286,6 +330,8 @@ Computer::builder()
 ```
 
 `Extras::audio()` adds a sound card, `Extras::video()` adds a recorder, and `Extras::everything()` adds all three sets.
+
+`Extras::accessibility()` installs AT-SPI, so a native window can be driven by the names of its widgets rather than by its pixels — `Computer::builder().accessibility()` is the same thing. See [Drive a native window by widget name](#drive-a-native-window-by-widget-name).
 
 `Extras::x11_apps()` puts Xwayland in the Wayland image, so an X11 program can run on a compositor. Opt-in, because it is a trade: about seventy megabytes resident, paid by every box that carries it whether or not an X11 program is ever started. Without it that image has no X server at all, and an X11 program fails to open a display rather than failing to draw.
 
@@ -555,8 +601,8 @@ A window is looked up when the capture is taken, not when it was listed — a wi
 `scaled` is a percentage of full size. It is what stops an agent paying for a megabyte on every step: a 1280×800 desktop halves to about two thirds of the bytes with the text still readable, and quarters to a third of them. On X11 the reduction averages pixels rather than interpolating, because blurring flat colours into gradients makes a *larger* PNG than the full-size picture it was meant to save.
 
 ```bash
-computer shot <box> out.png --window 42 --scale 50
-computer shot <box> out.png --at 100,80 --size 400x300
+computer screenshot <box> out.png --window 42 --scale 50
+computer screenshot <box> out.png --at 100,80 --size 400x300
 ```
 
 ## Hold a modifier, and wait for the drawing to stop
@@ -577,8 +623,8 @@ screen.wait_until_still(Duration::from_millis(400), Duration::from_secs(10)).awa
 The watch runs inside the box, so it costs one round trip however long it waits. A screen with something animating on it never settles and reaches the deadline instead, which is why one is asked for.
 
 ```bash
-computer click <box> 640 400 left --held shift,ctrl
-computer still <box> --settle 400 --within 10000
+computer mouse <box> click 640 400 left --held shift,ctrl
+computer wait <box> --settle 400 --within 10000
 ```
 
 Modifiers are X11 only. Holding a key across a click on Wayland needs a virtual keyboard that this image's pointer does not make, so the Wayland driver refuses rather than dropping the modifier and clicking anyway.
@@ -930,6 +976,7 @@ A control port exists only while somebody has been handed the screen, and it clo
 - [ ] MacOS Desktop Box and Quartz Display Server
 - [x] Computer Rest API & MCP - Manage instances of computer boxes
 - [x] Custom Image Builder - ImageRecipe
+- [x] Accessibility Tree - drive native windows by widget name, not by pixels
 
 ## License
 

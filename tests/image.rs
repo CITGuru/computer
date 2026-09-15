@@ -1,18 +1,3 @@
-//! The image and the claim about it, checked against each other.
-//!
-//! "One claim, tested once" is the reason for owning a desktop image rather
-//! than renting one, and it holds only while [`X11Profile`] and
-//! `images/desktop/` agree. Nothing else notices when they stop: the code
-//! keeps reporting 1280x800 and eight screens, the image quietly builds
-//! something else, and a caller chooses on a claim that was true last month.
-//!
-//! A drift check belongs to a profile rather than to the trait. Every other
-//! profile is another image and answers for itself; this pair is the one this
-//! crate ships and is therefore the one it has to prove.
-//!
-//! So these read the image as text. No Docker, no build, no daemon — the drift
-//! is visible in the files themselves.
-
 use computer::bundle::{
     BROWSER_DESKTOP, BROWSER_SH, DOCKERFILE, FLUXBOX_INIT, FLUXBOX_MENU, FLUXBOX_STYLE,
     INPUT_GUARD, LAUNCH_SH, SCREEN_SH, START_SH, TERMINAL_DESKTOP, TINT2RC, WALLPAPER_SH,
@@ -24,12 +9,10 @@ use computer::image::{
 use computer::{AUTH_ENV, CONTROL_SECRET_ENV, VIEW_SECRET_ENV, VIEWER_USER};
 use computer::{Profile, ScreenId, X11Profile};
 
-/// Every viewer port the built-in profile serves.
 fn viewer_ports() -> Vec<u16> {
     X11Profile.ports().viewer_ports()
 }
 
-/// The `EXPOSE` lines, flattened into port numbers.
 fn exposed() -> Vec<u16> {
     let mut ports: Vec<u16> = DOCKERFILE
         .lines()
@@ -139,8 +122,6 @@ fn every_verb_the_code_sends_is_one_the_script_answers() {
 
 #[test]
 fn the_image_carries_every_binary_the_driver_calls() {
-    // The X11 driver shells these by name, and a missing one reads as a
-    // broken tool rather than a missing package.
     for binary in [
         "xdotool",
         "wmctrl",
@@ -186,9 +167,7 @@ fn the_browser_speaks_devtools_on_the_port_the_code_reports() {
 
 #[test]
 fn devtools_is_published_through_a_bridge_and_not_straight_out() {
-    // Chromium binds the debugging port to loopback whatever
-    // --remote-debugging-address says, so a host port forwarded onto 9222
-    // reaches nothing and answers with an empty reply.
+    // Chromium binds DevTools to loopback, so 9222 cannot be forwarded straight on.
     assert!(
         START_SH.contains(&format!("TCP-LISTEN:{DEVTOOLS_BRIDGE_PORT}")),
         "nothing listens where the runtime can reach it"
@@ -213,8 +192,6 @@ fn the_browser_gets_a_profile_per_screen() {
 
 #[test]
 fn the_browser_starts_without_a_first_run_interstitial() {
-    // A first-run dialogue is a modal that has to be dismissed before
-    // anything else works.
     for flag in [
         "--no-first-run",
         "--no-default-browser-check",
@@ -295,8 +272,6 @@ fn releasing_control_leaves_the_read_only_viewer_up() {
 
 #[test]
 fn a_viewer_is_counted_by_connection_and_not_by_whether_a_server_is_up() {
-    // The control viewer keeps listening after the last tab closes, so "the
-    // server is up" would say somebody is driving long after nobody is.
     assert!(SCREEN_SH.contains("/proc/net/tcp"));
     assert!(
         SCREEN_SH.contains("$4==\"01\""),
@@ -307,8 +282,6 @@ fn a_viewer_is_counted_by_connection_and_not_by_whether_a_server_is_up() {
 
 #[test]
 fn input_is_refused_by_the_image_and_not_only_by_the_crate() {
-    // The gate inside the crate is cooperative. This is on the path, so a
-    // caller that reaches past the API meets it too.
     assert!(
         DOCKERFILE.contains("input-guard.sh /usr/local/bin/xdotool"),
         "the guard has to shadow the real binary to be on the path"
@@ -333,8 +306,6 @@ fn input_is_refused_by_the_image_and_not_only_by_the_crate() {
 
 #[test]
 fn a_sound_card_is_started_only_where_one_is_installed() {
-    // The base image has no audio, and asking for a device that is not there
-    // fails the whole recording.
     assert!(SCREEN_SH.contains("command -v pulseaudio"));
     assert!(
         SCREEN_SH.contains("module-null-sink"),
@@ -374,9 +345,7 @@ fn the_container_idles_rather_than_exiting() {
 
 #[test]
 fn the_image_can_also_bring_a_screen_up_and_return() {
-    // A container stops when its command exits, so the supervisor idles to
-    // hold it open. A machine lives until it is stopped, and the same loop
-    // there would hold an exec open for its whole life.
+    // A container needs the idle loop to stay up; on a machine it would hold an exec open.
     assert!(
         START_SH.contains(r#"if [ "${1:-}" = "--once" ]; then"#),
         "computer-desktop --once is what a microVM boots with"
@@ -411,12 +380,7 @@ fn the_window_manager_is_configured_rather_than_left_to_its_defaults() {
     assert!(SCREEN_SH.contains("/etc/computer/fluxbox/init"));
 }
 
-/// Every file the Dockerfile copies has to be one the bundle carries.
-///
-/// `materialize` writes the bundle's list and nothing else, so a `COPY` of a
-/// file that is not on it fails the build with "not found" — and the
-/// fingerprint would not cover that file either, leaving edits to it answering
-/// under a stale tag.
+/// `materialize` writes only the bundle's list, so an unlisted `COPY` source fails the build.
 #[test]
 fn every_file_the_dockerfile_copies_is_one_the_bundle_carries() {
     let carried: Vec<&str> = computer::bundle::DESKTOP
@@ -443,7 +407,6 @@ fn every_file_the_dockerfile_copies_is_one_the_bundle_carries() {
     }
 }
 
-/// And the window manager has to be given the files, not merely shipped them.
 #[test]
 fn the_window_manager_is_handed_every_configuration_the_image_installs() {
     for name in ["init", "menu", "apps", "style"] {
@@ -459,7 +422,6 @@ fn the_window_manager_is_handed_every_configuration_the_image_installs() {
     }
 }
 
-/// A style fluxbox never loads is default grey with extra steps.
 #[test]
 fn the_style_is_named_by_the_configuration_that_loads_it() {
     assert!(
@@ -477,7 +439,6 @@ fn the_style_is_named_by_the_configuration_that_loads_it() {
     );
 }
 
-/// The desktop is painted after the window manager, or not at all.
 #[test]
 fn the_wallpaper_is_set_once_the_window_manager_cannot_overwrite_it() {
     let after_wm = SCREEN_SH
@@ -497,7 +458,6 @@ fn the_wallpaper_is_set_once_the_window_manager_cannot_overwrite_it() {
     );
 }
 
-/// The dock is opt-in, and the image has to behave whether or not it is there.
 #[test]
 fn the_dock_is_started_only_where_one_was_installed() {
     assert!(
@@ -519,7 +479,6 @@ fn the_dock_is_started_only_where_one_was_installed() {
     );
 }
 
-/// A launcher pointing at an icon nothing draws is an empty square.
 #[test]
 fn the_terminal_launcher_has_an_icon_the_image_draws() {
     let icon = TERMINAL_DESKTOP
@@ -538,7 +497,6 @@ fn the_terminal_launcher_has_an_icon_the_image_draws() {
     );
 }
 
-/// A browser started from the dock has to be the one the crate drives.
 #[test]
 fn every_launcher_starts_the_browser_this_screen_already_owns() {
     assert!(
@@ -562,11 +520,7 @@ fn every_launcher_starts_the_browser_this_screen_already_owns() {
     );
 }
 
-/// A command a launcher runs through a shell cannot carry a bare `#`.
-///
-/// `#rrggbb` is the obvious way to write a colour and the one that breaks: a
-/// launcher handing `Exec` to a shell sees the `#` as a comment and truncates
-/// there. Nothing appears and nothing is said, so it reads as a slow launch.
+/// A launcher hands `Exec` to a shell, so a bare `#` silently truncates it.
 #[test]
 fn no_launcher_command_carries_a_bare_hash() {
     let exec = TERMINAL_DESKTOP
@@ -590,7 +544,6 @@ fn no_launcher_command_carries_a_bare_hash() {
     }
 }
 
-/// A dock icon returns to what is open rather than handing back a second copy.
 #[test]
 fn a_launcher_focuses_what_is_already_running() {
     for (name, entry) in [("terminal", TERMINAL_DESKTOP), ("browser", BROWSER_DESKTOP)] {
@@ -644,13 +597,6 @@ fn the_claim_is_a_constant_and_not_a_survey() {
     assert_eq!(first.max_screens, MAX_SCREENS);
 }
 
-/// A hidden dock is only reachable if the strip it leaves behind is somewhere a
-/// pointer can get to.
-///
-/// `panel_margin = 0 12` floated that strip twelve pixels above the bottom of
-/// the screen, so the gesture — pointer to the edge — landed under it and
-/// nothing came up. tint2 reported no fault: the configuration was fine, and
-/// only its idea of where a pointer goes was wrong.
 #[test]
 fn the_hidden_dock_leaves_its_trigger_on_the_screen_edge() {
     let value = |key: &str| {
@@ -687,13 +633,7 @@ fn the_hidden_dock_leaves_its_trigger_on_the_screen_edge() {
     );
 }
 
-/// A `pkill` pattern built from an environment assignment matches nothing.
-///
-/// The shell strips `HOME=` before it execs, so it never reaches argv and
-/// `pkill -f "HOME=..."` never finds the window manager it names — exiting
-/// zero, because matching nothing is not an error. A flag like
-/// `--user-data-dir=` carries `=` too and matches perfectly well; a bare
-/// NAME=VALUE is the shape that cannot.
+/// The shell strips `NAME=` before exec, so `pkill -f "NAME=..."` matches nothing.
 #[test]
 fn no_teardown_pattern_matches_on_an_environment_assignment() {
     let is_assignment = |pattern: &str| {
@@ -720,9 +660,6 @@ fn no_teardown_pattern_matches_on_an_environment_assignment() {
     }
 }
 
-/// The crate writes the gate into the box as environment and the script reads
-/// it back. Neither half means anything without the other, and a rename on one
-/// side leaves a viewer that refuses everybody or, worse, one that does not.
 #[test]
 fn the_script_reads_the_gate_the_crate_writes() {
     for name in [AUTH_ENV, VIEW_SECRET_ENV, CONTROL_SECRET_ENV] {
@@ -747,10 +684,6 @@ fn the_script_reads_the_gate_the_crate_writes() {
     );
 }
 
-/// The two doors must not read one variable. They differ by a port number in a
-/// URL, so one credential across both makes every watch link a control link,
-/// and `input-guard.sh` does not close that — it shadows `xdotool`, and a
-/// person on the control port drives over VNC without going near it.
 #[test]
 fn each_door_carries_its_own_credential() {
     let gate = SCREEN_SH
@@ -763,9 +696,6 @@ fn each_door_carries_its_own_credential() {
     assert!(gate.contains(&format!("control) secret=\"${{{CONTROL_SECRET_ENV}")));
 }
 
-/// A gate that cannot find its secret must refuse. Starting the viewer anyway
-/// would serve an open desktop while the crate reported it locked, which is the
-/// one failure this whole arrangement exists to prevent.
 #[test]
 fn a_gate_with_no_secret_refuses_rather_than_opening() {
     let gate = SCREEN_SH
@@ -780,8 +710,6 @@ fn a_gate_with_no_secret_refuses_rather_than_opening() {
     );
 }
 
-/// Both viewers go through the gate. One that took its target directly would
-/// serve an ungated desktop on a port the crate believes is locked.
 #[test]
 fn neither_viewer_reaches_websockify_around_the_gate() {
     for door in ["view", "control"] {
@@ -800,8 +728,6 @@ fn neither_viewer_reaches_websockify_around_the_gate() {
     );
 }
 
-/// A desktop carrying applications and no way to open one is a desk with the
-/// drawers locked.
 #[test]
 fn an_app_the_box_was_built_with_is_offered_by_the_dock() {
     assert!(

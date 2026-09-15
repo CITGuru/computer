@@ -1,18 +1,9 @@
-//! What the driver actually sends, checked without a container.
-//!
-//! Every method here becomes one command line inside the box. A wrong flag or
-//! a missing `--` produces a refusal that reads like a broken tool, and a
-//! container is the slowest possible place to discover that — so the mapping
-//! is pinned here and the image test is left to prove the image.
-
 use computer::servers::x11::{X11Desktop, port_listening};
 use computer::testing::{ScriptedDesktop, ScriptedHost};
 use computer::{
     Button, ControlGate, Delta, Desktop, ExecResult, Point, ScreenHost, ScreenId, Selection,
 };
 
-/// The clipboard is an optional capability, so a driver that has one has to
-/// hand it over rather than answer a method that every driver must carry.
 fn clipboard(screen: &X11Desktop) -> &dyn computer::Clipboard {
     screen
         .as_clipboard()
@@ -110,7 +101,7 @@ async fn typed_text_is_passed_after_a_double_dash() {
     let host = Arc::new(ScriptedHost::new());
     let screen = driver(Arc::clone(&host));
 
-    screen.type_text("--version").await.expect("typing");
+    screen.type_text("--version", None).await.expect("typing");
 
     assert_eq!(
         host.last(),
@@ -130,7 +121,10 @@ async fn a_chord_is_translated_before_it_is_sent() {
     let host = Arc::new(ScriptedHost::new());
     let screen = driver(Arc::clone(&host));
 
-    screen.key("cmd+enter").await.expect("a chord");
+    screen
+        .press(&["cmd+enter".to_string()], &[])
+        .await
+        .expect("a chord");
 
     assert_eq!(
         host.last_line(),
@@ -325,10 +319,13 @@ async fn the_owner_drives_again_once_the_screen_is_handed_back() {
     let screen = driver(Arc::clone(&host)).with_control(Arc::clone(&gate));
 
     gate.hand_over("token", SystemTime::now());
-    assert!(screen.key("ctrl+a").await.is_err());
+    assert!(screen.press(&["ctrl+a".to_string()], &[]).await.is_err());
 
     assert!(gate.hand_back("token"));
-    screen.key("ctrl+a").await.expect("the owner has it back");
+    screen
+        .press(&["ctrl+a".to_string()], &[])
+        .await
+        .expect("the owner has it back");
 }
 
 #[tokio::test]
@@ -437,7 +434,6 @@ async fn a_takeover_stops_a_driver_that_holds_no_x_server() {
 async fn every_gesture_a_screen_needs_is_on_the_trait() {
     let host = Arc::new(ScriptedHost::new());
     let screen = driver(Arc::clone(&host));
-    // Through the trait object, which is what `Screen` holds.
     let desktop: &dyn Desktop = &screen;
 
     desktop

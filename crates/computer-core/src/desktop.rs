@@ -1,22 +1,73 @@
-//! What a box can show, and be driven through.
-//!
-//! [`DesktopSupport`] is what an image claims, [`DesktopPresence`] is what
-//! answers right now, and [`DesktopNeed`] is what a caller requires. `browser`
-//! sits beside `display` because a browser needs no framebuffer, and a
-//! framebuffer needs an X server and a viewer.
-//!
-//! [`Desktop`] is everything a screen is driven through, and [`Clipboard`] is
-//! the part a box may not have.
-
 use crate::ScreenId;
 use crate::error::{Error, Result};
 use crate::machine::MachineHost;
 use crate::screens::ControlGate;
 use async_trait::async_trait;
-pub use computer_types::{Button, Held, Point, Rect, Selection};
+pub use computer_types::{Button, Held, Keys, Node, NodeQuery, Point, Rect, Selection};
+
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
+
+pub struct Press<'a> {
+    on: &'a dyn Desktop,
+    chords: Vec<String>,
+    held: Vec<Held>,
+}
+
+impl<'a> Press<'a> {
+    pub(crate) fn new(on: &'a dyn Desktop, keys: impl Keys) -> Self {
+        Self {
+            on,
+            chords: keys.chords(),
+            held: Vec::new(),
+        }
+    }
+
+    pub fn holding(mut self, held: impl AsRef<[Held]>) -> Self {
+        self.held = held.as_ref().to_vec();
+        self
+    }
+}
+
+impl<'a> std::future::IntoFuture for Press<'a> {
+    type Output = Result<()>;
+    type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move { self.on.press(&self.chords, &self.held).await })
+    }
+}
+
+pub struct Typing<'a> {
+    on: &'a dyn Desktop,
+    text: String,
+    delay: Option<Duration>,
+}
+
+impl<'a> Typing<'a> {
+    pub(crate) fn new(on: &'a dyn Desktop, text: impl Into<String>) -> Self {
+        Self {
+            on,
+            text: text.into(),
+            delay: None,
+        }
+    }
+
+    pub fn every(mut self, delay: Duration) -> Self {
+        self.delay = Some(delay);
+        self
+    }
+}
+
+impl<'a> std::future::IntoFuture for Typing<'a> {
+    type Output = Result<()>;
+    type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move { self.on.type_text(&self.text, self.delay).await })
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,15 +98,12 @@ pub struct Browser {
     pub name: String,
     #[serde(default)]
     pub version: Option<String>,
-    /// A DevTools endpoint, so it is drivable with no desktop at all.
     #[serde(default)]
     pub cdp: bool,
-    /// A real window on the display, not headless only.
     #[serde(default)]
     pub headed: bool,
 }
 
-/// Who is driving the input right now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Control {
     Owner,
@@ -65,13 +113,11 @@ pub enum Control {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Viewer {
     pub kind: ViewerKind,
-    /// A person can take the input, not merely watch.
     #[serde(default)]
     pub takeover: bool,
     pub control: Control,
 }
 
-/// What it can show. Stable — cache it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DesktopSupport {
     pub display: Option<Display>,
@@ -79,14 +125,9 @@ pub struct DesktopSupport {
     pub browser: Option<Browser>,
     pub clipboard: bool,
     pub viewer: Option<Viewer>,
-    /// Screens it can run at once. Zero where it has no desktop at all.
     pub max_screens: u32,
 }
 
-/// What it can serve right now.
-///
-/// A configured `DISPLAY` is not a running one: an X server that has exited
-/// leaves the variable set.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DesktopPresence {
     pub display: bool,
@@ -95,17 +136,11 @@ pub struct DesktopPresence {
 }
 
 impl DesktopPresence {
-    /// Both halves up. The screen stays blank until the browser has a window
-    /// on it.
     pub fn ready(&self) -> bool {
         self.display && self.browser
     }
 }
 
-/// Who is looking at a screen, and who is on the input.
-///
-/// Counted from live connections. Both servers keep listening whether or not
-/// anyone is connected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Viewers {
     pub watching: usize,
@@ -117,7 +152,6 @@ impl Viewers {
         self.driving > 0
     }
 
-    /// `watching=0 driving=1`, as the image reports it.
     pub fn parse(output: &str) -> Option<Self> {
         let mut viewers = Self::default();
         let mut seen = 0;
@@ -144,7 +178,6 @@ impl Viewers {
     }
 }
 
-/// What the work needs, checked against what a box offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DesktopNeed {
     pub display: bool,
@@ -154,7 +187,6 @@ pub struct DesktopNeed {
 }
 
 impl DesktopNeed {
-    /// Just a browser — no framebuffer, no window manager, any container.
     pub fn browser() -> Self {
         Self {
             browser: true,
@@ -162,7 +194,6 @@ impl DesktopNeed {
         }
     }
 
-    /// A screen the caller can see and drive.
     pub fn desktop() -> Self {
         Self {
             display: true,
@@ -176,7 +207,6 @@ impl DesktopNeed {
         self
     }
 
-    /// Which parts of this need `support` cannot meet. Empty means placeable.
     pub fn unsupported_by(&self, support: &DesktopSupport) -> Vec<&'static str> {
         let mut gaps = Vec::new();
 
@@ -192,8 +222,6 @@ impl DesktopNeed {
         if let Some((width, height)) = self.min_size {
             match support.display {
                 Some(display) if display.width >= width && display.height >= height => {}
-                // A display too small is reported as the size, not as a missing
-                // display: the caller asked for a screen and there is one.
                 Some(_) => gaps.push("display size"),
                 None if !self.display => gaps.push("display"),
                 None => {}
@@ -203,7 +231,6 @@ impl DesktopNeed {
         gaps
     }
 
-    /// The refusal a caller gets before anything is started.
     pub fn check(&self, support: &DesktopSupport) -> Result<()> {
         let gaps = self.unsupported_by(support);
         if gaps.is_empty() {
@@ -214,19 +241,12 @@ impl DesktopNeed {
     }
 }
 
-/// A DevTools endpoint reachable from the caller, not merely from inside.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserEndpoint {
     pub http_url: String,
     pub ws_url: String,
 }
 
-/// A wheel movement, in notches. Positive `dy` scrolls down and positive `dx`
-/// scrolls right.
-///
-/// Both axes at once is one gesture, not two: a trackpad swiped diagonally
-/// sends both, and splitting it into two calls moves the page in a corner
-/// rather than across it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delta {
     pub dx: i32,
@@ -266,25 +286,26 @@ impl Delta {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Shot {
     pub of: Of,
-    /// A percentage of full size, or `None` for all of it. A picture of a
-    /// desktop is a megabyte an agent pays for on every step, and most of what
-    /// it needs to read survives being halved.
+    /// Percent of full size.
     pub scale: Option<u32>,
+    pub pointer: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Of {
     #[default]
     Screen,
-    /// One window, by the id `windows()` reports. Looked up before the
-    /// capture, because a window is a rectangle once it has been found.
     Window(String),
     Region(Rect),
 }
 
 impl Shot {
     pub fn of(of: Of) -> Self {
-        Self { of, scale: None }
+        Self {
+            of,
+            scale: None,
+            pointer: false,
+        }
     }
 
     pub fn window(id: impl Into<String>) -> Self {
@@ -301,52 +322,27 @@ impl Shot {
     }
 }
 
-/// Reading and writing the selection a paste comes from.
-///
-/// Its own trait because [`DesktopSupport::clipboard`] calls the clipboard
-/// optional. `None` from [`Desktop::as_clipboard`] is something a caller can
-/// check; a required method that only ever fails is not.
 #[async_trait]
 pub trait Clipboard: Send + Sync {
-    /// What is on one selection, or an empty string where nothing is.
-    ///
-    /// A selection nobody has written to is empty rather than an error.
+    /// Empty rather than an error where nothing was written.
     async fn text(&self, selection: Selection) -> Result<String>;
 
-    /// Own a selection, serving what is in a file already inside the box.
-    ///
-    /// A path rather than the text, because the content is arbitrary and a
-    /// command line is no place for a document. Staging the file is the
-    /// caller's job: only the caller can reach the box.
+    /// A path inside the box: arbitrary content does not fit on a command line.
     async fn set_from(&self, selection: Selection, path: &str) -> Result<()>;
 
-    /// The selection as one of the types it is offered in.
-    ///
-    /// A page that copies a picture offers `image/png` beside the text of its
-    /// `alt` attribute, and asking for the wrong one gets the wrong thing.
     async fn bytes(&self, selection: Selection, target: &str) -> Result<Vec<u8>>;
 
-    /// Own the selection, offering it as this type.
     async fn set_bytes_from(&self, selection: Selection, target: &str, path: &str) -> Result<()>;
 
-    /// The types the selection can be read as, as its owner advertises them.
     async fn targets(&self, selection: Selection) -> Result<Vec<String>>;
 }
 
-/// A screen that can be looked at and driven.
-///
-/// Everything a screen is driven through is here, so a second display
-/// server is another implementation rather than an edit to
-/// [`crate::Screen`].
 #[async_trait]
 pub trait Desktop: Send + Sync {
-    /// PNG bytes of the whole screen.
+    /// PNG.
     async fn screenshot(&self) -> Result<Vec<u8>>;
 
-    /// `area` of `None` is the whole screen and `scale` of `None` its full
-    /// size, which is what the default answers. An implementation that cannot
-    /// crop or resize refuses the rest rather than quietly returning the whole
-    /// screen at full size, which a caller would read as an empty region.
+    /// A driver that cannot crop or scale must refuse, not return the whole screen.
     async fn capture(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
         match (area, scale) {
             (None, None) => self.screenshot().await,
@@ -356,17 +352,18 @@ pub trait Desktop: Send + Sync {
         }
     }
 
-    /// Move the pointer without pressing anything.
-    ///
-    /// Hovering is its own action: a menu highlights, a tooltip appears, a
-    /// control reveals itself.
+    /// A driver that cannot draw the pointer must refuse rather than leave it out.
+    async fn capture_pointing(&self, area: Option<Rect>, scale: Option<u32>) -> Result<Vec<u8>> {
+        let _ = (area, scale);
+        Err(Error::Unsupported {
+            gaps: vec!["the pointer in a capture"],
+        })
+    }
+
     async fn move_to(&self, at: Point) -> Result<()>;
 
     async fn click(&self, at: Point, button: Button) -> Result<()>;
 
-    /// Defaulted to the plain click when nothing is held, so a display server
-    /// that cannot hold a key still answers the common case, and refuses the
-    /// rest rather than dropping the modifier and clicking anyway.
     async fn click_with(&self, at: Point, button: Button, held: &[Held]) -> Result<()> {
         match held.is_empty() {
             true => self.click(at, button).await,
@@ -376,16 +373,10 @@ pub trait Desktop: Send + Sync {
         }
     }
 
-    /// Press twice close enough together to count as one gesture.
-    ///
-    /// No default implementation. Two `click` calls are two round trips to the
-    /// box, far enough apart that the application sees two single clicks.
+    /// Not defaulted: two `click` calls arrive as two single clicks.
     async fn double_click(&self, at: Point, button: Button) -> Result<()>;
 
-    /// Press at one point, move, release at another.
-    ///
-    /// Required rather than defaulted: a press held across separate calls may
-    /// be released when the first call's process exits.
+    /// Not defaulted: a press held across calls may be released between them.
     async fn drag(&self, from: Point, to: Point, button: Button) -> Result<()>;
 
     async fn drag_with(&self, from: Point, to: Point, button: Button, held: &[Held]) -> Result<()> {
@@ -397,14 +388,13 @@ pub trait Desktop: Send + Sync {
         }
     }
 
-    async fn type_text(&self, text: &str) -> Result<()>;
-    async fn key(&self, chord: &str) -> Result<()>;
+    /// A desktop that cannot pace keystrokes must refuse a `delay`.
+    async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()>;
+
+    /// A desktop that cannot hold a modifier must refuse a non-empty `held`.
+    async fn press(&self, chords: &[String], held: &[Held]) -> Result<()>;
     async fn scroll(&self, at: Point, by: Delta) -> Result<()>;
 
-    /// The alternative is a sleep, which is either short enough to read the
-    /// screen mid-repaint or long enough to be paid on every step. Waited
-    /// inside the box, because a poll from out here costs a round trip per
-    /// probe.
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
         let _ = (settle, within);
 
@@ -413,53 +403,72 @@ pub trait Desktop: Send + Sync {
         })
     }
 
-    /// Where the pointer is.
-    ///
-    /// A root-window capture does not include the cursor, so no screenshot
-    /// shows this. A display server that cannot read the pointer position
-    /// answers [`Error::Unsupported`] rather than guessing.
+    async fn nodes(&self, app: Option<&str>, depth: Option<u32>) -> Result<Vec<Node>> {
+        let _ = (app, depth);
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    /// Also matches a label beside the widget: a GTK entry's own name is empty.
+    async fn find_nodes(&self, query: &NodeQuery, limit: Option<usize>) -> Result<Vec<Node>> {
+        let _ = (query, limit);
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    async fn focus_node(&self, query: &NodeQuery) -> Result<Node> {
+        let _ = query;
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    /// The widget's own action: no pointer moves, so a covered widget is reachable.
+    async fn invoke_node(&self, query: &NodeQuery, action: Option<&str>) -> Result<Node> {
+        let _ = (query, action);
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    async fn set_node(&self, query: &NodeQuery, value: &str) -> Result<Node> {
+        let _ = (query, value);
+
+        Err(Error::Unsupported {
+            gaps: vec!["the accessibility tree"],
+        })
+    }
+
+    /// Never moves the pointer.
     async fn cursor(&self) -> Result<Point>;
 
-    /// The screen's own idea of its size.
-    ///
-    /// Read from the display rather than from what the box was asked for.
-    /// Coordinates are against the screen that came up.
+    /// May move the pointer where that is the only way to read it.
+    async fn find_cursor(&self) -> Result<Point> {
+        self.cursor().await
+    }
+
+    /// Read from the display, not from what the box was asked for.
     async fn geometry(&self) -> Result<(u32, u32)>;
 
-    /// Whether the screen answers now.
-    ///
-    /// `Ok` means it does, and the error says why not. A configured display is
-    /// not a running one: a server that has exited leaves its variable set.
     async fn alive(&self) -> Result<()>;
 
-    /// Whether the owner may act, and where a takeover is recorded.
-    ///
-    /// On the trait because the takeover rule belongs to this crate rather
-    /// than to any one display server. A driver holding its own gate would
-    /// send input into a session a person is already driving.
     fn control(&self) -> &Arc<ControlGate>;
 
-    /// The clipboard, where the box has one.
-    ///
-    /// `None` and [`DesktopSupport::clipboard`] have to agree.
+    /// Must agree with [`DesktopSupport::clipboard`].
     fn as_clipboard(&self) -> Option<&dyn Clipboard> {
         None
     }
 }
 
-/// Which display server a box is driven through.
-///
-/// [`Desktop`] is what a screen can do; this is who does it. A box picks one
-/// and opens every screen with it.
 pub trait DesktopFactory: Send + Sync {
-    /// What this drives, so [`Display::server`] reports the driver in use
-    /// rather than the one the image constants were written for.
     fn display_server(&self) -> DisplayServer;
 
-    /// A driver for one screen.
-    ///
-    /// Takes the host rather than the box's name: the whole coupling is
-    /// something that runs a command against one screen.
     fn open(&self, host: Arc<MachineHost>, screen: ScreenId) -> Arc<dyn Desktop>;
 }
 

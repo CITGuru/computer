@@ -1,30 +1,4 @@
-//! A sandbox vendor in one file.
-//!
-//! ```text
 //! cargo run --example custom_sandbox
-//! ```
-//!
-//! `sandboxes::remote` is the seam for a box in somebody else's cloud: Modal,
-//! Daytona, Fly, whatever you already pay for. Implement eight calls and
-//! everything above them is the code a container runs.
-//!
-//! The vendor below is `docker` on this host wearing a control plane. That is
-//! not how to run on Docker — `DockerMachine` is — but it is a vendor you can
-//! run, so every call here is one you can watch work before writing the same
-//! call against an API you cannot see. Each method is one request to yours:
-//!
-//! | Call | This example | Modal | Daytona |
-//! | --- | --- | --- | --- |
-//! | `create` | `docker run` | `Sandbox.create` | create a sandbox with labels |
-//! | `find` | `docker ps --filter label` | a lookup by tag | list filtered by label |
-//! | `exec` | `docker exec` | `sandbox.exec` | the toolbox execute call |
-//! | `read`/`write` | `docker cp` | `sandbox.open` | the toolbox file calls |
-//! | `kill` | `docker rm -f` | `sandbox.terminate` | delete the sandbox |
-//! | endpoints | `docker port` | `Tunnel.url` | `{port}-{id}.proxy.daytona.work` |
-//!
-//! The last row is the one to get right: a vendor publishes a port at an
-//! address of its own rather than forwarding it, so `Sandbox::endpoints` is
-//! what the viewer URL is built from and a port missing from it has none.
 
 use async_trait::async_trait;
 use computer::sandboxes::remote::{self, NAME_KEY, RemoteApi, Sandbox, SandboxPlan};
@@ -36,7 +10,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Containers on this host, pretending to be a cloud.
 struct Fleet {
     docker: Arc<SystemDocker>,
 }
@@ -53,8 +26,6 @@ impl Fleet {
         self.docker.run(&args).await
     }
 
-    /// The same, where anything but success is this vendor failing rather than
-    /// a command inside the box failing.
     async fn control(&self, args: &[&str]) -> Result<String> {
         let result = self.run(args).await?;
 
@@ -67,8 +38,7 @@ impl Fleet {
         }
     }
 
-    /// Where each of the box's ports answers: a host port picked by the
-    /// daemon here, a hostname or a tunnel URL in a cloud.
+    /// A vendor publishes ports at its own addresses; the viewer URL is built from these.
     async fn endpoints(&self, id: &str) -> Result<BTreeMap<u16, String>> {
         let printed = self.control(&["port", id]).await?;
 
@@ -103,8 +73,7 @@ impl RemoteApi for Fleet {
         let mut args = vec![
             "run".to_string(),
             "--detach".to_string(),
-            // A real sandbox comes up empty and `RemoteMachine` boots it, so
-            // this one must not start a screen of its own.
+            // `RemoteMachine` boots the sandbox, so it must not start a screen of its own.
             "--entrypoint".to_string(),
             "sleep".to_string(),
         ];
@@ -135,8 +104,7 @@ impl RemoteApi for Fleet {
         self.sandbox(&id).await
     }
 
-    /// A vendor assigns its own ID, so the name travels as metadata and this
-    /// is the lookup that turns one back into the other.
+    /// A vendor assigns its own ID, so the name travels as metadata.
     async fn find(&self, name: &str) -> Result<Option<Sandbox>> {
         let filter = format!("label={NAME_KEY}={name}");
         let found = self
@@ -163,8 +131,7 @@ impl RemoteApi for Fleet {
     ) -> Result<ExecResult> {
         let mut args = vec!["exec".to_string()];
 
-        // The screen a command goes to travels in here, and a vendor that
-        // drops it runs every click against display zero.
+        // A vendor that drops this runs every click against display zero.
         for (key, value) in env {
             args.push("--env".to_string());
             args.push(format!("{key}={value}"));
@@ -211,7 +178,6 @@ impl RemoteApi for Fleet {
         Ok(self.run(&["logs", id]).await?.stdout_utf8())
     }
 
-    /// What a sweep reads. Without this a box that outlived its program is
     /// nobody's to remove.
     async fn carrying(&self, key: &str) -> Result<Vec<(String, String)>> {
         let format = format!("{{{{.ID}}}}\t{{{{.Label \"{key}\"}}}}");
@@ -236,8 +202,7 @@ impl RemoteApi for Fleet {
         true
     }
 
-    /// `Drop` cannot await, so a handle that goes out of scope takes the box
-    /// with it only where the vendor can be killed by a command.
+    /// `Drop` cannot await, so a dropped handle takes the box only through a command.
     fn reaper(&self, id: &str) -> Option<(String, Vec<String>)> {
         Some((
             self.docker.program().to_string(),
@@ -245,8 +210,7 @@ impl RemoteApi for Fleet {
         ))
     }
 
-    /// This vendor runs container images, so the default refusal is wrong for
-    /// it. Leave it out where yours wants a template built first.
+    /// Leave this out where the vendor needs a template built first.
     async fn ensure_image(&self, config: &computer::Config) -> Result<()> {
         DockerMachine::new(Arc::clone(&self.docker) as Arc<dyn ContainerCli>)
             .ensure_image(config)
@@ -271,8 +235,7 @@ async fn main() -> Result<()> {
     let computer = Computer::builder()
         .machine(Arc::new(machine.public_viewer(true)))
         .profile(profile)
-        // `public_viewer(true)` hands out an address this crate did not choose,
-        // so the launch is gated the same way a routable bind is.
+        // A public viewer is gated the same way a routable bind is.
         .auth(Auth::Password)
         .launch()
         .await?;

@@ -1,18 +1,12 @@
 #!/bin/sh
-#
-# Chromium on Wayland, with the flags a box actually needs.
 set -eu
 
 BIN="$(command -v chromium || command -v chromium-browser || true)"
 [ -n "$BIN" ] || { echo "chromium is not installed" >&2; exit 1; }
 
-# --ozone-platform=wayland: the whole difference from the X11 image. Without
-#   it chromium looks for a display, finds none, and exits.
-# --no-sandbox: the box is the isolation, and chromium's own sandbox needs
-#   privileges the box does not have.
-# --test-type: removes the "unsupported command-line flag" banner --no-sandbox
-#   raises. The banner covers the top of the page, so every coordinate below it
-#   is one a caller worked out from a shifted screenshot.
+# --ozone-platform=wayland: without it chromium finds no display and exits.
+# --no-sandbox: the box is the isolation.
+# --test-type: hides the --no-sandbox banner, which shifts every coordinate.
 exec "$BIN" \
   --ozone-platform=wayland \
   --enable-features=UseOzonePlatform \

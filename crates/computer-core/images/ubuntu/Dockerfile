@@ -1,7 +1,4 @@
-# The X11 image contract on Ubuntu.
-#
-# Ubuntu ships Chromium as a Snap launcher, which does not run in this
-# container. Xtradeb supplies the native package used here.
+# Ubuntu's Chromium is a Snap launcher that does not run here; Xtradeb supplies a native one.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -39,9 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && chmod +x /usr/bin/fbsetbg \
   && ln -sfn /bin/true /usr/bin/xmessage
 
-# Repositories for packages Debian does not carry. One record per line, tab
-# separated: name, key URL, deb line. Added before the install below, because a
-# package from one of these does not resolve until its archive is known.
+# One tab-separated record per line: name, key URL, deb line.
 ARG EXTRA_SOURCES=""
 RUN if [ -n "$EXTRA_SOURCES" ]; then \
       apt-get update \
@@ -62,10 +57,6 @@ RUN if [ -n "$EXTRA_PACKAGES" ]; then \
       && rm -rf /var/lib/apt/lists/*; \
     fi
 
-# A launcher per app the box was asked for. After the install above, since an
-# entry names a program that install provides.
-#
-# Through `computer-launch`: a second click on an open app returns to it.
 ARG EXTRA_APPS=""
 RUN if [ -n "$EXTRA_APPS" ]; then \
       printf '%s\n' "$EXTRA_APPS" | while IFS="$(printf '\t')" read -r name class command; do \
@@ -84,6 +75,10 @@ ENV DISPLAY=:1
 ENV HOME=/home/computer
 ENV COMPUTER_SCREEN_WIDTH=1280
 ENV COMPUTER_SCREEN_HEIGHT=800
+
+# Fixed here, because this is the only environment a later `docker exec` inherits.
+ENV DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/computer/a11y-bus.socket
+ENV QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 WORKDIR /home/computer
 
 COPY input-guard.sh /usr/local/bin/xdotool
@@ -101,8 +96,6 @@ COPY tint2rc        /etc/computer/tint2rc
 COPY terminal.desktop /usr/share/applications/computer-terminal.desktop
 COPY browser.desktop  /usr/share/applications/computer-browser.desktop
 
-# The terminal's own icon, drawn rather than shipped: xterm's is the X logo,
-# which reads as nothing in a dock. ImageMagick is already here for screenshots.
 RUN mkdir -p /usr/share/computer \
   && convert -size 128x128 xc:none \
        -fill "#15151b" -stroke "#3d3d4a" -strokewidth 4 \
@@ -118,16 +111,10 @@ RUN chmod +x /usr/local/bin/computer-desktop \
              /usr/local/bin/computer-wallpaper \
              /usr/local/bin/computer-launch
 
-# Which contract this image implements, so a box driven by another profile is
-# refused before it starts rather than as a display that never came up.
 LABEL computer.profile="computer-desktop"
 
-# Eight screens, each a view port and a control port — takeover is a second
-# server, never a mode switch on the first.
 EXPOSE 6080 6081 6082 6083 6084 6085 6086 6087 6088 6089 6090 6091 6092 6093 6094 6095
 
-# 9222 inside, and 9223 the bridge in front of it; see `start.sh` for why the
-# bridge exists.
 EXPOSE 9222 9223
 
 CMD ["/usr/local/bin/computer-desktop"]

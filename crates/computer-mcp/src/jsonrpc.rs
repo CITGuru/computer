@@ -1,12 +1,8 @@
-//! JSON-RPC 2.0, as MCP carries it: one object per line, over stdio.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
 pub struct Request {
-    /// Absent on a notification, which is answered with silence rather than
-    /// with a result.
     #[serde(default)]
     pub id: Option<Value>,
     pub method: String,

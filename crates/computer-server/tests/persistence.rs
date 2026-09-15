@@ -1,5 +1,3 @@
-//! That a record outlives the process that wrote it.
-
 use computer_api::{Actor, TraceEvent};
 use computer_server::AppState;
 use computer_storage::BoxRecord;

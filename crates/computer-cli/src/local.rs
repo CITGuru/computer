@@ -1,11 +1,4 @@
-//! Driving boxes with the SDK, in this process.
-//!
-//! The escape hatch behind `--local`: no server, no socket, nothing to start.
-//! It reaches a box on this machine and nothing else, so the commands that need
-//! a server to remember anything — a trace, and the fork built on one — are not
-//! here.
-
-use crate::{flag, framing, positional, present, wheel};
+use crate::{bare, flag, framing, positional, present, wheel};
 use computer::{Button, Computer, Delta, Point};
 use std::time::Duration;
 
@@ -37,6 +30,9 @@ pub async fn up(args: &[String]) -> computer::Result<()> {
     if present(args, "--wide-fonts") {
         builder = builder.wide_fonts();
     }
+    if present(args, "--video") {
+        builder = builder.video();
+    }
 
     eprintln!("opening a box (the first one builds the image) …");
     let computer = builder.launch().await?;
@@ -45,8 +41,7 @@ pub async fn up(args: &[String]) -> computer::Result<()> {
         computer.open_url(url).await?;
     }
 
-    // The name on standard output, so `computer shot $(computer up)` works.
-    // Everything a person reads goes to standard error.
+    // Only the name goes to stdout, so `computer shot $(computer up)` works.
     println!("{}", computer.name());
     if let Some(url) = computer.viewer_url() {
         eprintln!("  watch it  {url}");
@@ -59,8 +54,7 @@ pub async fn up(args: &[String]) -> computer::Result<()> {
 }
 
 pub async fn list() -> computer::Result<()> {
-    // Through the runtime rather than through this crate: the boxes worth
-    // listing are the ones that outlived whatever opened them.
+    // Through the runtime: the boxes worth listing outlived whatever opened them.
     let output = tokio::process::Command::new("docker")
         .args([
             "ps",
@@ -77,7 +71,7 @@ pub async fn list() -> computer::Result<()> {
     Ok(())
 }
 
-pub async fn shot(args: &[String]) -> computer::Result<()> {
+pub async fn screenshot(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let out = crate::remote::named(args).unwrap_or("screen.png");
 
@@ -95,15 +89,104 @@ pub async fn open(args: &[String]) -> computer::Result<()> {
     computer.open_url(positional(args, 1, "a URL")?).await
 }
 
-pub async fn type_text(args: &[String]) -> computer::Result<()> {
-    let computer = attach(args).await?;
-    let text = args[1..].join(" ");
-    computer.type_text(&text).await
+pub async fn mouse(args: &[String]) -> computer::Result<()> {
+    let op = positional(args, 1, "move, click, drag, scroll or at")?.to_string();
+
+    let mut rest = args.to_vec();
+    rest.remove(1);
+
+    match op.as_str() {
+        "click" => click(&rest).await,
+        "scroll" => scroll(&rest).await,
+        "move" => {
+            let computer = attach(&rest).await?;
+            computer.move_to(point(&rest, 1)?).await
+        }
+        "drag" => {
+            let computer = attach(&rest).await?;
+            computer
+                .drag_with(
+                    point(&rest, 1)?,
+                    point(&rest, 3)?,
+                    button(rest.get(5)),
+                    &modifiers(&rest)?,
+                )
+                .await
+        }
+        "at" => {
+            let computer = attach(&rest).await?;
+            let at = computer.cursor().await?;
+            println!("{},{}", at.x, at.y);
+            Ok(())
+        }
+        other => Err(computer::Error::denied(format!("no such op: {other}"))),
+    }
 }
 
-pub async fn key(args: &[String]) -> computer::Result<()> {
+pub async fn keyboard(args: &[String]) -> computer::Result<()> {
+    let op = positional(args, 1, "type or press")?.to_string();
+
+    let mut rest = args.to_vec();
+    rest.remove(1);
+
+    match op.as_str() {
+        "type" => type_text(&rest).await,
+        "press" => press(&rest).await,
+        other => Err(computer::Error::denied(format!("no such op: {other}"))),
+    }
+}
+
+fn point(args: &[String], at: usize) -> computer::Result<Point> {
+    let read = |at: usize, what: &str| -> computer::Result<u32> {
+        positional(args, at, what)?
+            .parse()
+            .map_err(|_| computer::Error::denied(format!("{what} must be a whole number")))
+    };
+
+    Ok(Point::new(
+        read(at, "an x coordinate")?,
+        read(at + 1, "a y coordinate")?,
+    ))
+}
+
+fn button(named: Option<&String>) -> Button {
+    match named.map(String::as_str) {
+        Some("right") => Button::Right,
+        Some("middle") => Button::Middle,
+        _ => Button::Left,
+    }
+}
+
+const TYPED: [&str; 2] = ["--delay", "--held"];
+
+pub async fn type_text(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
-    computer.key(positional(args, 1, "a chord")?).await
+    let rest = bare(args, &TYPED);
+
+    let delay = match flag(args, "--delay") {
+        None => None,
+        Some(given) => Some(Duration::from_millis(given.parse().map_err(|_| {
+            computer::Error::denied(format!("--delay takes milliseconds: {given}"))
+        })?)),
+    };
+
+    let typing = computer.type_text(rest[1..].join(" "));
+    match delay {
+        Some(delay) => typing.every(delay).await,
+        None => typing.await,
+    }
+}
+
+pub async fn press(args: &[String]) -> computer::Result<()> {
+    let computer = attach(args).await?;
+    let rest = bare(args, &TYPED);
+
+    let keys = rest.get(1..).unwrap_or_default();
+    if keys.is_empty() {
+        return Err(computer::Error::denied("expected a key to press"));
+    }
+
+    computer.press(keys).holding(modifiers(args)?).await
 }
 
 pub async fn click(args: &[String]) -> computer::Result<()> {
@@ -115,18 +198,15 @@ pub async fn click(args: &[String]) -> computer::Result<()> {
         .parse()
         .map_err(|_| computer::Error::denied("y must be a whole number of pixels"))?;
 
-    let button = match args.get(3).map(String::as_str) {
-        Some("right") => Button::Right,
-        Some("middle") => Button::Middle,
-        _ => Button::Left,
-    };
+    let button = button(args.get(3));
+    let at = Point::new(x, y);
 
-    computer
-        .click_with(Point::new(x, y), button, &modifiers(args)?)
-        .await
+    match args.iter().any(|arg| arg == "--double") {
+        true => computer.double_click(at, button).await,
+        false => computer.click_with(at, button, &modifiers(args)?).await,
+    }
 }
 
-/// `--held shift,ctrl`, in the same spellings a chord takes.
 fn modifiers(args: &[String]) -> computer::Result<Vec<computer::Held>> {
     let Some(given) = flag(args, "--held") else {
         return Ok(Vec::new());
@@ -166,7 +246,7 @@ pub async fn scroll(args: &[String]) -> computer::Result<()> {
         .await
 }
 
-pub async fn still(args: &[String]) -> computer::Result<()> {
+pub async fn wait(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
     let ms = |name, fallback| -> computer::Result<Duration> {
         match flag(args, name) {
@@ -226,7 +306,6 @@ pub async fn release(args: &[String]) -> computer::Result<()> {
 pub async fn exec(args: &[String]) -> computer::Result<()> {
     let computer = attach(args).await?;
 
-    // Everything after `--`, so the box's command keeps its own flags.
     let argv: Vec<&String> = args
         .iter()
         .position(|arg| arg == "--")
@@ -248,17 +327,12 @@ pub async fn exec(args: &[String]) -> computer::Result<()> {
 }
 
 pub async fn sweep() -> computer::Result<()> {
-    // The deadline is on the box itself, so this finds the ones whose program
-    // died before it could clean up — which no timer is watching any more.
     let machine = computer::DockerMachine::default();
     let swept = computer::sweep_expired(&machine, std::time::SystemTime::now()).await?;
 
     for name in &swept {
         println!("{name}");
     }
-    // Named, because `sweep` is the one command that stays here when
-    // --server points somewhere else: an operator who just aimed at a fleet
-    // should not read this line as the fleet having been swept.
     eprintln!("{} removed from this host's own runtime", swept.len());
     Ok(())
 }

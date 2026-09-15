@@ -1,21 +1,14 @@
-//! What an agent is offered, and what it gets back.
-//!
-//! Every tool that moves the screen answers with the frame it produced, as an
-//! image rather than as a hash. An agent that has to ask for a screenshot after
-//! every click spends two round trips on one step, and the second one is where
-//! it forgets to look.
-
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, Arrange, ForkMode, ForkRequest, Frame, Held, OnElement, OpenIn, Reading,
-    Rect, ScrollTo, Shot, Want, Where,
+    Action, ActionBatch, Arrange, BoxState, Evaluate, Find, ForkMode, ForkRequest, Frame, Held,
+    NodeQuery, OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, ScrollTo, Shot, Want,
+    Where,
 };
-use computer_client::{Client, frame_png};
+use computer_client::{Client, captured_image, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
 use serde_json::{Value, json};
 
-/// What a tool call answers with: text a model reads, or a picture it looks at.
 #[derive(Debug)]
 pub enum Answer {
     Text(String),
@@ -23,8 +16,11 @@ pub enum Answer {
         text: String,
         png: Vec<u8>,
     },
-    /// A refusal the model reads and acts on, with the screen it was refused
-    /// on where there is one.
+    Drawn {
+        text: String,
+        image: Vec<u8>,
+        mime: &'static str,
+    },
     Failed {
         text: String,
         png: Option<Vec<u8>>,
@@ -42,6 +38,16 @@ impl Answer {
                         "type": "image",
                         "data": BASE64.encode(&png),
                         "mimeType": "image/png",
+                    },
+                ]
+            }),
+            Self::Drawn { text, image, mime } => json!({
+                "content": [
+                    { "type": "text", "text": text },
+                    {
+                        "type": "image",
+                        "data": BASE64.encode(&image),
+                        "mimeType": mime,
                     },
                 ]
             }),
@@ -86,6 +92,15 @@ pub fn catalogue() -> Value {
                         "description": "Install Chinese, Japanese, Korean and emoji fonts. \
                                         Without them those pages render as empty boxes and \
                                         the screenshot still looks like a working page."
+                    },
+                    "accessibility": {
+                        "type": "boolean",
+                        "description": "Let the `widget` tool read native windows by the \
+                                        names of their widgets rather than by their pixels. \
+                                        Ask for it here if the work involves anything that \
+                                        is not a web page — a file dialog, a settings \
+                                        panel, an installer. A running box cannot be given \
+                                        it afterwards."
                     }
                 }
             })
@@ -109,7 +124,8 @@ pub fn catalogue() -> Value {
             "Look at the screen, or at one window or rectangle of it. Coordinates for \
              clicking come from this picture: its top-left is (0, 0) and they are device \
              pixels, so a cropped or scaled picture is for reading rather than for aiming. \
-             The pointer is not drawn in it.",
+             This is the desktop, frame and address bar and all; `page_screenshot` is what \
+             the browser drew.",
             with_frame(
                 json!({
                     "window": {
@@ -127,6 +143,43 @@ pub fn catalogue() -> Value {
                         "description": "A percentage of full size, 1 to 400. Halving a \
                                         screen leaves most text readable and costs a \
                                         fraction of the bytes."
+                    },
+                    "pointer": {
+                        "type": "boolean",
+                        "description": "Draw the pointer. Left out otherwise, which is why \
+                                        the `cursor` tool exists."
+                    },
+                    "tab": {
+                        "type": "string",
+                        "description": "Bring this page to the front first, so the screen \
+                                        shows it. Still a picture of the desktop."
+                    }
+                }),
+                &[]
+            )
+        ),
+        tool(
+            "page_screenshot",
+            "The page as the browser drew it: no window frame, no address bar, no pointer, \
+             and the same on a box with no display. Use it to read a page as a picture, and \
+             `screenshot` to see the desktop the page sits on. `full` reaches past the \
+             viewport to the whole scrollable page, which is as tall as the page is — an \
+             article measured 33585 pixels — so it answers JPEG unless you ask otherwise.",
+            with_tab(
+                json!({
+                    "full": {
+                        "type": "boolean",
+                        "description": "The whole scrollable page rather than what is in \
+                                        view. Slower and much larger."
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["png", "jpeg"],
+                        "description": "png unless `full`, which is jpeg unless you say."
+                    },
+                    "quality": {
+                        "type": "integer",
+                        "description": "jpeg only, 1 to 100. 70 unless said."
                     }
                 }),
                 &[]
@@ -215,13 +268,16 @@ pub fn catalogue() -> Value {
         tool(
             "find",
             "Find things on the page by their words, or by a name, id, placeholder or CSS \
-             selector. Answers with what each one is, whether it is enabled, and where it sits \
+             selector. An icon button is found by what its icon says — the alt text of the \
+             image inside it, or the title of its svg. Answers with what each one is, whether it is enabled, and where it sits \
              in the page. Use it to see what is there before acting, then act by the same query \
              rather than by a coordinate — a point taken from a screenshot is wrong the moment \
              the page moves under it. Each match ends with a selector that named exactly one \
              element when it was read: pass that back as `query` rather than the words, which \
              may match more than one thing. A match outside the window is still listed, as \
-             `out of view`; the element tools scroll to it, a coordinate cannot reach it.",
+             `out of view`; the element tools scroll to it, a coordinate cannot reach it. A \
+             match also carries what the page declares it to be and what state it is in — a \
+             `collapsed` menu or a `disabled` control will not answer a click.",
             with_box(
                 json!({
                     "query": { "type": "string" },
@@ -237,6 +293,15 @@ pub fn catalogue() -> Value {
                         "description": "Match the whole of an element's words rather than any \
                                         part of them. Use it when you know the label."
                     },
+                    "role": {
+                        "type": "string",
+                        "enum": ["button", "link", "textbox", "checkbox", "radio", "combobox",
+                                 "option", "heading", "image", "tab", "dialog"],
+                        "description": "Everything built as this kind of thing, however it was \
+                                        built: `button` finds a <div role=button> as well as a \
+                                        <button> and a submit input. Use it instead of a query \
+                                        to see what a page offers."
+                    },
                     "scroll": {
                         "type": "boolean",
                         "description": "Bring the best match into view first. A match below the \
@@ -244,7 +309,7 @@ pub fn catalogue() -> Value {
                                         looking, and its coordinates address nothing."
                     }
                 }),
-                &["query"]
+                &[]
             )
         ),
         tool(
@@ -256,7 +321,13 @@ pub fn catalogue() -> Value {
             with_page(
                 json!({
                     "query": { "type": "string" },
-                    "button": { "type": "string", "enum": ["left", "right", "middle"] }
+                    "button": { "type": "string", "enum": ["left", "right", "middle"] },
+                    "double": {
+                        "type": "boolean",
+                        "description": "Click it twice: a file to open, a word to select, a row \
+                                        to expand. A page counts two clicks, which two separate \
+                                        calls to this do not give it."
+                    }
                 }),
                 &["query"]
             )
@@ -399,13 +470,44 @@ pub fn catalogue() -> Value {
         ),
         tool(
             "type_text",
-            "Type into whatever has keyboard focus. Click the field first.",
-            with_frame(json!({ "text": { "type": "string" } }), &["text"])
+            "Type into whatever has keyboard focus. Click the field first. `delay_ms` paces \
+             the keystrokes: a few inputs act on every keystroke and drop characters that \
+             arrive at full speed, and 30 to 50 is usually enough for one of those.",
+            with_frame(
+                json!({
+                    "text": { "type": "string" },
+                    "delay_ms": {
+                        "type": "integer",
+                        "description": "Milliseconds between keystrokes. Full speed unless said."
+                    }
+                }),
+                &["text"]
+            )
         ),
         tool(
             "press_key",
-            "Press a chord, such as `ctrl+a`, `enter`, `tab` or `cmd+shift+p`.",
-            with_frame(json!({ "chord": { "type": "string" } }), &["chord"])
+            "Press one key or several at once: `enter`, `tab`, `escape`, `up`, `pagedown`, \
+             `ctrl+a`, `cmd+shift+p`. Names are matched loosely — `esc`, `return`, `pgdn`, \
+             `cmd` and `win` all land where you would expect. `then` and `held` are for the \
+             one thing a combination cannot do: hold a modifier open across several keys. \
+             `chord: \"tab\", then: [\"tab\"], held: [\"alt\"]` reaches the third window, where \
+             pressing `alt+tab` twice only ever reaches the second.",
+            with_frame(
+                json!({
+                    "chord": { "type": "string" },
+                    "then": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "More keys, pressed in turn while `held` stays down."
+                    },
+                    "held": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["shift", "ctrl", "alt", "cmd"] },
+                        "description": "Modifiers kept down across every key named."
+                    }
+                }),
+                &["chord"]
+            )
         ),
         tool(
             "scroll",
@@ -462,6 +564,55 @@ pub fn catalogue() -> Value {
             )
         ),
         tool(
+            "widget",
+            "Work with a native window by the names of its widgets rather than by its pixels: \
+             a file dialog, a settings panel, an installer. Use this for anything that is not \
+             a web page — a page has `click_element` and the rest, which know more about it \
+             than any tree does. `op` is one of: `find` for what matches a query, with each \
+             match's role, name and rectangle; `tree` for everything an application \
+             publishes; `press` to run a widget's own action; `fill` to put a value in a \
+             field; `focus` to give one the keyboard. \
+             `press` sends no pointer event at all, so it reaches a widget that is covered \
+             or scrolled out of view — and an application watching the pointer sees nothing. \
+             Where that matters, `find` answers with a rectangle and `click` is still there. \
+             A form field usually has no name of its own, so a query is matched against the \
+             label beside it too: ask for `Street` and you get the box next to the word.",
+            with_frame(
+                json!({
+                    "op": {
+                        "type": "string",
+                        "enum": ["find", "tree", "press", "fill", "focus"]
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "The words on it, or beside it. Needed by find, \
+                                        press, fill and focus."
+                    },
+                    "value": { "type": "string", "description": "For fill." },
+                    "role": {
+                        "type": "string",
+                        "description": "The toolkit's own word — `push button`, `text`, \
+                                        `label` — where the query alone is ambiguous. \
+                                        `find` reports the role of every match."
+                    },
+                    "exact": {
+                        "type": "boolean",
+                        "description": "Match the whole of the words rather than any part."
+                    },
+                    "app": { "type": "string", "description": "One application's widgets only." },
+                    "action": {
+                        "type": "string",
+                        "description": "For press, where a widget offers more than one. The \
+                                        first is used by default, and `find` lists them: GTK \
+                                        spells it `click` where Qt spells it `Press`."
+                    },
+                    "depth": { "type": "integer", "description": "For tree. Defaults to a window's worth." },
+                    "limit": { "type": "integer" }
+                }),
+                &["op"]
+            )
+        ),
+        tool(
             "window",
             "Work with the windows on the desktop rather than with the pixels they drew. \
              `op` is one of: `list` for what is open, with the id, class, position and size \
@@ -500,6 +651,96 @@ pub fn catalogue() -> Value {
                 }),
                 &["op"]
             )
+        ),
+        tool(
+            "cursor",
+            "Where the pointer is. A screenshot does not draw it, and a click given no point \
+             of its own presses wherever it already is — so this is the only way to know what \
+             such a click would hit. Every move, click, drag and scroll answers with it too.",
+            box_only(),
+        ),
+        tool(
+            "inspect_box",
+            "Everything the server knows about one box: its state, its size, when it was made, \
+             when it expires, and where to watch it. `list_boxes` names them; this describes \
+             one.",
+            box_only(),
+        ),
+        tool(
+            "stop_box",
+            "Stop a box, keeping its files. Cheaper than pausing — the memory goes back — and \
+             costlier to come back from: resuming it gives a fresh desktop, so anything you had \
+             open is gone and the viewer URL changes. Pause instead if you are coming straight \
+             back. `resume_box` brings it back either way.",
+            box_only(),
+        ),
+        tool(
+            "pause_box",
+            "Freeze a box. It keeps its memory and its ports and costs no processor until you \
+             resume it, and comes back as the box it was — the windows that were open are \
+             still open. Use it when you are done with a box for now but not done with it. \
+             Every other tool will hang on a paused box rather than fail, so resume it first.",
+            box_only(),
+        ),
+        tool(
+            "resume_box",
+            "Make a box usable again, whichever way you put it down. A paused box wakes as it \
+             was, with its windows where they were. A stopped one starts a fresh desktop with \
+             nothing open and a new viewer URL — the answer says which you got, so read it \
+             rather than assuming what is on screen.",
+            box_only(),
+        ),
+        tool(
+            "record",
+            "Record the screen to a video file, or stop a recording and read where it landed. \
+             ffmpeg writes it inside the box, so the frames never cross the wire and the cost \
+             is the same however far away you are. Needs a box opened with video. You cannot \
+             watch the file — it is for the person who reads what you did afterwards, so say \
+             where it is when you stop.",
+            with_box(
+                json!({
+                    "op": {
+                        "type": "string",
+                        "enum": ["start", "stop", "status"],
+                        "description": "start begins one, stop ends it and names the file, \
+                                        status says whether one is running."
+                    },
+                    "fps": {
+                        "type": "integer",
+                        "description": "For start: frames a second, 1 to 60. 12 unless said, \
+                                        which is enough to follow a pointer and cheap."
+                    }
+                }),
+                &["op"]
+            )
+        ),
+        tool(
+            "evaluate",
+            "Run javascript in the page and read what it evaluated to. The box is an isolated \
+             sandbox, so anything the page can do is yours: read a value the tools do not \
+             expose, drive a widget that answers to no click, pull structured data straight out \
+             of the document rather than reading it as text. `await` works. Return what you want \
+             to read rather than the thing itself: a DOM node comes back as `{}` and anything \
+             cyclic is refused.",
+            with_tab(
+                json!({
+                    "expression": {
+                        "type": "string",
+                        "description": "Javascript. Its own value is the answer, such as \
+                                        `document.title`."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "How long it may take. The screen is held across it, so \
+                                        the server keeps a ceiling."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Characters of the answer to return."
+                    }
+                }),
+                &["expression"]
+            ),
         ),
         tool(
             "run_command",
@@ -548,17 +789,20 @@ fn box_only() -> Value {
     })
 }
 
-/// [`with_frame`], and which page to act on.
-///
-/// Only for the tools that reach a page. A coordinate click reaches the screen,
-/// which shows whatever tab is in front, so naming one there would promise
-/// something it cannot do.
 fn with_page(mut properties: Value, required: &[&str]) -> Value {
     if let Some(map) = properties.as_object_mut() {
         map.insert("tab".to_string(), tab_field());
     }
 
     with_frame(properties, required)
+}
+
+fn with_tab(mut properties: Value, required: &[&str]) -> Value {
+    if let Some(map) = properties.as_object_mut() {
+        map.insert("tab".to_string(), tab_field());
+    }
+
+    with_box(properties, required)
 }
 
 fn tab_field() -> Value {
@@ -569,11 +813,6 @@ fn tab_field() -> Value {
     })
 }
 
-/// [`with_box`], and the hash of the picture the caller already holds.
-///
-/// For the tools that answer with the screen. Passing back the hash from the
-/// last answer turns an unmoved screen into a line of text instead of an image
-/// the caller is already looking at.
 fn with_frame(mut properties: Value, required: &[&str]) -> Value {
     if let Some(map) = properties.as_object_mut() {
         map.insert(
@@ -622,14 +861,59 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
         }
         "screenshot" => {
             let id = text(arguments, "box_id")?;
-            // No mode here: asking for the screen and asking for no screen is
-            // a contradiction, and `never` on this tool would answer nothing.
             let frame = client
                 .capture(&id, 0, &framing(arguments)?, have(arguments).as_deref())
                 .await
                 .map_err(|e| e.to_string())?;
 
             Ok(framed("the screen now", Some(&frame)))
+        }
+        "page_screenshot" => {
+            let id = text(arguments, "box_id")?;
+            let full = arguments
+                .get("full")
+                .and_then(Value::as_bool)
+                .unwrap_or_default();
+
+            let format = match arguments.get("format").and_then(Value::as_str) {
+                Some("png") => Some(Picture::Png),
+                Some("jpeg") => Some(Picture::Jpeg),
+                Some(other) => return Err(format!("no such format: {other}")),
+                None => None,
+            };
+
+            let taken = client
+                .page_screenshot(
+                    &id,
+                    &PageShot {
+                        full,
+                        format,
+                        quality: arguments
+                            .get("quality")
+                            .and_then(Value::as_u64)
+                            .map(|quality| quality as u32),
+                        tab: arguments
+                            .get("tab")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let image = captured_image(&taken).map_err(|e| e.to_string())?;
+
+            Ok(Answer::Drawn {
+                text: match full {
+                    true => "the whole page".to_string(),
+                    false => "the page, as far as it is in view".to_string(),
+                },
+                image,
+                mime: match taken.format {
+                    Picture::Jpeg => "image/jpeg",
+                    Picture::Png => "image/png",
+                },
+            })
         }
         "open_url" => {
             act(
@@ -660,9 +944,6 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 })
                 .unwrap_or_default();
 
-            // No settle of its own: the launch already waited for the app to
-            // stop drawing, and a second wait on top would be paid for
-            // nothing.
             act(
                 client,
                 arguments,
@@ -733,6 +1014,108 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 other => Err(format!("no such op: {other}")),
             }
         }
+        "cursor" => {
+            let id = text(arguments, "box_id")?;
+            let at = client.cursor(&id, 0).await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!("the pointer is at {},{}", at.x, at.y)))
+        }
+        "inspect_box" => {
+            let id = text(arguments, "box_id")?;
+            let found = client.get(&id).await.map_err(|e| e.to_string())?;
+
+            let mut said = format!(
+                "{} — {:?}, {} screen(s), {}x{}",
+                found.id, found.state, found.screens, found.width, found.height
+            );
+            if let Some(url) = &found.viewer_url {
+                said.push_str(&format!("\nwatch it at {url}"));
+            }
+            match found.expires_at_ms {
+                Some(at) => said.push_str(&format!("\nit expires at {at}ms")),
+                None => said.push_str("\nit has no deadline"),
+            }
+
+            Ok(Answer::Text(said))
+        }
+        "stop_box" => {
+            let id = text(arguments, "box_id")?;
+            client.stop(&id).await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!(
+                "{id} is stopped and its files are kept. Resume it before anything reaches it, \
+                 and expect a desktop with nothing open."
+            )))
+        }
+        "pause_box" => {
+            let id = text(arguments, "box_id")?;
+            client.pause(&id).await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!(
+                "{id} is frozen; resume it before anything else reaches it"
+            )))
+        }
+        "resume_box" => {
+            let id = text(arguments, "box_id")?;
+
+            let was = client.get(&id).await.map_err(|e| e.to_string())?;
+            let found = client.resume(&id).await.map_err(|e| e.to_string())?;
+
+            if was.state != BoxState::Stopped {
+                return Ok(Answer::Text(format!("{id} is awake, as you left it")));
+            }
+
+            let mut said = format!("{id} was stopped, so it is running again with nothing open");
+            if let Some(url) = &found.viewer_url {
+                said.push_str(&format!("\nwatch it at {url}, which is a new address"));
+            }
+
+            Ok(Answer::Text(said))
+        }
+        "record" => {
+            let id = text(arguments, "box_id")?;
+            let fps = arguments
+                .get("fps")
+                .and_then(Value::as_u64)
+                .map(|fps| fps as u32);
+
+            let said = match text(arguments, "op")?.as_str() {
+                "start" => {
+                    let view = client
+                        .start_recording(&id, 0, fps)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    format!(
+                        "recording to {} inside the box; stop it to finish the file",
+                        view.path.unwrap_or_default()
+                    )
+                }
+                "stop" => {
+                    let view = client
+                        .stop_recording(&id, 0)
+                        .await
+                        .map_err(|e| e.to_string())?;
+
+                    format!(
+                        "recorded to {} inside the box; read it out with the files route",
+                        view.path.unwrap_or_default()
+                    )
+                }
+                "status" => match client
+                    .recording(&id, 0)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .path
+                {
+                    Some(path) => format!("recording to {path}"),
+                    None => "nothing is recording".to_string(),
+                },
+                other => return Err(format!("no such op: {other}")),
+            };
+
+            Ok(Answer::Text(said))
+        }
         "read_page" => {
             let id = text(arguments, "box_id")?;
             let limit = arguments
@@ -752,7 +1135,13 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .map(|links| links as usize);
 
             let page = client
-                .page(&id, format, limit, max_links)
+                .page(
+                    &id,
+                    format,
+                    limit,
+                    max_links,
+                    arguments.get("tab").and_then(Value::as_str),
+                )
                 .await
                 .map_err(|e| e.to_string())?;
 
@@ -781,13 +1170,27 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .and_then(Value::as_u64)
                 .map(|n| n as usize);
 
+            let role = arguments.get("role").and_then(Value::as_str);
+            let query = match arguments.get("query").and_then(Value::as_str) {
+                Some(query) => query.to_string(),
+                None if role.is_some() => String::new(),
+                None => return Err("find needs a query or a role".to_string()),
+            };
+
             let found = client
                 .find(
                     &id,
-                    &text(arguments, "query")?,
-                    limit,
-                    arguments.get("scroll").and_then(Value::as_bool),
-                    arguments.get("exact").and_then(Value::as_bool),
+                    &Find {
+                        query,
+                        limit,
+                        scroll: arguments.get("scroll").and_then(Value::as_bool),
+                        exact: arguments.get("exact").and_then(Value::as_bool),
+                        role: role.map(str::to_string),
+                        tab: arguments
+                            .get("tab")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    },
                 )
                 .await
                 .map_err(|e| e.to_string())?;
@@ -800,18 +1203,20 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                     .iter()
                     .map(|one| {
                         format!(
-                            "{} {}{}{} {} ({}x{}){}{}",
+                            "{} {}{}{}{} {} ({}x{}){}{}",
                             one.tag,
                             one.kind.as_deref().unwrap_or(""),
                             match one.text.is_empty() {
                                 true => String::new(),
                                 false => format!(" {:?}", one.text),
                             },
-                            // Only where it adds something: a button whose
-                            // label is its words would say it twice.
                             match one.label.as_deref() {
                                 Some(label) if label != one.text => format!(" [{label}]"),
                                 _ => String::new(),
+                            },
+                            match one.role.as_deref() {
+                                Some(role) => format!(" role={role}"),
+                                None => String::new(),
                             },
                             match one.at {
                                 Some(at) => format!("at {},{}", at.x, at.y),
@@ -819,12 +1224,11 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                             },
                             one.width,
                             one.height,
-                            match one.enabled {
-                                true => "",
-                                false => "  disabled",
+                            match (one.enabled, one.states.is_empty()) {
+                                (false, true) => "  disabled".to_string(),
+                                (_, false) => format!("  [{}]", one.states.join(" ")),
+                                _ => String::new(),
                             },
-                            // What to act by. Words can match more than one
-                            // thing; this matched exactly one when it was read.
                             match one.selector.as_deref() {
                                 Some(selector) => format!("  {selector}"),
                                 None => String::new(),
@@ -836,11 +1240,22 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             }))
         }
         "click_element" => {
+            let double = flag(arguments, "double");
             let what = OnElement::Click {
                 query: text(arguments, "query")?,
                 button: button(arguments),
+                double,
             };
-            element(client, arguments, what, "clicked").await
+            element(
+                client,
+                arguments,
+                what,
+                match double {
+                    true => "double clicked",
+                    false => "clicked",
+                },
+            )
+            .await
         }
         "fill_field" => {
             let what = OnElement::Fill {
@@ -929,6 +1344,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             element(client, arguments, what, "done").await
         }
         "window" => window(client, arguments).await,
+        "widget" => widget(client, arguments).await,
         "list_apps" => {
             let names = client.catalog().await.map_err(|e| e.to_string())?;
 
@@ -957,6 +1373,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 arguments,
                 Action::Type {
                     text: text(arguments, "text")?,
+                    delay_ms: arguments.get("delay_ms").and_then(Value::as_u64),
                 },
                 400,
             )
@@ -966,8 +1383,13 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
             act(
                 client,
                 arguments,
-                Action::Key {
+                Action::Press {
                     chord: text(arguments, "chord")?,
+                    then: strings(arguments, "then"),
+                    held: strings(arguments, "held")
+                        .iter()
+                        .filter_map(|word| Held::named(word))
+                        .collect(),
                 },
                 400,
             )
@@ -1012,6 +1434,27 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 0,
             )
             .await
+        }
+        "evaluate" => {
+            let id = text(arguments, "box_id")?;
+            let what = Evaluate {
+                expression: text(arguments, "expression")?,
+                timeout_ms: arguments.get("timeout_ms").and_then(Value::as_u64),
+                limit: arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize),
+            };
+
+            let answered = client
+                .evaluate(&id, &what, arguments.get("tab").and_then(Value::as_str))
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(match answered.truncated {
+                true => format!("{} … (truncated)", answered.json),
+                false => answered.json,
+            }))
         }
         "run_command" => run(client, arguments).await,
         "hand_over" => {
@@ -1074,11 +1517,13 @@ async fn launch(client: &Client, arguments: &Value) -> Result<Answer, String> {
                 .get("height")
                 .and_then(Value::as_u64)
                 .map(|n| n as u32),
-            features: if flag(arguments, "wide_fonts") {
-                vec![Feature::WideFonts]
-            } else {
-                Vec::new()
-            },
+            features: [
+                flag(arguments, "wide_fonts").then_some(Feature::WideFonts),
+                flag(arguments, "accessibility").then_some(Feature::Accessibility),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
             ..Desktop::default()
         },
         ..Spec::default()
@@ -1155,8 +1600,111 @@ async fn run(client: &Client, arguments: &Value) -> Result<Answer, String> {
     )))
 }
 
-/// Do the thing, let the screen settle, and hand back what it looks like now.
-/// One element operation, and a screenshot of what it did.
+fn said_node(node: &computer_api::Node) -> String {
+    let where_ = match node.at {
+        Some(at) => format!(" at {},{} {}x{}", at.x, at.y, node.width, node.height),
+        None => " (not drawn)".to_string(),
+    };
+    let named = match (&node.labelled, node.name.is_empty()) {
+        (Some(label), _) => format!("labelled {label:?}"),
+        (None, false) => format!("{:?}", node.name),
+        (None, true) => "unnamed".to_string(),
+    };
+    let does = match node.actions.is_empty() {
+        true => ", nothing to press".to_string(),
+        false => format!(", press runs {}", node.actions.join(" or ")),
+    };
+    let holds = match &node.value {
+        Some(value) if !value.is_empty() => format!(", holding {value:?}"),
+        _ => String::new(),
+    };
+
+    format!("{} {named}{where_}{does}{holds} [{}]", node.role, node.app)
+}
+
+async fn widget(client: &Client, arguments: &Value) -> Result<Answer, String> {
+    let id = text(arguments, "box_id")?;
+    let fail = |error: computer_client::Error| error.to_string();
+
+    let query = || -> Result<NodeQuery, String> {
+        Ok(NodeQuery {
+            query: text(arguments, "query")?,
+            role: arguments
+                .get("role")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            exact: flag(arguments, "exact"),
+            app: arguments
+                .get("app")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        })
+    };
+
+    let what = match text(arguments, "op")?.as_str() {
+        "find" => OnNode::Find {
+            node: query()?,
+            limit: arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|limit| limit as usize),
+        },
+        "tree" => OnNode::Tree {
+            app: arguments
+                .get("app")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            depth: arguments
+                .get("depth")
+                .and_then(Value::as_u64)
+                .map(|depth| depth as u32),
+        },
+        "press" => OnNode::Invoke {
+            node: query()?,
+            action: arguments
+                .get("action")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        },
+        "fill" => OnNode::Set {
+            node: query()?,
+            value: text(arguments, "value")?,
+        },
+        "focus" => OnNode::Focus { node: query()? },
+        other => return Err(format!("no such op: {other}")),
+    };
+
+    let reading = matches!(what, OnNode::Find { .. } | OnNode::Tree { .. });
+    let result = client.on_node(&id, 0, &what).await.map_err(fail)?;
+
+    if reading {
+        return Ok(Answer::Text(match result.nodes.is_empty() {
+            true => "nothing in the tree matched".to_string(),
+            false => result
+                .nodes
+                .iter()
+                .map(said_node)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }));
+    }
+
+    let did = match (&result.node, &result.action) {
+        (Some(node), Some(action)) => format!("{action} on {}", said_node(node)),
+        (Some(node), None) => said_node(node),
+        _ => "done".to_string(),
+    };
+
+    shot(
+        client,
+        &id,
+        &did,
+        have(arguments).as_deref(),
+        shots(arguments)?,
+    )
+    .await
+}
+
 async fn window(client: &Client, arguments: &Value) -> Result<Answer, String> {
     let id = text(arguments, "box_id")?;
     let named = |name| text(arguments, name);
@@ -1290,9 +1838,7 @@ async fn element(
 ) -> Result<Answer, String> {
     let id = text(arguments, "box_id")?;
 
-    // The same pause the coordinate tools take. Without it the URL and the
-    // frame below are the page on its way rather than the page it reached,
-    // which made the element tools less reliable than the ones they replace.
+    // Without the settle, the URL and frame are the page mid-navigation.
     let settle_ms = match &what {
         OnElement::WaitFor { .. } | OnElement::Options { .. } => 0,
         _ => SETTLE_MS,
@@ -1304,8 +1850,6 @@ async fn element(
 
     let result = match client.on_element(&id, &what, settle_ms, tab).await {
         Ok(result) => result,
-        // Nothing was captured with it, so the screen is asked for here. The
-        // settle was already paid by the call that failed.
         Err(why) => {
             let png = match how.wanted() {
                 true => screen_now(client, &id).await,
@@ -1329,8 +1873,6 @@ async fn element(
         (None, None) => did.to_string(),
     };
 
-    // Where it left the page. A click that navigated and one that did nothing
-    // read the same without this.
     let said = match (&result.url, result.navigated) {
         (Some(url), true) => format!("{said} — {url}"),
         (Some(_), false) => format!("{said} — the page did not move"),
@@ -1342,9 +1884,6 @@ async fn element(
         None => said,
     };
 
-    // The frame it produced, like every other tool that moves the screen: an
-    // agent that has to ask for one after each step spends two round trips on
-    // one, and forgets to look on the second.
     if !how.wanted() {
         return Ok(Answer::Text(said));
     }
@@ -1354,7 +1893,6 @@ async fn element(
     Ok(framed(&said, frame.as_ref()))
 }
 
-/// The screen, for an answer that has none of its own.
 async fn screen_now(client: &Client, id: &str) -> Option<Vec<u8>> {
     client
         .frame(id, 0, None)
@@ -1380,9 +1918,10 @@ async fn act(
             &ActionBatch {
                 actions: vec![action],
                 settle_ms: Some(settle_ms),
+                // A screenshot does not draw the pointer.
                 want: match how.wanted() {
-                    true => vec![Want::Frame],
-                    false => Vec::new(),
+                    true => vec![Want::Frame, Want::Cursor],
+                    false => vec![Want::Cursor],
                 },
                 have_frame: have(arguments),
             },
@@ -1399,8 +1938,6 @@ async fn act(
             .map(|error| error.message.clone())
             .unwrap_or_else(|| "it was refused".to_string());
 
-        // The batch already captured one, after its settle. A refusal is when a
-        // caller most wants to see the screen and least wants a second call.
         return Ok(Answer::Failed {
             text: why,
             png: result
@@ -1410,9 +1947,14 @@ async fn act(
         });
     }
 
+    let said = match result.cursor {
+        Some(at) => format!("done; the pointer is at {},{}", at.x, at.y),
+        None => "done".to_string(),
+    };
+
     match how.wanted() {
-        true => Ok(framed("done; the screen now", result.frame.as_ref())),
-        false => Ok(Answer::Text("done".to_string())),
+        true => Ok(framed(&said, result.frame.as_ref())),
+        false => Ok(Answer::Text(said)),
     }
 }
 
@@ -1448,18 +1990,25 @@ fn framing(arguments: &Value) -> Result<Shot, String> {
             width,
             height,
         }),
-        // Half a rectangle would be read as a corner and a guess, and
-        // answered with a picture of the wrong thing.
         _ => return Err("a rectangle takes x, y, width and height together".to_string()),
     };
 
-    Ok(Shot {
-        window: arguments
-            .get("window")
+    let named = |name| {
+        arguments
+            .get(name)
             .and_then(Value::as_str)
-            .map(str::to_string),
+            .map(str::to_string)
+    };
+
+    Ok(Shot {
+        window: named("window"),
         region,
         scale: whole("scale"),
+        pointer: arguments
+            .get("pointer")
+            .and_then(Value::as_bool)
+            .unwrap_or_default(),
+        tab: named("tab"),
     })
 }
 
@@ -1493,21 +2042,12 @@ fn button(arguments: &Value) -> Button {
     }
 }
 
-/// What a click, a fill or a history step is given to finish in.
-///
-/// The same as the coordinate tools take, because the same page is settling.
 const SETTLE_MS: u64 = 600;
 
-/// When an answer carries the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shots {
-    /// The screen when it moved, and whenever something was refused. A screen
-    /// the caller already holds costs a hash — see `have_frame`.
     Auto,
-    /// Every time, even where nothing moved.
     Always,
-    /// Never. The screen is not captured at all, so it costs nothing either
-    /// end.
     Never,
 }
 
@@ -1516,8 +2056,6 @@ impl Shots {
         !matches!(self, Self::Never)
     }
 
-    /// Whether the caller's hash is worth sending. Under `Always` it is not:
-    /// answering `unchanged` is exactly what it asked not to happen.
     fn deduped(&self) -> bool {
         matches!(self, Self::Auto)
     }
@@ -1534,7 +2072,6 @@ fn shots(arguments: &Value) -> Result<Shots, String> {
     }
 }
 
-/// The hash the caller says it already has.
 fn have(arguments: &Value) -> Option<String> {
     if !shots(arguments).is_ok_and(|how| how.deduped()) {
         return None;
@@ -1547,11 +2084,6 @@ fn have(arguments: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
-/// What an answer carries: the picture, or a note that it is the one the caller
-/// already has.
-///
-/// The hash goes in either way. Without it in the answer there is nothing for
-/// the caller to pass back, and every step pays for an image again.
 fn framed(said: &str, frame: Option<&Frame>) -> Answer {
     let Some(frame) = frame else {
         return Answer::Text(said.to_string());
@@ -1688,6 +2220,27 @@ mod tests {
     }
 
     #[test]
+    fn test_the_pointer_can_be_asked_for_on_its_own() {
+        let listed = catalogue();
+        let tool = listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|tool| tool["name"] == "cursor")
+            .expect("cursor is offered");
+
+        assert_eq!(
+            tool["inputSchema"]["properties"]["box_id"]["type"],
+            "string"
+        );
+        assert_eq!(
+            tool["inputSchema"]["required"],
+            json!(["box_id"]),
+            "a box and nothing else"
+        );
+    }
+
+    #[test]
     fn test_only_the_tools_that_reach_a_page_take_a_tab() {
         let listed = catalogue();
         let takes_tab: Vec<&str> = listed
@@ -1709,24 +2262,19 @@ mod tests {
             "history",
             "scroll_page",
             "upload_file",
+            "page_screenshot",
         ] {
             assert!(takes_tab.contains(&page_tool), "{page_tool} reaches a page");
         }
 
-        // A coordinate reaches the screen, which shows whatever is in front.
-        for screen_tool in [
-            "click",
-            "type_text",
-            "press_key",
-            "scroll",
-            "drag",
-            "screenshot",
-        ] {
+        for screen_tool in ["click", "type_text", "press_key", "scroll", "drag"] {
             assert!(
                 !takes_tab.contains(&screen_tool),
                 "{screen_tool} acts on pixels, so naming a tab would promise what it cannot do"
             );
         }
+
+        assert!(takes_tab.contains(&"screenshot"));
     }
 
     #[test]
@@ -1759,7 +2307,6 @@ mod tests {
 
     #[test]
     fn test_always_does_not_send_the_hash() {
-        // Sending it invites `unchanged`, which is what `always` asked against.
         assert!(have(&json!({ "screenshot": "always", "have_frame": "abc" })).is_none());
         assert_eq!(
             have(&json!({ "screenshot": "auto", "have_frame": "abc" })),
@@ -1876,7 +2423,6 @@ mod tests {
             vec!["sold out".to_string(), "unavailable".to_string()]
         );
         assert!(strings(&given, "absent").is_empty());
-        // Not an array, so nothing rather than a panic.
         assert!(strings(&given, "n").is_empty());
     }
 
@@ -1900,8 +2446,6 @@ mod tests {
     #[test]
     fn test_a_tool_that_needs_a_box_says_so() {
         let listed = catalogue();
-        // The three that ask the server rather than a box: two list what it
-        // holds, and one lists what it can install.
         let serverwide = ["launch_box", "list_boxes", "list_apps"];
 
         for one in listed.as_array().expect("a list") {
