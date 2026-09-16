@@ -525,6 +525,16 @@ pub struct ViewersView {
     pub watching: usize,
     pub driving: usize,
     pub person_driving: bool,
+    /// The screen was handed to a person and not yet reclaimed, whether or not they are connected.
+    #[serde(default)]
+    pub taken_over: bool,
+}
+
+/// Opens the viewer socket of one screen for a while, from a browser that can send no header.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewerTicket {
+    pub ticket: String,
+    pub expires_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1447,6 +1447,21 @@ impl Screen {
         })
     }
 
+    pub fn viewer_socket(&self) -> Option<String> {
+        self.mapped.get(&self.ports.view).map(|port| {
+            self.profile
+                .viewer_socket(&self.host.address(*port), self.host.view_ticket())
+        })
+    }
+
+    /// Answers while the port is mapped; the server behind it runs only during a takeover.
+    pub fn control_socket(&self) -> Option<String> {
+        self.mapped.get(&self.ports.control).map(|port| {
+            self.profile
+                .viewer_socket(&self.host.address(*port), self.host.control_ticket())
+        })
+    }
+
     pub async fn open_url(&self, url: &str) -> Result<()> {
         self.runtimes
             .browser

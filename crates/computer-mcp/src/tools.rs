@@ -9,9 +9,17 @@ use computer_client::{Client, captured_image, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
 use serde_json::{Value, json};
 
+use crate::ui;
+
 #[derive(Debug)]
 pub enum Answer {
     Text(String),
+    /// Text for the model, a record for the page, and under `_meta` what only the page may see.
+    Structured {
+        text: String,
+        structured: Value,
+        meta: Value,
+    },
     Shot {
         text: String,
         png: Vec<u8>,
@@ -31,6 +39,15 @@ impl Answer {
     pub fn into_content(self) -> Value {
         match self {
             Self::Text(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+            Self::Structured {
+                text,
+                structured,
+                meta,
+            } => json!({
+                "content": [{ "type": "text", "text": text }],
+                "structuredContent": structured,
+                "_meta": meta,
+            }),
             Self::Shot { text, png } => json!({
                 "content": [
                     { "type": "text", "text": text },
@@ -77,7 +94,7 @@ impl Answer {
 
 pub fn catalogue() -> Value {
     json!([
-        tool(
+        tool_with(
             "launch_box",
             "Start a fresh Linux desktop with a browser on it. Returns its id, which every \
              other tool takes, and a URL a person can watch it at. Remove it with remove_box \
@@ -87,6 +104,12 @@ pub fn catalogue() -> Value {
                 "properties": {
                     "width": { "type": "integer", "description": "Screen width. Defaults to the image's." },
                     "height": { "type": "integer", "description": "Screen height." },
+                    "video": {
+                        "type": "boolean",
+                        "description": "Put ffmpeg in the box, so `record` and the Record button \
+                                        on the screen page work. A running box cannot be given \
+                                        it afterwards."
+                    },
                     "wide_fonts": {
                         "type": "boolean",
                         "description": "Install Chinese, Japanese, Korean and emoji fonts. \
@@ -103,7 +126,8 @@ pub fn catalogue() -> Value {
                                         it afterwards."
                     }
                 }
-            })
+            }),
+            ui::renders("Starting a desktop", "Desktop ready")
         ),
         tool(
             "list_boxes",
@@ -690,7 +714,7 @@ pub fn catalogue() -> Value {
              rather than assuming what is on screen.",
             box_only(),
         ),
-        tool(
+        tool_with(
             "record",
             "Record the screen to a video file, or stop a recording and read where it landed. \
              ffmpeg writes it inside the box, so the frames never cross the wire and the cost \
@@ -712,7 +736,8 @@ pub fn catalogue() -> Value {
                     }
                 }),
                 &["op"]
-            )
+            ),
+            ui::callable()
         ),
         tool(
             "evaluate",
@@ -757,16 +782,32 @@ pub fn catalogue() -> Value {
                 &["command"]
             )
         ),
-        tool(
+        tool_with(
             "hand_over",
             "Give the screen to a person and stop driving it. Returns a URL they open. Your \
              own input is refused until reclaim_screen.",
-            box_only()
+            box_only(),
+            ui::renders("Handing the screen over", "The screen is theirs")
         ),
-        tool(
+        tool_with(
             "reclaim_screen",
             "Take the screen back from the person holding it.",
-            box_only()
+            box_only(),
+            ui::callable()
+        ),
+        tool_with(
+            "open_screen",
+            "Show the person the live screen of a box, with buttons to take it over and to \
+             record it. Call it when they ask to see or to drive the desktop; it changes \
+             nothing on the box.",
+            box_only(),
+            ui::renders("Opening the screen", "Screen ready")
+        ),
+        tool_with(
+            "screen_status",
+            "Who holds the screen, whether it is recording, and a fresh ticket to its viewer.",
+            box_only(),
+            ui::page_only()
         ),
         tool(
             "fork_box",
@@ -779,6 +820,12 @@ pub fn catalogue() -> Value {
 
 fn tool(name: &str, description: &str, schema: Value) -> Value {
     json!({ "name": name, "description": description, "inputSchema": schema })
+}
+
+fn tool_with(name: &str, description: &str, schema: Value, meta: Value) -> Value {
+    let mut listed = tool(name, description, schema);
+    listed["_meta"] = meta;
+    listed
 }
 
 fn box_only() -> Value {
@@ -850,9 +897,14 @@ fn with_box(mut properties: Value, required: &[&str]) -> Value {
     json!({ "type": "object", "properties": properties, "required": needed })
 }
 
-pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answer, String> {
+pub async fn call(
+    client: &Client,
+    origin: &str,
+    name: &str,
+    arguments: &Value,
+) -> Result<Answer, String> {
     match name {
-        "launch_box" => launch(client, arguments).await,
+        "launch_box" => launch(client, origin, arguments).await,
         "list_boxes" => list(client).await,
         "remove_box" => {
             let id = text(arguments, "box_id")?;
@@ -1114,7 +1166,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 other => return Err(format!("no such op: {other}")),
             };
 
-            Ok(Answer::Text(said))
+            status(client, origin, &id, said).await
         }
         "read_page" => {
             let id = text(arguments, "box_id")?;
@@ -1463,10 +1515,11 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .takeover(&id, 0, false)
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(Answer::Text(match view.url {
+            let said = match view.url {
                 Some(url) => format!("the screen is theirs; they open {url}"),
                 None => "the screen is theirs, and no viewer port is published".to_string(),
-            }))
+            };
+            status(client, origin, &id, said).await
         }
         "reclaim_screen" => {
             let id = text(arguments, "box_id")?;
@@ -1474,7 +1527,21 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
                 .end_takeover(&id, 0)
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(Answer::Text("the screen is yours again".to_string()))
+            status(client, origin, &id, "the screen is yours again".to_string()).await
+        }
+        "open_screen" => {
+            let id = text(arguments, "box_id")?;
+            status(
+                client,
+                origin,
+                &id,
+                format!("the screen of {id} is open for the person"),
+            )
+            .await
+        }
+        "screen_status" => {
+            let id = text(arguments, "box_id")?;
+            status(client, origin, &id, format!("the screen of {id}")).await
         }
         "fork_box" => {
             let id = text(arguments, "box_id")?;
@@ -1506,7 +1573,7 @@ pub async fn call(client: &Client, name: &str, arguments: &Value) -> Result<Answ
     }
 }
 
-async fn launch(client: &Client, arguments: &Value) -> Result<Answer, String> {
+async fn launch(client: &Client, origin: &str, arguments: &Value) -> Result<Answer, String> {
     let spec = Spec {
         desktop: Desktop {
             width: arguments
@@ -1518,6 +1585,7 @@ async fn launch(client: &Client, arguments: &Value) -> Result<Answer, String> {
                 .and_then(Value::as_u64)
                 .map(|n| n as u32),
             features: [
+                flag(arguments, "video").then_some(Feature::Video),
                 flag(arguments, "wide_fonts").then_some(Feature::WideFonts),
                 flag(arguments, "accessibility").then_some(Feature::Accessibility),
             ]
@@ -1534,16 +1602,58 @@ async fn launch(client: &Client, arguments: &Value) -> Result<Answer, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    Ok(Answer::Text(format!(
+    let said = format!(
         "box {} is up at {}x{}{}",
         created.id,
         created.width,
         created.height,
         created
             .viewer_url
+            .as_deref()
             .map(|url| format!("\nwatch it at {url}"))
             .unwrap_or_default()
-    )))
+    );
+    status(client, origin, &created.id, said).await
+}
+
+/// What every screen tool answers: the same record, so the page reads one shape. The
+/// socket goes under `_meta`, which no host shows the model, so a ticket never lands in
+/// a transcript.
+async fn status(client: &Client, origin: &str, id: &str, said: String) -> Result<Answer, String> {
+    let view = client.get(id).await.map_err(|e| e.to_string())?;
+    let viewers = client.viewers(id, 0).await.map_err(|e| e.to_string())?;
+    // A box opened without video has nothing to say here, and that is not a failure.
+    let recording = client.recording(id, 0).await.ok();
+    let ticket = client
+        .viewer_ticket(id, 0)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(Answer::Structured {
+        text: said,
+        structured: json!({
+            "box_id": id,
+            "screen": 0,
+            "width": view.width,
+            "height": view.height,
+            "state": view.state,
+            "taken_over": viewers.taken_over,
+            "watching": viewers.watching,
+            "driving": viewers.driving,
+            "recording": recording.as_ref().is_some_and(|r| r.recording),
+            "recording_path": recording.and_then(|r| r.path),
+        }),
+        meta: json!({
+            "vnc": {
+                "url": format!(
+                    "{}/v1/boxes/{id}/screens/0/viewer/socket?ticket={}",
+                    ui::socket_origin(origin),
+                    ticket.ticket
+                ),
+                "expires_at_ms": ticket.expires_at_ms,
+            }
+        }),
+    })
 }
 
 async fn list(client: &Client) -> Result<Answer, String> {

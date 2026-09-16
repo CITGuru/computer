@@ -512,6 +512,16 @@ impl Client {
         .await
     }
 
+    pub async fn viewer_ticket(&self, id: &str, screen: u32) -> Result<ViewerTicket> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/screens/{screen}/viewer/ticket"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     pub async fn recording(&self, id: &str, screen: u32) -> Result<RecordingView> {
         self.send(
             reqwest::Method::GET,

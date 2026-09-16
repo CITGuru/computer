@@ -49,7 +49,16 @@ const STILL: u64 = 10_000;
 const MAX_EXEC: Duration = Duration::from_secs(600);
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    // A browser opens a WebSocket with no header to carry a bearer in, so the viewer
+    // socket sits outside the gate and admits a ticket instead.
+    let open = Router::new()
+        .route(
+            "/v1/boxes/{id}/screens/{screen}/viewer/socket",
+            get(crate::viewer::socket),
+        )
+        .with_state(Arc::clone(&state));
+
+    let gated = Router::new()
         .route(HEALTH, get(health))
         .route("/v1/boxes", get(list_boxes).post(create_box))
         .route("/v1/boxes/{id}", get(get_box).delete(delete_box))
@@ -77,6 +86,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(start_takeover).delete(end_takeover),
         )
         .route("/v1/boxes/{id}/screens/{screen}/viewers", get(viewers))
+        .route(
+            "/v1/boxes/{id}/screens/{screen}/viewer/ticket",
+            post(crate::viewer::ticket),
+        )
         .route(
             "/v1/boxes/{id}/screens/{screen}/recording",
             get(recording).post(start_recording).delete(stop_recording),
@@ -115,7 +128,9 @@ pub fn router(state: Arc<AppState>) -> Router {
             Arc::clone(&state),
             crate::auth::gate,
         ))
-        .with_state(state)
+        .with_state(state);
+
+    open.merge(gated)
 }
 
 async fn health() -> Json<Health> {
@@ -222,6 +237,7 @@ async fn delete_box(
         .record(&id, Actor::Agent, TraceEvent::BoxDeleted)
         .await;
     state.forget_screens(&id);
+    state.tickets.forget(&id);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -839,6 +855,7 @@ async fn viewers(
         watching: counts.watching,
         driving: counts.driving,
         person_driving: counts.person_present(),
+        taken_over: matches!(held.control().control(), computer::Control::Human { .. }),
     }))
 }
 

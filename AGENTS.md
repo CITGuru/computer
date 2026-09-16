@@ -32,6 +32,13 @@ compiles, so they are parsed separately:
 python3 scripts/check-page-scripts.py
 ```
 
+The page an MCP Apps host renders is bundled and committed, so a change under
+`crates/computer-mcp/ui/src` is not a change until it is built:
+
+```bash
+crates/computer-mcp/ui/build.sh
+```
+
 The shell that goes inside an image is not compiled either:
 
 ```bash

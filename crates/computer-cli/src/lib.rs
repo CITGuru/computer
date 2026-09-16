@@ -198,7 +198,8 @@ async fn mcp(named: Option<String>, args: &[String]) -> Result<(), String> {
     let client = connect(named).await?;
     tracing::info!(server = %client.base(), "computer mcp is serving boxes from");
 
-    computer_mcp::stdio(&client)
+    computer_mcp::Server::new(client)
+        .stdio()
         .await
         .map_err(|error| error.to_string())
 }

@@ -401,3 +401,105 @@ async fn test_a_plain_frame_still_asks_for_nothing() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["code"], "not_found");
 }
+
+#[tokio::test]
+async fn test_a_viewer_ticket_is_for_a_box_that_is_here() {
+    let (status, body) = send(post("/v1/boxes/box_nope/screens/0/viewer/ticket", "")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}
+
+#[tokio::test]
+async fn test_the_viewer_socket_takes_a_ticket_and_no_bearer() {
+    let state = Arc::new(AppState::default().gated(Some(
+        computer::Secret::new("0123456789abcdef0123").expect("a secret"),
+    )));
+    let request = Request::builder()
+        .uri("/v1/boxes/box_nope/screens/0/viewer/socket?ticket=nothing")
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .body(Body::empty())
+        .expect("a request");
+    let response = routes::router(state)
+        .oneshot(request)
+        .await
+        .expect("the router answered");
+
+    // Without a live connection nothing can be upgraded, which is as far as a test gets;
+    // what matters is that the gate did not answer first.
+    assert_eq!(
+        response.status(),
+        StatusCode::UPGRADE_REQUIRED,
+        "the socket route sits outside the bearer gate"
+    );
+}
+
+async fn ask_mcp(body: &str) -> (StatusCode, Value) {
+    let router = computer_server::mcp::router(nowhere(), "http://127.0.0.1:1".to_string(), None);
+    let response = router
+        .oneshot(post("/mcp", body))
+        .await
+        .expect("the router answered");
+
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("a body")
+        .to_bytes();
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).expect("JSON")
+    };
+
+    (status, body)
+}
+
+#[tokio::test]
+async fn test_mcp_answers_over_http_with_the_page_among_its_resources() {
+    let (status, body) = ask_mcp(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["id"], 1);
+    assert!(body["result"]["capabilities"]["resources"].is_object());
+
+    let (status, body) = ask_mcp(r#"{"jsonrpc":"2.0","id":2,"method":"resources/list"}"#).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["result"]["resources"][0]["uri"],
+        "ui://computer/screen.html"
+    );
+}
+
+#[tokio::test]
+async fn test_mcp_takes_a_batch_and_answers_a_notification_with_nothing() {
+    let (status, body) = ask_mcp(
+        r#"[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"}]"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.as_array().map(Vec::len), Some(1), "{body}");
+
+    let (status, body) = ask_mcp(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).await;
+
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body, Value::Null);
+}
+
+#[tokio::test]
+async fn test_mcp_refuses_what_is_not_json() {
+    let (status, body) = ask_mcp("not json").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], -32700);
+}

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "computer": {
+      "type": "stdio",
+      "command": "computer-mcp",
+      "args": [],
+      "env": {
+        "COMPUTER_SERVER_URL": "http://127.0.0.1:8181"
+      }
+    }
+  }
+}

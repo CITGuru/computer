@@ -176,6 +176,20 @@ pub trait Profile: Send + Sync {
         url
     }
 
+    /// The socket behind the viewer page, for a proxy that carries the RFB bytes itself.
+    fn viewer_socket(&self, at: &crate::Address, ticket: Option<&crate::Secret>) -> String {
+        let scheme = match at.scheme {
+            crate::Scheme::Http => "ws",
+            crate::Scheme::Https => "wss",
+        };
+        let mut url = format!("{scheme}://{}/websockify", at.authority());
+        if let Some(ticket) = ticket {
+            url.push_str("?token=");
+            url.push_str(ticket.expose());
+        }
+        url
+    }
+
     fn start_command(&self, screen: ScreenId) -> Vec<String> {
         self.screen_command(ScreenAction::Start, screen, &[])
     }
