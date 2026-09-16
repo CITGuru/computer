@@ -33,10 +33,12 @@ python3 scripts/check-page-scripts.py
 ```
 
 The page an MCP Apps host renders is bundled and committed, so a change under
-`crates/computer-mcp/ui/src` is not a change until it is built:
+`crates/computer-mcp/ui/src` is not a change until it is built, and CI fails
+when the committed page is not what the source builds:
 
 ```bash
 crates/computer-mcp/ui/build.sh
+git diff --exit-code -- crates/computer-mcp/ui/screen.html
 ```
 
 The shell that goes inside an image is not compiled either:
