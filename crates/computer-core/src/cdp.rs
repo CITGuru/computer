@@ -1219,6 +1219,58 @@ const DESCRIBE: &str = r#"(el) => {
   };
 }"#;
 
+// The page's own scripts see the global, so it carries this crate's name.
+const WATCH: &str = r#"() => {
+  const key = '__computerWatch';
+  if (window[key]) window[key].observer.disconnect();
+  const state = { changed: false, observer: null };
+  state.observer = new MutationObserver(() => { state.changed = true; });
+  state.observer.observe(document.documentElement, {
+    subtree: true, childList: true, attributes: true, characterData: true,
+  });
+  window[key] = state;
+}"#;
+
+const CHANGED: &str = r#"() => {
+  const key = '__computerWatch';
+  const state = window[key];
+  if (!state) return null;
+  state.observer.disconnect();
+  delete window[key];
+  return state.changed;
+}"#;
+
+// A fetch that lands counts as activity before its data reaches the DOM, and a
+// page still loading is never quiet.
+const QUIET: &str = r#"(quietMs, withinMs) => new Promise(resolve => {
+  const now = () => performance.now();
+  const started = now();
+  let last = started;
+  const bump = () => { last = now(); };
+  const mutations = new MutationObserver(bump);
+  mutations.observe(document.documentElement, {
+    subtree: true, childList: true, attributes: true, characterData: true,
+  });
+  let resources = null;
+  try {
+    resources = new PerformanceObserver(bump);
+    resources.observe({ entryTypes: ['resource'] });
+  } catch (e) {}
+  const done = settled => {
+    mutations.disconnect();
+    if (resources) resources.disconnect();
+    resolve(settled);
+  };
+  const tick = () => {
+    const at = now();
+    if (document.readyState !== 'complete') last = at;
+    if (at - last >= quietMs) return done(true);
+    if (at - started >= withinMs) return done(false);
+    setTimeout(tick, Math.min(quietMs - (at - last), 100));
+  };
+  setTimeout(tick, Math.min(quietMs, 100));
+})"#;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reading {
@@ -1469,6 +1521,35 @@ impl Page {
             .as_str()
             .unwrap_or_default()
             .to_string())
+    }
+
+    /// Counts what the DOM does from here until `changed` reads it back.
+    pub async fn watch(&mut self) -> Result<()> {
+        self.evaluate(&format!("({WATCH})()")).await.map(|_| ())
+    }
+
+    /// None when nothing is watching, which a document the page has since left also answers.
+    pub async fn changed(&mut self) -> Result<Option<bool>> {
+        Ok(self.evaluate(&format!("({CHANGED})()")).await?.as_bool())
+    }
+
+    /// Returns once nothing on the page has changed for `quiet`, and fails when
+    /// `within` runs out first.
+    pub async fn quiet(&mut self, quiet: Duration, within: Duration) -> Result<()> {
+        let settled = self
+            .evaluate_within(
+                &format!("({QUIET})({}, {})", quiet.as_millis(), within.as_millis()),
+                Some(within),
+            )
+            .await?;
+
+        match settled.as_bool() {
+            Some(true) => Ok(()),
+            _ => Err(Error::Timeout {
+                after: within,
+                detail: "the page was still changing".to_string(),
+            }),
+        }
     }
 
     pub async fn wait_for_load(&mut self, within: Duration) -> Result<()> {

@@ -238,10 +238,20 @@ impl ControlGate {
     pub fn may_act(&self) -> Result<()> {
         match self.control() {
             Control::Owner => Ok(()),
-            Control::Human { .. } => Err(Error::denied(
-                "a person is driving this screen; observe, do not act",
-            )),
+            Control::Human { since } => Err(Error::denied(format!(
+                "a person has had this screen for {}: observe, do not act, or reclaim it first",
+                held_for(SystemTime::now().duration_since(since).unwrap_or_default())
+            ))),
         }
+    }
+}
+
+fn held_for(held: Duration) -> String {
+    let secs = held.as_secs();
+    match secs {
+        s if s < 120 => format!("{s} s"),
+        s if s < 7200 => format!("{} min", s / 60),
+        s => format!("{} h", s / 3600),
     }
 }
 
@@ -464,6 +474,23 @@ mod tests {
             "a takeover started by a process that has since exited must be \
              endable, or the screen is stuck for as long as the box lives"
         );
+    }
+
+    #[test]
+    fn test_a_refusal_says_how_long_and_what_to_do() {
+        let gate = ControlGate::new();
+        gate.hand_over("token", SystemTime::now() - Duration::from_secs(3 * 3600));
+
+        let said = gate.may_act().expect_err("held").to_string();
+        assert!(said.contains("for 3 h"), "{said}");
+        assert!(said.contains("reclaim"), "{said}");
+    }
+
+    #[test]
+    fn test_a_hold_is_said_in_the_unit_that_fits() {
+        assert_eq!(held_for(Duration::from_secs(42)), "42 s");
+        assert_eq!(held_for(Duration::from_secs(600)), "10 min");
+        assert_eq!(held_for(Duration::from_secs(3 * 3600 + 5)), "3 h");
     }
 
     #[test]

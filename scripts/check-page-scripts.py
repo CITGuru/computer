@@ -10,7 +10,7 @@ READER = "crates/computer-core/images/desktop/a11y.py"
 
 
 def constants(src):
-    for name in ("MATCH", "SELECTOR", "DESCRIBE"):
+    for name in ("MATCH", "SELECTOR", "DESCRIBE", "WATCH", "CHANGED", "QUIET"):
         found = re.search(r"const " + name + r': &str = r#"(.*?)"#;', src, re.S)
         if not found:
             sys.exit(f"{name} is not in {SOURCE} under the name this expects")

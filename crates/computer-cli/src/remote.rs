@@ -1015,7 +1015,9 @@ fn number(args: &[String], at: usize, what: &str) -> Result<u32, String> {
 
 const UPLOADS: &str = "/tmp/computer/uploads";
 
-const VALUED: [&str; 9] = [
+const SETTLE_MS: u64 = 600;
+
+const VALUED: [&str; 10] = [
     "--quality",
     "--tab",
     "--button",
@@ -1025,6 +1027,7 @@ const VALUED: [&str; 9] = [
     "--or",
     "--format",
     "--timeout",
+    "--quiet",
 ];
 
 pub async fn browser(client: &Client, args: &[String]) -> Done {
@@ -1100,7 +1103,11 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
             paths: handed(client, id, args, &rest).await?,
         },
         "wait" => OnElement::WaitFor {
-            query: query(2)?,
+            // Under --quiet the words are optional: the wait is for the page to settle.
+            query: match present(args, "--quiet") {
+                true => query(2).unwrap_or_default(),
+                false => query(2)?,
+            },
             gone: present(args, "--gone"),
             within_ms: counted(args, "--within", "a number of milliseconds")?,
             or: flag(args, "--or")
@@ -1113,6 +1120,7 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
                 })
                 .unwrap_or_default(),
             exact: present(args, "--exact"),
+            quiet_ms: counted(args, "--quiet", "a number of milliseconds")?,
         },
         "hover" => OnElement::Hover { query: query(2)? },
         "back" => OnElement::History { go: Where::Back },
@@ -1122,7 +1130,7 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     };
 
     let result = client
-        .on_element(id, &what, 600, tab)
+        .on_element(id, &what, SETTLE_MS, tab)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1135,11 +1143,10 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     if let Some(matched) = &result.matched {
         println!("matched {matched:?}");
     }
-    match &result.url {
-        Some(url) if result.navigated || op == "reload" => println!("{url}"),
-        Some(_) if matches!(op, "click" | "back" | "forward") => {
-            println!("the page did not move")
-        }
+    match (&result.url, result.changed) {
+        (Some(url), _) if result.navigated || op == "reload" => println!("{url}"),
+        (_, Some(true)) => println!("the page changed"),
+        (_, Some(false)) => println!("nothing on the page changed within {SETTLE_MS} ms"),
         _ => {}
     }
 

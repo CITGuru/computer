@@ -242,6 +242,8 @@ pub enum OnElement {
         or: Vec<String>,
         #[serde(default)]
         exact: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        quiet_ms: Option<u64>,
     },
     Hover {
         query: String,
@@ -286,6 +288,8 @@ pub struct ElementResult {
     pub url: Option<String>,
     #[serde(default)]
     pub navigated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matched: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -861,6 +865,33 @@ mod tests {
     }
 
     #[test]
+    fn test_a_wait_can_be_for_the_page_to_settle() {
+        let sent: OnElement =
+            serde_json::from_str(r#"{"op":"wait_for","query":"","quiet_ms":500}"#).expect("parses");
+        assert!(matches!(
+            sent,
+            OnElement::WaitFor {
+                quiet_ms: Some(500),
+                ..
+            }
+        ));
+
+        let plain = OnElement::WaitFor {
+            query: "Calendar".to_string(),
+            gone: false,
+            within_ms: None,
+            or: Vec::new(),
+            exact: false,
+            quiet_ms: None,
+        };
+        let wire = serde_json::to_string(&plain).expect("serialises");
+        assert!(
+            !wire.contains("quiet_ms"),
+            "an older server sees nothing new: {wire}"
+        );
+    }
+
+    #[test]
     fn test_an_element_with_no_point_goes_both_ways() {
         let out = Element {
             text: "Top".to_string(),
@@ -901,6 +932,18 @@ mod tests {
 
         assert!(result.url.is_none());
         assert!(!result.navigated, "and does not claim the page moved");
+        assert!(result.changed.is_none(), "nor that nothing on it changed");
         assert!(result.matched.is_none());
+    }
+
+    #[test]
+    fn test_a_result_says_whether_the_page_changed_under_the_press() {
+        let answered = r#"{"url":"https://example.com/","navigated":false,"changed":true}"#;
+        let result: ElementResult = serde_json::from_str(answered).expect("parses");
+
+        assert_eq!(result.changed, Some(true));
+
+        let wire = serde_json::to_string(&ElementResult::default()).expect("serialises");
+        assert!(!wire.contains("changed"), "unwatched is left out: {wire}");
     }
 }

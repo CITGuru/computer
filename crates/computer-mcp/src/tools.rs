@@ -1,9 +1,9 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, Arrange, BoxState, Evaluate, Find, ForkMode, ForkRequest, Frame, Held,
-    NodeQuery, OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, ScrollTo, Shot, Want,
-    Where,
+    Action, ActionBatch, Arrange, BoxState, ElementResult, Evaluate, Find, ForkMode, ForkRequest,
+    Frame, Held, NodeQuery, OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, ScrollTo,
+    Shot, Want, Where,
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
@@ -341,7 +341,9 @@ pub fn catalogue() -> Value {
             "Bring the thing this query names into view and click it. Prefer this over `click` \
              for anything on a web page: it finds the element itself, so nothing depends on a \
              coordinate being still correct. `right` opens the page's own context menu, which \
-             a site draws inside the page — not the browser's, which no screenshot holds.",
+             a site draws inside the page — not the browser's, which no screenshot holds. \
+             The answer ends with what the click did to the page: a new URL, a change, or \
+             nothing within 600 ms.",
             with_page(
                 json!({
                     "query": { "type": "string" },
@@ -387,7 +389,9 @@ pub fn catalogue() -> Value {
              same as `find` takes. Use this after anything that makes the page fetch — a sleep is either short \
              enough to act too early or long enough to be paid on every step. Give `or` the \
              text a page shows when what you asked for is never coming, and the answer says \
-             which arrived. Answers with what it found, and fails saying what never appeared.",
+             which arrived. Answers with what it found, and fails saying what never appeared. \
+             `quiet_ms` waits until nothing on the page has changed for that long, with or \
+             without a query: the prices a calendar fills in after its dates arrive.",
             with_page(
                 json!({
                     "query": { "type": "string" },
@@ -396,6 +400,12 @@ pub fn catalogue() -> Value {
                         "description": "Wait for it to leave instead: a spinner ending, a dialog closing."
                     },
                     "within_ms": { "type": "integer", "description": "How long to wait." },
+                    "quiet_ms": {
+                        "type": "integer",
+                        "description": "Return once nothing on the page has changed for this \
+                                        long, after the query if one is given. 500 covers a \
+                                        fetch that renders in pieces."
+                    },
                     "exact": {
                         "type": "boolean",
                         "description": "Match the whole of an element's words, not any part of \
@@ -411,7 +421,7 @@ pub fn catalogue() -> Value {
                                         already ruled out."
                     }
                 }),
-                &["query"]
+                &[]
             )
         ),
         tool(
@@ -1335,14 +1345,21 @@ pub async fn call(
             element(client, arguments, what, "handed over").await
         }
         "wait_for" => {
+            let quiet_ms = arguments.get("quiet_ms").and_then(Value::as_u64);
+            let query = match quiet_ms {
+                Some(_) => text(arguments, "query").unwrap_or_default(),
+                None => text(arguments, "query")?,
+            };
+            let did = waited(&query, quiet_ms);
             let what = OnElement::WaitFor {
-                query: text(arguments, "query")?,
+                query,
                 gone: flag(arguments, "gone"),
                 within_ms: arguments.get("within_ms").and_then(Value::as_u64),
                 or: strings(arguments, "or"),
                 exact: flag(arguments, "exact"),
+                quiet_ms,
             };
-            element(client, arguments, what, "there").await
+            element(client, arguments, what, &did).await
         }
         "hover" => {
             let what = OnElement::Hover {
@@ -1983,11 +2000,7 @@ async fn element(
         (None, None) => did.to_string(),
     };
 
-    let said = match (&result.url, result.navigated) {
-        (Some(url), true) => format!("{said} — {url}"),
-        (Some(_), false) => format!("{said} — the page did not move"),
-        (None, _) => said,
-    };
+    let said = ended(said, &result);
 
     let said = match &result.matched {
         Some(matched) => format!("{said} ({matched:?})"),
@@ -2001,6 +2014,25 @@ async fn element(
     let frame = client.frame(&id, 0, have(arguments).as_deref()).await.ok();
 
     Ok(framed(&said, frame.as_ref()))
+}
+
+fn waited(query: &str, quiet_ms: Option<u64>) -> String {
+    match (query.is_empty(), quiet_ms) {
+        (true, Some(ms)) => format!("the page has been still for {ms} ms"),
+        _ => "there".to_string(),
+    }
+}
+
+// The window is part of the claim: a slow site answers after it.
+fn ended(said: String, result: &ElementResult) -> String {
+    match (&result.url, result.navigated, result.changed) {
+        (Some(url), true, _) => format!("{said} — {url}"),
+        (_, _, Some(true)) => format!("{said} — the page changed"),
+        (_, _, Some(false)) => {
+            format!("{said} — nothing on the page changed within {SETTLE_MS} ms")
+        }
+        _ => said,
+    }
 }
 
 async fn screen_now(client: &Client, id: &str) -> Option<Vec<u8>> {
@@ -2330,6 +2362,39 @@ mod tests {
     }
 
     #[test]
+    fn test_a_press_says_what_it_did_to_the_page() {
+        let at = |navigated, changed| ElementResult {
+            url: Some("https://example.com/".to_string()),
+            navigated,
+            changed,
+            ..ElementResult::default()
+        };
+
+        assert_eq!(
+            ended("clicked".to_string(), &at(true, None)),
+            "clicked — https://example.com/"
+        );
+        assert_eq!(
+            ended("clicked".to_string(), &at(false, Some(true))),
+            "clicked — the page changed"
+        );
+        assert_eq!(
+            ended("clicked".to_string(), &at(false, Some(false))),
+            "clicked — nothing on the page changed within 600 ms"
+        );
+        assert_eq!(
+            ended("filled".to_string(), &at(false, None)),
+            "filled",
+            "a fill is not watched, and the URL alone is no news"
+        );
+        assert_eq!(
+            ended("clicked".to_string(), &ElementResult::default()),
+            "clicked",
+            "an older server says nothing about the page"
+        );
+    }
+
+    #[test]
     fn test_the_pointer_can_be_asked_for_on_its_own() {
         let listed = catalogue();
         let tool = listed
@@ -2348,6 +2413,32 @@ mod tests {
             json!(["box_id"]),
             "a box and nothing else"
         );
+    }
+
+    #[test]
+    fn test_a_quiet_wait_needs_no_words() {
+        let listed = catalogue();
+        let wait_for = listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|tool| tool["name"] == "wait_for")
+            .expect("wait_for is offered");
+
+        assert!(
+            wait_for["inputSchema"]["properties"]
+                .get("quiet_ms")
+                .is_some()
+        );
+        let required = wait_for["inputSchema"]["required"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(!required.iter().any(|name| name == "query"), "{required:?}");
+
+        assert_eq!(waited("", Some(500)), "the page has been still for 500 ms");
+        assert_eq!(waited("Calendar", Some(500)), "there");
+        assert_eq!(waited("Calendar", None), "there");
     }
 
     #[test]

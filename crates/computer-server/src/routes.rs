@@ -851,11 +851,15 @@ async fn viewers(
         .ok_or_else(|| ApiError::internal("this screen has no viewer"))?;
 
     let counts = held.viewers().await?;
+    // The gate is per process: a takeover another server started shows only in the box.
+    let taken_over = matches!(held.control().control(), computer::Control::Human { .. })
+        || held.person_driving().await;
+
     Ok(Json(ViewersView {
         watching: counts.watching,
         driving: counts.driving,
         person_driving: counts.person_present(),
-        taken_over: matches!(held.control().control(), computer::Control::Human { .. }),
+        taken_over,
     }))
 }
 
@@ -1547,7 +1551,12 @@ async fn apply(
     what: OnElement,
     settle: Duration,
 ) -> ApiResult<ElementResult> {
+    // A value set on an input is not a mutation, so only a press is watched:
+    // a fill would read as nothing having changed.
+    let watched = matches!(what, OnElement::Click { .. } | OnElement::Hover { .. });
+
     let before = page.url().await.ok();
+    let watching = watched && page.watch().await.is_ok();
     let mut result = applied(page, what).await?;
 
     if !settle.is_zero() {
@@ -1557,6 +1566,10 @@ async fn apply(
     if let Ok(after) = page.url().await {
         result.navigated = before.as_deref() != Some(after.as_str());
         result.url = Some(after);
+    }
+
+    if watching {
+        result.changed = page.changed().await.ok().flatten();
     }
 
     Ok(result)
@@ -1601,15 +1614,37 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             within_ms,
             or,
             exact,
+            quiet_ms,
         } => {
-            let within = Duration::from_millis(within_ms.unwrap_or(WAIT_MS)).min(MAX_WAIT);
-            let (matched, found) = page.wait_for_any(&query, &or, gone, within, exact).await?;
-
-            ElementResult {
-                element: found.map(element_out),
-                matched: Some(matched),
-                ..ElementResult::default()
+            if query.is_empty() && quiet_ms.is_none() {
+                return Err(ApiError::bad_request("a wait needs a query or quiet_ms"));
             }
+
+            let within = Duration::from_millis(within_ms.unwrap_or(WAIT_MS)).min(MAX_WAIT);
+            let started = Instant::now();
+            let mut result = ElementResult::default();
+
+            if !query.is_empty() {
+                let (matched, found) = page.wait_for_any(&query, &or, gone, within, exact).await?;
+                result.element = found.map(element_out);
+                result.matched = Some(matched);
+            }
+
+            // One window for both: the quiet is what the query waited for, landing.
+            if let Some(quiet) = quiet_ms {
+                let left = within.saturating_sub(started.elapsed());
+                page.quiet(Duration::from_millis(quiet).min(MAX_WAIT), left)
+                    .await
+                    .map_err(|error| match error {
+                        computer::Error::Timeout { detail, .. } => computer::Error::Timeout {
+                            after: within,
+                            detail,
+                        },
+                        other => other,
+                    })?;
+            }
+
+            result
         }
         OnElement::Hover { query } => ElementResult {
             element: Some(element_out(page.hover(&query).await?)),
