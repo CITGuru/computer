@@ -688,6 +688,21 @@ The gate that holds your input back lives in your process, and the token that sa
 
 The image enforces the same rule. While a person has the screen, `xdotool` refuses input from anything in the box, including a raw `exec`, and returns status 3. Reads such as `getdisplaygeometry` still work, because a program that may not act may still watch.
 
+### Show the screen inside Claude or ChatGPT
+
+`computerd` serves MCP over Streamable HTTP at `/mcp` beside its REST routes. A host that renders [MCP Apps](https://github.com/modelcontextprotocol/ext-apps), such as Claude, ChatGPT, VS Code or Goose, shows the person the live screen beside the results of `launch_box`, `open_screen` and `hand_over`, with buttons to take the screen over, hand it back, and record it. The page reaches the screen through one WebSocket back to `computerd`, so a box stays on loopback and a browser never needs its ports.
+
+```bash
+COMPUTER_SERVER_ADDR=0.0.0.0:8080 \
+COMPUTER_SERVER_TOKEN=... \
+COMPUTER_PUBLIC_URL=https://boxes.example.com \
+computerd
+```
+
+Put a proxy that terminates TLS in front, because the hosts serve the page from an HTTPS origin and a plain `ws://` socket is refused as mixed content. `COMPUTER_PUBLIC_URL` is the origin the page connects back to; without it `computerd` reads `X-Forwarded-Proto` and `X-Forwarded-Host`, and failing those the `Host` of the request. The page is a single file built by `crates/computer-mcp/ui/build.sh` and committed, so the crate compiles without node.
+
+Each screen tool answers with `structuredContent` the page reads and, under `_meta`, a socket URL carrying a ticket that opens that one screen for fifteen minutes. Hosts keep `_meta` from the model, so a ticket never lands in a transcript.
+
 ## Run in a microVM
 
 A container shares the host kernel. A microVM boots its own kernel and gives a stronger isolation boundary, but it starts more slowly.

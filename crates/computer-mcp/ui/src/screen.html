@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Computer screen</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1a1a1a;
+        --muted: #6b6b70;
+        --line: #e3e3e6;
+        --button: #f3f3f5;
+        --button-fg: #1a1a1a;
+        --accent: #2f6fed;
+        --record: #d93025;
+        --screen: #0e0e10;
+        color-scheme: light dark;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #141416;
+          --fg: #ececee;
+          --muted: #9a9aa1;
+          --line: #2a2a2e;
+          --button: #232327;
+          --button-fg: #ececee;
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #141416;
+        --fg: #ececee;
+        --muted: #9a9aa1;
+        --line: #2a2a2e;
+        --button: #232327;
+        --button-fg: #ececee;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      #bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+        flex-wrap: wrap;
+      }
+      #status {
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      #status::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+        margin-right: 6px;
+        vertical-align: 0;
+      }
+      :root.live #status::before {
+        background: #2ea043;
+      }
+      :root.driving #status::before {
+        background: var(--accent);
+      }
+      :root.recording #status::before {
+        background: var(--record);
+        animation: pulse 1.2s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.3;
+        }
+      }
+      #note {
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1 1 8em;
+        min-width: 0;
+      }
+      button {
+        font: inherit;
+        color: var(--button-fg);
+        background: var(--button);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) {
+        border-color: var(--muted);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      button.danger {
+        color: var(--record);
+      }
+      #screen {
+        width: 100%;
+        aspect-ratio: 16 / 10;
+        background: var(--screen);
+        overflow: hidden;
+      }
+      :root.fullscreen #screen {
+        height: calc(100vh - 41px);
+        aspect-ratio: auto;
+      }
+      #screen canvas {
+        outline: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <span id="status">connecting</span>
+      <span id="note"></span>
+      <button id="takeover" class="primary" title="Drive the desktop yourself">Take over</button>
+      <button id="giveback" hidden title="Hand the desktop back to the agent">Give back</button>
+      <button id="record" title="Record the screen inside the box">Record</button>
+      <button id="stop" class="danger" hidden title="Stop the recording">Stop</button>
+      <button id="fullscreen" title="Larger">⤢</button>
+    </div>
+    <div id="screen"></div>
+    <!--APP-->
+  </body>
+</html>

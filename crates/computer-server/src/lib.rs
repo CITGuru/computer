@@ -2,12 +2,14 @@ pub mod auth;
 pub mod error;
 pub mod extract;
 pub mod idempotency;
+pub mod mcp;
 pub mod prune;
 pub mod reap;
 pub mod recover;
 pub mod registry;
 pub mod routes;
 pub mod spec;
+pub mod viewer;
 
 use computer::ContainerCli;
 use computer_api::{Actor, TraceEvent};
@@ -28,6 +30,7 @@ pub struct AppState {
     pub frames: Arc<dyn Frames>,
     seen: Mutex<HashMap<(String, u32), String>>,
     pub cli: Option<Arc<dyn ContainerCli>>,
+    pub tickets: viewer::Tickets,
 }
 
 impl Default for AppState {
@@ -52,6 +55,7 @@ impl AppState {
             frames,
             seen: Mutex::new(HashMap::new()),
             cli: None,
+            tickets: viewer::Tickets::default(),
         }
     }
 

@@ -19,7 +19,9 @@ computer = { package = "computer-core", path = "../computer-core", version = "0.
 computer-api = { path = "../computer-api", version = "0.1.0" }
 computer-storage = { path = "../computer-storage", version = "0.1.0" }
 computer-types = { path = "../computer-types", version = "0.1.0" }
-axum = "0.8"
+computer-client = { path = "../computer-client", version = "0.1.0" }
+computer-mcp = { path = "../computer-mcp", version = "0.1.0" }
+axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -29,6 +31,9 @@ base64 = "0.22"
 # A real digest, not FNV: a frame-address collision would hand back a stale picture.
 sha2 = "0.10"
 getrandom = "0.3"
+# The same version axum's `ws` feature carries, so one message type crosses the proxy.
+tokio-tungstenite = "0.29"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

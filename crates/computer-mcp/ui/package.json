@@ -1,0 +1,13 @@
+{
+  "name": "computer-screen-ui",
+  "private": true,
+  "description": "The screen page an MCP Apps host renders beside a computer tool result",
+  "scripts": {
+    "build": "./build.sh"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "2.0.0",
+    "@novnc/novnc": "1.7.0",
+    "esbuild": "0.28.2"
+  }
+}

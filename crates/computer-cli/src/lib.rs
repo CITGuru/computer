@@ -68,7 +68,7 @@ computer — a desktop in a box
                               hand files to a file input. a path is one out
                               here, read and written into the box first;
                               --in-box names paths already there
-  browser <box> wait <query> [--gone] [--or TEXT,TEXT] [--within MS]
+  browser <box> wait [<query>] [--gone] [--or TEXT,TEXT] [--within MS] [--quiet MS]
   browser <box> hover <query>
   browser <box> eval <expression> [--timeout MS] [--limit N]
   browser <box> screenshot [file] [--full] [--format png|jpeg] [--quality N]
@@ -198,7 +198,8 @@ async fn mcp(named: Option<String>, args: &[String]) -> Result<(), String> {
     let client = connect(named).await?;
     tracing::info!(server = %client.base(), "computer mcp is serving boxes from");
 
-    computer_mcp::stdio(&client)
+    computer_mcp::Server::new(client)
+        .stdio()
         .await
         .map_err(|error| error.to_string())
 }

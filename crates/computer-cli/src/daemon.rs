@@ -42,13 +42,21 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     computer_server::prune::spawn(Arc::clone(&state), computer_server::prune::every());
 
     let listener = tokio::net::TcpListener::bind(address).await?;
+    let api = format!("http://{}", own(listener.local_addr()?));
+    let public = std::env::var("COMPUTER_PUBLIC_URL").ok();
 
     tracing::info!(
         %address,
         gated = state.token.is_some(),
+        mcp = "/mcp",
         "computerd is listening"
     );
-    axum::serve(listener, routes::router(Arc::clone(&state)))
+    let app = routes::router(Arc::clone(&state)).merge(computer_server::mcp::router(
+        Arc::clone(&state),
+        api,
+        public,
+    ));
+    axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
@@ -59,4 +67,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Where this process reaches itself: the bound address, or the loopback when it took them all.
+fn own(bound: SocketAddr) -> SocketAddr {
+    if bound.ip().is_unspecified() {
+        SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), bound.port())
+    } else {
+        bound
+    }
 }
