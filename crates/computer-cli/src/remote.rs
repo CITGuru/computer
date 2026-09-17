@@ -1,7 +1,8 @@
 use crate::{USAGE, bare, flag, framing, positional, present, wheel};
 use computer_api::{
     Action, ActionBatch, Arrange, BatchResult, Evaluate, Find, ForkMode, ForkRequest, Held,
-    OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, Shot, Where, Window,
+    OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, Shot, SnapshotOptions, Where,
+    Window,
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{
@@ -1017,8 +1018,9 @@ const UPLOADS: &str = "/tmp/computer/uploads";
 
 const SETTLE_MS: u64 = 600;
 
-const VALUED: [&str; 10] = [
+const VALUED: [&str; 11] = [
     "--quality",
+    "--scope",
     "--tab",
     "--button",
     "--role",
@@ -1036,8 +1038,8 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     let op = positional(
         &rest,
         1,
-        "read, find, click, fill, select, options, upload, wait, hover, eval, \
-         screenshot, tabs, switch, close, back, forward or reload",
+        "read, snapshot, find, click, fill, select, options, upload, wait, hover, \
+         eval, screenshot, tabs, switch, close, back, forward or reload",
     )
     .map_err(|e| e.to_string())?;
 
@@ -1050,6 +1052,7 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
 
     match op {
         "read" => return read_page(client, id, args).await,
+        "snapshot" => return snapshot_page(client, id, args).await,
         "find" => return find_on_page(client, id, args, &rest).await,
         "eval" => return evaluate_on_page(client, id, args, &rest).await,
         "screenshot" => return capture_page(client, id, args, &rest).await,
@@ -1149,6 +1152,11 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         (_, Some(false)) => println!("nothing on the page changed within {SETTLE_MS} ms"),
         _ => {}
     }
+    if let Some(delta) = &result.delta {
+        for line in delta.lines(false) {
+            println!("{line}");
+        }
+    }
 
     Ok(())
 }
@@ -1175,6 +1183,28 @@ async fn read_page(client: &Client, id: &str, args: &[String]) -> Done {
     println!("{}", read.text);
     if read.truncated {
         eprintln!("(truncated)");
+    }
+
+    Ok(())
+}
+
+async fn snapshot_page(client: &Client, id: &str, args: &[String]) -> Done {
+    let taken = client
+        .snapshot(
+            id,
+            &SnapshotOptions {
+                scope: flag(args, "--scope").map(str::to_string),
+                limit: counted(args, "--limit", "a number of elements")?,
+                tab: flag(args, "--tab").map(str::to_string),
+                delta: present(args, "--delta"),
+                quiet_ms: counted(args, "--quiet", "a number of milliseconds")?,
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for line in taken.lines(present(args, "--urls")) {
+        println!("{line}");
     }
 
     Ok(())
@@ -1330,7 +1360,11 @@ fn shown_element(element: &computer_api::Element) -> String {
     };
 
     format!(
-        "{}{} {:?}{} {} {}x{}{}{}",
+        "{}{}{} {:?}{} {} {}x{}{}{}",
+        match element.r#ref.as_deref() {
+            Some(numbered) => format!("@{numbered} "),
+            None => String::new(),
+        },
         element.tag,
         element.kind.as_deref().unwrap_or(""),
         element.text,

@@ -10,7 +10,7 @@ READER = "crates/computer-core/images/desktop/a11y.py"
 
 
 def constants(src):
-    for name in ("MATCH", "SELECTOR", "DESCRIBE", "WATCH", "CHANGED", "QUIET"):
+    for name in ("MATCH", "SELECTOR", "DESCRIBE", "SNAPSHOT", "REACH", "REF_STATE", "WATCH", "CHANGED", "QUIET"):
         found = re.search(r"const " + name + r': &str = r#"(.*?)"#;', src, re.S)
         if not found:
             sys.exit(f"{name} is not in {SOURCE} under the name this expects")
@@ -23,6 +23,7 @@ def main():
 
     # `describe()` splices SELECTOR in by string replacement, which no compiler sees.
     scripts["DESCRIBE"] = scripts["DESCRIBE"].replace("SELECTOR_FN", scripts["SELECTOR"])
+    scripts["SNAPSHOT"] = scripts["SNAPSHOT"].replace("DESCRIBE_FN", scripts["DESCRIBE"])
 
     failed = False
     for name, body in scripts.items():

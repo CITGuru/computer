@@ -1,8 +1,6 @@
 # computer-server
 
-A REST API over `computer` boxes. Create them, drive them, take them away —
-all of it over HTTP, so a shell script with `curl` and an MCP server built by
-mapping tools onto endpoints both work with no SDK in between.
+A REST API over `computer` boxes. Create them, drive them, take them away — all of it over HTTP, so a shell script with `curl` and an MCP server built by mapping tools onto endpoints both work with no SDK in between.
 
 ```bash
 cargo run -p computer-server            # 127.0.0.1:8080, or $COMPUTER_SERVER_ADDR
@@ -10,12 +8,9 @@ cargo run -p computer-server            # 127.0.0.1:8080, or $COMPUTER_SERVER_AD
 
 ## The gate
 
-Whoever reaches this API creates boxes, drives them, reads their frames and runs
-commands inside them, so an address it answers on is worth more than any single
-viewer URL behind it.
+Whoever reaches this API creates boxes, drives them, reads their frames and runs commands inside them, so an address it answers on is worth more than any single viewer URL behind it.
 
-The rule is the engine's own. On loopback it opens without a token, which is
-what a box on a laptop has always been. Bound anywhere else it needs one, and
+The rule is the engine's own. On loopback it opens without a token, which is what a box on a laptop has always been. Bound anywhere else it needs one, and
 says so at startup rather than on the first unauthenticated request:
 
 ```
@@ -30,20 +25,15 @@ export COMPUTER_SERVER_TOKEN=$(openssl rand -hex 32)
 curl -s localhost:8080/v1/boxes -H "Authorization: Bearer $COMPUTER_SERVER_TOKEN"
 ```
 
-The token is a `computer::Secret`, so it is refused under 16 characters, and it
-has no `Display` and no `Serialize` — it cannot reach a log by accident.
-Comparison is constant-time. `/v1/health` answers without one, since a load
-balancer has no token and a refusal would tell whoever asked the same thing.
+The token is a `computer::Secret`, so it is refused under 16 characters, and it has no `Display` and no `Serialize` — it cannot reach a log by accident.
+Comparison is constant-time. `/v1/health` answers without one, since a load balancer has no token and a refusal would tell whoever asked the same thing.
 
-This gates the API. The viewer and control URLs it hands back carry their own
-credentials, set by `policy.auth` in the spec.
+This gates the API. The viewer and control URLs it hands back carry their own credentials, set by `policy.auth` in the spec.
 
 ## Create a box
 
-A box is described by a **spec** — what desktop is wanted — and placed by a
-**placement** — where it runs and for how long. They are separate because two
-identical desktops that differ only in a memory limit are one desktop, and
-`spec_digest` is what says so. Both live in `computer-types`, which describes a
+A box is described by a **spec** — what desktop is wanted — and placed by a **placement** — where it runs and for how long. They are separate because two
+identical desktops that differ only in a memory limit are one desktop, and `spec_digest` is what says so. Both live in `computer-types`, which describes a
 desktop and how to address one without knowing an API exists.
 
 `width`, `height` and `screens` are optional. A spec that leaves them open
@@ -208,6 +198,28 @@ window is not looking, and its coordinates address nothing. On a page four
 thousand pixels tall, the same button reads `y=4011` without it and `y=903`
 with.
 
+`snapshot` lists every control on the page in document order — links, buttons,
+fields, dropdowns, checkboxes, tabs, menu items — with the headings between
+them, and numbers each. The number is kept in the page, so `@e12` is then a
+query for `find` and for everything `page/element` does, and a second snapshot
+of the same document hands out the same numbers. `scope` is a query as `find`
+takes one and narrows the listing to what its first match holds; `total` says
+how many the page offered when `limit` cut the listing short.
+
+`delta=true` answers only what appeared, changed or left since the last
+snapshot with the same scope, and a count of what stayed the same, so a page is
+read in full once and then by difference. The comparison is what each control
+is and says, not where it sits. The first snapshot of a document has nothing to
+compare with, so it answers in full with `delta.first`. `quiet_ms` lists the
+page only once nothing on it has changed for that long, and fails as a wait
+does when it never settles. Every `page/element` answer carries the same
+`delta` for what the action made appear, change or leave, so the next step
+needs no snapshot of its own. Only a snapshot numbers a page: an action on one
+nobody has snapshotted reports nothing rather than handing out refs nobody has
+seen, and a ref named there is refused with the reason. A navigation that keeps
+the document, as a single-page app's `pushState` does, keeps its numbers and its
+report; one that replaces it starts again.
+
 `format` is `markdown` (the default), `text` or `raw`. Markdown keeps the
 headings, lists, tables and code a flat rendering loses, and puts each link's
 address beside its words. `text` is the cheapest answer to "what does this
@@ -247,6 +259,7 @@ a server and this endpoint is only the HTTP in front of it.
 | `GET /v1/catalog` | the app names a launch can ask for |
 | `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
 | `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
+| `GET /v1/boxes/{id}/page/snapshot?scope=&limit=&delta=&quiet_ms=` | every control on the page in order, numbered; or what changed since the last one |
 | `POST /v1/boxes/{id}/page/element` | click, fill, dropdown, upload, hover, wait, history or scroll, by query |
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |

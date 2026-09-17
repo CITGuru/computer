@@ -1032,6 +1032,7 @@ dependencies = [
  "computer-cli",
  "computer-core",
  "computer-types",
+ "libc",
  "serde",
  "serde_json",
  "tokio",

@@ -205,6 +205,81 @@ pub struct Element {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Given by the last `snapshot`; `@e12` names it in a query.
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
+}
+
+impl Element {
+    pub fn role_word(&self) -> String {
+        if let Some(role) = self.role.as_deref() {
+            return role.to_string();
+        }
+
+        let word = match self.tag.as_str() {
+            "a" | "area" => "link",
+            "button" | "summary" => "button",
+            "select" => "combobox",
+            "textarea" => "textbox",
+            "input" => match self.kind.as_deref().unwrap_or("") {
+                "submit" | "button" | "reset" | "image" => "button",
+                "" | "text" | "search" | "email" | "url" | "tel" | "password" => "textbox",
+                other => other,
+            },
+            tag => tag,
+        };
+
+        word.to_string()
+    }
+
+    pub fn brief(&self, with_href: bool) -> String {
+        let mut line = match (&self.r#ref, &self.selector) {
+            (Some(numbered), _) => format!("@{numbered}"),
+            (None, Some(selector)) => selector.clone(),
+            (None, None) => self.tag.clone(),
+        };
+
+        line.push(' ');
+        line.push_str(&self.role_word());
+
+        let name = self
+            .label
+            .as_deref()
+            .filter(|label| !label.is_empty())
+            .unwrap_or(&self.text);
+        if !name.is_empty() {
+            line.push_str(&format!(" {name:?}"));
+        }
+
+        // A checkbox's value is "on"; its state is what says anything.
+        let field = matches!(self.tag.as_str(), "input" | "textarea" | "select")
+            && !matches!(
+                self.kind.as_deref(),
+                Some("checkbox" | "radio" | "submit" | "button" | "reset" | "image")
+            );
+        if field {
+            if let Some(value) = self.value.as_deref().filter(|value| !value.is_empty()) {
+                if value != name {
+                    line.push_str(&format!(" = {value:?}"));
+                }
+            }
+        }
+
+        if !self.states.is_empty() {
+            line.push_str(&format!(" [{}]", self.states.join(" ")));
+        }
+
+        if with_href {
+            if let Some(href) = &self.href {
+                line.push(' ');
+                line.push_str(href);
+            }
+        }
+
+        line
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,6 +371,8 @@ pub struct ElementResult {
     pub options: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<Point>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<Changes>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +440,119 @@ pub struct Find {
     pub exact: Option<bool>,
     pub role: Option<String>,
     pub tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotOptions {
+    /// A query as `find` takes one; the listing is what its first match holds.
+    pub scope: Option<String>,
+    pub limit: Option<usize>,
+    pub tab: Option<String>,
+    #[serde(default)]
+    pub delta: bool,
+    #[serde(default)]
+    pub quiet_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub url: String,
+    pub title: String,
+    /// What the page offers; the listing stops at the limit.
+    pub total: usize,
+    /// Empty when a delta was asked for and there was a snapshot to compare with.
+    pub elements: Vec<Element>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<Changes>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Changes {
+    /// Nothing to compare with, so the whole listing came instead.
+    #[serde(default)]
+    pub first: bool,
+    #[serde(default)]
+    pub added: Vec<Element>,
+    #[serde(default)]
+    pub changed: Vec<Element>,
+    /// As they were, since they are no longer on the page.
+    #[serde(default)]
+    pub gone: Vec<Element>,
+    #[serde(default)]
+    pub same: usize,
+}
+
+impl Changes {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.changed.is_empty() && self.gone.is_empty()
+    }
+
+    pub fn lines(&self, with_href: bool) -> Vec<String> {
+        if self.is_empty() {
+            return vec![format!(
+                "unchanged since the last snapshot: {} controls",
+                self.same
+            )];
+        }
+
+        let mut lines = vec![format!(
+            "since the last snapshot: {} appeared, {} changed, {} left, {} the same",
+            self.added.len(),
+            self.changed.len(),
+            self.gone.len(),
+            self.same
+        )];
+        lines.extend(
+            self.added
+                .iter()
+                .map(|one| format!("+ {}", one.brief(with_href))),
+        );
+        lines.extend(
+            self.changed
+                .iter()
+                .map(|one| format!("~ {}", one.brief(with_href))),
+        );
+        lines.extend(
+            self.gone
+                .iter()
+                .map(|one| format!("- {}", one.brief(with_href))),
+        );
+        lines
+    }
+}
+
+impl Snapshot {
+    pub fn lines(&self, with_href: bool) -> Vec<String> {
+        let mut lines = vec![match self.title.trim().is_empty() {
+            true => self.url.clone(),
+            false => format!("{}  {}", self.title, self.url),
+        }];
+
+        match &self.delta {
+            Some(delta) if !delta.first => {
+                lines.extend(delta.lines(with_href));
+                return lines;
+            }
+            Some(_) => {
+                lines.push("first snapshot of this page, so the whole listing follows".to_string())
+            }
+            None => {}
+        }
+
+        if self.elements.is_empty() {
+            lines.push("no controls on the page".to_string());
+        }
+        lines.extend(self.elements.iter().map(|one| one.brief(with_href)));
+
+        let left = self.total.saturating_sub(self.elements.len());
+        if left > 0 {
+            lines.push(format!(
+                "({left} more: narrow the scope or raise the limit)"
+            ));
+        }
+
+        lines
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -891,6 +1081,241 @@ mod tests {
         );
     }
 
+    fn numbered(tag: &str, kind: Option<&str>, text: &str) -> Element {
+        Element {
+            text: text.to_string(),
+            tag: tag.to_string(),
+            kind: kind.map(str::to_string),
+            role: None,
+            states: Vec::new(),
+            selector: Some("#one".to_string()),
+            label: None,
+            visible: true,
+            at: None,
+            width: 10,
+            height: 10,
+            enabled: true,
+            value: None,
+            r#ref: Some("e7".to_string()),
+            href: None,
+        }
+    }
+
+    #[test]
+    fn test_a_brief_line_names_the_ref_the_kind_and_the_words() {
+        let button = numbered("button", None, "Sign in");
+        assert_eq!(button.brief(false), "@e7 button \"Sign in\"");
+
+        let heading = numbered("h2", None, "Account");
+        assert_eq!(heading.brief(false), "@e7 h2 \"Account\"");
+
+        let unnumbered = Element {
+            r#ref: None,
+            ..numbered("a", None, "Docs")
+        };
+        assert_eq!(
+            unnumbered.brief(false),
+            "#one link \"Docs\"",
+            "without a number the selector names it"
+        );
+    }
+
+    #[test]
+    fn test_a_field_shows_its_value_and_a_checkbox_does_not() {
+        let email = Element {
+            label: Some("Email".to_string()),
+            value: Some("toby@example.com".to_string()),
+            states: vec!["required".to_string()],
+            ..numbered("input", Some("email"), "toby@example.com")
+        };
+        assert_eq!(
+            email.brief(false),
+            "@e7 textbox \"Email\" = \"toby@example.com\" [required]"
+        );
+
+        let ticked = Element {
+            label: Some("Remember me".to_string()),
+            value: Some("on".to_string()),
+            states: vec!["checked".to_string()],
+            ..numbered("input", Some("checkbox"), "on")
+        };
+        assert_eq!(
+            ticked.brief(false),
+            "@e7 checkbox \"Remember me\" [checked]",
+            "\"on\" says nothing; checked says it all"
+        );
+
+        let bare = Element {
+            value: Some("hello".to_string()),
+            ..numbered("input", None, "hello")
+        };
+        assert_eq!(
+            bare.brief(false),
+            "@e7 textbox \"hello\"",
+            "a field with no label is named by its value, and not twice"
+        );
+    }
+
+    #[test]
+    fn test_a_link_address_comes_only_when_asked() {
+        let link = Element {
+            href: Some("https://example.com/docs".to_string()),
+            ..numbered("a", None, "Docs")
+        };
+
+        assert_eq!(link.brief(false), "@e7 link \"Docs\"");
+        assert_eq!(
+            link.brief(true),
+            "@e7 link \"Docs\" https://example.com/docs"
+        );
+    }
+
+    #[test]
+    fn test_a_role_the_page_set_wins_over_the_tag() {
+        let styled = Element {
+            role: Some("tab".to_string()),
+            ..numbered("div", None, "Billing")
+        };
+        assert_eq!(styled.role_word(), "tab");
+
+        assert_eq!(
+            numbered("input", Some("submit"), "Go").role_word(),
+            "button"
+        );
+        assert_eq!(numbered("input", Some("date"), "").role_word(), "date");
+        assert_eq!(numbered("select", None, "").role_word(), "combobox");
+        assert_eq!(numbered("textarea", None, "").role_word(), "textbox");
+    }
+
+    fn listing(
+        title: &str,
+        elements: Vec<Element>,
+        total: usize,
+        delta: Option<Changes>,
+    ) -> Snapshot {
+        Snapshot {
+            url: "https://example.com/".to_string(),
+            title: title.to_string(),
+            total,
+            elements,
+            delta,
+        }
+    }
+
+    #[test]
+    fn test_a_listing_reads_as_one_line_per_control() {
+        let email = Element {
+            label: Some("Email".to_string()),
+            value: Some("toby@example.com".to_string()),
+            states: vec!["required".to_string()],
+            ..numbered("input", Some("email"), "toby@example.com")
+        };
+        let said = listing(
+            "Example",
+            vec![numbered("h1", None, "Example Domain"), email],
+            3,
+            None,
+        )
+        .lines(false)
+        .join("\n");
+
+        assert!(said.starts_with("Example  https://example.com/\n"));
+        assert!(said.contains("\n@e7 h1 \"Example Domain\"\n"));
+        assert!(said.contains("\n@e7 textbox \"Email\" = \"toby@example.com\" [required]\n"));
+        assert!(
+            said.ends_with("(1 more: narrow the scope or raise the limit)"),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn test_a_page_without_a_title_is_named_by_its_address() {
+        let said = listing("", Vec::new(), 0, None).lines(false);
+
+        assert_eq!(
+            said[0], "https://example.com/",
+            "no gap where a title would go"
+        );
+        assert_eq!(said[1], "no controls on the page");
+    }
+
+    #[test]
+    fn test_a_delta_lists_what_moved_and_nothing_else() {
+        let delta = Changes {
+            first: false,
+            added: vec![numbered("button", None, "Confirm")],
+            changed: Vec::new(),
+            gone: vec![numbered("input", Some("checkbox"), "on")],
+            same: 11,
+        };
+        let said = listing("Example", Vec::new(), 12, Some(delta)).lines(false);
+
+        assert_eq!(
+            said[1],
+            "since the last snapshot: 1 appeared, 0 changed, 1 left, 11 the same"
+        );
+        assert_eq!(said[2], "+ @e7 button \"Confirm\"");
+        assert_eq!(said[3], "- @e7 checkbox \"on\"");
+        assert_eq!(
+            said.len(),
+            4,
+            "the listing itself is not repeated: {said:?}"
+        );
+    }
+
+    #[test]
+    fn test_an_unchanged_delta_is_one_line() {
+        let delta = Changes {
+            same: 13,
+            ..Changes::default()
+        };
+        let said = listing("Example", Vec::new(), 13, Some(delta)).lines(false);
+
+        assert_eq!(said[1], "unchanged since the last snapshot: 13 controls");
+        assert_eq!(said.len(), 2);
+    }
+
+    #[test]
+    fn test_a_first_delta_is_the_whole_listing_and_says_so() {
+        let delta = Changes {
+            first: true,
+            ..Changes::default()
+        };
+        let said = listing(
+            "Example",
+            vec![numbered("button", None, "Go")],
+            1,
+            Some(delta),
+        )
+        .lines(false);
+
+        assert_eq!(
+            said[1],
+            "first snapshot of this page, so the whole listing follows"
+        );
+        assert_eq!(said[2], "@e7 button \"Go\"");
+    }
+
+    #[test]
+    fn test_a_result_from_an_older_server_carries_no_delta() {
+        let result: ElementResult = serde_json::from_str("{}").expect("parses");
+        assert!(result.delta.is_none());
+
+        let wire = serde_json::to_string(&ElementResult::default()).expect("serialises");
+        assert!(
+            !wire.contains("delta"),
+            "and nothing new is sent to one: {wire}"
+        );
+
+        let told: ElementResult = serde_json::from_str(
+            r#"{"delta":{"added":[{"text":"Confirm","tag":"button","ref":"e14","width":1,"height":1,"enabled":true}]}}"#,
+        )
+        .expect("parses");
+        let delta = told.delta.expect("a delta");
+        assert!(!delta.first, "left out means false");
+        assert_eq!(delta.added[0].r#ref.as_deref(), Some("e14"));
+    }
+
     #[test]
     fn test_an_element_with_no_point_goes_both_ways() {
         let out = Element {
@@ -907,10 +1332,16 @@ mod tests {
             height: 10,
             enabled: true,
             value: None,
+            r#ref: None,
+            href: None,
         };
 
         let wire = serde_json::to_string(&out).expect("serialises");
         assert!(!wire.contains("\"at\""), "absence is left out: {wire}");
+        assert!(
+            !wire.contains("\"ref\""),
+            "and so is a number it was never given"
+        );
         assert_eq!(
             serde_json::from_str::<Element>(&wire).expect("parses").at,
             None
