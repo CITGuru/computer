@@ -194,6 +194,26 @@ impl Client {
         self.send(reqwest::Method::GET, &path, None, &[]).await
     }
 
+    pub async fn snapshot(&self, id: &str, what: &SnapshotOptions) -> Result<Snapshot> {
+        let mut path = format!("/v1/boxes/{id}/page/snapshot");
+        let mut sep = '?';
+
+        for (name, given) in [
+            ("scope", what.scope.clone()),
+            ("limit", what.limit.map(|n| n.to_string())),
+            ("delta", what.delta.then(|| "true".to_string())),
+            ("quiet_ms", what.quiet_ms.map(|n| n.to_string())),
+            ("tab", what.tab.clone()),
+        ] {
+            if let Some(given) = given {
+                path.push_str(&format!("{sep}{name}={}", query_value(&given)));
+                sep = '&';
+            }
+        }
+
+        self.send(reqwest::Method::GET, &path, None, &[]).await
+    }
+
     pub async fn on_element(
         &self,
         id: &str,

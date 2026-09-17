@@ -43,8 +43,8 @@ pub mod testing;
 pub use audit::{Audit, audit};
 pub use auth::{AUTH_ENV, Auth, CONTROL_SECRET_ENV, Credentials, VIEW_SECRET_ENV, VIEWER_USER};
 pub use cdp::{
-    BrowserGroup, BrowserStore, Carry, Cookie, Database, Devtools, Element, Link, Page, PageText,
-    Reading, Scroll, SearchProvider, Session, Target,
+    BrowserGroup, BrowserStore, Carry, Changes, Cookie, Database, Devtools, Element, Link, Page,
+    PageText, Reading, Scroll, SearchProvider, Session, Snapshot, Target,
 };
 pub use desktop::{
     Browser, BrowserEndpoint, Button, Clipboard, Control, Delta, Desktop, DesktopFactory,

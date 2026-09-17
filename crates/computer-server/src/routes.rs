@@ -37,6 +37,9 @@ const EVALUATED: usize = 100_000;
 const EVALUATE_MS: u64 = 5_000;
 const LINKS: usize = 100;
 const FOUND: usize = 50;
+const SNAPSHOT: usize = 300;
+/// Enough to act on; a bigger change is a page to snapshot again.
+const DELTA_LINES: usize = 12;
 const TABS: usize = 12;
 const WAIT_MS: u64 = 10_000;
 const MAX_WAIT: Duration = Duration::from_secs(60);
@@ -121,6 +124,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/pages/{tab}/focus", post(focus_tab))
         .route("/v1/boxes/{id}/page", get(read_page))
         .route("/v1/boxes/{id}/page/find", get(find_elements))
+        .route("/v1/boxes/{id}/page/snapshot", get(snapshot_page))
         .route("/v1/boxes/{id}/page/element", post(on_element))
         .route("/v1/boxes/{id}/page/evaluate", post(evaluate))
         .route("/v1/boxes/{id}/page/screenshot", post(page_screenshot))
@@ -1498,6 +1502,42 @@ async fn find_elements(
     Ok(Json(found.into_iter().map(element_out).collect()))
 }
 
+#[derive(Debug, Deserialize)]
+struct SnapshotQuery {
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    tab: Option<String>,
+    #[serde(default)]
+    delta: Option<bool>,
+    #[serde(default)]
+    quiet_ms: Option<u64>,
+}
+
+async fn snapshot_page(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<SnapshotQuery>,
+) -> ApiResult<Json<Snapshot>> {
+    let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
+
+    if let Some(quiet) = query.quiet_ms {
+        let quiet = Duration::from_millis(quiet).min(MAX_WAIT);
+        page.quiet(quiet, Duration::from_millis(WAIT_MS).max(quiet))
+            .await?;
+    }
+
+    let limit = Some(query.limit.unwrap_or(SNAPSHOT).clamp(1, SNAPSHOT));
+    let taken = match query.delta.unwrap_or(false) {
+        true => page.snapshot_delta(query.scope.as_deref(), limit).await?,
+        false => page.snapshot(query.scope.as_deref(), limit).await?,
+    };
+
+    Ok(Json(snapshot_out(taken)))
+}
+
 async fn on_element(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
@@ -1555,6 +1595,12 @@ async fn apply(
     // a fill would read as nothing having changed.
     let watched = matches!(what, OnElement::Click { .. } | OnElement::Hover { .. });
 
+    // A courtesy: a page that refuses to be listed still gets its click.
+    let listed = !matches!(what, OnElement::Options { .. });
+    if listed {
+        let _ = page.remember().await;
+    }
+
     let before = page.url().await.ok();
     let watching = watched && page.watch().await.is_ok();
     let mut result = applied(page, what).await?;
@@ -1570,6 +1616,19 @@ async fn apply(
 
     if watching {
         result.changed = page.changed().await.ok().flatten();
+    }
+
+    // A new document has no numbers and reports nothing; a pushState keeps both.
+    if listed {
+        result.delta = page
+            .changes(Some(DELTA_LINES))
+            .await
+            .ok()
+            .flatten()
+            .filter(|changes| {
+                !(changes.added.is_empty() && changes.changed.is_empty() && changes.gone.is_empty())
+            })
+            .map(changes_out);
     }
 
     Ok(result)
@@ -1843,6 +1902,26 @@ fn tab_out(target: &computer::cdp::Target, visible: bool) -> Tab {
     }
 }
 
+fn snapshot_out(taken: computer::Snapshot) -> Snapshot {
+    Snapshot {
+        url: taken.url,
+        title: taken.title,
+        total: taken.total,
+        elements: taken.elements.into_iter().map(element_out).collect(),
+        delta: taken.delta.map(changes_out),
+    }
+}
+
+fn changes_out(delta: computer::Changes) -> Changes {
+    Changes {
+        first: delta.first,
+        added: delta.added.into_iter().map(element_out).collect(),
+        changed: delta.changed.into_iter().map(element_out).collect(),
+        gone: delta.gone.into_iter().map(element_out).collect(),
+        same: delta.same,
+    }
+}
+
 fn element_out(element: computer::Element) -> Element {
     Element {
         text: element.text,
@@ -1858,6 +1937,8 @@ fn element_out(element: computer::Element) -> Element {
         height: element.height,
         enabled: element.enabled,
         value: element.value,
+        r#ref: element.r#ref,
+        href: element.href,
     }
 }
 

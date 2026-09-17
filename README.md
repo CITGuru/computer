@@ -206,6 +206,41 @@ page.navigate("https://example.org").await?;
 
 `Page::call` sends any protocol method and returns the answer, so you can use parts of the protocol this crate does not wrap. Use `open_page` rather than `open` followed by a wait: a new tab shows `about:blank`, which is already loaded, so a wait returns before your page arrives.
 
+### Read a page once, then drive it by number
+
+```rust
+let taken = page.snapshot(None, None).await?;
+for control in &taken.elements {
+    println!("{}", control.text);             // "@e3" is in control.r#ref
+}
+
+page.fill("@e3", "toby@example.com").await?;
+page.click_on("@e4", Button::Left).await?;
+```
+
+`snapshot` lists every control on the page in document order — links, buttons, fields, dropdowns, checkboxes, tabs, menu items — with the headings between them, and numbers each. A number such as `@e3` is then a query for `find`, `click_on`, `fill`, `wait_for` and the rest, so a page is read once and driven by number rather than by words that may match twice. The numbers live in the page, so an element keeps its number across snapshots of the same document; a navigation forgets them with the elements. The first argument is a scope — a query as `find` takes one — that narrows the listing to what its first match holds, such as one form, and `total` says how many the page offered when the limit cut the listing short.
+
+A press asks the point what sits on top there before it lands. A scrim, or a dialog still fading out, is given a few hundred milliseconds to go, and one that stays is named in the refusal — `covered by <div#calendar>` — rather than pressed through. The scroll that brings the element into view is instant whatever the page's `scroll-behavior`, so the element is where it was measured. A page between documents, as after a redirect, is waited for rather than failed: `evaluate` retries for two seconds before saying the page is still loading.
+
+A ref cannot go stale silently. It names the element itself rather than a position, so when the page re-renders and that element leaves, `@e3` matches nothing and the action is refused with the reason: it left, or no snapshot of this page gave the number out. What the page keeps for it is a hole, so the numbers after it hold still.
+
+Knowing the listing is out of date without paying for a new one is the other half:
+
+```rust
+let taken = page.snapshot(None, None).await?;            // the whole listing, numbered
+page.click_on("@e4", Button::Left).await?;
+
+let since = page.snapshot_delta(None, None).await?;      // only what the click changed
+let delta = since.delta.expect("a snapshot to compare with");
+for control in &delta.added {
+    println!("+ {}", control.text);
+}
+```
+
+`snapshot_delta` compares the page with the last snapshot of the same scope and answers only the difference: `added`, `changed` and `gone`, with a count of what stayed the same. The comparison is what each control is and says, not where it sits, so scrolling is not a change. The first snapshot of a document has nothing to compare with, so it answers in full and says so in `delta.first`.
+
+Through the server, every element action ends the same way — the controls it made appear, change or leave — so a menu that opened is named by ref without another snapshot. That report comes from `remember` before the action and `changes` after it, and neither numbers a page: only a snapshot hands numbers out, because an agent has to have seen a number before it can name one, or a number kept from the last page would land on something on this one. A page nobody has snapshotted gets no report, and a ref named on it is refused with the reason. `quiet_ms` on a snapshot lists a page only once it has stopped changing.
+
 ### Isolate browser sessions with groups
 
 A browser group is a Chromium browser context inside screen 0. Groups share the Chromium process but keep cookies, local storage, IndexedDB, and service workers separate:

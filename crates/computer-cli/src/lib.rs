@@ -60,6 +60,8 @@ computer — a desktop in a box
                               name, and press sends no pointer event at all.
                               needs a box built with accessibility
   browser <box> read [--format text|raw] [--limit N] [--tab ID]
+  browser <box> snapshot [--scope QUERY] [--limit N] [--urls] [--delta]
+           [--quiet MS] [--tab ID]
   browser <box> find [<query>] [--role R] [--exact] [--scroll] [--limit N]
   browser <box> click <query> [--double] [--button right] [--tab ID]
   browser <box> fill <query> <value>
@@ -77,7 +79,14 @@ computer — a desktop in a box
                               drive the web page by what is on it rather than
                               by its pixels: a query is words, a name, an id or
                               a selector, and find answers with one that names
-                              exactly the element it found. eval runs javascript
+                              exactly the element it found. snapshot lists every
+                              control on the page in order and numbers each, and
+                              a number such as @e12 is then a query for all of
+                              these; --urls adds each link's address, --delta
+                              answers only what appeared, changed or left since
+                              the last snapshot, and --quiet waits for the page
+                              to hold still first. every action here ends by
+                              naming the controls it made appear or leave. eval runs javascript
                               in the page, which a box is isolated enough for.
                               screenshot is what the browser drew, with no
                               window frame and no address bar; --full reaches

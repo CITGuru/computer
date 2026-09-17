@@ -28,14 +28,17 @@ cargo install --path crates/computer-mcp
 ## The tools
 
 `launch_box` · `list_boxes` · `remove_box` · `screenshot` · `read_page` ·
-`find` · `wait_for` · `click_element` · `fill_field` · `dropdown` ·
+`snapshot` · `find` · `wait_for` · `click_element` · `fill_field` · `dropdown` ·
 `upload_file` · `hover` · `history` · `scroll_page` ·
 `open_url` · `open_app` · `list_apps` · `click` · `type_text` · `press_key` ·
 `scroll` · `drag` · `widget` · `run_command` · `hand_over` · `reclaim_screen` ·
 `fork_box`
 
-**On a web page, act by name rather than by coordinate.** `find` says what is
-there; `click_element`, `fill_field`, `dropdown` and `upload_file` act on what
+**On a web page, act by name rather than by coordinate.** `snapshot` lists
+every control in order and numbers each, so `@e12` is then a query, and with
+`delta` it answers only what appeared, changed or left since the last one;
+every action's answer ends the same way, so a menu that opened is named by ref
+without another snapshot. `find` says what is there; `click_element`, `fill_field`, `dropdown` and `upload_file` act on what
 a query names. A point taken from a screenshot is wrong the moment the page
 moves under it, and two of these have no coordinate at all: a file chooser is
 the operating system's window, and a native dropdown opens a menu no screenshot

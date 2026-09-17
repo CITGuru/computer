@@ -3,7 +3,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
     Action, ActionBatch, Arrange, BoxState, ElementResult, Evaluate, Find, ForkMode, ForkRequest,
     Frame, Held, NodeQuery, OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, ScrollTo,
-    Shot, Want, Where,
+    Shot, SnapshotOptions, Want, Where,
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
@@ -290,6 +290,51 @@ pub fn catalogue() -> Value {
             )
         ),
         tool(
+            "snapshot",
+            "List every control on the page in order, with the headings between them: \
+             links, buttons, fields, dropdowns, checkboxes, tabs and menu items, in view or \
+             not. Each line starts with a ref such as `@e12`, and every page tool takes a \
+             ref as `query`, so after one snapshot you click, fill and wait by number. An \
+             element keeps its number across snapshots of the same page; a navigation \
+             forgets them all, so take another after one. Use it to see what a page offers \
+             before acting: `find` looks for one thing, and `read_page` reads the words. \
+             The answer ends with how many were left out.",
+            with_tab(
+                json!({
+                    "scope": {
+                        "type": "string",
+                        "description": "Narrow it to what sits inside one thing: a query as \
+                                        `find` takes, so a form's name, a selector, or a ref \
+                                        from the last snapshot."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "How many to list. The server caps it."
+                    },
+                    "urls": {
+                        "type": "boolean",
+                        "description": "Put each link's address on its line. Left out unless \
+                                        asked, since a navigation bar can be a hundred of them."
+                    },
+                    "delta": {
+                        "type": "boolean",
+                        "description": "Answer only what appeared, changed or left since the \
+                                        last snapshot with this scope, and one line when \
+                                        nothing did. Cheaper than the listing on every step. \
+                                        The first snapshot of a page has nothing to compare \
+                                        with, so it answers in full and says so."
+                    },
+                    "quiet_ms": {
+                        "type": "integer",
+                        "description": "List the page only once nothing on it has changed for \
+                                        this long, so a page still fetching is not listed half \
+                                        done. Fails when it never settles within the wait."
+                    }
+                }),
+                &[]
+            )
+        ),
+        tool(
             "find",
             "Find things on the page by their words, or by a name, id, placeholder or CSS \
              selector. An icon button is found by what its icon says — the alt text of the \
@@ -340,10 +385,13 @@ pub fn catalogue() -> Value {
             "click_element",
             "Bring the thing this query names into view and click it. Prefer this over `click` \
              for anything on a web page: it finds the element itself, so nothing depends on a \
-             coordinate being still correct. `right` opens the page's own context menu, which \
+             coordinate being still correct, and it checks what sits under the point first — a \
+             dialog still fading out is given a moment to go, and one that stays is named in \
+             the refusal. `right` opens the page's own context menu, which \
              a site draws inside the page — not the browser's, which no screenshot holds. \
              The answer ends with what the click did to the page: a new URL, a change, or \
-             nothing within 600 ms.",
+             nothing within 600 ms, and then the controls that appeared, changed or left, by \
+             ref, so the next step needs no snapshot.",
             with_page(
                 json!({
                     "query": { "type": "string" },
@@ -1225,6 +1273,35 @@ pub async fn call(
                 }
             )))
         }
+        "snapshot" => {
+            let id = text(arguments, "box_id")?;
+            let taken = client
+                .snapshot(
+                    &id,
+                    &SnapshotOptions {
+                        scope: arguments
+                            .get("scope")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        limit: arguments
+                            .get("limit")
+                            .and_then(Value::as_u64)
+                            .map(|n| n as usize),
+                        tab: arguments
+                            .get("tab")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        delta: flag(arguments, "delta"),
+                        quiet_ms: arguments.get("quiet_ms").and_then(Value::as_u64),
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(
+                taken.lines(flag(arguments, "urls")).join("\n"),
+            ))
+        }
         "find" => {
             let id = text(arguments, "box_id")?;
             let limit = arguments
@@ -1265,7 +1342,11 @@ pub async fn call(
                     .iter()
                     .map(|one| {
                         format!(
-                            "{} {}{}{}{} {} ({}x{}){}{}",
+                            "{}{} {}{}{}{} {} ({}x{}){}{}",
+                            match one.r#ref.as_deref() {
+                                Some(numbered) => format!("@{numbered} "),
+                                None => String::new(),
+                            },
                             one.tag,
                             one.kind.as_deref().unwrap_or(""),
                             match one.text.is_empty() {
@@ -2007,6 +2088,8 @@ async fn element(
         None => said,
     };
 
+    let said = told(said, &result);
+
     if !how.wanted() {
         return Ok(Answer::Text(said));
     }
@@ -2032,6 +2115,13 @@ fn ended(said: String, result: &ElementResult) -> String {
             format!("{said} — nothing on the page changed within {SETTLE_MS} ms")
         }
         _ => said,
+    }
+}
+
+fn told(said: String, result: &ElementResult) -> String {
+    match &result.delta {
+        Some(delta) => format!("{said}\n{}", delta.lines(false).join("\n")),
+        None => said,
     }
 }
 
@@ -2454,6 +2544,7 @@ mod tests {
 
         for page_tool in [
             "read_page",
+            "snapshot",
             "find",
             "click_element",
             "fill_field",
@@ -2476,6 +2567,76 @@ mod tests {
         }
 
         assert!(takes_tab.contains(&"screenshot"));
+    }
+
+    #[test]
+    fn test_a_snapshot_offers_a_scope_a_limit_and_the_addresses() {
+        let listed = catalogue();
+        let snapshot = listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|tool| tool["name"] == "snapshot")
+            .expect("snapshot is offered");
+
+        let fields = &snapshot["inputSchema"]["properties"];
+        assert_eq!(fields["scope"]["type"], "string");
+        assert_eq!(fields["limit"]["type"], "integer");
+        assert_eq!(fields["urls"]["type"], "boolean");
+        assert_eq!(
+            snapshot["inputSchema"]["required"],
+            json!(["box_id"]),
+            "a box and nothing else: the whole page is the default"
+        );
+
+        let said = snapshot["description"].as_str().unwrap_or_default();
+        assert!(said.contains("@e12"), "it says what a ref looks like");
+    }
+
+    #[test]
+    fn test_a_snapshot_can_answer_with_the_changes_alone() {
+        let listed = catalogue();
+        let snapshot = listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|tool| tool["name"] == "snapshot")
+            .expect("snapshot is offered");
+
+        let fields = &snapshot["inputSchema"]["properties"];
+        assert_eq!(fields["delta"]["type"], "boolean");
+        assert_eq!(fields["quiet_ms"]["type"], "integer");
+    }
+
+    #[test]
+    fn test_an_action_ends_with_what_appeared_and_left() {
+        let result: ElementResult = serde_json::from_value(json!({
+            "changed": true,
+            "delta": {
+                "added": [{ "text": "Confirm", "tag": "button", "ref": "e14",
+                            "width": 40, "height": 12, "enabled": true }],
+                "gone": [{ "text": "Bacon", "tag": "input", "kind": "checkbox", "ref": "e7",
+                           "width": 10, "height": 10, "enabled": true }],
+                "same": 11
+            }
+        }))
+        .expect("parses");
+
+        let said = told(ended("clicked \"Order\"".to_string(), &result), &result);
+        assert_eq!(
+            said,
+            "clicked \"Order\" — the page changed\n\
+             since the last snapshot: 1 appeared, 0 changed, 1 left, 11 the same\n\
+             + @e14 button \"Confirm\"\n\
+             - @e7 checkbox \"Bacon\""
+        );
+
+        let plain = ElementResult::default();
+        assert_eq!(
+            told("filled".to_string(), &plain),
+            "filled",
+            "nothing moved, nothing said"
+        );
     }
 
     #[test]

@@ -1028,6 +1028,13 @@ impl Scroll {
 }
 
 const FOUND_DEFAULT: usize = 20;
+const SNAPSHOT_DEFAULT: usize = 200;
+/// A dialog fades in a few hundred milliseconds; longer, and it is staying.
+const COVERED: Duration = Duration::from_millis(600);
+const COVERED_POLL: Duration = Duration::from_millis(50);
+/// A redirect leaves no context for a moment; a slow load is not a redirect.
+const CONTEXT_WAIT: Duration = Duration::from_secs(2);
+const CONTEXT_POLL: Duration = Duration::from_millis(100);
 
 fn button_parts(button: Button) -> (&'static str, u8) {
     match button {
@@ -1061,6 +1068,11 @@ pub struct Element {
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Given by the last `snapshot`; `@e12` names it in a query.
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub href: Option<String>,
 }
 
 const MATCH: &str = r#"(q, exact) => {
@@ -1074,6 +1086,13 @@ const MATCH: &str = r#"(q, exact) => {
     if (style.visibility === 'hidden' || style.display === 'none') return;
     seen.add(el); out.push(el);
   };
+
+  const ref = /^@e(\d+)$/.exec(q.trim());
+  if (ref) {
+    const numbered = (window.__computerRefs || [])[+ref[1] - 1];
+    if (numbered && numbered.isConnected) add(numbered);
+    return out;
+  }
 
   try { document.querySelectorAll(q).forEach(add); } catch (e) {}
 
@@ -1186,9 +1205,18 @@ const DESCRIBE: &str = r#"(el) => {
   const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
   const inside = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
 
+  // A label wrapping its field is read without the field, or its value would be its name.
+  const wrapping = () => {
+    const label = el.closest('label');
+    if (!label) return undefined;
+    const copy = label.cloneNode(true);
+    copy.querySelectorAll('input, select, textarea, [aria-hidden=true]').forEach(n => n.remove());
+    return (copy.textContent || '').trim() || undefined;
+  };
   const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
                 el.getAttribute('title') ||
                 (el.id && (document.querySelector('label[for=' + JSON.stringify(el.id) + ']') || {}).innerText) ||
+                wrapping() ||
                 undefined;
 
   const aria = name => el.getAttribute('aria-' + name);
@@ -1200,6 +1228,9 @@ const DESCRIBE: &str = r#"(el) => {
   if (aria('expanded') === 'false') states.push('collapsed');
   if (el.checked === true || aria('checked') === 'true') states.push('checked');
   if (aria('selected') === 'true') states.push('selected');
+  if (el.required === true || aria('required') === 'true') states.push('required');
+
+  const numbered = (window.__computerRefs || []).indexOf(el);
 
   return {
     text: (el.innerText || el.value || el.getAttribute('aria-label') || '')
@@ -1209,15 +1240,137 @@ const DESCRIBE: &str = r#"(el) => {
     role: el.getAttribute('role') || undefined,
     states,
     selector: (SELECTOR_FN)(el),
-    label: label === undefined ? undefined : String(label).replace(/\s+/g, ' ').trim().slice(0, 200),
+    label: label === undefined ? undefined
+             : String(label).replace(/\s+/g, ' ').trim().replace(/[:*]\s*$/, '').slice(0, 200),
     at: inside ? { x, y } : undefined,
     visible: inside,
     width: Math.round(r.width),
     height: Math.round(r.height),
     enabled: !off,
     value: el.value === undefined ? undefined : String(el.value).slice(0, 200),
+    ref: numbered < 0 ? undefined : 'e' + (numbered + 1),
+    href: (el.tagName === 'A' || el.tagName === 'AREA') && el.href
+            ? String(el.href).slice(0, 300) : undefined,
   };
 }"#;
+
+const SNAPSHOT: &str = r#"(root, limit, mode, scope) => {
+  const controls = 'a[href], area[href], button, input:not([type=hidden]), select, textarea, ' +
+    'summary, [role=button], [role=link], [role=textbox], [role=searchbox], [role=checkbox], ' +
+    '[role=radio], [role=switch], [role=combobox], [role=listbox], [role=option], ' +
+    '[role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=tab], ' +
+    '[role=slider], [role=spinbutton], [contenteditable=true], [onclick], ' +
+    '[tabindex]:not([tabindex="-1"]), h1, h2, h3, h4, h5, h6, [role=heading]';
+  const shown = el => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none';
+  };
+
+  const found = Array.from(root.querySelectorAll(controls)).filter(shown);
+  const page = { url: location.href, title: document.title, total: found.length };
+
+  // Only a snapshot hands numbers out: an agent must have seen a number before it can
+  // name one, or a number kept from the last page would land on this one.
+  const numbered = Array.isArray(window.__computerRefs);
+  if ((mode === 'prime' || mode === 'since') && !numbered) {
+    return JSON.stringify({ ...page, elements: [] });
+  }
+
+  const refs = numbered ? window.__computerRefs : [];
+  // A hole, not a gap: the numbers after it hold still and the page can free it.
+  for (let i = 0; i < refs.length; i++) if (refs[i] && !refs[i].isConnected) refs[i] = null;
+  for (const el of found) if (!refs.includes(el)) refs.push(el);
+  window.__computerRefs = refs;
+
+  const remembered = window.__computerLast || (window.__computerLast = {});
+  const before = remembered[scope];
+
+  // Priming never overwrites what a snapshot remembered.
+  if (mode === 'prime' && before) return JSON.stringify({ ...page, elements: [] });
+
+  const described = found.map(el => (DESCRIBE_FN)(el));
+  const now = {};
+  for (const one of described) now[one.ref] = one;
+  remembered[scope] = now;
+
+  if (mode !== 'delta' && mode !== 'since') {
+    return JSON.stringify({ ...page, elements: mode === 'prime' ? [] : described.slice(0, limit) });
+  }
+  if (!before) {
+    return JSON.stringify({
+      ...page,
+      elements: described.slice(0, limit),
+      delta: { first: true, added: [], changed: [], gone: [], same: 0 },
+    });
+  }
+
+  // Not where it sits: scrolling is not the page changing.
+  const identity = one => [one.tag, one.kind, one.role, one.text, one.label, one.value,
+                           (one.states || []).join(' '), one.enabled, one.href].join('\u0001');
+  const added = [], changed = [], gone = [];
+  let same = 0;
+  for (const one of described) {
+    const was = before[one.ref];
+    if (!was) added.push(one);
+    else if (identity(was) !== identity(one)) changed.push(one);
+    else same += 1;
+  }
+  for (const ref of Object.keys(before)) if (!now[ref]) gone.push(before[ref]);
+
+  return JSON.stringify({
+    ...page,
+    elements: [],
+    delta: {
+      first: false,
+      added: added.slice(0, limit),
+      changed: changed.slice(0, limit),
+      gone: gone.slice(0, limit),
+      same,
+    },
+  });
+}"#;
+
+const REACH: &str = r#"(el) => {
+  const name = node => {
+    const id = node.id ? '#' + node.id : '';
+    const classes = typeof node.className === 'string' && node.className.trim()
+      ? '.' + node.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
+    return '<' + node.tagName.toLowerCase() + id + classes + '>';
+  };
+  const centre = r => ({ x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) });
+  const inside = p => p.x >= 0 && p.y >= 0 && p.x < innerWidth && p.y < innerHeight;
+
+  // The middle, then each line (a wrapped link has its middle in the gap between
+  // lines), then the quarters: an icon covers the middle of a field, a dialog all of it.
+  const box = el.getBoundingClientRect();
+  const quarters = [[0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75]].map(([fx, fy]) =>
+    ({ x: Math.round(box.left + box.width * fx), y: Math.round(box.top + box.height * fy) }));
+  const points = [centre(box), ...Array.from(el.getClientRects()).map(centre), ...quarters];
+  let covered = null;
+  for (const p of points) {
+    if (!inside(p)) continue;
+    const top = document.elementFromPoint(p.x, p.y);
+    if (!top) continue;
+    if (top === el || el.contains(top)) return { at: p };
+    if (!covered) covered = name(top);
+  }
+  return covered ? { covered } : { off: true };
+}"#;
+
+const REF_STATE: &str = r#"(n) => {
+  const refs = window.__computerRefs;
+  if (!Array.isArray(refs)) return 'none';
+  const el = refs[n - 1];
+  if (el === undefined) return 'unknown';
+  if (!el || !el.isConnected) return 'gone';
+  return 'hidden';
+}"#;
+
+fn snapshot_script() -> String {
+    SNAPSHOT.replace("DESCRIBE_FN", &describe())
+}
 
 // The page's own scripts see the global, so it carries this crate's name.
 const WATCH: &str = r#"() => {
@@ -1372,6 +1525,84 @@ pub struct Link {
     pub href: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub url: String,
+    pub title: String,
+    /// What the page offers; the listing stops at the limit.
+    pub total: usize,
+    /// Empty when a delta was asked for and there was a snapshot to compare with.
+    pub elements: Vec<Element>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<Changes>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Changes {
+    /// Nothing to compare with, so `elements` holds the whole listing instead.
+    #[serde(default)]
+    pub first: bool,
+    #[serde(default)]
+    pub added: Vec<Element>,
+    #[serde(default)]
+    pub changed: Vec<Element>,
+    /// As they were, since they are no longer on the page.
+    #[serde(default)]
+    pub gone: Vec<Element>,
+    #[serde(default)]
+    pub same: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Listing {
+    Full,
+    Delta,
+    Prime,
+    Since,
+}
+
+impl Listing {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Delta => "delta",
+            Self::Prime => "prime",
+            Self::Since => "since",
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct Reached {
+    element: Element,
+    reach: Reach,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Reach {
+    At {
+        at: Point,
+    },
+    Covered {
+        covered: String,
+    },
+    Off {
+        #[allow(dead_code)]
+        off: bool,
+    },
+}
+
+fn between_documents(error: &Error) -> bool {
+    let said = error.to_string();
+    said.contains("Cannot find default execution context")
+        || said.contains("Execution context was destroyed")
+}
+
+fn ref_number(query: &str) -> Option<usize> {
+    query.trim().strip_prefix("@e")?.parse().ok()
+}
+
 impl Page {
     pub fn target(&self) -> &Target {
         &self.target
@@ -1445,7 +1676,24 @@ impl Page {
     }
 
     async fn evaluated(&mut self, params: Value) -> Result<Value> {
-        let answer = self.call("Runtime.evaluate", params).await?;
+        let deadline = Instant::now() + CONTEXT_WAIT;
+
+        let answer = loop {
+            match self.call("Runtime.evaluate", params.clone()).await {
+                Ok(answer) => break answer,
+                Err(error) if between_documents(&error) => {
+                    if Instant::now() >= deadline {
+                        return Err(Error::Timeout {
+                            after: CONTEXT_WAIT,
+                            detail: "the page is still loading, so there is nothing to ask yet"
+                                .to_string(),
+                        });
+                    }
+                    tokio::time::sleep(CONTEXT_POLL).await;
+                }
+                Err(error) => return Err(error),
+            }
+        };
 
         if let Some(thrown) = answer.get("exceptionDetails") {
             return Err(Error::denied(format!("the page threw: {thrown}")));
@@ -1652,6 +1900,86 @@ impl Page {
             .await?;
 
         serde_json::from_str(found.as_str().unwrap_or("[]"))
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    /// Every control in document order, with the headings between them, each
+    /// numbered. `scope` is a query as `find` takes one. The numbers live in the page,
+    /// so a second snapshot of the same document hands out the same ones.
+    pub async fn snapshot(
+        &mut self,
+        scope: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Snapshot> {
+        self.listing(scope, limit, Listing::Full).await
+    }
+
+    /// What appeared, changed or left since the last snapshot with this scope. The
+    /// first of a document has nothing to compare with, so it answers in full.
+    pub async fn snapshot_delta(
+        &mut self,
+        scope: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Snapshot> {
+        self.listing(scope, limit, Listing::Delta).await
+    }
+
+    /// Remembers the page as it is now, unless a snapshot already has. A document no
+    /// snapshot has numbered is left alone: numbering it here would hand out refs
+    /// nobody has seen.
+    pub async fn remember(&mut self) -> Result<()> {
+        self.listing(None, Some(0), Listing::Prime)
+            .await
+            .map(|_| ())
+    }
+
+    /// What appeared, changed or left since what was last remembered; `None` when no
+    /// snapshot has numbered this document. Never numbers a page itself.
+    pub async fn changes(&mut self, limit: Option<usize>) -> Result<Option<Changes>> {
+        Ok(self
+            .listing(None, limit, Listing::Since)
+            .await?
+            .delta
+            .filter(|changes| !changes.first))
+    }
+
+    async fn listing(
+        &mut self,
+        scope: Option<&str>,
+        limit: Option<usize>,
+        mode: Listing,
+    ) -> Result<Snapshot> {
+        let root = match scope {
+            Some(query) => format!("({MATCH})({}, false).find(Boolean)", json!(query)),
+            None => "document".to_string(),
+        };
+
+        let taken = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const root = {root};
+                     if (!root) return JSON.stringify({{ error: 'nothing on the page matched the scope' }});
+                     return ({snapshot})(root, {limit}, {mode}, {key});
+                   }})()"#,
+                snapshot = snapshot_script(),
+                limit = limit.unwrap_or(SNAPSHOT_DEFAULT),
+                mode = json!(mode.as_str()),
+                key = json!(scope.unwrap_or("")),
+            ))
+            .await?;
+
+        let taken = taken
+            .as_str()
+            .ok_or_else(|| Error::denied("the page answered with something unreadable"))?;
+
+        let taken: Value = serde_json::from_str(taken)
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))?;
+
+        if let Some(error) = taken.get("error").and_then(Value::as_str) {
+            return Err(Error::denied(error.to_string()));
+        }
+
+        serde_json::from_value(taken)
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
@@ -1900,6 +2228,23 @@ impl Page {
         .map(|_| ())
     }
 
+    async fn ref_state(&mut self, query: &str) -> Result<Option<String>> {
+        let Some(number) = ref_number(query) else {
+            return Ok(None);
+        };
+
+        let state = self.evaluate(&format!("({REF_STATE})({number})")).await?;
+
+        Ok(Some(match state.as_str() {
+            Some("none") => {
+                format!("{query} names nothing: no snapshot has been taken of this page")
+            }
+            Some("unknown") => format!("{query} was not given out by a snapshot of this page"),
+            Some("gone") => format!("{query} has left the page since the snapshot; take another"),
+            _ => format!("{query} is on the page but hidden, so there is nowhere to press"),
+        }))
+    }
+
     async fn reachable(&mut self, query: &str) -> Result<(Element, Point)> {
         let element = self.reach(query).await?;
 
@@ -1911,37 +2256,71 @@ impl Page {
         }
     }
 
+    /// The point is asked what sits on top before a press is sent, and a dialog still
+    /// fading out is given a moment to go. `at` is that point, not always the middle.
     async fn reach(&mut self, query: &str) -> Result<Element> {
-        let found = self
-            .evaluate(&format!(
-                r#"(() => {{
-                     const el = ({MATCH})({}, false).find(Boolean);
-                     if (!el) return 'null';
-                     el.scrollIntoView({{ block: 'center', inline: 'center' }});
-                     return JSON.stringify(({describe})(el));
-                   }})()"#,
-                json!(query),
-                describe = describe()
-            ))
-            .await?;
+        let deadline = Instant::now() + COVERED;
 
-        let found = found.as_str().unwrap_or("null");
-        if found == "null" {
-            return Err(Error::denied(format!(
-                "nothing on the page matched {query}"
-            )));
+        loop {
+            let found = self
+                .evaluate(&format!(
+                    r#"(() => {{
+                         const el = ({MATCH})({}, false).find(Boolean);
+                         if (!el) return 'null';
+                         // Instant: a smooth scroll moves the element after it was measured.
+                         el.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }});
+                         return JSON.stringify({{ element: ({describe})(el), reach: ({REACH})(el) }});
+                       }})()"#,
+                    json!(query),
+                    describe = describe()
+                ))
+                .await?;
+
+            let found = found.as_str().unwrap_or("null");
+            if found == "null" {
+                return Err(Error::denied(match self.ref_state(query).await? {
+                    Some(why) => why,
+                    None => format!("nothing on the page matched {query}"),
+                }));
+            }
+
+            let reached: Reached = serde_json::from_str(found)
+                .map_err(|error| Error::denied(format!("the page would not parse: {error}")))?;
+
+            match reached.reach {
+                Reach::At { at } => {
+                    return Ok(Element {
+                        at: Some(at),
+                        ..reached.element
+                    });
+                }
+                Reach::Covered { covered } => {
+                    if Instant::now() >= deadline {
+                        return Err(Error::denied(format!(
+                            "{query} is covered by {covered}, so a press would land on that"
+                        )));
+                    }
+                    tokio::time::sleep(COVERED_POLL).await;
+                }
+                Reach::Off { .. } => {
+                    return Ok(Element {
+                        at: None,
+                        ..reached.element
+                    });
+                }
+            }
         }
-
-        serde_json::from_str(found)
-            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
+    /// One insertion, not one per character: a picker that opens on the first
+    /// keystroke takes the focus, and the rest would land in it.
     pub async fn type_text(&mut self, text: &str) -> Result<()> {
-        for character in text.chars() {
-            self.call("Input.insertText", json!({ "text": character.to_string() }))
-                .await?;
+        if text.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        self.call("Input.insertText", json!({ "text": text }))
+            .await
+            .map(|_| ())
     }
 }
 
@@ -2971,6 +3350,303 @@ mod tests {
         assert!(
             MATCH.contains("exact\n    ? [el => words(el) === want]"),
             "exact drops the substring pass rather than reordering it"
+        );
+    }
+
+    #[test]
+    fn test_a_ref_names_one_element_and_nothing_else() {
+        assert!(
+            MATCH.contains("/^@e(\\d+)$/"),
+            "a ref is the @ and a number, so words that happen to start with e are not one"
+        );
+        assert!(
+            MATCH.contains("if (numbered && numbered.isConnected) add(numbered);\n    return out;"),
+            "a ref resolves alone: no selector pass and no words pass after it"
+        );
+        for script in [MATCH, DESCRIBE, SNAPSHOT] {
+            assert!(
+                script.contains("window.__computerRefs"),
+                "the three scripts share one global, or a number means different things"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_number_survives_a_second_snapshot() {
+        assert!(
+            SNAPSHOT.contains("if (!refs.includes(el)) refs.push(el);"),
+            "an element already numbered keeps its number, and a new one is appended"
+        );
+        assert!(
+            SNAPSHOT.contains("const refs = numbered ? window.__computerRefs : [];"),
+            "and the first snapshot starts from nothing"
+        );
+    }
+
+    #[test]
+    fn test_a_ref_that_left_is_a_hole_and_not_a_gap() {
+        assert!(
+            SNAPSHOT.contains("if (refs[i] && !refs[i].isConnected) refs[i] = null;"),
+            "the numbers after it hold still, and the page can free the element"
+        );
+        assert!(
+            REF_STATE.contains("if (!el || !el.isConnected) return 'gone';"),
+            "and asking for it says so"
+        );
+    }
+
+    #[test]
+    fn test_a_delta_compares_what_the_page_says_and_not_where_it_sits() {
+        assert!(
+            SNAPSHOT.contains("[one.tag, one.kind, one.role, one.text, one.label, one.value,"),
+            "identity is what the element is and says"
+        );
+        assert!(
+            !SNAPSHOT.contains("one.at") && !SNAPSHOT.contains("one.visible"),
+            "scrolling is not the page changing"
+        );
+        assert!(
+            SNAPSHOT.contains("if (mode === 'prime' && before) return"),
+            "priming never overwrites what a snapshot remembered"
+        );
+        assert!(
+            SNAPSHOT.contains("delta: { first: true, added: [], changed: [], gone: [], same: 0 }"),
+            "a first snapshot says it had nothing to compare with"
+        );
+    }
+
+    #[test]
+    fn test_a_press_asks_what_is_under_the_point_first() {
+        assert!(
+            REACH.contains("document.elementFromPoint(p.x, p.y)"),
+            "the point is asked, not the element"
+        );
+        assert!(
+            REACH.contains("if (top === el || el.contains(top)) return { at: p };"),
+            "the element or anything inside it is a hit; an ancestor is not"
+        );
+        assert!(
+            REACH.contains("...Array.from(el.getClientRects()).map(centre)"),
+            "a link wrapped over two lines is tried line by line"
+        );
+        assert!(
+            REACH.contains("return covered ? { covered } : { off: true };"),
+            "covered outranks off-screen, since it names what to deal with"
+        );
+    }
+
+    #[test]
+    fn test_an_icon_over_the_middle_of_a_field_does_not_cover_it() {
+        assert!(
+            REACH.contains("[[0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75]]"),
+            "the quarters of the box are tried after its middle"
+        );
+        assert!(
+            REACH.contains("...Array.from(el.getClientRects()).map(centre), ...quarters]"),
+            "and after each line, so an inline element is still tried line by line first"
+        );
+    }
+
+    #[test]
+    fn test_typing_goes_in_one_piece() {
+        let source = include_str!("cdp.rs");
+        let typing = source
+            .split("pub async fn type_text(&mut self, text: &str)")
+            .nth(1)
+            .and_then(|rest| rest.split("async fn connect(").next())
+            .expect("type_text is here");
+        assert!(
+            !typing.contains("text.chars()"),
+            "a picker that opens on the first keystroke would take the rest"
+        );
+        assert!(typing.contains(r#"json!({ "text": text })"#));
+    }
+
+    #[test]
+    fn test_a_covered_target_waits_briefly_and_then_says_what_covers_it() {
+        assert!(
+            COVERED < Duration::from_secs(1),
+            "a dialog that has not gone in this long is staying"
+        );
+        assert!(COVERED_POLL * 4 <= COVERED, "several looks, not one");
+
+        let reached: Reached = serde_json::from_str(
+            r#"{"element":{"text":"Search","tag":"button","width":107,"height":40,"enabled":true},
+                "reach":{"covered":"<div#calendar.fade>"}}"#,
+        )
+        .expect("parses");
+        assert!(
+            matches!(reached.reach, Reach::Covered { ref covered } if covered == "<div#calendar.fade>")
+        );
+
+        let reached: Reached = serde_json::from_str(
+            r#"{"element":{"text":"Search","tag":"button","width":107,"height":40,"enabled":true},
+                "reach":{"at":{"x":632,"y":356}}}"#,
+        )
+        .expect("parses");
+        assert!(matches!(reached.reach, Reach::At { at } if at.x == 632 && at.y == 356));
+
+        let reached: Reached = serde_json::from_str(
+            r#"{"element":{"text":"Top","tag":"a","width":10,"height":10,"enabled":true},
+                "reach":{"off":true}}"#,
+        )
+        .expect("parses");
+        assert!(matches!(reached.reach, Reach::Off { .. }));
+    }
+
+    #[test]
+    fn test_a_scroll_before_a_press_is_never_smooth() {
+        let source = include_str!("cdp.rs");
+        let reach = source
+            .split("async fn reach(&mut self, query: &str)")
+            .nth(1)
+            .expect("reach is here");
+        assert!(
+            reach.contains("behavior: 'instant'"),
+            "a smooth scroll moves the element after it has been measured"
+        );
+    }
+
+    #[test]
+    fn test_a_page_between_documents_is_waited_for_and_not_failed() {
+        assert!(between_documents(&Error::denied(
+            "Runtime.evaluate: {\"code\":-32000,\"message\":\"Cannot find default execution context\"}"
+        )));
+        assert!(between_documents(&Error::denied(
+            "Runtime.evaluate: {\"code\":-32000,\"message\":\"Execution context was destroyed.\"}"
+        )));
+        assert!(
+            !between_documents(&Error::denied("the page threw: ReferenceError")),
+            "a page's own error is not a page that is not there"
+        );
+        assert!(
+            CONTEXT_WAIT <= Duration::from_secs(3),
+            "a redirect, not a load"
+        );
+    }
+
+    #[test]
+    fn test_only_a_snapshot_hands_numbers_out() {
+        assert!(
+            SNAPSHOT.contains("if ((mode === 'prime' || mode === 'since') && !numbered) {"),
+            "an action on a page nobody has snapshotted does not number it"
+        );
+        assert!(
+            SNAPSHOT.contains("const numbered = Array.isArray(window.__computerRefs);"),
+            "and a navigation, which empties the globals, counts as nobody having"
+        );
+        assert!(
+            SNAPSHOT.contains("if (mode !== 'delta' && mode !== 'since') {"),
+            "since compares as delta does once the page is numbered"
+        );
+    }
+
+    #[test]
+    fn test_a_ref_is_the_at_and_a_number() {
+        assert_eq!(ref_number("@e12"), Some(12));
+        assert_eq!(ref_number(" @e3 "), Some(3));
+        assert_eq!(ref_number("e12"), None, "without the @ it is words");
+        assert_eq!(ref_number("@e"), None);
+        assert_eq!(ref_number("@email"), None);
+    }
+
+    #[test]
+    fn test_a_delta_parses_with_what_left() {
+        let taken = r#"{"url":"https://example.com/","title":"Example","total":2,"elements":[],
+                        "delta":{"first":false,"added":[{"text":"Confirm","tag":"button","ref":"e14",
+                        "width":40,"height":12,"enabled":true}],"changed":[],
+                        "gone":[{"text":"Bacon","tag":"input","kind":"checkbox","ref":"e7",
+                        "width":10,"height":10,"enabled":true}],"same":11}}"#;
+        let taken: Snapshot = serde_json::from_str(taken).expect("it parses");
+        let delta = taken.delta.expect("a delta");
+
+        assert!(!delta.first);
+        assert_eq!(delta.added[0].r#ref.as_deref(), Some("e14"));
+        assert_eq!(
+            delta.gone[0].text, "Bacon",
+            "as it was, since it is no longer there"
+        );
+        assert_eq!(delta.same, 11);
+
+        let plain: Snapshot =
+            serde_json::from_str(r#"{"url":"u","title":"t","total":0,"elements":[]}"#)
+                .expect("a listing without a delta still parses");
+        assert!(plain.delta.is_none());
+    }
+
+    #[test]
+    fn test_a_snapshot_lists_the_headings_between_the_controls() {
+        for kind in [
+            "a[href]",
+            "button",
+            "input:not([type=hidden])",
+            "select",
+            "[role=tab]",
+        ] {
+            assert!(SNAPSHOT.contains(kind), "{kind} is a control");
+        }
+        assert!(
+            SNAPSHOT.contains("h1, h2, h3, h4, h5, h6, [role=heading]"),
+            "a heading is not a control, but it says where the controls are"
+        );
+    }
+
+    #[test]
+    fn test_a_snapshot_carries_the_describer() {
+        let script = snapshot_script();
+
+        assert!(
+            !script.contains("DESCRIBE_FN"),
+            "the placeholder was replaced"
+        );
+        assert!(
+            script.contains("querySelectorAll(q).length === 1"),
+            "and the describer brought its selector builder with it"
+        );
+    }
+
+    #[test]
+    fn test_a_snapshot_parses_with_its_count() {
+        let taken = r#"{"url":"https://example.com/","title":"Example","total":12,
+                        "elements":[{"text":"More","tag":"a","href":"https://example.com/more",
+                        "ref":"e1","width":40,"height":12,"enabled":true}]}"#;
+        let taken: Snapshot = serde_json::from_str(taken).expect("it parses");
+
+        assert_eq!(taken.total, 12, "the page offered more than was listed");
+        assert_eq!(taken.elements[0].r#ref.as_deref(), Some("e1"));
+        assert_eq!(
+            taken.elements[0].href.as_deref(),
+            Some("https://example.com/more")
+        );
+    }
+
+    #[test]
+    fn test_a_label_wrapping_its_field_names_it() {
+        assert!(
+            DESCRIBE.contains("el.closest('label')"),
+            "a form that wraps each field in its label has named it"
+        );
+        assert!(
+            DESCRIBE.contains("copy.querySelectorAll('input, select, textarea, [aria-hidden=true]').forEach(n => n.remove());"),
+            "read without the field itself, or a filled value becomes the name"
+        );
+        assert!(
+            DESCRIBE.contains("wrapping() ||\n                undefined"),
+            "and it comes after everything the field says about itself"
+        );
+        assert!(
+            DESCRIBE.contains(".replace(/[:*]\\s*$/, '')"),
+            "\"Customer name:\" is the label of \"Customer name\""
+        );
+    }
+
+    #[test]
+    fn test_a_required_field_says_so() {
+        assert!(
+            DESCRIBE.contains(
+                "if (el.required === true || aria('required') === 'true') states.push('required');"
+            ),
+            "a form's own rule is a state, the same as disabled or checked"
         );
     }
 
