@@ -16,7 +16,7 @@ use computer::motion::path;
 use computer::{Delta, Desktop as EngineDesktop};
 use computer_api::*;
 use computer_storage::BoxRecord;
-use computer_types::Spec;
+use computer_types::{Search, Spec};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -74,6 +74,9 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/trace", get(read_trace))
         .route("/v1/boxes/{id}/trace/frames/{hash}", get(trace_frame))
         .route("/v1/boxes/{id}/files", get(read_file).put(write_file))
+        .route("/v1/boxes/{id}/files/list", get(list_dir))
+        .route("/v1/boxes/{id}/files/grep", post(grep))
+        .route("/v1/boxes/{id}/files/glob", get(glob))
         .route("/v1/boxes/{id}/screens/{screen}/actions", post(actions))
         .route("/v1/boxes/{id}/screens/{screen}/frame", get(frame))
         .route("/v1/boxes/{id}/screens/{screen}/cursor", get(cursor))
@@ -1089,6 +1092,78 @@ async fn exec(
 #[derive(Debug, Deserialize)]
 struct PathQuery {
     path: String,
+}
+
+async fn list_dir(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<PathQuery>,
+) -> ApiResult<Json<Listing>> {
+    let entry = state.registry.get(&id).await?;
+    let entries = entry.computer.list_dir(&query.path).await?;
+
+    Ok(Json(Listing {
+        path: query.path,
+        entries,
+    }))
+}
+
+async fn grep(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<Search>,
+) -> ApiResult<Json<Found>> {
+    if body.pattern.is_empty() {
+        return Err(ApiError::bad_request(
+            "a search with no pattern matches every line",
+        ));
+    }
+
+    let asked = body
+        .limit
+        .unwrap_or(computer::MATCHES)
+        .clamp(1, computer::MATCHES);
+    let entry = state.registry.get(&id).await?;
+    let mut matches = entry.computer.grep(&body).await?;
+
+    let cut = matches.len() > asked;
+    matches.truncate(asked);
+
+    Ok(Json(Found { matches, cut }))
+}
+
+async fn glob(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<GlobQuery>,
+) -> ApiResult<Json<Globbed>> {
+    let asked = query
+        .limit
+        .unwrap_or(computer::MATCHES)
+        .clamp(1, computer::MATCHES);
+    let entry = state.registry.get(&id).await?;
+    let mut paths = entry
+        .computer
+        .glob(
+            &query.pattern,
+            query.path.as_deref().unwrap_or("/"),
+            query.limit,
+        )
+        .await?;
+
+    let cut = paths.len() > asked;
+    paths.truncate(asked);
+
+    Ok(Json(Globbed { paths, cut }))
+}
+
+#[derive(Debug, Deserialize)]
+struct GlobQuery {
+    pattern: String,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 async fn read_file(
