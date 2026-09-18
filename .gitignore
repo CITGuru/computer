@@ -15,3 +15,4 @@
 # The page is built by crates/computer-mcp/ui/build.sh and committed as screen.html.
 node_modules/
 crates/computer-mcp/ui/dist/
+demos/

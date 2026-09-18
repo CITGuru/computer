@@ -161,6 +161,26 @@ Take a fresh screenshot after anything opens a tab, or put the page you meant ba
 
 Every command is bounded. `exec` gives up after two minutes, as does each call the driver makes for you, so a screen that stops answering does not hold your program. Use `exec_within(argv, duration)` when a command needs a different limit.
 
+## Move the pointer as a person would
+
+Every pointer action jumps unless told otherwise. `Motion::Smooth` eases it along a line; `Motion::Human` eases it along a curve a person might draw, over 100 to 700 ms by distance, bent to one side by up to 36 px, with the side and the size drawn from a seed so the same seed draws the same path:
+
+```rust
+use computer::{Motion, motion::path};
+
+let steps = path(from, to, Motion::Human, 42);   // every step and its pause
+computer.move_along(&steps).await?;
+computer.drag_along(from, &path(from, to, Motion::Human, 43), Button::Left, &[]).await?;
+
+let mut page = computer.browser().unwrap().first_page().await?;
+page.click_on_with("Sign in", Button::Left, Motion::Human, 42).await?;
+page.drag_on("Card", "Done column", Button::Left, Motion::Smooth, 0).await?;
+```
+
+On X11 the whole path goes to the box as one command, so the pauses are pauses and not round trips. On Wayland the pointer client walks it the same way. On a page the steps are pointer moves the page sees, and the page remembers where the pointer ended, so the next path starts there. A drag on a page passes through the middle even when instant, since an application that tracks motion ignores a teleport, and both ends must fit in the window at once.
+
+Through the server, `click`, `drag`, `click_element`, `hover` and `drag_element` take `motion` and `seed`, and the CLI takes `--smooth`, `--human` and `--seed`. Instant stays the default: nothing slows down unless asked.
+
 ## Use the clipboard
 
 Each screen has its own selections. Text copied on screen 0 is not on screen 1.

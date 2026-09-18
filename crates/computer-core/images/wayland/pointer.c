@@ -161,6 +161,8 @@ static const char *USAGE =
     "                        click X Y BUTTON\n"
     "                        dblclick X Y BUTTON\n"
     "                        drag X1 Y1 X2 Y2 BUTTON\n"
+    "                        path MS X Y [X Y ...]         (a pause of MS after each)\n"
+    "                        sweep BUTTON MS X0 Y0 X Y [X Y ...]   (a drag through every point)\n"
     "                        scroll X Y DOWN [RIGHT]   (negative goes up and left)\n";
 
 int main(int argc, char **argv) {
@@ -237,6 +239,27 @@ int main(int argc, char **argv) {
 		move_to((x1 + x2) / 2, (y1 + y2) / 2);
 		settle(20);
 		move_to(x2, y2);
+		settle(20);
+		button(code, 0);
+	} else if (strcmp(verb, "path") == 0 && rest >= 3 && rest % 2 == 1) {
+		long pause = number(argv[2]);
+
+		for (int at = 3; at + 1 < argc; at += 2) {
+			move_to(number(argv[at]), number(argv[at + 1]));
+			settle(pause);
+		}
+	} else if (strcmp(verb, "sweep") == 0 && rest >= 6 && rest % 2 == 0) {
+		uint32_t code = button_code(argv[2]);
+		long pause = number(argv[3]);
+
+		move_to(number(argv[4]), number(argv[5]));
+		settle(20);
+		button(code, 1);
+		settle(20);
+		for (int at = 6; at + 1 < argc; at += 2) {
+			move_to(number(argv[at]), number(argv[at + 1]));
+			settle(pause);
+		}
 		settle(20);
 		button(code, 0);
 	} else if (strcmp(verb, "scroll") == 0 && (rest == 3 || rest == 4)) {

@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Parse the page scripts and the accessibility reader, which nothing compiles."""
 
+import os
 import re
 import subprocess
 import sys
 
 SOURCE = "crates/computer-core/src/cdp.rs"
 READER = "crates/computer-core/images/desktop/a11y.py"
+# Files of their own, so node reads them as they are. `demos/` is not in the
+# repository, so a checkout that has them checks them and one that does not
+# says so rather than failing.
+DEMO = ["demos/jev/src/view.js", "demos/jev/src/through.js", "demos/jev/static/app.js"]
 
 
 def constants(src):
@@ -37,6 +42,17 @@ def main():
         print(f"{name:9} {'ok' if ran.returncode == 0 else 'FAILED'}")
         if ran.returncode != 0:
             print(ran.stderr.strip()[:800], file=sys.stderr)
+            failed = True
+
+    for path in DEMO:
+        if not os.path.exists(path):
+            print(f"{path.rsplit('/', 1)[-1]:10} not here")
+            continue
+
+        parsed = subprocess.run(["node", "--check", path], capture_output=True, text=True)
+        print(f"{path.rsplit('/', 1)[-1]:10} {'ok' if parsed.returncode == 0 else 'FAILED'}")
+        if parsed.returncode != 0:
+            print(parsed.stderr.strip()[:800], file=sys.stderr)
             failed = True
 
     # Compiled, not run: it connects to a bus on import.

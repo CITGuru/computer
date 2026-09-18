@@ -342,6 +342,23 @@ impl<T: AsRef<str>, const N: usize> Keys for [T; N] {
     }
 }
 
+/// How the pointer gets to a point: at once, eased along a line, or eased along a
+/// curve a person might draw.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Motion {
+    #[default]
+    Instant,
+    Smooth,
+    Human,
+}
+
+impl Motion {
+    pub fn is_instant(&self) -> bool {
+        matches!(self, Self::Instant)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Held {

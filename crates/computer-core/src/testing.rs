@@ -172,6 +172,25 @@ impl Desktop for ScriptedDesktop {
         ))
     }
 
+    async fn move_along(&self, steps: &[crate::motion::Step]) -> Result<()> {
+        let last = steps.last().map(|step| step.at).unwrap_or_default();
+        self.act(format!("move_along {} {} {}", steps.len(), last.x, last.y))
+    }
+
+    async fn drag_along(
+        &self,
+        from: Point,
+        steps: &[crate::motion::Step],
+        button: Button,
+        _held: &[crate::Held],
+    ) -> Result<()> {
+        let last = steps.last().map(|step| step.at).unwrap_or(from);
+        self.act(format!(
+            "drag_along {} {} {} {} {button:?}",
+            from.x, from.y, last.x, last.y
+        ))
+    }
+
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
         match delay {
             Some(delay) => self.act(format!("type_text {text} every {}ms", delay.as_millis())),

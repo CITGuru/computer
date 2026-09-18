@@ -79,3 +79,6 @@ members = [
     "crates/computer-mcp",
     "crates/computer-storage",
 ]
+# Kept out of the workspace, not just out of git: a member nothing checks out
+# fails `cargo metadata` for everyone but the machine that has it.
+exclude = ["demos"]

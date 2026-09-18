@@ -41,6 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     Action::Move {
                         to: Point { x: 640, y: 400 },
+                        motion: Default::default(),
+                        seed: None,
                     },
                 ],
                 settle_ms: Some(3000),
