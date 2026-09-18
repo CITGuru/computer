@@ -5,6 +5,7 @@ pub use profile::WaylandProfile;
 use crate::error::{Error, Result};
 use crate::machine::MachineHost;
 use crate::machine::ScreenHost;
+use crate::motion::Step;
 use crate::screens::ControlGate;
 use crate::servers::{a11y, settled, still_argv};
 use crate::{
@@ -257,6 +258,15 @@ impl WaylandDesktop {
         self.run(args).await.map(|_| ())
     }
 
+    /// The pointer client takes one pause for the whole path; a path has one.
+    fn pause_ms(steps: &[Step]) -> String {
+        steps
+            .first()
+            .map(|step| step.pause.as_millis())
+            .unwrap_or(0)
+            .to_string()
+    }
+
     fn moved_to(&self, at: Point) {
         if let Ok(mut pointer) = self.pointer.lock() {
             *pointer = Some(Tracked {
@@ -310,6 +320,44 @@ impl Desktop for WaylandDesktop {
         parts.push(button_name(button).to_string());
         self.act(input_argv("drag", &parts)).await?;
         self.moved_to(to);
+        Ok(())
+    }
+
+    async fn move_along(&self, steps: &[Step]) -> Result<()> {
+        let Some(last) = steps.last() else {
+            return Ok(());
+        };
+        let mut parts = vec![Self::pause_ms(steps)];
+        for step in steps {
+            parts.extend(point_parts(step.at));
+        }
+        self.act(input_argv("path", &parts)).await?;
+        self.moved_to(last.at);
+        Ok(())
+    }
+
+    async fn drag_along(
+        &self,
+        from: Point,
+        steps: &[Step],
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        if !held.is_empty() {
+            return Err(Error::Unsupported {
+                gaps: vec!["modifiers"],
+            });
+        }
+        let Some(last) = steps.last() else {
+            return self.click(from, button).await;
+        };
+        let mut parts = vec![button_name(button).to_string(), Self::pause_ms(steps)];
+        parts.extend(point_parts(from));
+        for step in steps {
+            parts.extend(point_parts(step.at));
+        }
+        self.act(input_argv("sweep", &parts)).await?;
+        self.moved_to(last.at);
         Ok(())
     }
 

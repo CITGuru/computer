@@ -388,6 +388,30 @@ pub trait Desktop: Send + Sync {
         }
     }
 
+    /// A driver that spawns a process per move should send the whole path as
+    /// one, or the pauses are the spawns.
+    async fn move_along(&self, steps: &[crate::motion::Step]) -> Result<()> {
+        for step in steps {
+            self.move_to(step.at).await?;
+            tokio::time::sleep(step.pause).await;
+        }
+        Ok(())
+    }
+
+    /// Not defaulted: a press held across calls may be released between them.
+    async fn drag_along(
+        &self,
+        from: Point,
+        steps: &[crate::motion::Step],
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        let _ = (from, steps, button, held);
+        Err(Error::Unsupported {
+            gaps: vec!["a drag along a path"],
+        })
+    }
+
     /// A desktop that cannot pace keystrokes must refuse a `delay`.
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()>;
 

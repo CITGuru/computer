@@ -63,7 +63,8 @@ computer — a desktop in a box
   browser <box> snapshot [--scope QUERY] [--limit N] [--urls] [--delta]
            [--quiet MS] [--tab ID]
   browser <box> find [<query>] [--role R] [--exact] [--scroll] [--limit N]
-  browser <box> click <query> [--double] [--button right] [--tab ID]
+  browser <box> click <query> [--double] [--button right] [--human] [--tab ID]
+  browser <box> drag <query> <query> [--button right] [--human]
   browser <box> fill <query> <value>
   browser <box> select <query> <option> | options <query>
   browser <box> upload <query> <file…> [--in-box]
@@ -71,7 +72,7 @@ computer — a desktop in a box
                               here, read and written into the box first;
                               --in-box names paths already there
   browser <box> wait [<query>] [--gone] [--or TEXT,TEXT] [--within MS] [--quiet MS]
-  browser <box> hover <query>
+  browser <box> hover <query> [--human]
   browser <box> eval <expression> [--timeout MS] [--limit N]
   browser <box> screenshot [file] [--full] [--format png|jpeg] [--quality N]
   browser <box> tabs | switch <tab> | close <tab>
@@ -108,7 +109,13 @@ computer — a desktop in a box
                               the third window where `press alt+tab` three
                               times only ever reaches the second
 
-  mouse <box> move <x> <y>    put the pointer somewhere, in device pixels
+  mouse <box> move <x> <y> [--smooth | --human] [--seed N]
+                              put the pointer somewhere, in device pixels. it
+                              jumps unless told to glide: --smooth eases along
+                              a line, --human along a curve a person might
+                              draw, the same one again for the same --seed.
+                              click, drag and the page's click, hover and
+                              drag take the same flags
   mouse <box> click <x> <y> [button] [--double] [--held shift,ctrl]
                               --double clicks twice, as a page counts it.
                               --held keeps modifiers down around it, which

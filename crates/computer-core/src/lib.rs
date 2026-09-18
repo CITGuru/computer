@@ -32,6 +32,7 @@ pub mod cdp;
 pub mod image;
 pub mod machine;
 pub mod microvm;
+pub mod motion;
 pub mod profile;
 pub mod runtime;
 pub mod sandboxes;
@@ -79,7 +80,7 @@ pub use spec::Resolved;
 
 /// Aliased, not glob-imported: several of its names clash with this crate's own types.
 pub use computer_types as types;
-pub use computer_types::{Placement, Spec};
+pub use computer_types::{Motion, Placement, Spec};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -1339,6 +1340,20 @@ impl Desktop for Computer {
         Desktop::drag_with(&self.primary, from, to, button, held).await
     }
 
+    async fn move_along(&self, steps: &[motion::Step]) -> Result<()> {
+        Desktop::move_along(&self.primary, steps).await
+    }
+
+    async fn drag_along(
+        &self,
+        from: Point,
+        steps: &[motion::Step],
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        Desktop::drag_along(&self.primary, from, steps, button, held).await
+    }
+
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
         Desktop::wait_until_still(&self.primary, settle, within).await
     }
@@ -1977,6 +1992,20 @@ impl Desktop for Screen {
 
     async fn drag_with(&self, from: Point, to: Point, button: Button, held: &[Held]) -> Result<()> {
         self.driver.drag_with(from, to, button, held).await
+    }
+
+    async fn move_along(&self, steps: &[motion::Step]) -> Result<()> {
+        self.driver.move_along(steps).await
+    }
+
+    async fn drag_along(
+        &self,
+        from: Point,
+        steps: &[motion::Step],
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        self.driver.drag_along(from, steps, button, held).await
     }
 
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {

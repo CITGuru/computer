@@ -6,7 +6,7 @@ use computer_api::{
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{
-    Button, Desktop, DisplayServer, Feature, NodeQuery, Placement, Point, Selection, Spec,
+    Button, Desktop, DisplayServer, Feature, Motion, NodeQuery, Placement, Point, Selection, Spec,
 };
 use std::time::Duration;
 
@@ -73,7 +73,7 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
             .map_err(|error| error.to_string())?;
     }
 
-    // Only the id goes to stdout, so `computer shot $(computer up)` works.
+    // Only the id goes to stdout, so `computer screenshot $(computer up)` works.
     println!("{}", created.id);
     if let Some(url) = &created.viewer_url {
         eprintln!("  watch it  {url}");
@@ -546,9 +546,11 @@ pub async fn mouse(client: &Client, args: &[String]) -> Done {
         "scroll" => scroll(client, &rest).await,
         "move" => {
             let to = point(&rest, 1)?;
-            act(client, id, Action::Move { to }).await
+            let (motion, seed) = motion(args)?;
+            act(client, id, Action::Move { to, motion, seed }).await
         }
         "drag" => {
+            let (motion, seed) = motion(args)?;
             act(
                 client,
                 id,
@@ -557,6 +559,8 @@ pub async fn mouse(client: &Client, args: &[String]) -> Done {
                     to: point(&rest, 3)?,
                     button: button(rest.get(5)),
                     held: modifiers(&rest)?,
+                    motion,
+                    seed,
                 },
             )
             .await
@@ -590,6 +594,15 @@ fn point(args: &[String], at: usize) -> Result<Point, String> {
     })
 }
 
+fn motion(args: &[String]) -> Result<(Motion, Option<u64>), String> {
+    let motion = match (present(args, "--human"), present(args, "--smooth")) {
+        (true, _) => Motion::Human,
+        (_, true) => Motion::Smooth,
+        _ => Motion::Instant,
+    };
+    Ok((motion, counted(args, "--seed", "a number")?))
+}
+
 fn button(named: Option<&String>) -> Button {
     match named.map(String::as_str) {
         Some("right") => Button::Right,
@@ -606,10 +619,22 @@ pub async fn click(client: &Client, args: &[String]) -> Done {
     let button = button(args.get(3));
     let held = modifiers(args)?;
     let at = Some(Point { x, y });
+    let (motion, seed) = motion(args)?;
 
     let action = match args.iter().any(|arg| arg == "--double") {
-        true => Action::DoubleClick { at, button },
-        false => Action::Click { at, button, held },
+        true => Action::DoubleClick {
+            at,
+            button,
+            motion,
+            seed,
+        },
+        false => Action::Click {
+            at,
+            button,
+            held,
+            motion,
+            seed,
+        },
     };
 
     act(client, id, action).await
@@ -933,6 +958,7 @@ fn op_of(what: &computer_api::OnElement) -> &'static str {
         O::Upload { .. } => "upload",
         O::WaitFor { .. } => "wait",
         O::Hover { .. } => "hover",
+        O::Drag { .. } => "drag",
         O::History { .. } => "history",
         O::Scroll { .. } => "scroll",
     }
@@ -950,7 +976,7 @@ fn node_op_of(what: &OnNode) -> &'static str {
 
 fn name_of(action: &Action) -> String {
     match action {
-        Action::Move { to } => format!("move to {},{}", to.x, to.y),
+        Action::Move { to, .. } => format!("move to {},{}", to.x, to.y),
         Action::Click { at, .. } => match at {
             Some(at) => format!("click at {},{}", at.x, at.y),
             None => "click".to_string(),
@@ -1018,9 +1044,10 @@ const UPLOADS: &str = "/tmp/computer/uploads";
 
 const SETTLE_MS: u64 = 600;
 
-const VALUED: [&str; 11] = [
+const VALUED: [&str; 12] = [
     "--quality",
     "--scope",
+    "--seed",
     "--tab",
     "--button",
     "--role",
@@ -1039,7 +1066,7 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         &rest,
         1,
         "read, snapshot, find, click, fill, select, options, upload, wait, hover, \
-         eval, screenshot, tabs, switch, close, back, forward or reload",
+         drag, eval, screenshot, tabs, switch, close, back, forward or reload",
     )
     .map_err(|e| e.to_string())?;
 
@@ -1078,15 +1105,29 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         _ => {}
     }
 
+    let (motion, seed) = motion(args)?;
+    let button = match flag(args, "--button") {
+        Some("right") => Button::Right,
+        Some("middle") => Button::Middle,
+        _ => Button::Left,
+    };
+
     let what = match op {
         "click" => OnElement::Click {
             query: query(2)?,
-            button: match flag(args, "--button") {
-                Some("right") => Button::Right,
-                Some("middle") => Button::Middle,
-                _ => Button::Left,
-            },
+            button,
             double: present(args, "--double"),
+            motion,
+            seed,
+        },
+        "drag" => OnElement::Drag {
+            from: query(2)?,
+            to: positional(&rest, 3, "a target")
+                .map_err(|e| e.to_string())?
+                .to_string(),
+            button,
+            motion,
+            seed,
         },
         "fill" => OnElement::Fill {
             query: query(2)?,
@@ -1125,7 +1166,11 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
             exact: present(args, "--exact"),
             quiet_ms: counted(args, "--quiet", "a number of milliseconds")?,
         },
-        "hover" => OnElement::Hover { query: query(2)? },
+        "hover" => OnElement::Hover {
+            query: query(2)?,
+            motion,
+            seed,
+        },
         "back" => OnElement::History { go: Where::Back },
         "forward" => OnElement::History { go: Where::Forward },
         "reload" => OnElement::History { go: Where::Reload },

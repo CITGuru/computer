@@ -6,7 +6,7 @@ use computer_api::{
     Shot, SnapshotOptions, Want, Where,
 };
 use computer_client::{Client, captured_image, frame_png};
-use computer_types::{Button, Desktop, Feature, Placement, Point, Spec};
+use computer_types::{Button, Desktop, Feature, Motion, Placement, Point, Spec};
 use serde_json::{Value, json};
 
 use crate::ui;
@@ -393,7 +393,7 @@ pub fn catalogue() -> Value {
              nothing within 600 ms, and then the controls that appeared, changed or left, by \
              ref, so the next step needs no snapshot.",
             with_page(
-                json!({
+                with_motion(json!({
                     "query": { "type": "string" },
                     "button": { "type": "string", "enum": ["left", "right", "middle"] },
                     "double": {
@@ -402,7 +402,7 @@ pub fn catalogue() -> Value {
                                         to expand. A page counts two clicks, which two separate \
                                         calls to this do not give it."
                     }
-                }),
+                })),
                 &["query"]
             )
         ),
@@ -476,7 +476,26 @@ pub fn catalogue() -> Value {
             "hover",
             "Put the pointer over something without pressing anything. A menu that opens on \
              hover has nothing to click until the pointer arrives.",
-            with_page(json!({ "query": { "type": "string" } }), &["query"])
+            with_page(
+                with_motion(json!({ "query": { "type": "string" } })),
+                &["query"]
+            )
+        ),
+        tool(
+            "drag_element",
+            "Press on one thing and let go on another: a card into a column, a file onto a \
+             drop zone, a slider handle to a mark. Both are queries as `find` takes them, and \
+             both must fit in the window at once. The pointer passes through the middle on \
+             the way, which a page that tracks motion needs; `motion: human` takes a curved, \
+             paced path instead.",
+            with_page(
+                with_motion(json!({
+                    "from": { "type": "string" },
+                    "to": { "type": "string" },
+                    "button": { "type": "string", "enum": ["left", "right", "middle"] }
+                })),
+                &["from", "to"]
+            )
         ),
         tool(
             "history",
@@ -534,7 +553,7 @@ pub fn catalogue() -> Value {
              from a picture you have just seen, not from an older one and never from a scaled \
              copy — a click against a stale frame lands somewhere else and nothing says so.",
             with_frame(
-                json!({
+                with_motion(json!({
                     "x": { "type": "integer" },
                     "y": { "type": "integer" },
                     "button": { "type": "string", "enum": ["left", "right", "middle"] },
@@ -546,7 +565,7 @@ pub fn catalogue() -> Value {
                                         selection, ctrl to add to one. press_key first does \
                                         not do this — that press ends before this arrives."
                     }
-                }),
+                })),
                 &["x", "y"]
             )
         ),
@@ -630,7 +649,7 @@ pub fn catalogue() -> Value {
             "drag",
             "Drag from one point to another, which is how text is selected.",
             with_frame(
-                json!({
+                with_motion(json!({
                     "from_x": { "type": "integer" }, "from_y": { "type": "integer" },
                     "to_x": { "type": "integer" }, "to_y": { "type": "integer" },
                     "button": { "type": "string", "enum": ["left", "right", "middle"] },
@@ -641,7 +660,7 @@ pub fn catalogue() -> Value {
                                         selection, ctrl to add to one. press_key first does \
                                         not do this — that press ends before this arrives."
                     }
-                }),
+                })),
                 &["from_x", "from_y", "to_x", "to_y"]
             )
         ),
@@ -892,6 +911,44 @@ fn box_only() -> Value {
         "properties": { "box_id": { "type": "string" } },
         "required": ["box_id"]
     })
+}
+
+fn with_motion(mut properties: Value) -> Value {
+    if let Some(map) = properties.as_object_mut() {
+        map.insert(
+            "motion".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["instant", "smooth", "human"],
+                "description": "How the pointer gets there. `instant`, the default, jumps. \
+                                `smooth` eases along a line. `human` eases along a curve a \
+                                person might draw, over 100 to 700 ms by distance, for a page \
+                                that watches how the pointer moves or a person watching the \
+                                screen."
+            }),
+        );
+        map.insert(
+            "seed".to_string(),
+            json!({
+                "type": "integer",
+                "description": "For `human`: the same seed draws the same curve again."
+            }),
+        );
+    }
+    properties
+}
+
+fn motion(arguments: &Value) -> Result<Motion, String> {
+    match arguments.get("motion").and_then(Value::as_str) {
+        None | Some("instant") => Ok(Motion::Instant),
+        Some("smooth") => Ok(Motion::Smooth),
+        Some("human") => Ok(Motion::Human),
+        Some(other) => Err(format!("motion is instant, smooth or human, not {other}")),
+    }
+}
+
+fn seed(arguments: &Value) -> Option<u64> {
+    arguments.get("seed").and_then(Value::as_u64)
 }
 
 fn with_page(mut properties: Value, required: &[&str]) -> Value {
@@ -1388,6 +1445,8 @@ pub async fn call(
                 query: text(arguments, "query")?,
                 button: button(arguments),
                 double,
+                motion: motion(arguments)?,
+                seed: seed(arguments),
             };
             element(
                 client,
@@ -1445,8 +1504,20 @@ pub async fn call(
         "hover" => {
             let what = OnElement::Hover {
                 query: text(arguments, "query")?,
+                motion: motion(arguments)?,
+                seed: seed(arguments),
             };
             element(client, arguments, what, "hovering over").await
+        }
+        "drag_element" => {
+            let what = OnElement::Drag {
+                from: text(arguments, "from")?,
+                to: text(arguments, "to")?,
+                button: button(arguments),
+                motion: motion(arguments)?,
+                seed: seed(arguments),
+            };
+            element(client, arguments, what, "dragged").await
         }
         "history" => {
             let go = match text(arguments, "go")?.as_str() {
@@ -1506,13 +1577,22 @@ pub async fn call(
         "click" => {
             let at = Some(point(arguments, "x", "y")?);
             let button = button(arguments);
+            let motion = motion(arguments)?;
+            let seed = seed(arguments);
             let action = if flag(arguments, "double") {
-                Action::DoubleClick { at, button }
+                Action::DoubleClick {
+                    at,
+                    button,
+                    motion,
+                    seed,
+                }
             } else {
                 Action::Click {
                     at,
                     button,
                     held: held(arguments)?,
+                    motion,
+                    seed,
                 }
             };
             act(client, arguments, action, 600).await
@@ -1566,6 +1646,8 @@ pub async fn call(
                     to,
                     button: button(arguments),
                     held: held(arguments)?,
+                    motion: motion(arguments)?,
+                    seed: seed(arguments),
                 },
                 400,
             )
@@ -2551,6 +2633,7 @@ mod tests {
             "dropdown",
             "wait_for",
             "hover",
+            "drag_element",
             "history",
             "scroll_page",
             "upload_file",
@@ -2637,6 +2720,33 @@ mod tests {
             "filled",
             "nothing moved, nothing said"
         );
+    }
+
+    #[test]
+    fn test_everything_that_moves_the_pointer_can_be_told_how() {
+        let listed = catalogue();
+        for name in ["click", "drag", "click_element", "hover", "drag_element"] {
+            let tool = listed
+                .as_array()
+                .expect("a list")
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("offered");
+            let fields = &tool["inputSchema"]["properties"];
+            assert_eq!(
+                fields["motion"]["enum"],
+                json!(["instant", "smooth", "human"]),
+                "{name}"
+            );
+            assert_eq!(fields["seed"]["type"], "integer", "{name}");
+        }
+
+        assert!(matches!(motion(&json!({})), Ok(Motion::Instant)));
+        assert!(matches!(
+            motion(&json!({ "motion": "human" })),
+            Ok(Motion::Human)
+        ));
+        assert!(motion(&json!({ "motion": "drunk" })).is_err());
     }
 
     #[test]

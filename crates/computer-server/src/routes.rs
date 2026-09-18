@@ -12,6 +12,7 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use computer::motion::path;
 use computer::{Delta, Desktop as EngineDesktop};
 use computer_api::*;
 use computer_storage::BoxRecord;
@@ -392,19 +393,40 @@ async fn run(
     tabs: &mut Vec<Tab>,
 ) -> ApiResult<Option<Window>> {
     match action {
-        Action::Move { to } => desktop.move_to(*to).await?,
-        Action::Click { at, button, held } => {
+        Action::Move { to, motion, seed } => match motion.is_instant() {
+            true => desktop.move_to(*to).await?,
+            false => {
+                let from = pointer_start(desktop, spec).await;
+                desktop
+                    .move_along(&path(from, *to, *motion, seed.unwrap_or(0)))
+                    .await?
+            }
+        },
+        Action::Click {
+            at,
+            button,
+            held,
+            motion,
+            seed,
+        } => {
             let at = match at {
                 Some(at) => *at,
                 None => desktop.cursor().await?,
             };
+            approach(desktop, spec, at, *motion, *seed).await?;
             desktop.click_with(at, *button, held).await?;
         }
-        Action::DoubleClick { at, button } => {
+        Action::DoubleClick {
+            at,
+            button,
+            motion,
+            seed,
+        } => {
             let at = match at {
                 Some(at) => *at,
                 None => desktop.cursor().await?,
             };
+            approach(desktop, spec, at, *motion, *seed).await?;
             desktop.double_click(at, *button).await?;
         }
         Action::Drag {
@@ -412,7 +434,23 @@ async fn run(
             to,
             button,
             held,
-        } => desktop.drag_with(*from, *to, *button, held).await?,
+            motion,
+            seed,
+        } => match motion.is_instant() {
+            true => desktop.drag_with(*from, *to, *button, held).await?,
+            false => {
+                let seed = seed.unwrap_or(0);
+                approach(desktop, spec, *from, *motion, Some(seed)).await?;
+                desktop
+                    .drag_along(
+                        *from,
+                        &path(*from, *to, *motion, seed.wrapping_add(1)),
+                        *button,
+                        held,
+                    )
+                    .await?
+            }
+        },
         Action::Type { text, delay_ms } => {
             let pace = delay_ms.map(|ms| Duration::from_millis(ms).min(MAX_PACE));
             desktop.type_text(text, pace).await?
@@ -674,6 +712,35 @@ async fn on_node(
     let target = entry.desktop(screen).await?;
 
     Ok(Json(on_tree(target.as_desktop(), body).await?))
+}
+
+/// Where a path starts: the pointer, or the middle of the screen where a driver
+/// cannot say where the pointer is.
+async fn pointer_start(desktop: &dyn EngineDesktop, spec: &Spec) -> computer_types::Point {
+    match desktop.cursor().await {
+        Ok(at) => at,
+        Err(_) => computer_types::Point {
+            x: spec.desktop.width.unwrap_or(1280) / 2,
+            y: spec.desktop.height.unwrap_or(800) / 2,
+        },
+    }
+}
+
+async fn approach(
+    desktop: &dyn EngineDesktop,
+    spec: &Spec,
+    to: computer_types::Point,
+    motion: computer::Motion,
+    seed: Option<u64>,
+) -> ApiResult<()> {
+    if motion.is_instant() {
+        return Ok(());
+    }
+    let from = pointer_start(desktop, spec).await;
+    desktop
+        .move_along(&path(from, to, motion, seed.unwrap_or(0)))
+        .await?;
+    Ok(())
 }
 
 async fn on_tree(desktop: &dyn computer::Desktop, what: OnNode) -> ApiResult<NodeResult> {
@@ -1593,7 +1660,10 @@ async fn apply(
 ) -> ApiResult<ElementResult> {
     // A value set on an input is not a mutation, so only a press is watched:
     // a fill would read as nothing having changed.
-    let watched = matches!(what, OnElement::Click { .. } | OnElement::Hover { .. });
+    let watched = matches!(
+        what,
+        OnElement::Click { .. } | OnElement::Hover { .. } | OnElement::Drag { .. }
+    );
 
     // A courtesy: a page that refuses to be listed still gets its click.
     let listed = !matches!(what, OnElement::Options { .. });
@@ -1640,10 +1710,16 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             query,
             button,
             double,
+            motion,
+            seed,
         } => {
+            let seed = seed.unwrap_or(0);
             let on = match double {
-                true => page.double_click_on(&query, button).await?,
-                false => page.click_on(&query, button).await?,
+                true => {
+                    page.double_click_on_with(&query, button, motion, seed)
+                        .await?
+                }
+                false => page.click_on_with(&query, button, motion, seed).await?,
             };
 
             ElementResult {
@@ -1705,10 +1781,31 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
 
             result
         }
-        OnElement::Hover { query } => ElementResult {
-            element: Some(element_out(page.hover(&query).await?)),
+        OnElement::Hover {
+            query,
+            motion,
+            seed,
+        } => ElementResult {
+            element: Some(element_out(
+                page.hover_with(&query, motion, seed.unwrap_or(0)).await?,
+            )),
             ..ElementResult::default()
         },
+        OnElement::Drag {
+            from,
+            to,
+            button,
+            motion,
+            seed,
+        } => {
+            let (source, _) = page
+                .drag_on(&from, &to, button, motion, seed.unwrap_or(0))
+                .await?;
+            ElementResult {
+                element: Some(element_out(source)),
+                ..ElementResult::default()
+            }
+        }
         OnElement::History { go } => {
             match go {
                 Where::Back => page.back().await?,

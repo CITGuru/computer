@@ -220,6 +220,13 @@ seen, and a ref named there is refused with the reason. A navigation that keeps
 the document, as a single-page app's `pushState` does, keeps its numbers and its
 report; one that replaces it starts again.
 
+The pointer actions — `move`, `click`, `double_click` and `drag` in an action
+batch, and `click`, `hover` and `drag` on `page/element` — take `motion`:
+`instant`, the default, `smooth` or `human`, and a `seed` for `human`. A path
+starts where the pointer is, or the middle of the screen where a driver cannot
+say, and on a page where the page last saw it. `drag` on `page/element` takes
+`from` and `to` as queries, and both must fit in the window at once.
+
 `format` is `markdown` (the default), `text` or `raw`. Markdown keeps the
 headings, lists, tables and code a flat rendering loses, and puts each link's
 address beside its words. `text` is the cheapest answer to "what does this
@@ -260,7 +267,7 @@ a server and this endpoint is only the HTTP in front of it.
 | `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
 | `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
 | `GET /v1/boxes/{id}/page/snapshot?scope=&limit=&delta=&quiet_ms=` | every control on the page in order, numbered; or what changed since the last one |
-| `POST /v1/boxes/{id}/page/element` | click, fill, dropdown, upload, hover, wait, history or scroll, by query |
+| `POST /v1/boxes/{id}/page/element` | click, fill, dropdown, upload, hover, drag, wait, history or scroll, by query |
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |

@@ -29,7 +29,7 @@ cargo install --path crates/computer-mcp
 
 `launch_box` · `list_boxes` · `remove_box` · `screenshot` · `read_page` ·
 `snapshot` · `find` · `wait_for` · `click_element` · `fill_field` · `dropdown` ·
-`upload_file` · `hover` · `history` · `scroll_page` ·
+`upload_file` · `hover` · `drag_element` · `history` · `scroll_page` ·
 `open_url` · `open_app` · `list_apps` · `click` · `type_text` · `press_key` ·
 `scroll` · `drag` · `widget` · `run_command` · `hand_over` · `reclaim_screen` ·
 `fork_box`

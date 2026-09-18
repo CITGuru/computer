@@ -1,5 +1,7 @@
 use crate::error::{Error, Result};
+use crate::motion::{Step, path};
 use crate::{BrowserEndpoint, Button, Point};
+use computer_types::Motion;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -1855,24 +1857,97 @@ impl Page {
     }
 
     async fn press(&mut self, at: Point, button: Button, count: u32) -> Result<()> {
-        let (name, mask) = button_parts(button);
+        self.button_event("mousePressed", at, button, count).await?;
+        self.button_event("mouseReleased", at, button, count).await
+    }
 
+    async fn button_event(
+        &mut self,
+        kind: &str,
+        at: Point,
+        button: Button,
+        count: u32,
+    ) -> Result<()> {
+        let (name, mask) = button_parts(button);
         // The protocol does not derive `buttons` from `button`.
-        for (kind, buttons) in [("mousePressed", mask), ("mouseReleased", 0)] {
+        let buttons = match kind {
+            "mouseReleased" => 0,
+            _ => mask,
+        };
+
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": kind,
+                "x": at.x,
+                "y": at.y,
+                "button": name,
+                "buttons": buttons,
+                "clickCount": count,
+            }),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// The page remembers where it ended, so the next path starts there.
+    pub async fn move_along(&mut self, steps: &[Step], held: Option<Button>) -> Result<()> {
+        let (name, buttons) = match held {
+            Some(button) => button_parts(button),
+            None => ("none", 0),
+        };
+
+        for step in steps {
             self.call(
                 "Input.dispatchMouseEvent",
                 json!({
-                    "type": kind,
-                    "x": at.x,
-                    "y": at.y,
+                    "type": "mouseMoved",
+                    "x": step.at.x,
+                    "y": step.at.y,
                     "button": name,
                     "buttons": buttons,
-                    "clickCount": count,
                 }),
             )
             .await?;
+            if !step.pause.is_zero() {
+                tokio::time::sleep(step.pause).await;
+            }
         }
-        Ok(())
+
+        match steps.last() {
+            Some(last) => self.pointed(last.at).await,
+            None => Ok(()),
+        }
+    }
+
+    /// Where the page last saw the pointer, or the middle of the window before any move.
+    async fn pointer(&mut self) -> Result<Point> {
+        let at = self
+            .evaluate(
+                "JSON.stringify(window.__computerPointer || \
+                 { x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2) })",
+            )
+            .await?;
+
+        serde_json::from_str(at.as_str().unwrap_or("{}"))
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    async fn pointed(&mut self, at: Point) -> Result<()> {
+        self.evaluate(&format!(
+            "void (window.__computerPointer = {{ x: {}, y: {} }})",
+            at.x, at.y
+        ))
+        .await
+        .map(|_| ())
+    }
+
+    async fn glide(&mut self, to: Point, motion: Motion, seed: u64) -> Result<()> {
+        if motion.is_instant() {
+            return self.pointed(to).await;
+        }
+        let from = self.pointer().await?;
+        self.move_along(&path(from, to, motion, seed), None).await
     }
 
     pub async fn find(
@@ -2117,7 +2192,12 @@ impl Page {
     }
 
     pub async fn hover(&mut self, query: &str) -> Result<Element> {
+        self.hover_with(query, Motion::Instant, 0).await
+    }
+
+    pub async fn hover_with(&mut self, query: &str, motion: Motion, seed: u64) -> Result<Element> {
         let (element, at) = self.reachable(query).await?;
+        self.glide(at, motion, seed).await?;
 
         self.call(
             "Input.dispatchMouseEvent",
@@ -2133,15 +2213,129 @@ impl Page {
     }
 
     pub async fn click_on(&mut self, query: &str, button: Button) -> Result<Element> {
+        self.click_on_with(query, button, Motion::Instant, 0).await
+    }
+
+    pub async fn click_on_with(
+        &mut self,
+        query: &str,
+        button: Button,
+        motion: Motion,
+        seed: u64,
+    ) -> Result<Element> {
         let (element, at) = self.reachable(query).await?;
+        self.glide(at, motion, seed).await?;
         self.click(at, button).await?;
         Ok(element)
     }
 
     pub async fn double_click_on(&mut self, query: &str, button: Button) -> Result<Element> {
+        self.double_click_on_with(query, button, Motion::Instant, 0)
+            .await
+    }
+
+    pub async fn double_click_on_with(
+        &mut self,
+        query: &str,
+        button: Button,
+        motion: Motion,
+        seed: u64,
+    ) -> Result<Element> {
         let (element, at) = self.reachable(query).await?;
+        self.glide(at, motion, seed).await?;
         self.double_click(at, button).await?;
         Ok(element)
+    }
+
+    /// Presses on what `from` names, moves to what `to` names with the button held,
+    /// and releases there. Both must fit in the window at once. An instant drag still
+    /// passes through the middle: an application that tracks motion ignores a teleport.
+    pub async fn drag_on(
+        &mut self,
+        from: &str,
+        to: &str,
+        button: Button,
+        motion: Motion,
+        seed: u64,
+    ) -> Result<(Element, Element)> {
+        let (target, _) = self.reachable(to).await?;
+        let (source, start) = self.reachable(from).await?;
+        let end = self
+            .find(to, Some(1), Some(false), None)
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|found| found.at)
+            .ok_or_else(|| {
+                Error::denied(format!(
+                    "{to} is not in the window beside {from}: both ends of a drag must fit in it"
+                ))
+            })?;
+
+        // A press on selected text, an image, a link or a draggable starts Chrome's own
+        // drag, which swallows every pointer event after it. Intercepted, it is finished
+        // by hand with a drop where the pointer ends, so a page built on either kind of
+        // drag gets its drop.
+        let intercepting = self
+            .call("Input.setInterceptDrags", json!({ "enabled": true }))
+            .await
+            .is_ok();
+        self.take_events();
+
+        // Selected text is what most often turns a press into Chrome's own drag.
+        self.evaluate("void (getSelection() && getSelection().removeAllRanges())")
+            .await?;
+        self.glide(start, motion, seed).await?;
+        self.button_event("mousePressed", start, button, 1).await?;
+
+        let steps = match motion.is_instant() {
+            true => vec![
+                Step {
+                    at: Point {
+                        x: start.x.midpoint(end.x),
+                        y: start.y.midpoint(end.y),
+                    },
+                    pause: Duration::ZERO,
+                },
+                Step {
+                    at: end,
+                    pause: Duration::ZERO,
+                },
+            ],
+            false => path(start, end, motion, seed.wrapping_add(1)),
+        };
+        self.move_along(&steps, Some(button)).await?;
+
+        let intercepted = self
+            .take_events()
+            .into_iter()
+            .find(|event| event.method == "Input.dragIntercepted")
+            .map(|event| event.params["data"].clone());
+        match intercepted {
+            Some(data) => {
+                for kind in ["dragEnter", "dragOver", "drop"] {
+                    self.call(
+                        "Input.dispatchDragEvent",
+                        json!({ "type": kind, "x": end.x, "y": end.y, "data": data }),
+                    )
+                    .await?;
+                }
+            }
+            None => self.button_event("mouseReleased", end, button, 1).await?,
+        }
+        if intercepting {
+            let _ = self
+                .call("Input.setInterceptDrags", json!({ "enabled": false }))
+                .await;
+        }
+
+        Ok((
+            source,
+            Element {
+                at: Some(end),
+                ..target
+            },
+        ))
     }
 
     pub async fn fill(&mut self, query: &str, text: &str) -> Result<()> {
@@ -3522,6 +3716,30 @@ mod tests {
         assert!(
             CONTEXT_WAIT <= Duration::from_secs(3),
             "a redirect, not a load"
+        );
+    }
+
+    #[test]
+    fn test_a_drag_finishes_chromes_own_drag_with_a_drop() {
+        let source = include_str!("cdp.rs");
+        let drag = source
+            .split("pub async fn drag_on(")
+            .nth(1)
+            .and_then(|rest| rest.split("pub async fn type_text(").next())
+            .expect("drag_on is here");
+
+        assert!(drag.contains(r#""Input.setInterceptDrags", json!({ "enabled": true })"#));
+        assert!(
+            drag.contains(r#"event.method == "Input.dragIntercepted""#),
+            "a drag Chrome started is noticed"
+        );
+        assert!(
+            drag.contains(r#"for kind in ["dragEnter", "dragOver", "drop"]"#),
+            "and dropped where the pointer ends, in the order a browser sends them"
+        );
+        assert!(
+            drag.contains(r#"None => self.button_event("mouseReleased", end, button, 1).await?"#),
+            "a pointer drag is released as before"
         );
     }
 

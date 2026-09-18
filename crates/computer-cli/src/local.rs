@@ -41,7 +41,7 @@ pub async fn up(args: &[String]) -> computer::Result<()> {
         computer.open_url(url).await?;
     }
 
-    // Only the name goes to stdout, so `computer shot $(computer up)` works.
+    // Only the name goes to stdout, so `computer screenshot $(computer up)` works.
     println!("{}", computer.name());
     if let Some(url) = computer.viewer_url() {
         eprintln!("  watch it  {url}");

@@ -117,6 +117,11 @@ def bounds_of(node):
     if extents.width < 1 or extents.height < 1:
         return None
 
+    # A menu item that was never drawn reports INT_MIN. Nowhere left of or above the
+    # screen is a place to press, and one such node fails the whole listing: `at` is unsigned.
+    if extents.x + extents.width // 2 < 0 or extents.y + extents.height // 2 < 0:
+        return None
+
     return extents
 
 

@@ -1,3 +1,4 @@
+use computer_types::Motion;
 pub use computer_types::{
     App, Arrange, Auth, Bind, Button, Desktop, DisplayServer, Feature, Held, Node, NodeQuery,
     Placement, Point, Policy, Rect, Selection, Spec, Window,
@@ -56,6 +57,10 @@ pub struct BoxList {
 pub enum Action {
     Move {
         to: Point,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
     },
     Click {
         #[serde(default)]
@@ -64,12 +69,20 @@ pub enum Action {
         button: Button,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         held: Vec<Held>,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
     },
     DoubleClick {
         #[serde(default)]
         at: Option<Point>,
         #[serde(default)]
         button: Button,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
     },
     Drag {
         from: Point,
@@ -78,6 +91,10 @@ pub enum Action {
         button: Button,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         held: Vec<Held>,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
     },
     Type {
         text: String,
@@ -291,6 +308,21 @@ pub enum OnElement {
         button: Button,
         #[serde(default)]
         double: bool,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
+    },
+    /// Both ends must fit in the window at once.
+    Drag {
+        from: String,
+        to: String,
+        #[serde(default)]
+        button: Button,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
     },
     Fill {
         query: String,
@@ -322,6 +354,10 @@ pub enum OnElement {
     },
     Hover {
         query: String,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
     },
     History {
         go: Where,

@@ -4,6 +4,7 @@ pub use profile::X11Profile;
 
 use crate::error::{Error, Result};
 use crate::machine::{MachineHost, ScreenHost};
+use crate::motion::Step;
 use crate::screens::ControlGate;
 use crate::servers::{a11y, settled, still_argv};
 use crate::{
@@ -86,6 +87,20 @@ fn point_argv(command: &[&str], at: Point) -> Vec<String> {
     let mut args = argv(command);
     args.push(at.x.to_string());
     args.push(at.y.to_string());
+    args
+}
+
+/// `sleep` takes seconds. A pause under a millisecond is not worth the word.
+fn along(steps: &[Step]) -> Vec<String> {
+    let mut args = Vec::new();
+
+    for step in steps {
+        args.extend(point_argv(&["mousemove", "--"], step.at));
+        if step.pause >= Duration::from_millis(1) {
+            args.push("sleep".to_string());
+            args.push(format!("{:.3}", step.pause.as_secs_f64()));
+        }
+    }
     args
 }
 
@@ -330,6 +345,30 @@ impl Desktop for X11Desktop {
         };
         args.extend(point_argv(&["mousemove", "--"], middle));
         args.extend(point_argv(&["mousemove", "--"], to));
+        args.extend(argv(&["mouseup", number]));
+        args.extend(letting_go(held));
+
+        self.act(args).await
+    }
+
+    async fn move_along(&self, steps: &[Step]) -> Result<()> {
+        let mut args = argv(&["xdotool"]);
+        args.extend(along(steps));
+        self.act(args).await
+    }
+
+    async fn drag_along(
+        &self,
+        from: Point,
+        steps: &[Step],
+        button: Button,
+        held: &[Held],
+    ) -> Result<()> {
+        let number = button_number(button);
+        let mut args = holding(held);
+        args.extend(point_argv(&["mousemove", "--"], from));
+        args.extend(argv(&["mousedown", number]));
+        args.extend(along(steps));
         args.extend(argv(&["mouseup", number]));
         args.extend(letting_go(held));
 
