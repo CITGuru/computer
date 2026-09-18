@@ -146,6 +146,17 @@ computer — a desktop in a box
                               read a selection, or set it
   takeover <box>              open the input viewer and print its URL
   release <box>               close it and take the screen back
+  file <box> ls [dir]         what is in a directory, `/` unless told
+  file <box> get <path> [out] take a file out. to stdout where no file is named
+  file <box> put <local> [path]
+                              put one in, at /tmp under its own name unless
+                              told otherwise
+  file <box> grep <pattern> <dir> [--include GLOB] [--ignore-case] [--limit N]
+  file <box> glob <pattern> [dir] [--limit N]
+                              search inside files, or for their names. the
+                              directory is required for grep: the whole
+                              filesystem answers in megabytes. both are cut in
+                              the box at 200, and say when they were
   exec <box> -- <command…>    run a command inside the box
   rm <box>                    take the box away
   fork <box> [--up-to SEQ]    build another by doing again what was done
@@ -264,6 +275,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "clip" => remote::clip(client, args).await,
         "takeover" => remote::takeover(client, args).await,
         "release" => remote::release(client, args).await,
+        "file" => remote::file(client, args).await,
         "exec" => remote::exec(client, args).await,
         "rm" => remote::remove(client, args).await,
         "fork" => remote::fork(client, args).await,
@@ -280,7 +292,7 @@ async fn here(command: &str, args: &[String]) -> Result<(), String> {
         "screenshot" => local::screenshot(args).await,
         "open" => local::open(args).await,
         "app" | "apps" | "window" | "widget" | "browser" | "record" | "box" | "pause"
-        | "resume" | "stop" => Err(computer::Error::invalid(format!(
+        | "resume" | "stop" | "file" => Err(computer::Error::invalid(format!(
             "`{command}` needs a server; drop --local"
         ))),
         "mouse" => local::mouse(args).await,
