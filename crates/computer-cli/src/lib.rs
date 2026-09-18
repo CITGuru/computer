@@ -170,6 +170,14 @@ computer — a desktop in a box
   takeover <box>              open the input viewer and print its URL
   release <box>               close it and take the screen back
   exec <box> -- <command…>    run a command inside the box
+  batch <box> [file.json] [--keep-going] [--settle MS]
+                              run many steps in one call, from a file or from
+                              stdin. every command above is a step, and a step
+                              that reads answers under its own line. the box
+                              holds its screen for the whole run, which
+                              separate calls cannot promise. --keep-going runs
+                              the rest after a step is refused, which a drawing
+                              wants and a form does not
   rm <box>                    take the box away
   fork <box> [--up-to SEQ]    build another by doing again what was done
   trace <box> [--after SEQ]   what has been done to it, and by whom
@@ -288,6 +296,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "takeover" => remote::takeover(client, args).await,
         "release" => remote::release(client, args).await,
         "exec" => remote::exec(client, args).await,
+        "batch" => remote::batch(client, args).await,
         "rm" => remote::remove(client, args).await,
         "fork" => remote::fork(client, args).await,
         "trace" => remote::trace(client, args).await,
