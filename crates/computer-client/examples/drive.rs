@@ -48,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 settle_ms: Some(3000),
                 want: vec![Want::Frame, Want::Cursor],
                 have_frame: None,
+                keep_going: false,
             },
             None,
         )
