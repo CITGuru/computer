@@ -333,7 +333,13 @@ pub enum OnElement {
     },
     Choose {
         query: String,
-        option: String,
+        /// The whole selection, for a dropdown that takes several.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
+        /// Take those named out of the selection instead, or empty it when
+        /// none is named.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        drop: bool,
     },
     Upload {
         query: String,
@@ -1105,6 +1111,33 @@ mod tests {
                 .expect("parses");
 
         assert!(matches!(strict, OnElement::WaitFor { exact: true, .. }));
+    }
+
+    #[test]
+    fn test_a_dropdown_takes_one_option_or_several() {
+        let one: OnElement =
+            serde_json::from_str(r#"{"op":"choose","query":"Colour","options":["Blue"]}"#)
+                .expect("parses");
+        assert!(matches!(one, OnElement::Choose { drop: false, .. }));
+
+        let clear: OnElement =
+            serde_json::from_str(r#"{"op":"choose","query":"Tags","drop":true}"#).expect("parses");
+        assert!(matches!(
+            clear,
+            OnElement::Choose {
+                drop: true,
+                ref options,
+                ..
+            } if options.is_empty()
+        ));
+
+        let wire = serde_json::to_string(&OnElement::Choose {
+            query: "Colour".to_string(),
+            options: vec!["Blue".to_string()],
+            drop: false,
+        })
+        .expect("serialises");
+        assert!(!wire.contains("drop"), "nothing new when defaulted: {wire}");
     }
 
     #[test]

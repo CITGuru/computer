@@ -442,14 +442,21 @@ pub fn catalogue() -> Value {
         ),
         tool(
             "dropdown",
-            "List what a dropdown offers, or choose one of them. A native dropdown opens a menu \
-             the operating system draws, which no screenshot shows and no click can reach, so \
-             this is the only way to work one.",
+            "List what a dropdown offers, choose from it, or drop what is chosen. A native \
+             dropdown opens a menu the operating system draws, which no screenshot shows and no \
+             click can reach, so this is the only way to work one.",
             with_page(
                 json!({
                     "query": { "type": "string" },
-                    "op": { "type": "string", "enum": ["list", "select"] },
-                    "option": { "type": "string", "description": "Required for select." }
+                    "op": { "type": "string", "enum": ["list", "select", "deselect"] },
+                    "options": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Matched by their text or their value. Required for \
+                                        select, where they become the whole selection; several \
+                                        only where the dropdown takes several. For deselect, \
+                                        the ones to drop, or none to drop every one."
+                    }
                 }),
                 &["query", "op"]
             )
@@ -1509,20 +1516,9 @@ pub async fn call(
             element(client, arguments, what, "filled").await
         }
         "upload_file" => {
-            let paths = arguments
-                .get("paths")
-                .and_then(Value::as_array)
-                .map(|paths| {
-                    paths
-                        .iter()
-                        .filter_map(|p| p.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-
             let what = OnElement::Upload {
                 query: text(arguments, "query")?,
-                paths,
+                paths: words(arguments, "paths"),
             };
             element(client, arguments, what, "handed over").await
         }
@@ -1627,11 +1623,22 @@ pub async fn call(
             let query = text(arguments, "query")?;
             let what = match text(arguments, "op")?.as_str() {
                 "list" => OnElement::Options { query },
-                "select" => OnElement::Choose {
-                    query,
-                    option: text(arguments, "option")?,
+                "select" => match words(arguments, "options") {
+                    named if named.is_empty() => return Err("select needs options".to_string()),
+                    named => OnElement::Choose {
+                        query,
+                        options: named,
+                        drop: false,
+                    },
                 },
-                other => return Err(format!("no such op: {other}; use list or select")),
+                "deselect" => OnElement::Choose {
+                    query,
+                    options: words(arguments, "options"),
+                    drop: true,
+                },
+                other => {
+                    return Err(format!("no such op: {other}; use list, select or deselect"));
+                }
             };
             element(client, arguments, what, "done").await
         }
@@ -2395,6 +2402,19 @@ fn framing(arguments: &Value) -> Result<Shot, String> {
             .unwrap_or_default(),
         tab: named("tab"),
     })
+}
+
+fn words(arguments: &Value, name: &str) -> Vec<String> {
+    arguments
+        .get(name)
+        .and_then(Value::as_array)
+        .map(|listed| {
+            listed
+                .iter()
+                .filter_map(|one| one.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn text(arguments: &Value, name: &str) -> Result<String, String> {

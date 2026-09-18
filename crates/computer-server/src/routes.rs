@@ -1743,10 +1743,14 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             element: Some(element_out(page.check(&query, on).await?)),
             ..ElementResult::default()
         },
-        OnElement::Choose { query, option } => {
-            page.choose(&query, &option).await?;
-            ElementResult::default()
-        }
+        OnElement::Choose {
+            query,
+            options,
+            drop,
+        } => ElementResult {
+            options: page.choose(&query, &options, drop).await?,
+            ..ElementResult::default()
+        },
         OnElement::Upload { query, paths } => {
             page.upload(&query, &paths).await?;
             ElementResult::default()

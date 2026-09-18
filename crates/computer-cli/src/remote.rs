@@ -954,7 +954,10 @@ fn op_of(what: &computer_api::OnElement) -> &'static str {
         O::Click { .. } => "click",
         O::Fill { .. } => "fill",
         O::Options { .. } => "options",
-        O::Choose { .. } => "choose",
+        O::Choose { drop, .. } => match drop {
+            true => "deselect",
+            false => "select",
+        },
         O::Upload { .. } => "upload",
         O::WaitFor { .. } => "wait",
         O::Hover { .. } => "hover",
@@ -1072,8 +1075,8 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         &rest,
         1,
         "read, snapshot, find, click, fill, focus, check, uncheck, select, \
-         options, upload, wait, hover, drag, eval, screenshot, tabs, switch, \
-         close, back, forward or reload",
+         deselect, options, upload, wait, hover, drag, eval, screenshot, tabs, \
+         switch, close, back, forward or reload",
     )
     .map_err(|e| e.to_string())?;
 
@@ -1144,9 +1147,16 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         },
         "select" => OnElement::Choose {
             query: query(2)?,
-            option: positional(&rest, 3, "an option")
-                .map_err(|e| e.to_string())?
-                .to_string(),
+            options: match rest.get(3..) {
+                Some([]) | None => return Err("expected an option".to_string()),
+                Some(named) => named.to_vec(),
+            },
+            drop: false,
+        },
+        "deselect" => OnElement::Choose {
+            query: query(2)?,
+            options: rest.get(3..).unwrap_or_default().to_vec(),
+            drop: true,
         },
         "options" => OnElement::Options { query: query(2)? },
         "focus" => OnElement::Focus { query: query(2)? },
