@@ -46,7 +46,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = menu.options("select").await?;
     println!("  options: {options:?}");
     if let Some(pick) = options.get(1) {
-        menu.choose("select", pick).await?;
+        menu.choose("select", std::slice::from_ref(pick), false)
+            .await?;
         let now = menu.find("select", Some(1), None, None).await?;
         println!(
             "  value now {:?}",

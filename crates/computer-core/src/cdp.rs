@@ -1202,6 +1202,132 @@ fn describe() -> String {
     DESCRIBE.replace("SELECTOR_FN", SELECTOR)
 }
 
+fn checkbox() -> String {
+    BOX.replace("MATCH_FN", MATCH)
+}
+
+fn fillable() -> String {
+    FILLABLE.replace("MATCH_FN", MATCH)
+}
+
+fn assign() -> String {
+    ASSIGN.replace("MATCH_FN", MATCH)
+}
+
+fn rich() -> String {
+    RICH.replace("MATCH_FN", MATCH)
+}
+
+fn dropdown() -> String {
+    PICK.replace("MATCH_FN", MATCH)
+}
+
+/// "I agree" names a checkbox but matches the `label`. A click lands on the
+/// control either way; ticking has to find it.
+const BOX: &str = r#"(query) => {
+  const el = (MATCH_FN)(query, false).find(Boolean);
+  if (!el) return null;
+  if ('checked' in el) return el;
+  return el.control || el.querySelector('input[type=checkbox], input[type=radio]') || el;
+}"#;
+
+/// Which of three ways a control takes a value, or the verb that reaches it.
+const FILLABLE: &str = r#"(query) => {
+  const el = (MATCH_FN)(query, false).find(Boolean);
+  if (!el) return 'gone';
+
+  const tag = el.tagName;
+  const kind = tag === 'INPUT' ? (el.type || 'text').toLowerCase() : '';
+
+  if (tag === 'SELECT') return 'select';
+  if (kind === 'file') return 'upload';
+  if (kind === 'checkbox' || kind === 'radio') return 'check';
+  if (tag === 'BUTTON' || ['submit', 'button', 'reset', 'image'].includes(kind)) return 'click';
+  if (tag !== 'INPUT' && tag !== 'TEXTAREA') return el.isContentEditable ? 'rich' : 'no';
+
+  if (el.disabled) return 'disabled';
+  if (el.readOnly) return 'read-only';
+  return ['range', 'color', 'date', 'time', 'datetime-local', 'month', 'week'].includes(kind)
+    ? 'assign'
+    : 'type';
+}"#;
+
+/// React shadows `value` with a setter that remembers what it last saw, so a
+/// write through it leaves React believing nothing changed. The prototype's
+/// setter goes under the shadow.
+///
+/// A control that will not hold the value empties instead of refusing, and a
+/// colour turns black, so both are read back rather than trusted.
+const ASSIGN: &str = r#"(query, value) => {
+  const el = (MATCH_FN)(query, false).find(Boolean);
+  if (!el) return 'gone';
+  if ((el.type || '').toLowerCase() === 'color' && !/^#[0-9a-f]{6}$/i.test(value))
+    return 'rejected';
+
+  const native = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value');
+  if (native && native.set) native.set.call(el, value); else el.value = value;
+  if (el.value === '' && value !== '') return 'rejected';
+
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return el.value;
+}"#;
+
+/// A contenteditable has no `value` to clear, so what replaces the old text is
+/// the selection the typing lands on.
+const RICH: &str = r#"(query, empty) => {
+  const el = (MATCH_FN)(query, false).find(Boolean);
+  if (!el) return 'gone';
+  el.focus({ preventScroll: true });
+
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const picked = getSelection();
+  picked.removeAllRanges();
+  picked.addRange(range);
+
+  if (empty) document.execCommand('delete');
+  return 'ok';
+}"#;
+
+const PICK: &str = r#"(query, wanted, drop) => {
+  const el = (MATCH_FN)(query, false).find(e => e.tagName === 'SELECT');
+  if (!el) return { no: 'no dropdown matched' };
+  if (el.disabled) return { no: 'the dropdown is disabled' };
+  if (!el.multiple && (drop || wanted.length > 1))
+    return { no: 'it takes one option, and always holds one' };
+
+  const want = [];
+  for (const name of wanted) {
+    const looking = name.trim().toLowerCase();
+    const at = Array.from(el.options).findIndex(
+      o => o.text.trim().toLowerCase() === looking || String(o.value).toLowerCase() === looking);
+    if (at < 0) return { no: 'no option named ' + name };
+    if (el.options[at].disabled) return { no: name + ' is disabled' };
+    want.push(at);
+  }
+
+  if (drop)
+    Array.from(el.options).forEach((o, at) => {
+      if (!wanted.length || want.includes(at)) o.selected = false;
+    });
+  else if (el.multiple)
+    Array.from(el.options).forEach((o, at) => { o.selected = want.includes(at); });
+  else el.selectedIndex = want[0];
+
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return { picked: Array.from(el.selectedOptions).map(o => o.text.trim()) };
+}"#;
+
+/// What a wait will take as a match, beyond the query itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ready {
+    /// Not `disabled`. A query matches a button that is in the document, which
+    /// is not the same as one that can be pressed.
+    pub enabled: bool,
+}
+
 const DESCRIBE: &str = r#"(el) => {
   const r = el.getBoundingClientRect();
   const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
@@ -1802,6 +1928,30 @@ impl Page {
         }
     }
 
+    /// Polled rather than observed, so it sees a state that holds rather than
+    /// one that flickers.
+    pub async fn wait_until_true(&mut self, js: &str, within: Duration) -> Result<()> {
+        let deadline = Instant::now() + within;
+
+        loop {
+            // A throw is not truthy and not a fault: an expression reaching
+            // through something the page has not built yet raises until it has.
+            let said = self.evaluate(&format!("!!({js})")).await;
+
+            if said.map(|one| one.as_bool() == Some(true)).unwrap_or(false) {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    after: within,
+                    detail: format!("{js} was never true"),
+                });
+            }
+
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
     pub async fn wait_for_load(&mut self, within: Duration) -> Result<()> {
         let deadline = SystemTime::now() + within;
 
@@ -2106,15 +2256,30 @@ impl Page {
         within: Duration,
         exact: bool,
     ) -> Result<(String, Option<Element>)> {
+        self.wait_until(query, or, gone, within, exact, Ready::default())
+            .await
+    }
+
+    pub async fn wait_until(
+        &mut self,
+        query: &str,
+        or: &[String],
+        gone: bool,
+        within: Duration,
+        exact: bool,
+        ready: Ready,
+    ) -> Result<(String, Option<Element>)> {
         let deadline = Instant::now() + within;
+        let counts = |one: &Element| !ready.enabled || one.enabled;
 
         loop {
             let found = self.find(query, Some(1), None, Some(exact)).await?;
-            let here = found.first().cloned();
+            let here = found.first().filter(|one| counts(one)).cloned();
 
             match (gone, &here) {
                 (false, Some(_)) => return Ok((query.to_string(), here)),
-                (true, None) => return Ok((query.to_string(), None)),
+                // Gone means gone, whatever was asked of a match that stayed.
+                (true, None) if found.is_empty() => return Ok((query.to_string(), None)),
                 _ => {}
             }
 
@@ -2123,6 +2288,7 @@ impl Page {
                     .find(other, Some(1), None, Some(exact))
                     .await?
                     .first()
+                    .filter(|one| counts(one))
                     .cloned()
                 {
                     return Ok((other.clone(), Some(one)));
@@ -2135,11 +2301,16 @@ impl Page {
                     false => format!("{query} (nor {})", or.join(", ")),
                 };
 
+                let wanted = match ready.enabled {
+                    true => " enabled",
+                    false => "",
+                };
+
                 return Err(Error::Timeout {
                     after: within,
                     detail: match gone {
                         true => format!("{waited} was still on the page"),
-                        false => format!("nothing matching {waited} appeared"),
+                        false => format!("nothing matching {waited} appeared{wanted}"),
                     },
                 });
             }
@@ -2338,17 +2509,151 @@ impl Page {
         ))
     }
 
+    /// Typed where a person types, assigned where a person does not: a slider
+    /// is dragged and a date is picked, and neither takes keystrokes.
     pub async fn fill(&mut self, query: &str, text: &str) -> Result<()> {
-        let (_, at) = self.reachable(query).await?;
-        self.click(at, Button::Left).await?;
+        let how = self
+            .evaluate(&format!("({fill})({})", json!(query), fill = fillable()))
+            .await?;
+
+        match how.as_str() {
+            Some("type") => {
+                let (_, at) = self.reachable(query).await?;
+                self.click(at, Button::Left).await?;
+
+                self.evaluate(&format!(
+                    "(({MATCH})({}, false).find(Boolean) || {{}}).value = ''",
+                    json!(query)
+                ))
+                .await?;
+
+                self.type_text(text).await
+            }
+            Some("rich") => {
+                let (_, at) = self.reachable(query).await?;
+                self.click(at, Button::Left).await?;
+
+                self.evaluate(&format!(
+                    "({rich})({}, {})",
+                    json!(query),
+                    text.is_empty(),
+                    rich = rich()
+                ))
+                .await?;
+
+                self.type_text(text).await
+            }
+            Some("assign") => {
+                let took = self
+                    .evaluate(&format!(
+                        "({set})({}, {})",
+                        json!(query),
+                        json!(text),
+                        set = assign()
+                    ))
+                    .await?;
+
+                match took.as_str() {
+                    Some("gone") => Err(Error::denied(format!("nothing matched {query}"))),
+                    Some("rejected") => {
+                        Err(Error::denied(format!("{query} will not hold {text:?}")))
+                    }
+                    _ => Ok(()),
+                }
+            }
+            Some("gone") => Err(Error::denied(format!("nothing matched {query}"))),
+            Some(shut @ ("disabled" | "read-only")) => {
+                Err(Error::denied(format!("{query} is {shut}")))
+            }
+            Some(verb @ ("select" | "check" | "click" | "upload")) => Err(Error::denied(format!(
+                "{query} does not take typing: use {verb}"
+            ))),
+            _ => Err(Error::denied(format!("{query} holds no value"))),
+        }
+    }
+
+    /// Keyboard focus, without the click that would otherwise carry it: a
+    /// click on a menu opens it, and one on a submit sends the form.
+    pub async fn focus(&mut self, query: &str) -> Result<Element> {
+        let element = self.reach(query).await?;
 
         self.evaluate(&format!(
-            "(({MATCH})({}, false).find(Boolean) || {{}}).value = ''",
+            r#"(() => {{
+                 const el = ({MATCH})({}, false).find(Boolean);
+                 if (!el) return 'gone';
+                 el.focus({{ preventScroll: true }});
+                 return document.activeElement === el ? 'ok' : 'refused';
+               }})()"#,
             json!(query)
         ))
-        .await?;
+        .await
+        .and_then(|said| match said.as_str() {
+            // An element with no tabindex takes no focus, and saying so beats
+            // answering as though the keyboard reaches it.
+            Some("refused") => Err(Error::denied(format!("{query} will not take focus"))),
+            Some("gone") => Err(Error::denied(format!("{query} left the page"))),
+            _ => Ok(()),
+        })?;
 
-        self.type_text(text).await
+        Ok(element)
+    }
+
+    /// Tick a box, or untick it. Already in that state is not a click.
+    ///
+    /// Clicked rather than assigned: setting `checked` fires no `change`, so a
+    /// page that validates on one never learns the box was ticked.
+    pub async fn check(&mut self, query: &str, on: bool) -> Result<Element> {
+        let state = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const el = ({box})({});
+                     if (!el) return 'gone';
+                     if (!('checked' in el)) return 'not a box';
+                     if (el.disabled) return 'disabled';
+                     return el.checked ? 'on' : 'off';
+                   }})()"#,
+                json!(query),
+                box = checkbox()
+            ))
+            .await?;
+
+        match state.as_str() {
+            Some("gone") => return Err(Error::denied(format!("nothing matched {query}"))),
+            Some("not a box") => {
+                return Err(Error::denied(format!(
+                    "{query} is not a checkbox or a radio"
+                )));
+            }
+            Some("disabled") => return Err(Error::denied(format!("{query} is disabled"))),
+            _ => {}
+        }
+
+        let already = state.as_str() == Some("on");
+        let (element, at) = self.reachable(query).await?;
+
+        // A radio cannot be turned off by clicking it, so that is refused
+        // rather than clicked and silently left on.
+        if already && !on {
+            let radio = self
+                .evaluate(&format!(
+                    "((({box})({})) || {{}}).type === 'radio'",
+                    json!(query),
+                    box = checkbox()
+                ))
+                .await?;
+
+            if radio.as_bool() == Some(true) {
+                return Err(Error::denied(format!(
+                    "{query} is a radio; choose another in its group instead"
+                )));
+            }
+        }
+
+        if already != on {
+            self.click(at, Button::Left).await?;
+        }
+
+        Ok(element)
     }
 
     pub async fn options(&mut self, query: &str) -> Result<Vec<String>> {
@@ -2363,34 +2668,37 @@ impl Page {
             .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
     }
 
-    pub async fn choose(&mut self, query: &str, option: &str) -> Result<()> {
-        let chose = self
+    /// The options named become the whole selection; `drop` takes them out of
+    /// it instead, or empties it when none is named.
+    pub async fn choose(
+        &mut self,
+        query: &str,
+        options: &[String],
+        drop: bool,
+    ) -> Result<Vec<String>> {
+        let answered = self
             .evaluate(&format!(
-                r#"(() => {{
-                     const el = ({MATCH})({}, false).find(e => e.tagName === 'SELECT');
-                     if (!el) return 'no dropdown matched';
-                     const want = {}.trim().toLowerCase();
-                     const at = Array.from(el.options)
-                       .findIndex(o => o.text.trim().toLowerCase() === want ||
-                                       String(o.value).toLowerCase() === want);
-                     if (at < 0) return 'no such option';
-                     el.selectedIndex = at;
-                     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                     return 'ok';
-                   }})()"#,
+                "({pick})({}, {}, {drop})",
                 json!(query),
-                json!(option)
+                json!(options),
+                pick = dropdown()
             ))
             .await?;
 
-        match chose.as_str() {
-            Some("ok") => Ok(()),
-            other => Err(Error::denied(format!(
-                "{}: {query} / {option}",
-                other.unwrap_or("the page answered nothing")
-            ))),
+        if let Some(no) = answered.get("no").and_then(Value::as_str) {
+            return Err(Error::denied(format!("{no}: {query}")));
         }
+
+        Ok(answered
+            .get("picked")
+            .and_then(Value::as_array)
+            .map(|picked| {
+                picked
+                    .iter()
+                    .filter_map(|one| one.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// Paths are inside the box.

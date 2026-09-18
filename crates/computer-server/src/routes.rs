@@ -1735,10 +1735,22 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             options: page.options(&query).await?,
             ..ElementResult::default()
         },
-        OnElement::Choose { query, option } => {
-            page.choose(&query, &option).await?;
-            ElementResult::default()
-        }
+        OnElement::Focus { query } => ElementResult {
+            element: Some(element_out(page.focus(&query).await?)),
+            ..ElementResult::default()
+        },
+        OnElement::Check { query, on } => ElementResult {
+            element: Some(element_out(page.check(&query, on).await?)),
+            ..ElementResult::default()
+        },
+        OnElement::Choose {
+            query,
+            options,
+            drop,
+        } => ElementResult {
+            options: page.choose(&query, &options, drop).await?,
+            ..ElementResult::default()
+        },
         OnElement::Upload { query, paths } => {
             page.upload(&query, &paths).await?;
             ElementResult::default()
@@ -1750,19 +1762,44 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             or,
             exact,
             quiet_ms,
+            enabled,
+            load,
+            until,
         } => {
-            if query.is_empty() && quiet_ms.is_none() {
-                return Err(ApiError::bad_request("a wait needs a query or quiet_ms"));
+            if query.is_empty() && quiet_ms.is_none() && !load && until.is_none() {
+                return Err(ApiError::bad_request(
+                    "a wait needs a query, quiet_ms, load or until",
+                ));
             }
 
             let within = Duration::from_millis(within_ms.unwrap_or(WAIT_MS)).min(MAX_WAIT);
             let started = Instant::now();
             let mut result = ElementResult::default();
 
+            // First: a query run against a document still loading is asked of
+            // a page that is not there yet.
+            if load {
+                page.wait_for_load(within).await?;
+            }
+
             if !query.is_empty() {
-                let (matched, found) = page.wait_for_any(&query, &or, gone, within, exact).await?;
+                let (matched, found) = page
+                    .wait_until(
+                        &query,
+                        &or,
+                        gone,
+                        within,
+                        exact,
+                        computer::cdp::Ready { enabled },
+                    )
+                    .await?;
                 result.element = found.map(element_out);
                 result.matched = Some(matched);
+            }
+
+            if let Some(until) = &until {
+                let left = within.saturating_sub(started.elapsed());
+                page.wait_until_true(until, left).await?;
             }
 
             // One window for both: the quiet is what the query waited for, landing.
