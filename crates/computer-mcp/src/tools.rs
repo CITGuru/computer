@@ -417,6 +417,30 @@ pub fn catalogue() -> Value {
             )
         ),
         tool(
+            "focus",
+            "Put the keyboard on an element without clicking it. A click on a menu opens it and \
+             a click on a submit sends the form, so clicking to focus brings the side effect \
+             too. Use this before `type_text`.",
+            with_page(json!({ "query": { "type": "string" } }), &["query"])
+        ),
+        tool(
+            "check",
+            "Tick a checkbox or a radio, or clear a checkbox. One that is already in that state \
+             is not clicked, so asking twice changes nothing — unlike `click_element`, which \
+             toggles and cannot be retried safely. A radio cannot be cleared; choose another in \
+             its group.",
+            with_page(
+                json!({
+                    "query": { "type": "string" },
+                    "on": {
+                        "type": "boolean",
+                        "description": "Ticked. `false` clears a checkbox. True unless you say."
+                    }
+                }),
+                &["query"]
+            )
+        ),
+        tool(
             "dropdown",
             "List what a dropdown offers, or choose one of them. A native dropdown opens a menu \
              the operating system draws, which no screenshot shows and no click can reach, so \
@@ -467,6 +491,24 @@ pub fn catalogue() -> Value {
                                         \"unavailable\". Answers with which one matched, instead \
                                         of spending the whole timeout on a success the page has \
                                         already ruled out."
+                    },
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "Wait for it to accept a press. A query matches a button \
+                                        that is present and disabled, which is where a form most \
+                                        often goes wrong."
+                    },
+                    "load": {
+                        "type": "boolean",
+                        "description": "Wait for the document to finish loading first."
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": "Javascript, waited on until it is truthy — for what no \
+                                        other field names: `document.querySelectorAll('.row')\
+                                        .length > 5`, `location.pathname === '/done'`. A throw \
+                                        counts as not yet, so reaching through something the \
+                                        page builds late is fine."
                     }
                 }),
                 &[]
@@ -1486,9 +1528,11 @@ pub async fn call(
         }
         "wait_for" => {
             let quiet_ms = arguments.get("quiet_ms").and_then(Value::as_u64);
-            let query = match quiet_ms {
-                Some(_) => text(arguments, "query").unwrap_or_default(),
-                None => text(arguments, "query")?,
+            let alone =
+                quiet_ms.is_some() || flag(arguments, "load") || arguments.get("until").is_some();
+            let query = match alone {
+                true => text(arguments, "query").unwrap_or_default(),
+                false => text(arguments, "query")?,
             };
             let did = waited(&query, quiet_ms);
             let what = OnElement::WaitFor {
@@ -1498,6 +1542,12 @@ pub async fn call(
                 or: strings(arguments, "or"),
                 exact: flag(arguments, "exact"),
                 quiet_ms,
+                enabled: flag(arguments, "enabled"),
+                load: flag(arguments, "load"),
+                until: arguments
+                    .get("until")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             };
             element(client, arguments, what, &did).await
         }
@@ -1551,6 +1601,27 @@ pub async fn call(
                 dy: axis("dy"),
             };
             element(client, arguments, what, "scrolled").await
+        }
+        "focus" => {
+            let what = OnElement::Focus {
+                query: text(arguments, "query")?,
+            };
+            element(client, arguments, what, "focused").await
+        }
+        "check" => {
+            let on = arguments.get("on").and_then(Value::as_bool).unwrap_or(true);
+
+            let what = OnElement::Check {
+                query: text(arguments, "query")?,
+                on,
+            };
+            element(
+                client,
+                arguments,
+                what,
+                if on { "ticked" } else { "cleared" },
+            )
+            .await
         }
         "dropdown" => {
             let query = text(arguments, "query")?;

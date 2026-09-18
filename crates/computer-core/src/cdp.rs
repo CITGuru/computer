@@ -1202,6 +1202,27 @@ fn describe() -> String {
     DESCRIBE.replace("SELECTOR_FN", SELECTOR)
 }
 
+fn checkbox() -> String {
+    BOX.replace("MATCH_FN", MATCH)
+}
+
+/// "I agree" names a checkbox but matches the `label`. A click lands on the
+/// control either way; ticking has to find it.
+const BOX: &str = r#"(query) => {
+  const el = (MATCH_FN)(query, false).find(Boolean);
+  if (!el) return null;
+  if ('checked' in el) return el;
+  return el.control || el.querySelector('input[type=checkbox], input[type=radio]') || el;
+}"#;
+
+/// What a wait will take as a match, beyond the query itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Ready {
+    /// Not `disabled`. A query matches a button that is in the document, which
+    /// is not the same as one that can be pressed.
+    pub enabled: bool,
+}
+
 const DESCRIBE: &str = r#"(el) => {
   const r = el.getBoundingClientRect();
   const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
@@ -1802,6 +1823,30 @@ impl Page {
         }
     }
 
+    /// Polled rather than observed, so it sees a state that holds rather than
+    /// one that flickers.
+    pub async fn wait_until_true(&mut self, js: &str, within: Duration) -> Result<()> {
+        let deadline = Instant::now() + within;
+
+        loop {
+            // A throw is not truthy and not a fault: an expression reaching
+            // through something the page has not built yet raises until it has.
+            let said = self.evaluate(&format!("!!({js})")).await;
+
+            if said.map(|one| one.as_bool() == Some(true)).unwrap_or(false) {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    after: within,
+                    detail: format!("{js} was never true"),
+                });
+            }
+
+            tokio::time::sleep(POLL).await;
+        }
+    }
+
     pub async fn wait_for_load(&mut self, within: Duration) -> Result<()> {
         let deadline = SystemTime::now() + within;
 
@@ -2106,15 +2151,30 @@ impl Page {
         within: Duration,
         exact: bool,
     ) -> Result<(String, Option<Element>)> {
+        self.wait_until(query, or, gone, within, exact, Ready::default())
+            .await
+    }
+
+    pub async fn wait_until(
+        &mut self,
+        query: &str,
+        or: &[String],
+        gone: bool,
+        within: Duration,
+        exact: bool,
+        ready: Ready,
+    ) -> Result<(String, Option<Element>)> {
         let deadline = Instant::now() + within;
+        let counts = |one: &Element| !ready.enabled || one.enabled;
 
         loop {
             let found = self.find(query, Some(1), None, Some(exact)).await?;
-            let here = found.first().cloned();
+            let here = found.first().filter(|one| counts(one)).cloned();
 
             match (gone, &here) {
                 (false, Some(_)) => return Ok((query.to_string(), here)),
-                (true, None) => return Ok((query.to_string(), None)),
+                // Gone means gone, whatever was asked of a match that stayed.
+                (true, None) if found.is_empty() => return Ok((query.to_string(), None)),
                 _ => {}
             }
 
@@ -2123,6 +2183,7 @@ impl Page {
                     .find(other, Some(1), None, Some(exact))
                     .await?
                     .first()
+                    .filter(|one| counts(one))
                     .cloned()
                 {
                     return Ok((other.clone(), Some(one)));
@@ -2135,11 +2196,16 @@ impl Page {
                     false => format!("{query} (nor {})", or.join(", ")),
                 };
 
+                let wanted = match ready.enabled {
+                    true => " enabled",
+                    false => "",
+                };
+
                 return Err(Error::Timeout {
                     after: within,
                     detail: match gone {
                         true => format!("{waited} was still on the page"),
-                        false => format!("nothing matching {waited} appeared"),
+                        false => format!("nothing matching {waited} appeared{wanted}"),
                     },
                 });
             }
@@ -2349,6 +2415,90 @@ impl Page {
         .await?;
 
         self.type_text(text).await
+    }
+
+    /// Keyboard focus, without the click that would otherwise carry it: a
+    /// click on a menu opens it, and one on a submit sends the form.
+    pub async fn focus(&mut self, query: &str) -> Result<Element> {
+        let element = self.reach(query).await?;
+
+        self.evaluate(&format!(
+            r#"(() => {{
+                 const el = ({MATCH})({}, false).find(Boolean);
+                 if (!el) return 'gone';
+                 el.focus({{ preventScroll: true }});
+                 return document.activeElement === el ? 'ok' : 'refused';
+               }})()"#,
+            json!(query)
+        ))
+        .await
+        .and_then(|said| match said.as_str() {
+            // An element with no tabindex takes no focus, and saying so beats
+            // answering as though the keyboard reaches it.
+            Some("refused") => Err(Error::denied(format!("{query} will not take focus"))),
+            Some("gone") => Err(Error::denied(format!("{query} left the page"))),
+            _ => Ok(()),
+        })?;
+
+        Ok(element)
+    }
+
+    /// Tick a box, or untick it. Already in that state is not a click.
+    ///
+    /// Clicked rather than assigned: setting `checked` fires no `change`, so a
+    /// page that validates on one never learns the box was ticked.
+    pub async fn check(&mut self, query: &str, on: bool) -> Result<Element> {
+        let state = self
+            .evaluate(&format!(
+                r#"(() => {{
+                     const el = ({box})({});
+                     if (!el) return 'gone';
+                     if (!('checked' in el)) return 'not a box';
+                     if (el.disabled) return 'disabled';
+                     return el.checked ? 'on' : 'off';
+                   }})()"#,
+                json!(query),
+                box = checkbox()
+            ))
+            .await?;
+
+        match state.as_str() {
+            Some("gone") => return Err(Error::denied(format!("nothing matched {query}"))),
+            Some("not a box") => {
+                return Err(Error::denied(format!(
+                    "{query} is not a checkbox or a radio"
+                )));
+            }
+            Some("disabled") => return Err(Error::denied(format!("{query} is disabled"))),
+            _ => {}
+        }
+
+        let already = state.as_str() == Some("on");
+        let (element, at) = self.reachable(query).await?;
+
+        // A radio cannot be turned off by clicking it, so that is refused
+        // rather than clicked and silently left on.
+        if already && !on {
+            let radio = self
+                .evaluate(&format!(
+                    "((({box})({})) || {{}}).type === 'radio'",
+                    json!(query),
+                    box = checkbox()
+                ))
+                .await?;
+
+            if radio.as_bool() == Some(true) {
+                return Err(Error::denied(format!(
+                    "{query} is a radio; choose another in its group instead"
+                )));
+            }
+        }
+
+        if already != on {
+            self.click(at, Button::Left).await?;
+        }
+
+        Ok(element)
     }
 
     pub async fn options(&mut self, query: &str) -> Result<Vec<String>> {

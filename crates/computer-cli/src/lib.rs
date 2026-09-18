@@ -66,12 +66,24 @@ computer — a desktop in a box
   browser <box> click <query> [--double] [--button right] [--human] [--tab ID]
   browser <box> drag <query> <query> [--button right] [--human]
   browser <box> fill <query> <value>
+  browser <box> focus <query>  the keyboard, without the click that would
+                              otherwise carry it and fire the page's handlers
+  browser <box> check <query> | uncheck <query>
+                              tick a box or clear it. already in that state is
+                              not a click, so asking twice changes nothing
   browser <box> select <query> <option> | options <query>
   browser <box> upload <query> <file…> [--in-box]
                               hand files to a file input. a path is one out
                               here, read and written into the box first;
                               --in-box names paths already there
-  browser <box> wait [<query>] [--gone] [--or TEXT,TEXT] [--within MS] [--quiet MS]
+  browser <box> wait [<query>] [--gone] [--or TEXT,TEXT] [--within MS]
+                [--quiet MS] [--enabled] [--load] [--fn JS]
+                              --enabled waits for it to accept a press: a
+                              query matches a button that is in the document
+                              and disabled, which is where a form goes wrong.
+                              --load waits for the document first, and --fn
+                              for javascript to be truthy — a count, a URL,
+                              anything no flag here names
   browser <box> hover <query> [--human]
   browser <box> eval <expression> [--timeout MS] [--limit N]
   browser <box> screenshot [file] [--full] [--format png|jpeg] [--quality N]

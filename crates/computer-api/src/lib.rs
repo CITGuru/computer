@@ -351,6 +351,23 @@ pub enum OnElement {
         exact: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quiet_ms: Option<u64>,
+        /// Not disabled. A query matches a button that cannot be pressed.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        enabled: bool,
+        /// Wait for the document to finish loading.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        load: bool,
+        /// Javascript, waited on until it is truthy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<String>,
+    },
+    Focus {
+        query: String,
+    },
+    Check {
+        query: String,
+        /// Ticked, or cleared. Already in that state is not a click.
+        on: bool,
     },
     Hover {
         query: String,
@@ -1109,12 +1126,17 @@ mod tests {
             or: Vec::new(),
             exact: false,
             quiet_ms: None,
+            enabled: false,
+            load: false,
+            until: None,
         };
         let wire = serde_json::to_string(&plain).expect("serialises");
-        assert!(
-            !wire.contains("quiet_ms"),
-            "an older server sees nothing new: {wire}"
-        );
+        for added in ["quiet_ms", "enabled", "load", "until"] {
+            assert!(
+                !wire.contains(added),
+                "an older server sees nothing new: {wire}"
+            );
+        }
     }
 
     fn numbered(tag: &str, kind: Option<&str>, text: &str) -> Element {

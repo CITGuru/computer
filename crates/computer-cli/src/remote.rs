@@ -958,6 +958,11 @@ fn op_of(what: &computer_api::OnElement) -> &'static str {
         O::Upload { .. } => "upload",
         O::WaitFor { .. } => "wait",
         O::Hover { .. } => "hover",
+        O::Focus { .. } => "focus",
+        O::Check { on, .. } => match on {
+            true => "check",
+            false => "uncheck",
+        },
         O::Drag { .. } => "drag",
         O::History { .. } => "history",
         O::Scroll { .. } => "scroll",
@@ -1044,7 +1049,8 @@ const UPLOADS: &str = "/tmp/computer/uploads";
 
 const SETTLE_MS: u64 = 600;
 
-const VALUED: [&str; 12] = [
+const VALUED: [&str; 13] = [
+    "--fn",
     "--quality",
     "--scope",
     "--seed",
@@ -1065,8 +1071,9 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     let op = positional(
         &rest,
         1,
-        "read, snapshot, find, click, fill, select, options, upload, wait, hover, \
-         drag, eval, screenshot, tabs, switch, close, back, forward or reload",
+        "read, snapshot, find, click, fill, focus, check, uncheck, select, \
+         options, upload, wait, hover, drag, eval, screenshot, tabs, switch, \
+         close, back, forward or reload",
     )
     .map_err(|e| e.to_string())?;
 
@@ -1142,13 +1149,24 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
                 .to_string(),
         },
         "options" => OnElement::Options { query: query(2)? },
+        "focus" => OnElement::Focus { query: query(2)? },
+        "check" => OnElement::Check {
+            query: query(2)?,
+            on: true,
+        },
+        "uncheck" => OnElement::Check {
+            query: query(2)?,
+            on: false,
+        },
         "upload" => OnElement::Upload {
             query: query(2)?,
             paths: handed(client, id, args, &rest).await?,
         },
         "wait" => OnElement::WaitFor {
-            // Under --quiet the words are optional: the wait is for the page to settle.
-            query: match present(args, "--quiet") {
+            query: match present(args, "--quiet")
+                || present(args, "--load")
+                || present(args, "--fn")
+            {
                 true => query(2).unwrap_or_default(),
                 false => query(2)?,
             },
@@ -1165,6 +1183,9 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
                 .unwrap_or_default(),
             exact: present(args, "--exact"),
             quiet_ms: counted(args, "--quiet", "a number of milliseconds")?,
+            enabled: present(args, "--enabled"),
+            load: present(args, "--load"),
+            until: flag(args, "--fn").map(str::to_string),
         },
         "hover" => OnElement::Hover {
             query: query(2)?,
