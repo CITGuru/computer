@@ -164,6 +164,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_a_match_line_is_read_or_left_alone() {
+        let one = Match::parse("/etc/hosts:3:127.0.0.1 localhost").expect("a match");
+        assert_eq!(one.path, "/etc/hosts");
+        assert_eq!(one.line, 3);
+        assert_eq!(one.text, "127.0.0.1 localhost");
+
+        assert_eq!(
+            Match::parse("/tmp/a.txt:7:a:b:c")
+                .expect("colons in the text")
+                .text,
+            "a:b:c",
+            "only the first two colons are the shape; the rest is the line"
+        );
+
+        for odd in [
+            "grep: /root: Permission denied",
+            "",
+            "/tmp/a.txt:notanumber:x",
+        ] {
+            assert!(Match::parse(odd).is_none(), "{odd:?} is not a match");
+        }
+    }
+
+    #[test]
+    fn test_a_listing_line_is_read_or_left_alone() {
+        let file = DirEntry::parse("f\t20\tnote.txt").expect("a file");
+        assert_eq!(file.name, "note.txt");
+        assert_eq!(file.bytes, 20);
+        assert!(!file.dir);
+
+        assert!(DirEntry::parse("d\t4096\tcron.daily").expect("a dir").dir);
+        assert_eq!(
+            DirEntry::parse("f\t0\tone\ttwo")
+                .expect("a tab in the name")
+                .name,
+            "one\ttwo",
+            "a name may hold a tab, so only the first two fields are split off"
+        );
+
+        for odd in [
+            "find: '/nope': No such file or directory",
+            "",
+            "f\tnotanumber\tx",
+            "f\t1\t",
+        ] {
+            assert!(DirEntry::parse(odd).is_none(), "{odd:?} is not an entry");
+        }
+    }
+
+    #[test]
     fn test_a_press_takes_one_chord_or_several() {
         assert_eq!("ctrl+a".chords(), ["ctrl+a"]);
         assert_eq!("enter".to_string().chords(), ["enter"]);
@@ -340,6 +390,67 @@ impl<T: AsRef<str>, const N: usize> Keys for [T; N] {
     fn chords(self) -> Vec<String> {
         self.iter().map(|one| one.as_ref().to_string()).collect()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub dir: bool,
+    pub bytes: u64,
+}
+
+impl DirEntry {
+    /// A `find -printf '%y\t%s\t%f\n'` line. `None` for anything else, so a
+    /// warning on stderr does not become an entry.
+    pub fn parse(line: &str) -> Option<Self> {
+        let mut parts = line.splitn(3, '\t');
+        let kind = parts.next()?;
+        let bytes = parts.next()?.parse().ok()?;
+        let name = parts.next()?;
+
+        (!name.is_empty()).then(|| Self {
+            name: name.to_string(),
+            dir: kind == "d",
+            bytes,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Match {
+    pub path: String,
+    pub line: u32,
+    pub text: String,
+}
+
+impl Match {
+    /// A `grep -n` line: `path:line:text`. `None` for anything else, so a
+    /// permission warning on stderr does not become a match.
+    pub fn parse(line: &str) -> Option<Self> {
+        let (path, rest) = line.split_once(':')?;
+        let (number, text) = rest.split_once(':')?;
+
+        Some(Self {
+            path: path.to_string(),
+            line: number.parse().ok()?,
+            text: text.to_string(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Search {
+    pub pattern: String,
+    /// Where to look. A search of the whole filesystem answers in megabytes.
+    pub path: String,
+    /// Only files whose name matches, as `*.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ignore_case: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
 }
 
 /// How the pointer gets to a point: at once, eased along a line, or eased along a

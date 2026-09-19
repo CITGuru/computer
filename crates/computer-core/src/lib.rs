@@ -33,6 +33,10 @@ pub mod image;
 pub mod machine;
 pub mod microvm;
 pub mod motion;
+
+/// The most lines a search answers with. `grep -rn "the" /usr/share` is 96,912
+/// on a plain box.
+pub const MATCHES: usize = 200;
 pub mod profile;
 pub mod runtime;
 pub mod sandboxes;
@@ -80,7 +84,7 @@ pub use spec::Resolved;
 
 /// Aliased, not glob-imported: several of its names clash with this crate's own types.
 pub use computer_types as types;
-pub use computer_types::{Motion, Placement, Spec};
+pub use computer_types::{DirEntry, Match, Motion, Placement, Search, Spec};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -1139,6 +1143,119 @@ impl Computer {
     pub async fn read_file(&self, path: impl AsRef<Path>) -> Result<Vec<u8>> {
         self.touch();
         self.machine.read_file(&self.name, path.as_ref()).await
+    }
+
+    /// One directory, not a walk.
+    pub async fn list_dir(&self, path: impl AsRef<Path>) -> Result<Vec<DirEntry>> {
+        self.touch();
+
+        let at = path.as_ref().display().to_string();
+        let result = self
+            .exec(&[
+                "find".into(),
+                at.clone(),
+                "-maxdepth".into(),
+                "1".into(),
+                "-mindepth".into(),
+                "1".into(),
+                "-printf".into(),
+                // Tab separated, name last: a name may hold anything but a tab
+                // and a newline, and neither of the first two fields can.
+                "%y\t%s\t%f\n".into(),
+            ])
+            .await?;
+
+        if !result.ok() {
+            return Err(Error::invalid(format!(
+                "{at}: {}",
+                result.stderr_utf8().trim()
+            )));
+        }
+
+        Ok(result
+            .stdout_utf8()
+            .lines()
+            .filter_map(DirEntry::parse)
+            .collect())
+    }
+
+    /// Capped in the box, so the bytes never cross the wire.
+    pub async fn grep(&self, search: &Search) -> Result<Vec<Match>> {
+        self.touch();
+
+        let limit = search.limit.unwrap_or(MATCHES).clamp(1, MATCHES);
+        let mut argv = vec![
+            "grep".to_string(),
+            "-rn".to_string(),
+            // A binary that happens to hold the pattern is not a line anyone
+            // can read, and one line of it can be megabytes.
+            "--binary-files=without-match".to_string(),
+        ];
+
+        if search.ignore_case {
+            argv.push("-i".to_string());
+        }
+        if let Some(include) = &search.include {
+            argv.push(format!("--include={include}"));
+        }
+        argv.push("-e".to_string());
+        argv.push(search.pattern.clone());
+        argv.push(search.path.clone());
+
+        // One past the cap, so a caller can tell a result that filled it from
+        // one that happened to land on it.
+        let result = self.exec_shell(&argv, limit + 1).await?;
+
+        Ok(result.lines().filter_map(Match::parse).collect())
+    }
+
+    /// `*.log`, or a pattern with a slash matched against the whole path.
+    pub async fn glob(
+        &self,
+        pattern: &str,
+        path: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<String>> {
+        self.touch();
+
+        let limit = limit.unwrap_or(MATCHES).clamp(1, MATCHES);
+        let argv = vec![
+            "find".to_string(),
+            path.to_string(),
+            match pattern.contains('/') {
+                true => "-path".to_string(),
+                false => "-name".to_string(),
+            },
+            pattern.to_string(),
+        ];
+
+        let result = self.exec_shell(&argv, limit + 1).await?;
+
+        Ok(result
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+
+    /// Through a shell for the pipe: cutting out here would mean carrying
+    /// every line out of the box first, which is what the cap avoids.
+    async fn exec_shell(&self, argv: &[String], limit: usize) -> Result<String> {
+        let quoted = argv
+            .iter()
+            .map(|one| format!("'{}'", one.replace('\'', "'\\''")))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let result = self
+            .exec(&[
+                "sh".to_string(),
+                "-c".to_string(),
+                format!("{quoted} 2>/dev/null | head -n {limit}"),
+            ])
+            .await?;
+
+        Ok(result.stdout_utf8())
     }
 
     pub async fn upload(&self, from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
