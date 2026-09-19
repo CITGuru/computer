@@ -21,6 +21,7 @@ computer-client = { path = "../computer-client", version = "0.1.0" }
 computer-mcp = { path = "../computer-mcp", version = "0.1.0" }
 computer-server = { path = "../computer-server", version = "0.1.0" }
 computer-types = { path = "../computer-types", version = "0.1.0" }
+serde_json = "1"
 tokio = { version = "1", features = [
     "macros",
     "rt-multi-thread",

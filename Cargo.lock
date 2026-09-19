@@ -1058,6 +1058,7 @@ dependencies = [
  "computer-mcp",
  "computer-server",
  "computer-types",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
