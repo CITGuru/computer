@@ -151,4 +151,4 @@ case ":${PATH}:" in
     ;;
 esac
 
-echo "install: done. Try: computer up"
+echo "install: done. Try: computer new"
