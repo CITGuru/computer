@@ -1,12 +1,13 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, Arrange, BoxState, ElementResult, Evaluate, Find, ForkMode, ForkRequest,
-    Frame, Held, NodeQuery, OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, ScrollTo,
-    Shot, SnapshotOptions, Want, Where,
+    Action, ActionBatch, ActionResult, Arrange, AwaitWindow, BoxState, ElementResult, Evaluate,
+    ExecRequest, Find, ForkMode, ForkRequest, Frame, Held, NodeQuery, OnElement, OnNode, OpenIn,
+    Out, PageRead, PageShot, Picture, Reading, RecordOp, Rect, ScrollTo, Shot, SnapshotOptions,
+    Want, Where, WindowOp, WriteFile,
 };
 use computer_client::{Client, captured_image, frame_png};
-use computer_types::{Button, Desktop, Feature, Motion, Placement, Point, Search, Spec};
+use computer_types::{Button, Desktop, Feature, Motion, Placement, Point, Search, Selection, Spec};
 use serde_json::{Value, json};
 
 use crate::ui;
@@ -417,15 +418,105 @@ pub fn catalogue() -> Value {
             )
         ),
         tool(
-            "dropdown",
-            "List what a dropdown offers, or choose one of them. A native dropdown opens a menu \
-             the operating system draws, which no screenshot shows and no click can reach, so \
-             this is the only way to work one.",
+            "focus",
+            "Put the keyboard on an element without clicking it. A click on a menu opens it and \
+             a click on a submit sends the form, so clicking to focus brings the side effect \
+             too. Use this before `type_text`.",
+            with_page(json!({ "query": { "type": "string" } }), &["query"])
+        ),
+        tool(
+            "check",
+            "Tick a checkbox or a radio, or clear a checkbox. One that is already in that state \
+             is not clicked, so asking twice changes nothing — unlike `click_element`, which \
+             toggles and cannot be retried safely. A radio cannot be cleared; choose another in \
+             its group.",
             with_page(
                 json!({
                     "query": { "type": "string" },
-                    "op": { "type": "string", "enum": ["list", "select"] },
-                    "option": { "type": "string", "description": "Required for select." }
+                    "on": {
+                        "type": "boolean",
+                        "description": "Ticked. `false` clears a checkbox. True unless you say."
+                    }
+                }),
+                &["query"]
+            )
+        ),
+        tool(
+            "batch",
+            "Every step in one call. Each entry names a tool and carries that tool's own \
+             arguments, so anything here is what you would have called on its own. The box holds \
+             its screen for the whole run, which no sequence of separate calls can promise, and \
+             one picture comes back at the end rather than one a step. Use it wherever the steps \
+             are already known: filling a form, drawing, opening an app and waiting for its \
+             window, or reading a page and acting on what it said. A step that reads — evaluate, \
+             find, snapshot, read_page, screenshot, run_command, clipboard, tabs, windows — \
+             answers in the line for that step.",
+            with_frame(
+                json!({
+                    "actions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "The steps, run in order.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool": {
+                                    "type": "string",
+                                    "description": "click, move, drag, draw, scroll, type_text, \
+                                                    press_key, wait, wait_until_still, open_url, \
+                                                    open_app, click_element, fill_field, focus, \
+                                                    check, dropdown, upload_file, wait_for, \
+                                                    hover, drag_element, history, scroll_page, \
+                                                    evaluate, find, snapshot, read_page, \
+                                                    page_screenshot, screenshot, cursor, \
+                                                    windows, wait_for_window, window, tabs, \
+                                                    run_command, read_file, write_file, \
+                                                    clipboard, record or list_apps. `draw` takes \
+                                                    `through`, a list of {x, y}: one press \
+                                                    through every point and one release, which \
+                                                    is one stroke where a drag for each leg \
+                                                    would be several."
+                                },
+                                "arguments": {
+                                    "type": "object",
+                                    "description": "What that tool takes, less box_id."
+                                }
+                            },
+                            "required": ["tool"]
+                        }
+                    },
+                    "keep_going": {
+                        "type": "boolean",
+                        "description": "Run the rest after a step is refused. A form wants the \
+                                        default, where a later step does not run on the \
+                                        assumption an earlier one worked; a drawing wants this, \
+                                        where one refused stroke costs only that stroke."
+                    },
+                    "settle_ms": {
+                        "type": "integer",
+                        "description": "Wait this long after the last step, before the picture."
+                    }
+                }),
+                &["actions"]
+            )
+        ),
+        tool(
+            "dropdown",
+            "List what a dropdown offers, choose from it, or drop what is chosen. A native \
+             dropdown opens a menu the operating system draws, which no screenshot shows and no \
+             click can reach, so this is the only way to work one.",
+            with_page(
+                json!({
+                    "query": { "type": "string" },
+                    "op": { "type": "string", "enum": ["list", "select", "deselect"] },
+                    "options": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Matched by their text or their value. Required for \
+                                        select, where they become the whole selection; several \
+                                        only where the dropdown takes several. For deselect, \
+                                        the ones to drop, or none to drop every one."
+                    }
                 }),
                 &["query", "op"]
             )
@@ -467,6 +558,24 @@ pub fn catalogue() -> Value {
                                         \"unavailable\". Answers with which one matched, instead \
                                         of spending the whole timeout on a success the page has \
                                         already ruled out."
+                    },
+                    "enabled": {
+                        "type": "boolean",
+                        "description": "Wait for it to accept a press. A query matches a button \
+                                        that is present and disabled, which is where a form most \
+                                        often goes wrong."
+                    },
+                    "load": {
+                        "type": "boolean",
+                        "description": "Wait for the document to finish loading first."
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": "Javascript, waited on until it is truthy — for what no \
+                                        other field names: `document.querySelectorAll('.row')\
+                                        .length > 5`, `location.pathname === '/done'`. A throw \
+                                        counts as not yet, so reaching through something the \
+                                        page builds late is fine."
                     }
                 }),
                 &[]
@@ -1141,46 +1250,8 @@ pub async fn call(
                 },
             })
         }
-        "open_url" => {
-            act(
-                client,
-                arguments,
-                Action::OpenUrl {
-                    target: match arguments.get("target").and_then(Value::as_str) {
-                        None | Some("blank") => OpenIn::Blank,
-                        Some("current") => OpenIn::Current,
-                        Some(other) => {
-                            return Err(format!("target is blank or current, not {other:?}"));
-                        }
-                    },
-                    url: text(arguments, "url")?,
-                },
-                2500,
-            )
-            .await
-        }
-        "open_app" => {
-            let args = arguments
-                .get("args")
-                .and_then(Value::as_array)
-                .map(|args| {
-                    args.iter()
-                        .filter_map(|arg| arg.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            act(
-                client,
-                arguments,
-                Action::Launch {
-                    app: text(arguments, "app")?,
-                    args,
-                },
-                0,
-            )
-            .await
-        }
+        "open_url" => act(client, arguments, action_of(name, arguments)?, 2500).await,
+        "open_app" => act(client, arguments, action_of(name, arguments)?, 0).await,
         "tabs" => {
             let id = text(arguments, "box_id")?;
 
@@ -1499,55 +1570,34 @@ pub async fn call(
             }))
         }
         "click_element" => {
-            let double = flag(arguments, "double");
-            let what = OnElement::Click {
-                query: text(arguments, "query")?,
-                button: button(arguments),
-                double,
-                motion: motion(arguments)?,
-                seed: seed(arguments),
-            };
             element(
                 client,
                 arguments,
-                what,
-                match double {
+                on_element_of(name, arguments)?,
+                match flag(arguments, "double") {
                     true => "double clicked",
                     false => "clicked",
                 },
             )
             .await
         }
-        "fill_field" => {
-            let what = OnElement::Fill {
-                query: text(arguments, "query")?,
-                text: text(arguments, "text")?,
-            };
-            element(client, arguments, what, "filled").await
-        }
+        "fill_field" => element(client, arguments, on_element_of(name, arguments)?, "filled").await,
         "upload_file" => {
-            let paths = arguments
-                .get("paths")
-                .and_then(Value::as_array)
-                .map(|paths| {
-                    paths
-                        .iter()
-                        .filter_map(|p| p.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let what = OnElement::Upload {
-                query: text(arguments, "query")?,
-                paths,
-            };
-            element(client, arguments, what, "handed over").await
+            element(
+                client,
+                arguments,
+                on_element_of(name, arguments)?,
+                "handed over",
+            )
+            .await
         }
         "wait_for" => {
             let quiet_ms = arguments.get("quiet_ms").and_then(Value::as_u64);
-            let query = match quiet_ms {
-                Some(_) => text(arguments, "query").unwrap_or_default(),
-                None => text(arguments, "query")?,
+            let alone =
+                quiet_ms.is_some() || flag(arguments, "load") || arguments.get("until").is_some();
+            let query = match alone {
+                true => text(arguments, "query").unwrap_or_default(),
+                false => text(arguments, "query")?,
             };
             let did = waited(&query, quiet_ms);
             let what = OnElement::WaitFor {
@@ -1557,36 +1607,34 @@ pub async fn call(
                 or: strings(arguments, "or"),
                 exact: flag(arguments, "exact"),
                 quiet_ms,
+                enabled: flag(arguments, "enabled"),
+                load: flag(arguments, "load"),
+                until: arguments
+                    .get("until")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             };
             element(client, arguments, what, &did).await
         }
         "hover" => {
-            let what = OnElement::Hover {
-                query: text(arguments, "query")?,
-                motion: motion(arguments)?,
-                seed: seed(arguments),
-            };
-            element(client, arguments, what, "hovering over").await
+            element(
+                client,
+                arguments,
+                on_element_of(name, arguments)?,
+                "hovering over",
+            )
+            .await
         }
         "drag_element" => {
-            let what = OnElement::Drag {
-                from: text(arguments, "from")?,
-                to: text(arguments, "to")?,
-                button: button(arguments),
-                motion: motion(arguments)?,
-                seed: seed(arguments),
-            };
-            element(client, arguments, what, "dragged").await
+            element(
+                client,
+                arguments,
+                on_element_of(name, arguments)?,
+                "dragged",
+            )
+            .await
         }
-        "history" => {
-            let go = match text(arguments, "go")?.as_str() {
-                "back" => Where::Back,
-                "forward" => Where::Forward,
-                "reload" => Where::Reload,
-                other => return Err(format!("no such direction: {other}")),
-            };
-            element(client, arguments, OnElement::History { go }, "went").await
-        }
+        "history" => element(client, arguments, on_element_of(name, arguments)?, "went").await,
         "scroll_page" => {
             let to = match arguments.get("to").and_then(Value::as_str) {
                 Some("top") => ScrollTo::Top,
@@ -1611,18 +1659,50 @@ pub async fn call(
             };
             element(client, arguments, what, "scrolled").await
         }
+        "focus" => {
+            element(
+                client,
+                arguments,
+                on_element_of(name, arguments)?,
+                "focused",
+            )
+            .await
+        }
+        "check" => {
+            let on = arguments.get("on").and_then(Value::as_bool).unwrap_or(true);
+
+            element(
+                client,
+                arguments,
+                on_element_of(name, arguments)?,
+                if on { "ticked" } else { "cleared" },
+            )
+            .await
+        }
         "dropdown" => {
             let query = text(arguments, "query")?;
             let what = match text(arguments, "op")?.as_str() {
                 "list" => OnElement::Options { query },
-                "select" => OnElement::Choose {
-                    query,
-                    option: text(arguments, "option")?,
+                "select" => match words(arguments, "options") {
+                    named if named.is_empty() => return Err("select needs options".to_string()),
+                    named => OnElement::Choose {
+                        query,
+                        options: named,
+                        drop: false,
+                    },
                 },
-                other => return Err(format!("no such op: {other}; use list or select")),
+                "deselect" => OnElement::Choose {
+                    query,
+                    options: words(arguments, "options"),
+                    drop: true,
+                },
+                other => {
+                    return Err(format!("no such op: {other}; use list, select or deselect"));
+                }
             };
             element(client, arguments, what, "done").await
         }
+        "batch" => batched(client, arguments).await,
         "window" => window(client, arguments).await,
         "widget" => widget(client, arguments).await,
         "list_apps" => {
@@ -1633,99 +1713,12 @@ pub async fn call(
                 false => names.join(", "),
             }))
         }
-        "click" => {
-            let at = Some(point(arguments, "x", "y")?);
-            let button = button(arguments);
-            let motion = motion(arguments)?;
-            let seed = seed(arguments);
-            let action = if flag(arguments, "double") {
-                Action::DoubleClick {
-                    at,
-                    button,
-                    motion,
-                    seed,
-                }
-            } else {
-                Action::Click {
-                    at,
-                    button,
-                    held: held(arguments)?,
-                    motion,
-                    seed,
-                }
-            };
-            act(client, arguments, action, 600).await
-        }
-        "type_text" => {
-            act(
-                client,
-                arguments,
-                Action::Type {
-                    text: text(arguments, "text")?,
-                    delay_ms: arguments.get("delay_ms").and_then(Value::as_u64),
-                },
-                400,
-            )
-            .await
-        }
-        "press_key" => {
-            act(
-                client,
-                arguments,
-                Action::Press {
-                    chord: text(arguments, "chord")?,
-                    then: strings(arguments, "then"),
-                    held: strings(arguments, "held")
-                        .iter()
-                        .filter_map(|word| Held::named(word))
-                        .collect(),
-                },
-                400,
-            )
-            .await
-        }
-        "scroll" => {
-            let at = point(arguments, "x", "y")?;
-            let dy = number(arguments, "dy")? as i32;
-            let dx = arguments
-                .get("dx")
-                .and_then(Value::as_i64)
-                .unwrap_or_default() as i32;
-
-            act(client, arguments, Action::Scroll { at, dx, dy }, 400).await
-        }
-        "drag" => {
-            let from = point(arguments, "from_x", "from_y")?;
-            let to = point(arguments, "to_x", "to_y")?;
-            act(
-                client,
-                arguments,
-                Action::Drag {
-                    from,
-                    to,
-                    button: button(arguments),
-                    held: held(arguments)?,
-                    motion: motion(arguments)?,
-                    seed: seed(arguments),
-                },
-                400,
-            )
-            .await
-        }
-        "wait_until_still" => {
-            let ms = |name| arguments.get(name).and_then(Value::as_u64);
-
-            act(
-                client,
-                arguments,
-                Action::WaitStill {
-                    settle_ms: ms("settle_ms"),
-                    within_ms: ms("within_ms"),
-                },
-                0,
-            )
-            .await
-        }
+        "click" => act(client, arguments, action_of(name, arguments)?, 600).await,
+        "type_text" => act(client, arguments, action_of(name, arguments)?, 400).await,
+        "press_key" => act(client, arguments, action_of(name, arguments)?, 400).await,
+        "scroll" => act(client, arguments, action_of(name, arguments)?, 400).await,
+        "drag" => act(client, arguments, action_of(name, arguments)?, 400).await,
+        "wait_until_still" => act(client, arguments, action_of(name, arguments)?, 0).await,
         "evaluate" => {
             let id = text(arguments, "box_id")?;
             let what = Evaluate {
@@ -2391,6 +2384,534 @@ async fn screen_now(client: &Client, id: &str) -> Option<Vec<u8>> {
         .filter(|png| !png.is_empty())
 }
 
+/// Every step in one call: one round trip, and one hold of the screen, so
+/// nothing of anyone else's lands between the steps.
+async fn batched(client: &Client, arguments: &Value) -> Result<Answer, String> {
+    let id = text(arguments, "box_id")?;
+    let how = shots(arguments)?;
+
+    let Some(steps) = arguments.get("actions").and_then(Value::as_array) else {
+        return Err("actions is required and must be an array".to_string());
+    };
+    if steps.is_empty() {
+        return Err("a batch needs at least one action".to_string());
+    }
+
+    let mut actions = Vec::with_capacity(steps.len());
+    for (index, step) in steps.iter().enumerate() {
+        let tool = step
+            .get("tool")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("step {index} names no tool"))?;
+        let empty = json!({});
+        let with = step.get("arguments").unwrap_or(&empty);
+
+        actions.push(action_of(tool, with).map_err(|why| format!("step {index}, {tool}: {why}"))?);
+    }
+
+    let result = client
+        .act(
+            &id,
+            0,
+            &ActionBatch {
+                actions,
+                settle_ms: arguments.get("settle_ms").and_then(Value::as_u64),
+                want: match how.wanted() {
+                    true => vec![Want::Frame, Want::Cursor],
+                    false => vec![Want::Cursor],
+                },
+                have_frame: have(arguments),
+                keep_going: flag(arguments, "keep_going"),
+            },
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let said = steps
+        .iter()
+        .zip(&result.results)
+        .map(|(step, ran)| stepped(step, ran))
+        .chain(
+            result
+                .stopped_at
+                .filter(|at| at + 1 < steps.len())
+                .map(|at| format!("{} step(s) did not run", steps.len() - at - 1)),
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    match how.wanted() {
+        true => Ok(framed(&said, result.frame.as_ref())),
+        false => Ok(Answer::Text(said)),
+    }
+}
+
+/// One line a step, naming what it was and what it left.
+fn stepped(step: &Value, ran: &ActionResult) -> String {
+    let tool = step.get("tool").and_then(Value::as_str).unwrap_or("?");
+
+    if !ran.ok {
+        let why = ran
+            .error
+            .as_ref()
+            .map(|error| error.message.as_str())
+            .unwrap_or("refused");
+
+        return format!("{} {tool}: {why}", ran.index);
+    }
+
+    match &ran.out {
+        None => format!("{} {tool}: ok", ran.index),
+        Some(out) => format!("{} {tool}: {}", ran.index, saw(out)),
+    }
+}
+
+fn saw(out: &Out) -> String {
+    match out {
+        Out::Value(value) => match value.truncated {
+            true => format!("{} (cut)", value.json),
+            false => value.json.clone(),
+        },
+        Out::Elements(found) => match found.is_empty() {
+            true => "nothing matched".to_string(),
+            false => found
+                .iter()
+                .map(|one| one.brief(false))
+                .collect::<Vec<_>>()
+                .join("; "),
+        },
+        Out::Snapshot(taken) => format!("{} of {} controls", taken.elements.len(), taken.total),
+        Out::Text(read) => format!("{:?}, {} characters", read.title, read.text.len()),
+        Out::Picture(shot) => format!("{} bytes", shot.bytes),
+        Out::Frame(frame) => match frame.unchanged {
+            true => "the screen did not move".to_string(),
+            false => format!("frame {}", frame.hash.chars().take(12).collect::<String>()),
+        },
+        Out::At(at) => format!("{},{}", at.x, at.y),
+        Out::Windows(windows) => format!("{} window(s)", windows.len()),
+        Out::Window(window) => match window {
+            Some(window) => format!("{} {:?}", window.id, window.title),
+            None => "no window".to_string(),
+        },
+        Out::Tabs(tabs) => format!("{} tab(s)", tabs.len()),
+        Out::Ran(ran) => {
+            let said = match ran.stdout.trim().is_empty() {
+                true => ran.stderr.trim(),
+                false => ran.stdout.trim(),
+            };
+
+            format!("exit {}: {said}", ran.code)
+        }
+        Out::File(file) => format!("{} read", file.path),
+        Out::Clipboard(held) => format!("{:?}", held.text),
+        Out::Recording(state) => match (&state.recording, &state.path) {
+            (true, Some(path)) => format!("recording to {path}"),
+            (true, None) => "recording".to_string(),
+            (false, Some(path)) => format!("written to {path}"),
+            (false, None) => "not recording".to_string(),
+        },
+        Out::Apps(names) => names.join(", "),
+    }
+}
+
+/// A tool's arguments as the page op it names. One reader, so a tool and the
+/// same tool inside a batch never drift apart.
+fn on_element_of(tool: &str, arguments: &Value) -> Result<OnElement, String> {
+    Ok(match tool {
+        "click_element" => OnElement::Click {
+            query: text(arguments, "query")?,
+            button: button(arguments),
+            double: flag(arguments, "double"),
+            motion: motion(arguments)?,
+            seed: seed(arguments),
+        },
+        "fill_field" => OnElement::Fill {
+            query: text(arguments, "query")?,
+            text: text(arguments, "text")?,
+        },
+        "upload_file" => OnElement::Upload {
+            query: text(arguments, "query")?,
+            paths: words(arguments, "paths"),
+        },
+        "wait_for" => {
+            let quiet_ms = arguments.get("quiet_ms").and_then(Value::as_u64);
+            let alone =
+                quiet_ms.is_some() || flag(arguments, "load") || arguments.get("until").is_some();
+
+            OnElement::WaitFor {
+                query: match alone {
+                    true => text(arguments, "query").unwrap_or_default(),
+                    false => text(arguments, "query")?,
+                },
+                gone: flag(arguments, "gone"),
+                within_ms: arguments.get("within_ms").and_then(Value::as_u64),
+                or: strings(arguments, "or"),
+                exact: flag(arguments, "exact"),
+                quiet_ms,
+                enabled: flag(arguments, "enabled"),
+                load: flag(arguments, "load"),
+                until: arguments
+                    .get("until")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            }
+        }
+        "hover" => OnElement::Hover {
+            query: text(arguments, "query")?,
+            motion: motion(arguments)?,
+            seed: seed(arguments),
+        },
+        "drag_element" => OnElement::Drag {
+            from: text(arguments, "from")?,
+            to: text(arguments, "to")?,
+            button: button(arguments),
+            motion: motion(arguments)?,
+            seed: seed(arguments),
+        },
+        "history" => OnElement::History {
+            go: match text(arguments, "go")?.as_str() {
+                "back" => Where::Back,
+                "forward" => Where::Forward,
+                "reload" => Where::Reload,
+                other => return Err(format!("no such direction: {other}")),
+            },
+        },
+        "scroll_page" => {
+            let axis = |name| {
+                arguments
+                    .get(name)
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default() as i32
+            };
+
+            OnElement::Scroll {
+                query: arguments
+                    .get("query")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                to: match arguments.get("to").and_then(Value::as_str) {
+                    Some("top") => ScrollTo::Top,
+                    Some("bottom") => ScrollTo::Bottom,
+                    _ => ScrollTo::By,
+                },
+                dx: axis("dx"),
+                dy: axis("dy"),
+            }
+        }
+        "focus" => OnElement::Focus {
+            query: text(arguments, "query")?,
+        },
+        "check" => OnElement::Check {
+            query: text(arguments, "query")?,
+            on: arguments.get("on").and_then(Value::as_bool).unwrap_or(true),
+        },
+        "dropdown" => {
+            let query = text(arguments, "query")?;
+
+            match text(arguments, "op")?.as_str() {
+                "list" => OnElement::Options { query },
+                "select" => match words(arguments, "options") {
+                    named if named.is_empty() => return Err("select needs options".to_string()),
+                    named => OnElement::Choose {
+                        query,
+                        options: named,
+                        drop: false,
+                    },
+                },
+                "deselect" => OnElement::Choose {
+                    query,
+                    options: words(arguments, "options"),
+                    drop: true,
+                },
+                other => return Err(format!("no such op: {other}; use list, select or deselect")),
+            }
+        }
+        other => return Err(format!("{other} is not a page op")),
+    })
+}
+
+/// A batch step: the tool it names, with that tool's own arguments.
+fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
+    Ok(match tool {
+        "click" => {
+            let at = Some(point(arguments, "x", "y")?);
+
+            match flag(arguments, "double") {
+                true => Action::DoubleClick {
+                    at,
+                    button: button(arguments),
+                    motion: motion(arguments)?,
+                    seed: seed(arguments),
+                },
+                false => Action::Click {
+                    at,
+                    button: button(arguments),
+                    held: held(arguments)?,
+                    motion: motion(arguments)?,
+                    seed: seed(arguments),
+                },
+            }
+        }
+        "move" => Action::Move {
+            to: point(arguments, "x", "y")?,
+            motion: motion(arguments)?,
+            seed: seed(arguments),
+        },
+        "type_text" => Action::Type {
+            text: text(arguments, "text")?,
+            delay_ms: arguments.get("delay_ms").and_then(Value::as_u64),
+        },
+        "press_key" => Action::Press {
+            chord: text(arguments, "chord")?,
+            then: strings(arguments, "then"),
+            held: strings(arguments, "held")
+                .iter()
+                .filter_map(|word| Held::named(word))
+                .collect(),
+        },
+        "scroll" => Action::Scroll {
+            at: point(arguments, "x", "y")?,
+            dx: arguments
+                .get("dx")
+                .and_then(Value::as_i64)
+                .unwrap_or_default() as i32,
+            dy: number(arguments, "dy")? as i32,
+        },
+        "drag" => Action::Drag {
+            from: point(arguments, "from_x", "from_y")?,
+            to: point(arguments, "to_x", "to_y")?,
+            button: button(arguments),
+            held: held(arguments)?,
+            motion: motion(arguments)?,
+            seed: seed(arguments),
+        },
+        "draw" => Action::Path {
+            through: arguments
+                .get("through")
+                .and_then(Value::as_array)
+                .map(|points| {
+                    points
+                        .iter()
+                        .map(|one| point(one, "x", "y"))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            button: button(arguments),
+            held: held(arguments)?,
+            motion: motion(arguments)?,
+            seed: seed(arguments),
+        },
+        "wait" => Action::Wait {
+            ms: number(arguments, "ms")?.max(0) as u64,
+        },
+        "wait_until_still" => {
+            let ms = |name| arguments.get(name).and_then(Value::as_u64);
+
+            Action::WaitStill {
+                settle_ms: ms("settle_ms"),
+                within_ms: ms("within_ms"),
+            }
+        }
+        "open_url" => Action::OpenUrl {
+            target: match arguments.get("target").and_then(Value::as_str) {
+                None | Some("blank") => OpenIn::Blank,
+                Some("current") => OpenIn::Current,
+                Some(other) => return Err(format!("target is blank or current, not {other:?}")),
+            },
+            url: text(arguments, "url")?,
+        },
+        "open_app" => Action::Launch {
+            app: text(arguments, "app")?,
+            args: words(arguments, "args"),
+        },
+        "evaluate" => Action::Evaluate {
+            what: Evaluate {
+                expression: text(arguments, "expression")?,
+                timeout_ms: arguments.get("timeout_ms").and_then(Value::as_u64),
+                limit: arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|limit| limit as usize),
+            },
+        },
+        "find" => Action::Look {
+            what: Find {
+                query: text(arguments, "query").unwrap_or_default(),
+                limit: arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|limit| limit as usize),
+                scroll: arguments.get("scroll").and_then(Value::as_bool),
+                exact: arguments.get("exact").and_then(Value::as_bool),
+                role: arguments
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                tab: tab_of(arguments),
+            },
+        },
+        "snapshot" => Action::Snapshot {
+            what: SnapshotOptions {
+                scope: arguments
+                    .get("scope")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                limit: arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|limit| limit as usize),
+                tab: tab_of(arguments),
+                delta: flag(arguments, "delta"),
+                quiet_ms: arguments.get("quiet_ms").and_then(Value::as_u64),
+            },
+        },
+        "read_page" => Action::Read {
+            what: PageRead {
+                format: match arguments.get("format").and_then(Value::as_str) {
+                    Some("text") => Reading::Text,
+                    Some("raw") => Reading::Raw,
+                    _ => Reading::Markdown,
+                },
+                limit: arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|limit| limit as usize),
+                max_links: arguments
+                    .get("max_links")
+                    .and_then(Value::as_u64)
+                    .map(|links| links as usize),
+                tab: tab_of(arguments),
+            },
+        },
+        "page_screenshot" => Action::PageShot {
+            what: PageShot {
+                full: flag(arguments, "full"),
+                format: match arguments.get("format").and_then(Value::as_str) {
+                    Some("jpeg") => Some(Picture::Jpeg),
+                    Some("png") => Some(Picture::Png),
+                    _ => None,
+                },
+                quality: arguments
+                    .get("quality")
+                    .and_then(Value::as_u64)
+                    .map(|one| one as u32),
+                tab: tab_of(arguments),
+            },
+        },
+        "screenshot" => Action::Capture {
+            what: Shot {
+                window: arguments
+                    .get("window")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                region: None,
+                scale: arguments
+                    .get("scale")
+                    .and_then(Value::as_u64)
+                    .map(|one| one as u32),
+                pointer: flag(arguments, "pointer"),
+                tab: tab_of(arguments),
+            },
+        },
+        "cursor" => Action::Cursor,
+        "windows" => Action::Windows {
+            active: flag(arguments, "active"),
+        },
+        "wait_for_window" => Action::AwaitWindow {
+            what: AwaitWindow {
+                class: text(arguments, "class")?,
+                within_ms: arguments.get("within_ms").and_then(Value::as_u64),
+            },
+        },
+        "window" => Action::OnWindow {
+            window: text(arguments, "window")?,
+            what: match text(arguments, "op")?.as_str() {
+                "focus" => WindowOp::Focus,
+                "close" => WindowOp::Close,
+                "max" => WindowOp::Arrange {
+                    how: Arrange::Maximise,
+                },
+                "min" => WindowOp::Arrange {
+                    how: Arrange::Minimise,
+                },
+                "restore" => WindowOp::Arrange {
+                    how: Arrange::Restore,
+                },
+                "move" => WindowOp::Arrange {
+                    how: Arrange::At {
+                        to: point(arguments, "x", "y")?,
+                    },
+                },
+                "size" => WindowOp::Arrange {
+                    how: Arrange::Size {
+                        width: number(arguments, "width")?.max(1) as u32,
+                        height: number(arguments, "height")?.max(1) as u32,
+                    },
+                },
+                other => return Err(format!("no such window op: {other}")),
+            },
+        },
+        "tabs" => match arguments.get("tab").and_then(Value::as_str) {
+            Some(tab) => Action::OnTab {
+                tab: tab.to_string(),
+                close: text(arguments, "op").as_deref() == Ok("close"),
+            },
+            None => Action::Tabs,
+        },
+        "run_command" => Action::Exec {
+            what: ExecRequest {
+                argv: words(arguments, "argv"),
+                timeout_ms: arguments.get("timeout_ms").and_then(Value::as_u64),
+            },
+        },
+        "read_file" => Action::ReadFile {
+            path: text(arguments, "path")?,
+        },
+        "write_file" => Action::WriteFile {
+            what: WriteFile {
+                path: text(arguments, "path")?,
+                contents_base64: text(arguments, "contents_base64")?,
+            },
+        },
+        "clipboard" => Action::Clipboard {
+            selection: match arguments.get("selection").and_then(Value::as_str) {
+                Some("primary") => Selection::Primary,
+                _ => Selection::Clipboard,
+            },
+            text: arguments
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        },
+        "record" => Action::Record {
+            what: match text(arguments, "op")?.as_str() {
+                "start" => RecordOp::Start {
+                    fps: arguments
+                        .get("fps")
+                        .and_then(Value::as_u64)
+                        .map(|fps| fps as u32),
+                },
+                "stop" => RecordOp::Stop,
+                "status" => RecordOp::Status,
+                other => return Err(format!("no such record op: {other}")),
+            },
+        },
+        "list_apps" => Action::Apps,
+        page => Action::OnPage {
+            what: on_element_of(page, arguments)?,
+        },
+    })
+}
+
+fn tab_of(arguments: &Value) -> Option<String> {
+    arguments
+        .get("tab")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 async fn act(
     client: &Client,
     arguments: &Value,
@@ -2413,6 +2934,7 @@ async fn act(
                     false => vec![Want::Cursor],
                 },
                 have_frame: have(arguments),
+                keep_going: false,
             },
             None,
         )
@@ -2499,6 +3021,19 @@ fn framing(arguments: &Value) -> Result<Shot, String> {
             .unwrap_or_default(),
         tab: named("tab"),
     })
+}
+
+fn words(arguments: &Value, name: &str) -> Vec<String> {
+    arguments
+        .get(name)
+        .and_then(Value::as_array)
+        .map(|listed| {
+            listed
+                .iter()
+                .filter_map(|one| one.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn text(arguments: &Value, name: &str) -> Result<String, String> {

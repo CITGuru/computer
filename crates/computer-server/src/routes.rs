@@ -283,18 +283,30 @@ async fn actions(
 
     for (index, action) in batch.actions.iter().enumerate() {
         let outcome = run(
-            desktop,
-            target.as_screen(),
+            &mut Doing {
+                state: &state,
+                id: &id,
+                number: screen,
+                entry: &entry,
+                desktop,
+                screen: target.as_screen(),
+                spec: &entry.spec,
+                browser: browser.as_ref(),
+                page: &mut page,
+                tabs: &mut tabs,
+            },
             action,
-            &entry.spec,
-            browser.as_ref(),
-            &mut page,
-            &mut tabs,
         )
         .await;
 
         match (&outcome, action) {
-            (Ok(Some(window)), Action::Launch { app, args }) => {
+            (
+                Ok(Did {
+                    window: Some(window),
+                    ..
+                }),
+                Action::Launch { app, args },
+            ) => {
                 state
                     .record(
                         &id,
@@ -325,12 +337,13 @@ async fn actions(
         };
 
         match outcome {
-            Ok(window) => {
-                windows.extend(window);
+            Ok(did) => {
+                windows.extend(did.window);
                 results.push(ActionResult {
                     index,
                     ok: true,
                     error: None,
+                    out: did.out,
                 })
             }
             Err(error) => {
@@ -339,9 +352,15 @@ async fn actions(
                     index,
                     ok: false,
                     error: Some(error.body),
+                    out: None,
                 });
-                stopped_at = Some(index);
-                break;
+
+                // Only where it did stop: with `keep_going` the step was
+                // refused and the rest still ran.
+                if !batch.keep_going {
+                    stopped_at = Some(index);
+                    break;
+                }
             }
         }
     }
@@ -386,15 +405,304 @@ async fn actions(
     )
 }
 
-async fn run(
-    desktop: &dyn EngineDesktop,
-    screen: Option<&computer::Screen>,
-    action: &Action,
-    spec: &Spec,
-    browser: Option<&computer::Devtools>,
-    page: &mut Option<computer::Page>,
-    tabs: &mut Vec<Tab>,
-) -> ApiResult<Option<Window>> {
+/// What one step leaves behind: a window a launch drew, and what a read saw.
+#[derive(Default)]
+struct Did {
+    window: Option<Window>,
+    out: Option<Out>,
+}
+
+impl Did {
+    fn read(out: Out) -> Self {
+        Self {
+            window: None,
+            out: Some(out),
+        }
+    }
+}
+
+/// Everything a step may reach. A batch holds the screen for its whole length,
+/// so a step that goes outside the screen still belongs to the same box.
+struct Doing<'a> {
+    state: &'a AppState,
+    id: &'a str,
+    number: u32,
+    entry: &'a Entry,
+    desktop: &'a dyn EngineDesktop,
+    screen: Option<&'a computer::Screen>,
+    spec: &'a Spec,
+    browser: Option<&'a computer::Devtools>,
+    page: &'a mut Option<computer::Page>,
+    tabs: &'a mut Vec<Tab>,
+}
+
+impl Doing<'_> {
+    fn held(&self, cannot: &str) -> ApiResult<&computer::Screen> {
+        self.screen
+            .ok_or_else(|| ApiError::bad_request(format!("this screen {cannot}")))
+    }
+}
+
+/// The steps that read, and the ones that reach past the screen. Each answers
+/// with what its own endpoint would.
+async fn reaching(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
+    let out = match action {
+        Action::Evaluate { what } => {
+            let mut page = page_for(doing.state, doing.id, None).await?;
+            let within =
+                Duration::from_millis(what.timeout_ms.unwrap_or(EVALUATE_MS)).min(MAX_PAUSE);
+            let value = page.evaluate_within(&what.expression, Some(within)).await?;
+
+            let json = serde_json::to_string(&value).map_err(|error| {
+                ApiError::internal(format!("the answer would not serialise: {error}"))
+            })?;
+            let limit = what.limit.unwrap_or(EVALUATED).clamp(1, EVALUATED);
+
+            Out::Value(Evaluated {
+                truncated: json.chars().count() > limit,
+                json: json.chars().take(limit).collect(),
+            })
+        }
+        Action::Look { what } => {
+            let mut page = page_for(doing.state, doing.id, what.tab.as_deref()).await?;
+            let query = match what.role.as_deref() {
+                Some(role) => computer::cdp::selector_for(role)
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!(
+                            "no such role: {role}. This server knows {}",
+                            computer::cdp::ROLES
+                        ))
+                    })?
+                    .to_string(),
+                None => what.query.clone(),
+            };
+
+            let found = page
+                .find(
+                    &query,
+                    Some(what.limit.unwrap_or(FOUND).clamp(1, FOUND)),
+                    what.scroll,
+                    what.exact,
+                )
+                .await?;
+
+            Out::Elements(found.into_iter().map(element_out).collect())
+        }
+        Action::Snapshot { what } => {
+            let mut page = page_for(doing.state, doing.id, what.tab.as_deref()).await?;
+
+            if let Some(quiet) = what.quiet_ms {
+                let quiet = Duration::from_millis(quiet).min(MAX_WAIT);
+                page.quiet(quiet, Duration::from_millis(WAIT_MS).max(quiet))
+                    .await?;
+            }
+
+            let limit = Some(what.limit.unwrap_or(SNAPSHOT).clamp(1, SNAPSHOT));
+            let taken = match what.delta {
+                true => page.snapshot_delta(what.scope.as_deref(), limit).await?,
+                false => page.snapshot(what.scope.as_deref(), limit).await?,
+            };
+
+            Out::Snapshot(Box::new(snapshot_out(taken)))
+        }
+        Action::Read { what } => {
+            let mut page = page_for(doing.state, doing.id, what.tab.as_deref()).await?;
+            Out::Text(Box::new(read_out(&mut page, what).await?))
+        }
+        Action::PageShot { what } => {
+            Out::Picture(captured_page(doing.state, doing.id, what).await?)
+        }
+        Action::Capture { what } => {
+            if let Some(tab) = &what.tab {
+                named(doing.state, doing.id, tab)
+                    .await?
+                    .bring_to_front()
+                    .await?;
+                tokio::time::sleep(RAISE).await;
+            }
+
+            let png = match what.is_whole() {
+                true => doing.desktop.screenshot().await?,
+                false => {
+                    doing
+                        .held("cannot be captured in part")?
+                        .capture(&shot_in(what))
+                        .await?
+                }
+            };
+
+            Out::Frame(recorded(doing.state, doing.id, Actor::Agent, doing.number, png, None).await)
+        }
+        Action::Cursor => Out::At(doing.desktop.cursor().await?),
+        Action::Windows { active } => {
+            let held = doing.held("holds no windows")?;
+
+            match active {
+                true => Out::Window(held.active_window().await?),
+                false => Out::Windows(held.windows().await?.into_iter().collect()),
+            }
+        }
+        Action::AwaitWindow { what } => {
+            let held = doing.held("holds no windows")?;
+            let within = Duration::from_millis(what.within_ms.unwrap_or(computer::apps::READY_MS));
+
+            Out::Window(Some(held.wait_for_window(&what.class, within).await?))
+        }
+        Action::OnWindow { window, what } => {
+            let held = doing.held("holds no windows")?;
+
+            match what {
+                WindowOp::Focus => held.focus(window).await?,
+                WindowOp::Close => held.close_window(window).await?,
+                WindowOp::Arrange { how } => {
+                    return Ok(Did::read(Out::Window(Some(
+                        held.arrange(window, *how).await?,
+                    ))));
+                }
+            }
+
+            Out::Window(held.active_window().await?)
+        }
+        Action::Tabs => Out::Tabs(listed_tabs(doing.state, doing.id).await?),
+        Action::OnTab { tab, close } => {
+            match close {
+                true => debugger(doing.state, doing.id).await?.close(tab).await?,
+                false => {
+                    named(doing.state, doing.id, tab)
+                        .await?
+                        .bring_to_front()
+                        .await?
+                }
+            }
+
+            Out::Tabs(listed_tabs(doing.state, doing.id).await?)
+        }
+        Action::Exec { what } => {
+            if what.argv.is_empty() {
+                return Err(ApiError::bad_request("argv is empty"));
+            }
+
+            let ran = match what.timeout_ms {
+                Some(ms) => {
+                    doing
+                        .entry
+                        .computer
+                        .exec_within(&what.argv, Duration::from_millis(ms).min(MAX_EXEC))
+                        .await?
+                }
+                None => doing.entry.computer.exec(&what.argv).await?,
+            };
+
+            doing
+                .state
+                .record(
+                    doing.id,
+                    Actor::Agent,
+                    TraceEvent::Executed {
+                        argv: what.argv.clone(),
+                        code: ran.code,
+                        timed_out: ran.timed_out,
+                    },
+                )
+                .await;
+
+            Out::Ran(ExecResponse {
+                code: ran.code,
+                stdout: ran.stdout_utf8(),
+                stderr: ran.stderr_utf8(),
+                timed_out: ran.timed_out,
+            })
+        }
+        Action::ReadFile { path } => {
+            let bytes = doing.entry.computer.read_file(path).await?;
+
+            doing
+                .state
+                .record(
+                    doing.id,
+                    Actor::Agent,
+                    TraceEvent::FileRead {
+                        path: path.clone(),
+                        bytes: bytes.len(),
+                    },
+                )
+                .await;
+
+            Out::File(ReadFile {
+                path: path.clone(),
+                contents_base64: BASE64.encode(bytes),
+            })
+        }
+        Action::WriteFile { what } => {
+            let bytes = BASE64
+                .decode(what.contents_base64.as_bytes())
+                .map_err(|error| {
+                    ApiError::bad_request(format!("contents_base64 is not base64: {error}"))
+                })?;
+
+            doing.entry.computer.write_file(&what.path, &bytes).await?;
+            doing
+                .state
+                .record(
+                    doing.id,
+                    Actor::Agent,
+                    TraceEvent::FileWritten {
+                        path: what.path.clone(),
+                        bytes: bytes.len(),
+                    },
+                )
+                .await;
+
+            return Ok(Did::default());
+        }
+        Action::Clipboard { selection, text } => {
+            let held = doing.held("has no clipboard")?;
+
+            match text {
+                Some(text) => {
+                    held.set_selection(*selection, text).await?;
+                    return Ok(Did::default());
+                }
+                None => Out::Clipboard(ClipboardView {
+                    text: held.selection(*selection).await?,
+                }),
+            }
+        }
+        Action::Record { what } => {
+            let held = doing.held("cannot be recorded")?;
+
+            let (recording, path) = match what {
+                RecordOp::Start { fps } => {
+                    if let Some(fps) = fps
+                        && !(1..=60).contains(fps)
+                    {
+                        return Err(ApiError::bad_request("fps must be between 1 and 60"));
+                    }
+
+                    (true, Some(held.start_recording(*fps).await?))
+                }
+                RecordOp::Stop => (false, Some(held.stop_recording().await?)),
+                RecordOp::Status => {
+                    let path = held.recording().await?;
+                    (path.is_some(), path)
+                }
+            };
+
+            Out::Recording(RecordingView { recording, path })
+        }
+        Action::Apps => Out::Apps(computer::apps::builtin().keys().cloned().collect()),
+        _ => return Err(ApiError::internal("this step has no runner")),
+    };
+
+    Ok(Did::read(out))
+}
+
+async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
+    let desktop = doing.desktop;
+    let screen = doing.screen;
+    let spec = doing.spec;
+    let browser = doing.browser;
+
     match action {
         Action::Move { to, motion, seed } => match motion.is_instant() {
             true => desktop.move_to(*to).await?,
@@ -454,6 +762,34 @@ async fn run(
                     .await?
             }
         },
+        Action::Path {
+            through,
+            button,
+            held,
+            motion,
+            seed,
+        } => {
+            let [first, rest @ ..] = through.as_slice() else {
+                return Err(ApiError::bad_request("a path needs at least one point"));
+            };
+            if rest.is_empty() {
+                return Err(ApiError::bad_request("a path needs somewhere to go"));
+            }
+
+            let seed = seed.unwrap_or(0);
+            approach(desktop, spec, *first, *motion, Some(seed)).await?;
+
+            // One list, so the press and the release bracket every leg: a
+            // drag_along for each would lift the button at every corner.
+            let mut steps = Vec::new();
+            let mut at = *first;
+            for (leg, to) in rest.iter().enumerate() {
+                steps.extend(path(at, *to, *motion, seed.wrapping_add(leg as u64 + 1)));
+                at = *to;
+            }
+
+            desktop.drag_along(*first, &steps, *button, held).await?
+        }
         Action::Type { text, delay_ms } => {
             let pace = delay_ms.map(|ms| Duration::from_millis(ms).min(MAX_PACE));
             desktop.type_text(text, pace).await?
@@ -465,7 +801,7 @@ async fn run(
         }
         Action::Scroll { at, dx, dy } => desktop.scroll(*at, Delta { dx: *dx, dy: *dy }).await?,
         Action::OpenUrl { url, target } => {
-            *page = None;
+            *doing.page = None;
 
             match (browser, target) {
                 (Some(browser), OpenIn::Blank) => {
@@ -474,7 +810,7 @@ async fn run(
                     // `PUT /json/new` does not raise it.
                     fresh.bring_to_front().await?;
 
-                    tabs.push(tab_out(&opened, true));
+                    doing.tabs.push(tab_out(&opened, true));
 
                     let _ = browser.tidy(TABS).await;
                 }
@@ -485,7 +821,7 @@ async fn run(
                     };
                     showing.navigate(url).await?;
 
-                    tabs.push(tab_out(showing.target(), true));
+                    doing.tabs.push(tab_out(showing.target(), true));
                 }
                 (None, _) => {
                     let screen = screen.ok_or_else(|| {
@@ -506,14 +842,15 @@ async fn run(
             desktop.wait_until_still(settle, within).await?
         }
         Action::OnPage { what } => {
-            if page.is_none() {
+            if doing.page.is_none() {
                 let browser = browser
                     .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
 
-                *page = browser.visible_page().await?;
+                *doing.page = browser.visible_page().await?;
             }
 
-            let page = page
+            let page = doing
+                .page
                 .as_mut()
                 .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
 
@@ -548,11 +885,15 @@ async fn run(
                 })
                 .await?;
 
-            return Ok(Some(window));
+            return Ok(Did {
+                window: Some(window),
+                out: None,
+            });
         }
+        other => return reaching(doing, other).await,
     }
 
-    Ok(None)
+    Ok(Did::default())
 }
 
 #[derive(Debug, Deserialize)]
@@ -1415,13 +1756,19 @@ async fn replay_onto(
                 let acted = match target {
                     Ok(target) => {
                         run(
-                            target.as_desktop(),
-                            target.as_screen(),
+                            &mut Doing {
+                                state,
+                                id,
+                                number: *screen,
+                                entry,
+                                desktop: target.as_desktop(),
+                                screen: target.as_screen(),
+                                spec: &entry.spec,
+                                browser: None,
+                                page: &mut None,
+                                tabs: &mut Vec::new(),
+                            },
                             action,
-                            &entry.spec,
-                            None,
-                            &mut None,
-                            &mut Vec::new(),
                         )
                         .await
                     }
@@ -1429,7 +1776,13 @@ async fn replay_onto(
                 };
 
                 match (&acted, action) {
-                    (Ok(Some(window)), Action::Launch { app, args }) => {
+                    (
+                        Ok(Did {
+                            window: Some(window),
+                            ..
+                        }),
+                        Action::Launch { app, args },
+                    ) => {
                         state
                             .record(
                                 id,
@@ -1564,7 +1917,22 @@ async fn read_page(
 ) -> ApiResult<Json<PageText>> {
     let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
 
-    let format = match query.format.unwrap_or_default() {
+    Ok(Json(
+        read_out(
+            &mut page,
+            &PageRead {
+                format: query.format.unwrap_or_default(),
+                limit: query.limit,
+                max_links: query.max_links,
+                tab: query.tab,
+            },
+        )
+        .await?,
+    ))
+}
+
+async fn read_out(page: &mut computer::Page, what: &PageRead) -> ApiResult<PageText> {
+    let format = match what.format {
         Reading::Markdown => computer::Reading::Markdown,
         Reading::Text => computer::Reading::Text,
         Reading::Raw => computer::Reading::Raw,
@@ -1573,12 +1941,12 @@ async fn read_page(
     let read = page
         .read(
             format,
-            Some(query.limit.unwrap_or(PAGE_TEXT).clamp(1, PAGE_TEXT)),
-            Some(query.max_links.unwrap_or(LINKS).clamp(0, LINKS)),
+            Some(what.limit.unwrap_or(PAGE_TEXT).clamp(1, PAGE_TEXT)),
+            Some(what.max_links.unwrap_or(LINKS).clamp(0, LINKS)),
         )
         .await?;
 
-    Ok(Json(PageText {
+    Ok(PageText {
         url: read.url,
         title: read.title,
         text: read.text,
@@ -1591,7 +1959,7 @@ async fn read_page(
                 href: link.href,
             })
             .collect(),
-    }))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1810,10 +2178,22 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             options: page.options(&query).await?,
             ..ElementResult::default()
         },
-        OnElement::Choose { query, option } => {
-            page.choose(&query, &option).await?;
-            ElementResult::default()
-        }
+        OnElement::Focus { query } => ElementResult {
+            element: Some(element_out(page.focus(&query).await?)),
+            ..ElementResult::default()
+        },
+        OnElement::Check { query, on } => ElementResult {
+            element: Some(element_out(page.check(&query, on).await?)),
+            ..ElementResult::default()
+        },
+        OnElement::Choose {
+            query,
+            options,
+            drop,
+        } => ElementResult {
+            options: page.choose(&query, &options, drop).await?,
+            ..ElementResult::default()
+        },
         OnElement::Upload { query, paths } => {
             page.upload(&query, &paths).await?;
             ElementResult::default()
@@ -1825,19 +2205,44 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             or,
             exact,
             quiet_ms,
+            enabled,
+            load,
+            until,
         } => {
-            if query.is_empty() && quiet_ms.is_none() {
-                return Err(ApiError::bad_request("a wait needs a query or quiet_ms"));
+            if query.is_empty() && quiet_ms.is_none() && !load && until.is_none() {
+                return Err(ApiError::bad_request(
+                    "a wait needs a query, quiet_ms, load or until",
+                ));
             }
 
             let within = Duration::from_millis(within_ms.unwrap_or(WAIT_MS)).min(MAX_WAIT);
             let started = Instant::now();
             let mut result = ElementResult::default();
 
+            // First: a query run against a document still loading is asked of
+            // a page that is not there yet.
+            if load {
+                page.wait_for_load(within).await?;
+            }
+
             if !query.is_empty() {
-                let (matched, found) = page.wait_for_any(&query, &or, gone, within, exact).await?;
+                let (matched, found) = page
+                    .wait_until(
+                        &query,
+                        &or,
+                        gone,
+                        within,
+                        exact,
+                        computer::cdp::Ready { enabled },
+                    )
+                    .await?;
                 result.element = found.map(element_out);
                 result.matched = Some(matched);
+            }
+
+            if let Some(until) = &until {
+                let left = within.saturating_sub(started.elapsed());
+                page.wait_until_true(until, left).await?;
             }
 
             // One window for both: the quiet is what the query waited for, landing.
@@ -1936,6 +2341,10 @@ async fn page_screenshot(
     ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<PageShot>,
 ) -> ApiResult<Json<Captured>> {
+    Ok(Json(captured_page(&state, &id, &body).await?))
+}
+
+async fn captured_page(state: &AppState, id: &str, body: &PageShot) -> ApiResult<Captured> {
     if let Some(quality) = body.quality
         && !(1..=100).contains(&quality)
     {
@@ -1957,12 +2366,12 @@ async fn page_screenshot(
         quality: body.quality.unwrap_or(computer::cdp::JPEG_QUALITY),
     };
 
-    let mut page = page_for(&state, &id, body.tab.as_deref()).await?;
+    let mut page = page_for(state, id, body.tab.as_deref()).await?;
     let image = page.capture(&shot).await?;
 
     state
         .record(
-            &id,
+            id,
             Actor::Agent,
             TraceEvent::PageCaptured {
                 full: body.full,
@@ -1971,11 +2380,11 @@ async fn page_screenshot(
         )
         .await;
 
-    Ok(Json(Captured {
+    Ok(Captured {
         format,
         bytes: image.len(),
         image_base64: BASE64.encode(&image),
-    }))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -1988,21 +2397,23 @@ async fn list_tabs(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<Vec<Tab>>> {
-    let browser = debugger(&state, &id).await?;
+    Ok(Json(listed_tabs(&state, &id).await?))
+}
+
+async fn listed_tabs(state: &AppState, id: &str) -> ApiResult<Vec<Tab>> {
+    let browser = debugger(state, id).await?;
 
     let showing = match browser.visible_page().await {
         Ok(Some(page)) => Some(page.target().id.clone()),
         _ => None,
     };
 
-    let tabs = browser
+    Ok(browser
         .pages()
         .await?
         .iter()
         .map(|target| tab_out(target, showing.as_deref() == Some(target.id.as_str())))
-        .collect();
-
-    Ok(Json(tabs))
+        .collect())
 }
 
 async fn focus_tab(

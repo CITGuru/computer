@@ -109,6 +109,19 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         held: Vec<Held>,
     },
+    /// One press, through every point, one release. A drag for each leg draws
+    /// that many strokes; this draws one.
+    Path {
+        through: Vec<Point>,
+        #[serde(default)]
+        button: Button,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        held: Vec<Held>,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
+    },
     /// In notches: positive `dy` down, positive `dx` right.
     Scroll {
         at: Point,
@@ -144,6 +157,121 @@ pub enum Action {
         #[serde(default)]
         args: Vec<String>,
     },
+    Evaluate {
+        what: Evaluate,
+    },
+    Look {
+        what: Find,
+    },
+    Snapshot {
+        what: SnapshotOptions,
+    },
+    Read {
+        what: PageRead,
+    },
+    PageShot {
+        what: PageShot,
+    },
+    Capture {
+        what: Shot,
+    },
+    Cursor,
+    Windows {
+        /// Only the one the keyboard reaches.
+        #[serde(default)]
+        active: bool,
+    },
+    AwaitWindow {
+        what: AwaitWindow,
+    },
+    OnWindow {
+        window: String,
+        what: WindowOp,
+    },
+    Tabs,
+    OnTab {
+        tab: String,
+        #[serde(default)]
+        close: bool,
+    },
+    Exec {
+        what: ExecRequest,
+    },
+    ReadFile {
+        path: String,
+    },
+    WriteFile {
+        what: WriteFile,
+    },
+    /// Reads the selection, or sets it when `text` is given.
+    Clipboard {
+        #[serde(default)]
+        selection: Selection,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    Record {
+        what: RecordOp,
+    },
+    Apps,
+}
+
+/// What a reading step answers with. Typed rather than free JSON, so this
+/// crate stays a contract and needs no JSON library of its own.
+// Adjacently tagged: an internal tag cannot carry a variant that holds a
+// sequence, and half of these are lists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "is", content = "saw", rename_all = "snake_case")]
+pub enum Out {
+    Value(Evaluated),
+    Elements(Vec<Element>),
+    Snapshot(Box<Snapshot>),
+    Text(Box<PageText>),
+    Picture(Captured),
+    /// The desktop, which answers with a hash so an unchanged screen costs
+    /// nothing; a page capture answers with the bytes every time.
+    Frame(Frame),
+    At(Point),
+    Windows(Vec<Window>),
+    Window(Option<Window>),
+    Tabs(Vec<Tab>),
+    Ran(ExecResponse),
+    File(ReadFile),
+    Clipboard(ClipboardView),
+    Recording(RecordingView),
+    Apps(Vec<String>),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PageRead {
+    #[serde(default)]
+    pub format: Reading,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_links: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "do", rename_all = "snake_case", deny_unknown_fields)]
+pub enum WindowOp {
+    Focus,
+    Close,
+    Arrange { how: Arrange },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "do", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecordOp {
+    Start {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fps: Option<u32>,
+    },
+    Stop,
+    Status,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,7 +461,13 @@ pub enum OnElement {
     },
     Choose {
         query: String,
-        option: String,
+        /// The whole selection, for a dropdown that takes several.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
+        /// Take those named out of the selection instead, or empty it when
+        /// none is named.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        drop: bool,
     },
     Upload {
         query: String,
@@ -351,6 +485,23 @@ pub enum OnElement {
         exact: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quiet_ms: Option<u64>,
+        /// Not disabled. A query matches a button that cannot be pressed.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        enabled: bool,
+        /// Wait for the document to finish loading.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        load: bool,
+        /// Javascript, waited on until it is truthy.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<String>,
+    },
+    Focus {
+        query: String,
+    },
+    Check {
+        query: String,
+        /// Ticked, or cleared. Already in that state is not a click.
+        on: bool,
     },
     Hover {
         query: String,
@@ -445,6 +596,11 @@ pub struct ActionBatch {
     pub want: Vec<Want>,
     #[serde(default)]
     pub have_frame: Option<String>,
+    /// Run the rest after a step is refused. A form wants the default, where
+    /// step four does not run on the assumption that step three worked; a
+    /// drawing wants this, where one refused stroke costs only that stroke.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_going: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -622,6 +778,9 @@ pub struct ActionResult {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorBody>,
+    /// What the step read. Absent for a step that only acts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out: Option<Out>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -707,7 +866,7 @@ pub enum ErrorCode {
     Internal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExecRequest {
     pub argv: Vec<String>,
@@ -723,7 +882,7 @@ pub struct ExecResponse {
     pub timed_out: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WriteFile {
     pub path: String,
@@ -1110,6 +1269,33 @@ mod tests {
     }
 
     #[test]
+    fn test_a_dropdown_takes_one_option_or_several() {
+        let one: OnElement =
+            serde_json::from_str(r#"{"op":"choose","query":"Colour","options":["Blue"]}"#)
+                .expect("parses");
+        assert!(matches!(one, OnElement::Choose { drop: false, .. }));
+
+        let clear: OnElement =
+            serde_json::from_str(r#"{"op":"choose","query":"Tags","drop":true}"#).expect("parses");
+        assert!(matches!(
+            clear,
+            OnElement::Choose {
+                drop: true,
+                ref options,
+                ..
+            } if options.is_empty()
+        ));
+
+        let wire = serde_json::to_string(&OnElement::Choose {
+            query: "Colour".to_string(),
+            options: vec!["Blue".to_string()],
+            drop: false,
+        })
+        .expect("serialises");
+        assert!(!wire.contains("drop"), "nothing new when defaulted: {wire}");
+    }
+
+    #[test]
     fn test_a_wait_can_be_for_the_page_to_settle() {
         let sent: OnElement =
             serde_json::from_str(r#"{"op":"wait_for","query":"","quiet_ms":500}"#).expect("parses");
@@ -1128,12 +1314,17 @@ mod tests {
             or: Vec::new(),
             exact: false,
             quiet_ms: None,
+            enabled: false,
+            load: false,
+            until: None,
         };
         let wire = serde_json::to_string(&plain).expect("serialises");
-        assert!(
-            !wire.contains("quiet_ms"),
-            "an older server sees nothing new: {wire}"
-        );
+        for added in ["quiet_ms", "enabled", "load", "until"] {
+            assert!(
+                !wire.contains(added),
+                "an older server sees nothing new: {wire}"
+            );
+        }
     }
 
     fn numbered(tag: &str, kind: Option<&str>, text: &str) -> Element {

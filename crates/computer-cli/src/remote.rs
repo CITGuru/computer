@@ -1,8 +1,8 @@
 use crate::{USAGE, bare, flag, framing, positional, present, wheel};
 use computer_api::{
     Action, ActionBatch, Arrange, BatchResult, Evaluate, Find, ForkMode, ForkRequest, Held,
-    OnElement, OnNode, OpenIn, PageShot, Picture, Reading, Rect, Shot, SnapshotOptions, Where,
-    Window,
+    OnElement, OnNode, OpenIn, Out, PageShot, Picture, Reading, RecordOp, Rect, Shot,
+    SnapshotOptions, Where, Window, WindowOp,
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{
@@ -1098,10 +1098,18 @@ fn op_of(what: &computer_api::OnElement) -> &'static str {
         O::Click { .. } => "click",
         O::Fill { .. } => "fill",
         O::Options { .. } => "options",
-        O::Choose { .. } => "choose",
+        O::Choose { drop, .. } => match drop {
+            true => "deselect",
+            false => "select",
+        },
         O::Upload { .. } => "upload",
         O::WaitFor { .. } => "wait",
         O::Hover { .. } => "hover",
+        O::Focus { .. } => "focus",
+        O::Check { on, .. } => match on {
+            true => "check",
+            false => "uncheck",
+        },
         O::Drag { .. } => "drag",
         O::History { .. } => "history",
         O::Scroll { .. } => "scroll",
@@ -1115,6 +1123,126 @@ fn node_op_of(what: &OnNode) -> &'static str {
         OnNode::Focus { .. } => "focus",
         OnNode::Invoke { .. } => "invoke",
         OnNode::Set { .. } => "set",
+    }
+}
+
+/// The actions as JSON, from a file or from stdin: a shell line cannot carry
+/// a list of points, and the same JSON is what `trace` writes out.
+pub async fn batch(client: &Client, args: &[String]) -> Done {
+    let rest = bare(args, &VALUED);
+    let id = positional(&rest, 0, "a box").map_err(|e| e.to_string())?;
+
+    let raw = match rest.get(1).map(String::as_str) {
+        Some("-") | None => {
+            let mut read = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut read)
+                .map_err(|error| format!("could not read the batch: {error}"))?;
+            read
+        }
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|error| format!("could not read {path}: {error}"))?,
+    };
+
+    let actions: Vec<Action> = match serde_json::from_str::<serde_json::Value>(raw.trim()) {
+        Ok(serde_json::Value::Array(_)) => serde_json::from_str(raw.trim()),
+        _ => serde_json::from_str::<ActionBatch>(raw.trim()).map(|batch| batch.actions),
+    }
+    .map_err(|error| format!("the batch would not parse: {error}"))?;
+
+    if actions.is_empty() {
+        return Err("the batch has no actions".to_string());
+    }
+
+    let told = actions.iter().map(name_of).collect::<Vec<_>>();
+    let result = client
+        .act(
+            id,
+            0,
+            &ActionBatch {
+                actions,
+                settle_ms: flag(args, "--settle").and_then(|ms| ms.parse().ok()),
+                want: Vec::new(),
+                have_frame: None,
+                keep_going: present(args, "--keep-going"),
+            },
+            None,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for (step, ran) in told.iter().zip(&result.results) {
+        match (&ran.ok, &ran.out) {
+            (false, _) => println!(
+                "{:>3}  {step}: {}",
+                ran.index,
+                ran.error
+                    .as_ref()
+                    .map(|error| error.message.as_str())
+                    .unwrap_or("refused")
+            ),
+            (true, None) => println!("{:>3}  {step}", ran.index),
+            (true, Some(out)) => {
+                println!("{:>3}  {step}", ran.index);
+                for line in out_lines(out) {
+                    println!("       {line}");
+                }
+            }
+        }
+    }
+
+    let refused = result.results.iter().filter(|one| !one.ok).count();
+
+    match (result.stopped_at, refused) {
+        (Some(at), _) => Err(format!("{} step(s) did not run", told.len() - at - 1)),
+        (None, 0) => Ok(()),
+        (None, refused) => Err(format!("{refused} step(s) were refused")),
+    }
+}
+
+fn out_lines(out: &Out) -> Vec<String> {
+    match out {
+        Out::Value(value) => vec![value.json.clone()],
+        Out::Elements(found) => found.iter().map(shown_element).collect(),
+        Out::Snapshot(taken) => taken
+            .elements
+            .iter()
+            .map(|one| one.brief(false))
+            .chain([format!("{} of {} shown", taken.elements.len(), taken.total)])
+            .collect(),
+        Out::Text(read) => vec![
+            read.title.clone(),
+            format!("{} characters", read.text.len()),
+        ],
+        Out::Picture(shot) => vec![format!("{} bytes", shot.bytes)],
+        Out::Frame(frame) => vec![format!("frame {}", frame.hash)],
+        Out::At(at) => vec![format!("{},{}", at.x, at.y)],
+        Out::Windows(windows) => windows
+            .iter()
+            .map(|one| format!("{} {:?}", one.id, one.title))
+            .collect(),
+        Out::Window(window) => match window {
+            Some(window) => vec![format!("{} {:?}", window.id, window.title)],
+            None => vec!["no window".to_string()],
+        },
+        Out::Tabs(tabs) => tabs
+            .iter()
+            .map(|tab| format!("{} {:?} {}", tab.id, tab.title, tab.url))
+            .collect(),
+        Out::Ran(ran) => {
+            let mut said = vec![format!("exit {}", ran.code)];
+            said.extend(ran.stdout.lines().map(str::to_string));
+            said.extend(ran.stderr.lines().map(str::to_string));
+            said
+        }
+        Out::File(file) => vec![format!("{} read", file.path)],
+        Out::Clipboard(held) => vec![held.text.clone()],
+        Out::Recording(state) => vec![match (&state.recording, &state.path) {
+            (true, Some(path)) => format!("recording to {path}"),
+            (true, None) => "recording".to_string(),
+            (false, Some(path)) => format!("written to {path}"),
+            (false, None) => "not recording".to_string(),
+        }],
+        Out::Apps(names) => names.clone(),
     }
 }
 
@@ -1144,6 +1272,46 @@ fn name_of(action: &Action) -> String {
         },
         Action::Wait { ms } => format!("wait {ms}ms"),
         Action::WaitStill { .. } => "wait until still".to_string(),
+        Action::Path { through, .. } => format!("draw through {} points", through.len()),
+        Action::Evaluate { what } => format!("evaluate {:?}", what.expression),
+        Action::Look { what } => format!("find {:?}", what.query),
+        Action::Snapshot { .. } => "snapshot the page".to_string(),
+        Action::Read { .. } => "read the page".to_string(),
+        Action::PageShot { .. } => "capture the page".to_string(),
+        Action::Capture { .. } => "capture the screen".to_string(),
+        Action::Cursor => "where the pointer is".to_string(),
+        Action::Windows { active } => match active {
+            true => "the active window".to_string(),
+            false => "the windows".to_string(),
+        },
+        Action::AwaitWindow { what } => format!("wait for a {} window", what.class),
+        Action::OnWindow { window, what } => format!("window {window} {}", window_op_of(what)),
+        Action::Tabs => "the tabs".to_string(),
+        Action::OnTab { tab, close } => match close {
+            true => format!("close tab {tab}"),
+            false => format!("raise tab {tab}"),
+        },
+        Action::Exec { what } => format!("run {}", what.argv.join(" ")),
+        Action::ReadFile { path } => format!("read {path}"),
+        Action::WriteFile { what } => format!("write {}", what.path),
+        Action::Clipboard { selection, text } => match text {
+            Some(_) => format!("set the {} selection", selection.name()),
+            None => format!("read the {} selection", selection.name()),
+        },
+        Action::Record { what } => match what {
+            RecordOp::Start { .. } => "start recording".to_string(),
+            RecordOp::Stop => "stop recording".to_string(),
+            RecordOp::Status => "is it recording".to_string(),
+        },
+        Action::Apps => "the apps".to_string(),
+    }
+}
+
+fn window_op_of(what: &WindowOp) -> &'static str {
+    match what {
+        WindowOp::Focus => "focus",
+        WindowOp::Close => "close",
+        WindowOp::Arrange { .. } => "arrange",
     }
 }
 
@@ -1161,6 +1329,7 @@ async fn acted(client: &Client, id: &str, action: Action) -> Result<BatchResult,
                 settle_ms: None,
                 want: Vec::new(),
                 have_frame: None,
+                keep_going: false,
             },
             None,
         )
@@ -1188,7 +1357,8 @@ const UPLOADS: &str = "/tmp/computer/uploads";
 
 const SETTLE_MS: u64 = 600;
 
-const VALUED: [&str; 12] = [
+const VALUED: [&str; 13] = [
+    "--fn",
     "--quality",
     "--scope",
     "--seed",
@@ -1209,8 +1379,9 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     let op = positional(
         &rest,
         1,
-        "read, snapshot, find, click, fill, select, options, upload, wait, hover, \
-         drag, eval, screenshot, tabs, switch, close, back, forward or reload",
+        "read, snapshot, find, click, fill, focus, check, uncheck, select, \
+         deselect, options, upload, wait, hover, drag, eval, screenshot, tabs, \
+         switch, close, back, forward or reload",
     )
     .map_err(|e| e.to_string())?;
 
@@ -1281,18 +1452,36 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         },
         "select" => OnElement::Choose {
             query: query(2)?,
-            option: positional(&rest, 3, "an option")
-                .map_err(|e| e.to_string())?
-                .to_string(),
+            options: match rest.get(3..) {
+                Some([]) | None => return Err("expected an option".to_string()),
+                Some(named) => named.to_vec(),
+            },
+            drop: false,
+        },
+        "deselect" => OnElement::Choose {
+            query: query(2)?,
+            options: rest.get(3..).unwrap_or_default().to_vec(),
+            drop: true,
         },
         "options" => OnElement::Options { query: query(2)? },
+        "focus" => OnElement::Focus { query: query(2)? },
+        "check" => OnElement::Check {
+            query: query(2)?,
+            on: true,
+        },
+        "uncheck" => OnElement::Check {
+            query: query(2)?,
+            on: false,
+        },
         "upload" => OnElement::Upload {
             query: query(2)?,
             paths: handed(client, id, args, &rest).await?,
         },
         "wait" => OnElement::WaitFor {
-            // Under --quiet the words are optional: the wait is for the page to settle.
-            query: match present(args, "--quiet") {
+            query: match present(args, "--quiet")
+                || present(args, "--load")
+                || present(args, "--fn")
+            {
                 true => query(2).unwrap_or_default(),
                 false => query(2)?,
             },
@@ -1309,6 +1498,9 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
                 .unwrap_or_default(),
             exact: present(args, "--exact"),
             quiet_ms: counted(args, "--quiet", "a number of milliseconds")?,
+            enabled: present(args, "--enabled"),
+            load: present(args, "--load"),
+            until: flag(args, "--fn").map(str::to_string),
         },
         "hover" => OnElement::Hover {
             query: query(2)?,

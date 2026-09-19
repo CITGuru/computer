@@ -66,12 +66,35 @@ computer — a desktop in a box
   browser <box> click <query> [--double] [--button right] [--human] [--tab ID]
   browser <box> drag <query> <query> [--button right] [--human]
   browser <box> fill <query> <value>
-  browser <box> select <query> <option> | options <query>
+                              type into a field, or set a control a person does
+                              not type into: a slider, a colour, a date or a
+                              time take the value whole. anything with its own
+                              verb — a dropdown, a checkbox, a file input, a
+                              button — is refused and told which
+  browser <box> focus <query>  the keyboard, without the click that would
+                              otherwise carry it and fire the page's handlers
+  browser <box> check <query> | uncheck <query>
+                              tick a box or clear it. already in that state is
+                              not a click, so asking twice changes nothing
+  browser <box> select <query> <option…> | deselect <query> [<option…>]
+  browser <box> options <query>
+                              work a dropdown by the text or the value of its
+                              options. select makes those named the whole of
+                              the selection; several only where the dropdown
+                              takes several. deselect drops those named, or
+                              every one when none is
   browser <box> upload <query> <file…> [--in-box]
                               hand files to a file input. a path is one out
                               here, read and written into the box first;
                               --in-box names paths already there
-  browser <box> wait [<query>] [--gone] [--or TEXT,TEXT] [--within MS] [--quiet MS]
+  browser <box> wait [<query>] [--gone] [--or TEXT,TEXT] [--within MS]
+                [--quiet MS] [--enabled] [--load] [--fn JS]
+                              --enabled waits for it to accept a press: a
+                              query matches a button that is in the document
+                              and disabled, which is where a form goes wrong.
+                              --load waits for the document first, and --fn
+                              for javascript to be truthy — a count, a URL,
+                              anything no flag here names
   browser <box> hover <query> [--human]
   browser <box> eval <expression> [--timeout MS] [--limit N]
   browser <box> screenshot [file] [--full] [--format png|jpeg] [--quality N]
@@ -158,6 +181,14 @@ computer — a desktop in a box
                               filesystem answers in megabytes. both are cut in
                               the box at 200, and say when they were
   exec <box> -- <command…>    run a command inside the box
+  batch <box> [file.json] [--keep-going] [--settle MS]
+                              run many steps in one call, from a file or from
+                              stdin. every command above is a step, and a step
+                              that reads answers under its own line. the box
+                              holds its screen for the whole run, which
+                              separate calls cannot promise. --keep-going runs
+                              the rest after a step is refused, which a drawing
+                              wants and a form does not
   rm <box>                    take the box away
   fork <box> [--up-to SEQ]    build another by doing again what was done
   trace <box> [--after SEQ]   what has been done to it, and by whom
@@ -277,6 +308,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "release" => remote::release(client, args).await,
         "file" => remote::file(client, args).await,
         "exec" => remote::exec(client, args).await,
+        "batch" => remote::batch(client, args).await,
         "rm" => remote::remove(client, args).await,
         "fork" => remote::fork(client, args).await,
         "trace" => remote::trace(client, args).await,
