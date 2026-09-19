@@ -6,32 +6,15 @@ pub async fn attach(args: &[String]) -> computer::Result<Computer> {
     Computer::attach(positional(args, 0, "a box name")?).await
 }
 
-pub async fn up(args: &[String]) -> computer::Result<()> {
-    let mut builder = Computer::builder().keep_on_drop(true);
+pub async fn new(args: &[String]) -> computer::Result<()> {
+    let asked = crate::spec::asked(args).map_err(computer::Error::denied)?;
 
-    if let Some(size) = flag(args, "--size") {
-        let (width, height) = size
-            .split_once(['x', 'X'])
-            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
-            .ok_or_else(|| {
-                computer::Error::denied("--size takes WIDTHxHEIGHT, such as 1920x1080")
-            })?;
-        builder = builder.size(width, height);
-    }
+    let mut builder = computer::Builder::from_spec(&asked.spec)?
+        .place(&asked.placement)?
+        .keep_on_drop(true);
+
     if let Some(name) = flag(args, "--name") {
         builder = builder.name(name);
-    }
-    if let Some(minutes) = flag(args, "--ttl") {
-        let minutes: u64 = minutes
-            .parse()
-            .map_err(|_| computer::Error::denied("--ttl takes a number of minutes"))?;
-        builder = builder.expires_after(Duration::from_secs(minutes * 60));
-    }
-    if present(args, "--wide-fonts") {
-        builder = builder.wide_fonts();
-    }
-    if present(args, "--video") {
-        builder = builder.video();
     }
 
     eprintln!("opening a box (the first one builds the image) …");
@@ -41,7 +24,6 @@ pub async fn up(args: &[String]) -> computer::Result<()> {
         computer.open_url(url).await?;
     }
 
-    // Only the name goes to stdout, so `computer screenshot $(computer up)` works.
     println!("{}", computer.name());
     if let Some(url) = computer.viewer_url() {
         eprintln!("  watch it  {url}");

@@ -7,7 +7,9 @@ use computer_api::{
     Want, Where, WindowOp, WriteFile,
 };
 use computer_client::{Client, captured_image, frame_png};
-use computer_types::{Button, Desktop, Feature, Motion, Placement, Point, Selection, Spec};
+use computer_types::{
+    App, Button, Desktop, DisplayServer, Feature, Motion, Placement, Point, Selection, Spec,
+};
 use serde_json::{Value, json};
 
 use crate::ui;
@@ -125,6 +127,53 @@ pub fn catalogue() -> Value {
                                         is not a web page — a file dialog, a settings \
                                         panel, an installer. A running box cannot be given \
                                         it afterwards."
+                    },
+                    "apps": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Applications to install, by the names `list_apps` \
+                                        gives, such as gimp or vscode. `open_app` opens only \
+                                        what was asked for here, and a running box cannot be \
+                                        given one afterwards. The first box with a new set \
+                                        builds an image, which takes minutes."
+                    },
+                    "packages": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Apt packages to install besides, for `run_command`: \
+                                        jq, ripgrep, a compiler."
+                    },
+                    "audio": {
+                        "type": "boolean",
+                        "description": "A sound server, for a page or an app that refuses to \
+                                        play without one."
+                    },
+                    "screens": {
+                        "type": "integer",
+                        "description": "How many screens `open_screen` may open. One unless \
+                                        you say."
+                    },
+                    "wayland": {
+                        "type": "boolean",
+                        "description": "Run sway in place of X11, for work that is about \
+                                        Wayland itself. It cannot hold a modifier through a \
+                                        click."
+                    },
+                    "network": {
+                        "type": "boolean",
+                        "description": "`false` cuts the box off from every network. True \
+                                        unless you say."
+                    },
+                    "memory": { "type": "string", "description": "A limit, such as 4g." },
+                    "cpus": { "type": "string", "description": "A limit, such as 2." },
+                    "ttl_minutes": {
+                        "type": "integer",
+                        "description": "Remove the box this long after it opens, whatever it \
+                                        is doing."
+                    },
+                    "idle_minutes": {
+                        "type": "integer",
+                        "description": "Remove the box once nothing has used it for this long."
                     }
                 }
             }),
@@ -1746,32 +1795,68 @@ pub async fn call(
     }
 }
 
-async fn launch(client: &Client, origin: &str, arguments: &Value) -> Result<Answer, String> {
-    let spec = Spec {
+fn asked(arguments: &Value) -> (Spec, Placement) {
+    let whole = |name: &str| arguments.get(name).and_then(Value::as_u64);
+    let said = |name: &str| {
+        arguments
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let named = |name: &str| {
+        arguments
+            .get(name)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+    };
+
+    let mut spec = Spec {
         desktop: Desktop {
-            width: arguments
-                .get("width")
-                .and_then(Value::as_u64)
-                .map(|n| n as u32),
-            height: arguments
-                .get("height")
-                .and_then(Value::as_u64)
-                .map(|n| n as u32),
+            server: match flag(arguments, "wayland") {
+                true => DisplayServer::Wayland,
+                false => DisplayServer::X11,
+            },
+            width: whole("width").map(|n| n as u32),
+            height: whole("height").map(|n| n as u32),
+            screens: whole("screens").map(|n| n as u32),
             features: [
                 flag(arguments, "video").then_some(Feature::Video),
                 flag(arguments, "wide_fonts").then_some(Feature::WideFonts),
                 flag(arguments, "accessibility").then_some(Feature::Accessibility),
+                flag(arguments, "audio").then_some(Feature::Audio),
             ]
             .into_iter()
             .flatten()
             .collect(),
-            ..Desktop::default()
+            packages: named("packages").collect(),
         },
+        apps: named("apps").map(|name| (name, App::default())).collect(),
         ..Spec::default()
     };
+    spec.policy.network = arguments
+        .get("network")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+
+    let placement = Placement {
+        memory: said("memory"),
+        cpus: said("cpus"),
+        expires_after_secs: whole("ttl_minutes").map(|minutes| minutes * 60),
+        idle_timeout_secs: whole("idle_minutes").map(|minutes| minutes * 60),
+        ..Placement::default()
+    };
+
+    (spec, placement)
+}
+
+async fn launch(client: &Client, origin: &str, arguments: &Value) -> Result<Answer, String> {
+    let (spec, placement) = asked(arguments);
 
     let created = client
-        .create(&spec, &Placement::default(), None)
+        .create(&spec, &placement, None)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -2992,6 +3077,74 @@ mod tests {
             );
             assert_eq!(one["inputSchema"]["type"], "object");
         }
+    }
+
+    #[test]
+    fn test_a_box_asked_for_nothing_is_the_default_box() {
+        let (spec, placement) = asked(&json!({}));
+
+        assert_eq!(spec, Spec::default());
+        assert_eq!(placement, Placement::default());
+    }
+
+    #[test]
+    fn test_a_box_can_be_asked_for_with_everything_launch_box_offers() {
+        let offered = catalogue()
+            .as_array()
+            .and_then(|tools| tools.iter().find(|tool| tool["name"] == "launch_box"))
+            .map(|tool| tool["inputSchema"]["properties"].clone())
+            .expect("launch_box");
+
+        let arguments = json!({
+            "width": 1920,
+            "height": 1080,
+            "video": true,
+            "wide_fonts": true,
+            "accessibility": true,
+            "apps": ["gimp", "vscode"],
+            "packages": ["jq"],
+            "audio": true,
+            "screens": 2,
+            "wayland": true,
+            "network": false,
+            "memory": "4g",
+            "cpus": "2",
+            "ttl_minutes": 60,
+            "idle_minutes": 10,
+        });
+        for name in offered.as_object().expect("properties").keys() {
+            assert!(
+                arguments.get(name).is_some(),
+                "{name} is offered, so this test must ask for it"
+            );
+        }
+
+        let (spec, placement) = asked(&arguments);
+
+        assert_eq!(spec.desktop.width, Some(1920));
+        assert_eq!(spec.desktop.height, Some(1080));
+        assert_eq!(spec.desktop.screens, Some(2));
+        assert_eq!(spec.desktop.server, DisplayServer::Wayland);
+        assert_eq!(spec.desktop.packages, ["jq"]);
+        assert_eq!(
+            spec.desktop.features,
+            [
+                Feature::Video,
+                Feature::WideFonts,
+                Feature::Accessibility,
+                Feature::Audio
+            ]
+        );
+        assert_eq!(spec.apps.keys().collect::<Vec<_>>(), ["gimp", "vscode"]);
+        assert!(
+            spec.apps.values().all(|app| app == &App::default()),
+            "a bare name is left empty, which is what resolves it from the catalog"
+        );
+        assert!(!spec.policy.network);
+        assert_eq!(placement.memory.as_deref(), Some("4g"));
+        assert_eq!(placement.cpus.as_deref(), Some("2"));
+        assert_eq!(placement.expires_after_secs, Some(3600));
+        assert_eq!(placement.idle_timeout_secs, Some(600));
     }
 
     #[test]

@@ -55,7 +55,7 @@ Set `COMPUTER_INSTALL_DIR` to change the install directory. Set `COMPUTER_VERSIO
 Start and control a desktop:
 
 ```bash
-BOX=$(computer up)
+BOX=$(computer new)
 computer open "$BOX" https://example.com
 computer screenshot "$BOX" screen.png
 computer rm "$BOX"
@@ -95,7 +95,7 @@ async fn main() -> computer::Result<()> {
 CLI:
 
 ```bash
-BOX=$(computer up --url https://example.com)
+BOX=$(computer new --url https://example.com)
 computer mouse "$BOX" click 640 81 left
 computer keyboard "$BOX" type "driven from the CLI"
 computer screenshot "$BOX" screen.png
@@ -318,7 +318,7 @@ let screen = computer.primary();
 CLI:
 
 ```bash
-BOX=$(computer up --accessibility)
+BOX=$(computer new --accessibility)
 ```
 
 
@@ -616,7 +616,7 @@ computer
 CLI:
 
 ```bash
-BOX=$(computer up --video)
+BOX=$(computer new --video)
 computer record "$BOX" start --fps 20
 computer record "$BOX" status
 computer record "$BOX" stop screen.mp4
@@ -717,10 +717,10 @@ let computer = Computer::builder()
 CLI:
 
 ```bash
-BOX=$(computer up --size 1920x1080 --ttl 60)
+BOX=$(computer new --size 1920x1080 --no-network --memory 2g --runtime podman --ttl 60)
 ```
 
-`computer up` keeps the desktop after the command exits.
+`computer new` keeps the desktop after the command exits. `--app gimp` and `--package jq` install into the image, and `--spec box.json` takes a file shaped like the body of `POST /v1/boxes` for what has no flag; a flag goes over the file.
 
 - `network(false)` blocks outbound network access from the desktop.
 - `runtime()` also accepts `nerdctl`.
@@ -745,7 +745,7 @@ let computer = Computer::builder()
 CLI:
 
 ```bash
-BOX=$(computer up --wide-fonts --accessibility --video)
+BOX=$(computer new --wide-fonts --accessibility --video)
 ```
 
 `Extras::audio()`, `Extras::video()`, `Extras::accessibility()`, and `Extras::everything()` provide common package sets.
@@ -840,7 +840,7 @@ let computer = Computer::builder()
 CLI:
 
 ```bash
-BOX=$(computer up --wayland)
+BOX=$(computer new --wayland)
 ```
 
 The public desktop API is the same for both profiles.

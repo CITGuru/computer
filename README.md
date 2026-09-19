@@ -321,7 +321,7 @@ The action name belongs to the toolkit, not to us: GTK spells it `click` where Q
 From the command line:
 
 ```bash
-computer up --accessibility
+computer new --accessibility
 computer widget <box> find "Street" --role text
 computer widget <box> fill "Street" "12 Bishop Street"
 computer widget <box> press "OK"
@@ -347,6 +347,18 @@ let computer = Computer::builder()
 - `runtime()` also accepts `nerdctl`.
 - `keep_on_drop(true)` leaves the container running when the handle is dropped.
 - `expires_after(duration)` removes the desktop when the time runs out.
+
+From the command line the same settings are flags on `new`:
+
+```bash
+computer new --size 1920x1080 --app gimp --package jq --video --no-network --memory 2g --ttl 60
+```
+
+What has no flag goes in a file shaped like the body of `POST /v1/boxes`, and a flag goes over it:
+
+```bash
+computer new --spec box.json --size 1280x720
+```
 
 ### Change the wallpaper
 

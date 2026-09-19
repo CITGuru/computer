@@ -2,6 +2,7 @@ mod daemon;
 mod embed;
 mod local;
 mod remote;
+mod spec;
 
 pub use daemon::serve as daemon;
 
@@ -10,14 +11,24 @@ use computer_client::Client;
 pub const USAGE: &str = "\
 computer — a desktop in a box
 
-  up [--size WxH] [--url URL] [--ttl MINUTES] [--wide-fonts]
-     [--accessibility] [--video] [--wayland]
-                              --accessibility reads native windows by widget
-                              name, for the widget command below. --video puts
-                              ffmpeg in the box, for record. --wayland runs
-                              sway in place of X11. none can be turned on
-                              afterwards
-                              open a box and print where to watch it
+  new [--size WxH] [--screens N] [--wayland] [--url URL]
+      [--app NAME]… [--package PKG]… [--wide-fonts] [--audio] [--video]
+      [--dock] [--x11-apps] [--accessibility]
+      [--no-network] [--memory SIZE] [--cpus N] [--runtime NAME]
+      [--ttl MINUTES] [--idle MINUTES] [--spec FILE]
+                              open a box and print where to watch it. --app
+                              installs one from the catalog, such as gimp or
+                              vscode, for the app command below; it and
+                              --package take several, or a,b. --accessibility
+                              reads native windows by widget name, for the
+                              widget command. --video puts ffmpeg in the box,
+                              for record. --wayland runs sway in place of X11.
+                              none of those can be turned on afterwards. --ttl
+                              removes the box that long after it opens, --idle
+                              that long after it was last used. --spec is a
+                              file of what POST /v1/boxes takes, or - for
+                              stdin, for what has no flag: an app of your own,
+                              or who may watch. a flag goes over the file
   ls                          boxes that are running
   box <box>                   everything the server knows about one
   pause <box>                 freeze it: it keeps its memory and its ports,
@@ -188,8 +199,9 @@ computer — a desktop in a box
   --local                     drive the box from here, with no server at all.
                               fork and trace need one, and say so.
 
-The first `up` builds the image, which takes a few minutes. Every one after it
-starts in seconds.
+The first `new` builds the image, which takes a few minutes, and so does the
+first with an app, a package or a feature no box before it had. Every one after
+it starts in seconds.
 
 Without a server these commands start one for their own length. Run `computerd`
 to keep one: it holds the trace a fork reads, sweeps boxes past their deadline,
@@ -275,7 +287,7 @@ fn carrying(base: String, token: Option<String>) -> Client {
 
 async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), String> {
     match command {
-        "up" => remote::up(client, args).await,
+        "new" => remote::new(client, args).await,
         "ls" => remote::list(client).await,
         "box" => remote::describe(client, args).await,
         "stop" => remote::stop(client, args).await,
@@ -307,7 +319,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
 
 async fn here(command: &str, args: &[String]) -> Result<(), String> {
     let outcome = match command {
-        "up" => local::up(args).await,
+        "new" => local::new(args).await,
         "ls" => local::list().await,
         "screenshot" => local::screenshot(args).await,
         "open" => local::open(args).await,
