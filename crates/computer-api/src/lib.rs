@@ -895,6 +895,25 @@ pub struct ReadFile {
     pub contents_base64: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Found {
+    pub matches: Vec<computer_types::Match>,
+    /// There were more; the cap stopped it.
+    pub cut: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Globbed {
+    pub paths: Vec<String>,
+    pub cut: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Listing {
+    pub path: String,
+    pub entries: Vec<computer_types::DirEntry>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TakeoverRequest {
