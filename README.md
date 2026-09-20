@@ -288,13 +288,11 @@ This API wraps CDP browser contexts, not Chrome's visual tab groups. Visual tab 
 Anything that speaks CDP can drive the box's browser: agent-browser, Playwright, browser-use, Puppeteer. `computer cdp` prints an address that goes through the server, so it works against a server on another machine, and the DevTools port itself never leaves loopback:
 
 ```bash
-BOX=$(computer up --url https://example.com)
-
-agent-browser --cdp "$(computer cdp $BOX --ws)" snapshot -i
+agent-browser --cdp "$(computer cdp <box> --ws)" snapshot -i
 ```
 
 ```js
-const browser = await chromium.connectOverCDP(process.env.CDP);    // CDP=$(computer cdp $BOX)
+const browser = await chromium.connectOverCDP(process.env.CDP);    // CDP=$(computer cdp <box>)
 ```
 
 ```python
