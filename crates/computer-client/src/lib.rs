@@ -1,7 +1,7 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::*;
-use computer_types::{Placement, Point, Selection, Spec};
+use computer_types::{Placement, Point, Search, Selection, Spec};
 use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
@@ -601,6 +601,56 @@ impl Client {
             reqwest::Method::POST,
             &format!("/v1/boxes/{id}/exec"),
             Some(serde_json::json!({ "argv": argv, "timeout_ms": timeout_ms })),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn list_dir(&self, id: &str, path: &str) -> Result<Listing> {
+        self.send(
+            reqwest::Method::GET,
+            &format!("/v1/boxes/{id}/files/list?path={}", query_value(path)),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn grep(&self, id: &str, search: &Search) -> Result<Found> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/files/grep"),
+            Some(serde_json::json!({
+                "pattern": search.pattern,
+                "path": search.path,
+                "include": search.include,
+                "ignore_case": search.ignore_case,
+                "limit": search.limit,
+            })),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn glob(
+        &self,
+        id: &str,
+        pattern: &str,
+        path: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Globbed> {
+        let mut asked = format!("pattern={}", query_value(pattern));
+        if let Some(path) = path {
+            asked.push_str(&format!("&path={}", query_value(path)));
+        }
+        if let Some(limit) = limit {
+            asked.push_str(&format!("&limit={limit}"));
+        }
+
+        self.send(
+            reqwest::Method::GET,
+            &format!("/v1/boxes/{id}/files/glob?{asked}"),
+            None,
             &[],
         )
         .await

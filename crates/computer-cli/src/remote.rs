@@ -6,7 +6,8 @@ use computer_api::{
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{
-    Button, Desktop, DisplayServer, Feature, Motion, NodeQuery, Placement, Point, Selection, Spec,
+    Button, Desktop, DisplayServer, Feature, Motion, NodeQuery, Placement, Point, Search,
+    Selection, Spec,
 };
 use std::time::Duration;
 
@@ -855,6 +856,149 @@ pub async fn release(client: &Client, args: &[String]) -> Done {
         watching.watching, watching.driving
     );
     Ok(())
+}
+
+pub async fn file(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "ls, get, put, grep or glob").map_err(|e| e.to_string())?;
+    let at = |n| positional(args, n, "a path").map_err(|e| e.to_string());
+
+    match op {
+        "get" => {
+            let there = at(2)?;
+            let bytes = client
+                .read_file(id, there)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            // To standard output where no file is named, so a caller can pipe
+            // it. The byte count goes to standard error either way.
+            match args.get(3) {
+                Some(here) => {
+                    std::fs::write(here, &bytes).map_err(|why| format!("{here}: {why}"))?;
+                    eprintln!("{} bytes → {here}", bytes.len());
+                }
+                None => {
+                    use std::io::Write;
+                    std::io::stdout()
+                        .write_all(&bytes)
+                        .map_err(|why| why.to_string())?;
+                    eprintln!("{} bytes", bytes.len());
+                }
+            }
+            Ok(())
+        }
+        "put" => {
+            let here = at(2)?;
+            let bytes = std::fs::read(here).map_err(|why| format!("{here}: {why}"))?;
+
+            // The same name in the box where only a directory was given, so
+            // `file box put ./notes.txt /tmp` lands where a person expects.
+            let there = match args.get(3) {
+                Some(given) if given.ends_with('/') => format!("{given}{}", named_part(here)),
+                Some(given) => given.clone(),
+                None => format!("/tmp/{}", named_part(here)),
+            };
+
+            client
+                .write_file(id, &there, &bytes)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            eprintln!("{} bytes → {there}", bytes.len());
+            Ok(())
+        }
+        "ls" => {
+            let there = args.get(2).map(String::as_str).unwrap_or("/");
+            let listing = client
+                .list_dir(id, there)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if listing.entries.is_empty() {
+                println!("nothing in {there}");
+            }
+            for entry in &listing.entries {
+                match entry.dir {
+                    true => println!("{:>10}  {}/", "-", entry.name),
+                    false => println!("{:>10}  {}", entry.bytes, entry.name),
+                }
+            }
+            Ok(())
+        }
+        "grep" => {
+            let pattern = at(2)?;
+            let where_ = bare(args, &SEARCHED);
+
+            let found = client
+                .grep(
+                    id,
+                    &Search {
+                        pattern: pattern.to_string(),
+                        // Required: a search of the whole filesystem answers
+                        // in megabytes, and nobody means to ask for that.
+                        path: where_
+                            .get(3)
+                            .cloned()
+                            .ok_or_else(|| "expected a directory to search".to_string())?,
+                        include: flag(args, "--include").map(str::to_string),
+                        ignore_case: present(args, "--ignore-case"),
+                        limit: counted(args, "--limit", "a number of matches")?,
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if found.matches.is_empty() {
+                println!("nothing matched");
+            }
+            for one in &found.matches {
+                println!("{}:{}:{}", one.path, one.line, one.text);
+            }
+            if found.cut {
+                eprintln!("(cut at {} matches)", found.matches.len());
+            }
+            Ok(())
+        }
+        "glob" => {
+            let pattern = at(2)?;
+            let where_ = bare(args, &SEARCHED);
+
+            let found = client
+                .glob(
+                    id,
+                    pattern,
+                    where_.get(3).map(String::as_str),
+                    counted(args, "--limit", "a number of paths")?,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if found.paths.is_empty() {
+                println!("nothing matched");
+            }
+            for path in &found.paths {
+                println!("{path}");
+            }
+            if found.cut {
+                eprintln!("(cut at {} paths)", found.paths.len());
+            }
+            Ok(())
+        }
+        other => Err(format!("no such op: {other}")),
+    }
+}
+
+/// The `file` flags that take a value.
+const SEARCHED: [&str; 2] = ["--include", "--limit"];
+
+/// The file's own name, for a path that named a directory to put it in.
+fn named_part(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file")
+        .to_string()
 }
 
 pub async fn exec(client: &Client, args: &[String]) -> Done {

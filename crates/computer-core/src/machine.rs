@@ -271,6 +271,15 @@ fn if_stopped(name: &str, stderr: &str) -> Option<Error> {
         .then(|| Error::denied(format!("box {name} is stopped. Start it first.")))
 }
 
+/// The runtime's words for a path the box does not have, in ours. It names a
+/// container id the caller never saw.
+fn if_absent(stderr: &str) -> Option<Error> {
+    let path = stderr.split_once("Could not find the file ")?.1;
+    let path = path.split_once(" in container")?.0;
+
+    Some(Error::invalid(format!("the box has no file at {path}")))
+}
+
 fn arg(value: impl Into<String>) -> String {
     value.into()
 }
@@ -332,7 +341,8 @@ impl DockerMachine {
         let result = self.cli.run(&[arg("cp"), arg(from), arg(to)]).await?;
 
         if result.code != 0 {
-            return Err(Error::denied(result.stderr_utf8().trim().to_string()));
+            let said = result.stderr_utf8();
+            return Err(if_absent(&said).unwrap_or_else(|| Error::denied(said.trim().to_string())));
         }
         Ok(())
     }
