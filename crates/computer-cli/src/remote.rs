@@ -88,6 +88,36 @@ pub async fn describe(client: &Client, args: &[String]) -> Done {
     Ok(())
 }
 
+pub async fn cdp(client: &Client, args: &[String]) -> Done {
+    let rest = bare(args, &["--ttl"]);
+    let id = positional(&rest, 0, "a box").map_err(|e| e.to_string())?;
+
+    if present(args, "--direct") {
+        let found = client.get(id).await.map_err(|e| e.to_string())?;
+        let url = found
+            .devtools_url
+            .ok_or_else(|| "this box publishes no DevTools port".to_string())?;
+        println!("{url}");
+        return Ok(());
+    }
+
+    let minutes: Option<u64> = counted(args, "--ttl", "a number of minutes")?;
+    let token = client
+        .cdp(id, minutes.map(|minutes| minutes * 60))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!(
+        "{}",
+        match present(args, "--ws") {
+            true => &token.ws_url,
+            false => &token.url,
+        }
+    );
+    eprintln!("  good until  {}", stamped(token.expires_at_ms));
+    Ok(())
+}
+
 fn stamped(ms: u64) -> String {
     let secs = (ms / 1000) as i64;
     match chrono_free(secs) {

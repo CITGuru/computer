@@ -437,6 +437,43 @@ async fn test_the_viewer_socket_takes_a_ticket_and_no_bearer() {
     );
 }
 
+#[tokio::test]
+async fn test_a_cdp_token_is_for_a_box_that_is_here() {
+    let (status, body) = send(post("/v1/boxes/box_nope/cdp", "")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}
+
+#[tokio::test]
+async fn test_a_cdp_token_is_minted_behind_the_bearer_and_used_without_one() {
+    let gated = || {
+        Arc::new(AppState::default().gated(Some(
+            computer::Secret::new("0123456789abcdef0123").expect("a secret"),
+        )))
+    };
+
+    let minted = routes::router(gated())
+        .oneshot(post("/v1/boxes/box_nope/cdp", ""))
+        .await
+        .expect("the router answered");
+    assert_eq!(
+        minted.status(),
+        StatusCode::UNAUTHORIZED,
+        "whoever mints one reads every cookie the browser holds"
+    );
+
+    let relayed = routes::router(gated())
+        .oneshot(get("/v1/cdp/nothing/json/version"))
+        .await
+        .expect("the router answered");
+    assert_eq!(
+        relayed.status(),
+        StatusCode::FORBIDDEN,
+        "a library that speaks CDP sends no bearer, so the short-lived token in the path is the gate"
+    );
+}
+
 async fn ask_mcp(body: &str) -> (StatusCode, Value) {
     let router = computer_server::mcp::router(nowhere(), "http://127.0.0.1:1".to_string(), None);
     let response = router

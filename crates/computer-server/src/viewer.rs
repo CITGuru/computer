@@ -39,9 +39,18 @@ struct Ticket {
 
 impl Tickets {
     pub fn mint(&self, box_id: &str, screen: u32) -> ApiResult<(String, SystemTime)> {
+        self.mint_for(box_id, screen, TICKET_LIFE)
+    }
+
+    pub fn mint_for(
+        &self,
+        box_id: &str,
+        screen: u32,
+        life: Duration,
+    ) -> ApiResult<(String, SystemTime)> {
         let secret = computer::Secret::generate()?;
         let now = SystemTime::now();
-        let until = now + TICKET_LIFE;
+        let until = now + life;
 
         let mut held = self.lock()?;
         held.retain(|_, ticket| ticket.until > now);
@@ -65,6 +74,14 @@ impl Tickets {
         held.get(ticket).is_some_and(|found| {
             found.box_id == box_id && found.screen == screen && found.until > SystemTime::now()
         })
+    }
+
+    pub fn box_of(&self, ticket: &str) -> Option<String> {
+        let held = self.held.lock().ok()?;
+
+        held.get(ticket)
+            .filter(|found| found.until > SystemTime::now())
+            .map(|found| found.box_id.clone())
     }
 
     pub fn forget(&self, box_id: &str) {
@@ -163,7 +180,7 @@ pub async fn socket(
         .on_upgrade(move |person| carry(person, box_side)))
 }
 
-type BoxSide =
+pub(crate) type BoxSide =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 async fn carry(mut person: WebSocket, mut box_side: BoxSide) {

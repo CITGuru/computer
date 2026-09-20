@@ -31,6 +31,15 @@ computer — a desktop in a box
                               or who may watch. a flag goes over the file
   ls                          boxes that are running
   box <box>                   everything the server knows about one
+  cdp <box> [--ws] [--ttl MINUTES] [--direct]
+                              an address another library drives the box's
+                              browser by: agent-browser --cdp, playwright
+                              connectOverCDP, browser-use cdp_url. it goes
+                              through the server and carries a short-lived
+                              token, good for an hour or for --ttl. --ws is the
+                              browser's socket, for a library that takes one.
+                              --direct is the box's own port, which only this
+                              machine reaches and nothing guards
   pause <box>                 freeze it: it keeps its memory and its ports,
                               and costs no processor until resumed
   stop <box>                  end everything in it, keeping its files. cheaper
@@ -301,6 +310,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "new" => remote::new(client, args).await,
         "ls" => remote::list(client).await,
         "box" => remote::describe(client, args).await,
+        "cdp" => remote::cdp(client, args).await,
         "stop" => remote::stop(client, args).await,
         "pause" => remote::pause(client, args).await,
         "resume" => remote::resume(client, args).await,
