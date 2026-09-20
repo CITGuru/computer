@@ -533,7 +533,8 @@ pub async fn press(client: &Client, args: &[String]) -> Done {
 
 pub async fn mouse(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-    let op = positional(args, 1, "move, click, drag, scroll or at").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "move, click, down, up, drag, scroll or at")
+        .map_err(|e| e.to_string())?;
 
     let mut rest = args.to_vec();
     rest.remove(1);
@@ -572,12 +573,54 @@ pub async fn mouse(client: &Client, args: &[String]) -> Done {
             )
             .await
         }
+        "down" => {
+            let (at, button) = spot(&rest)?;
+            let seconds: Option<u64> = counted(args, "--hold", "a number of seconds")?;
+            let (motion, seed) = motion(args)?;
+
+            let result = acted(
+                client,
+                id,
+                Action::MouseDown {
+                    at,
+                    button,
+                    motion,
+                    seed,
+                    hold_ms: Some(seconds.map_or(HOLD_MS, |seconds| seconds * 1000)),
+                },
+            )
+            .await?;
+
+            for held in &result.holding {
+                eprintln!(
+                    "the {} button is down until {}, or until: computer mouse {id} up",
+                    format!("{:?}", held.button).to_lowercase(),
+                    stamped(held.until_ms)
+                );
+            }
+            Ok(())
+        }
+        "up" => {
+            let (at, button) = spot(&rest)?;
+            act(client, id, Action::MouseUp { at, button }).await
+        }
         "at" => {
             let at = client.cursor(id, 0).await.map_err(|e| e.to_string())?;
             println!("{},{}", at.x, at.y);
             Ok(())
         }
         other => Err(format!("no such op: {other}")),
+    }
+}
+
+const HOLD_MS: u64 = 10_000;
+
+fn spot(rest: &[String]) -> Result<(Option<Point>, Button), String> {
+    let named = bare(rest, &["--hold", "--seed"]);
+
+    match named.get(1).is_some_and(|word| word.parse::<u32>().is_ok()) {
+        true => Ok((Some(point(&named, 1)?), button(named.get(3)))),
+        false => Ok((None, button(named.get(1)))),
     }
 }
 
@@ -1786,4 +1829,36 @@ fn shown_element(element: &computer_api::Element) -> String {
             None => String::new(),
         }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(listed: &[&str]) -> Vec<String> {
+        listed.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    fn test_a_button_goes_down_where_the_pointer_is_unless_given_a_point() {
+        assert_eq!(spot(&args(&["mybox"])), Ok((None, Button::Left)));
+        assert_eq!(spot(&args(&["mybox", "right"])), Ok((None, Button::Right)));
+        assert_eq!(
+            spot(&args(&["mybox", "400", "300"])),
+            Ok((Some(Point { x: 400, y: 300 }), Button::Left))
+        );
+        assert_eq!(
+            spot(&args(&["mybox", "400", "300", "middle", "--hold", "5"])),
+            Ok((Some(Point { x: 400, y: 300 }), Button::Middle))
+        );
+        assert_eq!(
+            spot(&args(&["mybox", "--hold", "5", "400", "300"])),
+            Ok((Some(Point { x: 400, y: 300 }), Button::Left)),
+            "the seconds a button is held are not a coordinate"
+        );
+        assert!(
+            spot(&args(&["mybox", "400"])).is_err(),
+            "half a point is a mistake, and pressing where the pointer is would hide it"
+        );
+    }
 }

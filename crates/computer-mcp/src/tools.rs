@@ -2768,6 +2768,7 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
             button: button(arguments),
             motion: motion(arguments)?,
             seed: seed(arguments),
+            hold_ms: None,
         },
         "mouse_up" => Action::MouseUp {
             at: spot(arguments)?,
@@ -3371,6 +3372,7 @@ mod tests {
                 button: Button::Right,
                 motion: Motion::default(),
                 seed: None,
+                hold_ms: None,
             })
         );
         assert_eq!(

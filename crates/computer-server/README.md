@@ -104,6 +104,14 @@ between them drags.
 ] }
 ```
 
+`hold_ms` on `mouse_down` keeps the button down after the batch ends, which is
+how `computer mouse <box> down` and `up` are two commands. Nothing holds the
+screen between two calls, so the server lets the button go itself: after
+`hold_ms`, 60 seconds at most; when a person takes the screen over; before the
+box is paused; and when a server takes the box back after a restart, which lost
+the timer. `holding` names the button and when it will be let go. Without
+`hold_ms` a button never outlives its batch.
+
 `pause_ms` waits after the move, a second at most. A drawing program reads the
 pointer at intervals and merges moves that arrive faster than it reads: without
 a pause GIMP joined the two ends of a stroke and never saw the corner between

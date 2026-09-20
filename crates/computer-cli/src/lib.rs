@@ -166,6 +166,16 @@ computer — a desktop in a box
                               with its own command
   mouse <box> drag <x> <y> <x> <y> [button] [--held shift,ctrl]
                               press at the first point, release at the second
+  mouse <box> down [<x> <y>] [button] [--hold SECONDS]
+  mouse <box> up [<x> <y>] [button]
+                              press a button and let it go as two commands,
+                              where the pointer is unless given a point. the
+                              server lets the button go after --hold, 10 unless
+                              told and 60 at most, and when a person takes the
+                              screen over, so one that is forgotten does not
+                              stay down. X11 only. a batch does this with its
+                              mouse_down and mouse_up steps and holds the
+                              screen between them, which two commands cannot
   mouse <box> scroll [<x> <y>] up|down|left|right [notches]
   mouse <box> scroll <x> <y> <dy> [dx]
                               turn the wheel, in notches. a direction goes 3
