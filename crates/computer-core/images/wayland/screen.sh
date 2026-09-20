@@ -21,6 +21,7 @@ runtime="/tmp/computer/run-${number}"
 wayland_display="wayland-1"
 sockfile="/tmp/computer/screen-${screen}.sway"
 control_token="/tmp/computer/screen-${screen}.control"
+pointer_door="${runtime}/computer-pointer"
 profile="${HOME:-/home/computer}/.browser-profiles/screen-${number}"
 logs="/tmp/computer/screen-${number}"
 
@@ -99,8 +100,19 @@ viewers() {
   echo "watching=$(established "$view_vnc") driving=$(established "$control_vnc")"
 }
 
+resident_pointer() {
+  if [ -S "$pointer_door" ] && pgrep -f "computer-pointer serve ${pointer_door}$" >/dev/null; then
+    return 0
+  fi
+
+  rm -f "$pointer_door"
+  computer-pointer serve "$pointer_door" >>"${logs}-pointer.log" 2>&1 &
+  await test -S "$pointer_door"
+}
+
 start() {
   if alive; then
+    resident_pointer
     exit 0
   fi
 
@@ -126,6 +138,9 @@ start() {
 
   await test -S "${runtime}/${wayland_display}" \
     || { echo "the compositor is not on ${wayland_display}" >&2; exit 1; }
+
+  resident_pointer \
+    || { echo "no resident pointer on ${pointer_door}" >&2; exit 1; }
 
   # A profile kept in a volume brings back a lock naming a gone container; clear only foreign ones.
   lock="$profile/SingletonLock"
@@ -154,11 +169,12 @@ stop() {
   [ -n "$sock" ] && swaymsg -s "$sock" exit >/dev/null 2>&1
 
   pkill -f -- "--user-data-dir=${profile}" || true
+  pkill -f "computer-pointer serve ${pointer_door}$" || true
   pkill -f "wayvnc .* ${view_vnc}$" || true
   pkill -f "wayvnc .* ${control_vnc}$" || true
   pkill -f "websockify.*${view_port}" || true
   pkill -f "websockify.*${control_port}" || true
-  rm -f "$sockfile" "$control_token"
+  rm -f "$sockfile" "$control_token" "$pointer_door"
 }
 
 control() {
@@ -224,7 +240,7 @@ recording_pid="/tmp/computer/recording-${screen}.pid"
 recording_flag="/tmp/computer/recording-${screen}.on"
 
 # wlroots publishes no input ffmpeg can read, so the frames come from `grim`.
-# No pointer: a synthetic move's virtual device lives for one command.
+# No pointer: headless sway draws no cursor for `grim` to capture.
 record() {
   what="${3:-}"
   fps="${4:-12}"

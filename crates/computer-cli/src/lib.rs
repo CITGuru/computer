@@ -173,9 +173,9 @@ computer — a desktop in a box
                               server lets the button go after --hold, 10 unless
                               told and 60 at most, and when a person takes the
                               screen over, so one that is forgotten does not
-                              stay down. X11 only. a batch does this with its
-                              mouse_down and mouse_up steps and holds the
-                              screen between them, which two commands cannot
+                              stay down. a batch does this with its mouse_down
+                              and mouse_up steps and holds the screen between
+                              them, which two commands cannot
   mouse <box> scroll [<x> <y>] up|down|left|right [notches]
   mouse <box> scroll <x> <y> <dy> [dx]
                               turn the wheel, in notches. a direction goes 3

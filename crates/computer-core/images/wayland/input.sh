@@ -4,7 +4,7 @@
 # On the path, so a shell or an `exec` meets the takeover gate too.
 set -uo pipefail
 
-verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|type|key ...}"
+verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|key ...}"
 shift
 
 screen=$(( ${WAYLAND_DISPLAY#wayland-} - 1 ))
@@ -22,8 +22,8 @@ fi
 [ -s "$sockfile" ] || { echo "screen ${screen} is not running" >&2; exit 1; }
 
 case "$verb" in
-  move|click|dblclick|drag|path|sweep|scroll)
-    computer-pointer "$verb" "$@"
+  move|click|dblclick|drag|path|sweep|scroll|down|up)
+    computer-pointer "$verb" "$@" || exit $?
     ;;
   # `-s` first: the first key races the keymap, so `KEYBOARD` arrives as `EYBOARD`.
   # `--` next, or text starting with a dash is read as a flag.
@@ -34,7 +34,7 @@ case "$verb" in
     said=$(wtype -s 120 "$@" 2>&1) || true
     ;;
   *)
-    echo "usage: computer-input move|click|dblclick|drag|path|sweep|scroll|type|key ..." >&2
+    echo "usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|key ..." >&2
     exit 2
     ;;
 esac

@@ -117,7 +117,9 @@ fn every_input_verb_the_driver_sends_is_one_the_script_answers() {
         .nth(1)
         .expect("the script dispatches on a verb");
 
-    for verb in ["move", "click", "dblclick", "drag", "scroll", "type", "key"] {
+    for verb in [
+        "move", "click", "dblclick", "drag", "path", "sweep", "scroll", "down", "up", "type", "key",
+    ] {
         // Alone or in an alternation, which is how the pointer verbs share one branch.
         assert!(
             dispatch.contains(&format!("{verb})")) || dispatch.contains(&format!("{verb}|")),
@@ -195,13 +197,137 @@ fn the_device_exists_before_any_event_is_sent_through_it() {
         .nth(1)
         .expect("the pointer is created");
     let before_first_event = created
-        .split("const char *verb")
+        .split("return 0;")
         .next()
-        .expect("the gesture follows");
+        .expect("the compositor is met before any gesture");
 
     assert!(
         before_first_event.contains("wl_display_roundtrip"),
         "without a trip in between, the first event of every gesture is lost"
+    );
+}
+
+#[test]
+fn one_pointer_stays_for_the_life_of_the_screen() {
+    let start = WAYLAND_SCREEN_SH
+        .split("start() {")
+        .nth(1)
+        .expect("the script starts a screen");
+    let compositor_up = start
+        .find(r#"test -S "${runtime}/${wayland_display}""#)
+        .expect("the compositor's socket is waited for");
+    let pointer_up = start
+        .rfind("resident_pointer")
+        .expect("a screen is given its pointer");
+
+    assert!(
+        pointer_up > compositor_up,
+        "a pointer asked for before the compositor is up has nothing to connect to"
+    );
+    assert!(
+        WAYLAND_SCREEN_SH.contains(r#"computer-pointer serve "$pointer_door""#),
+        "between two clients the seat has no pointer at all, so a button cannot stay down \
+         and a menu loses its hover after every command"
+    );
+    assert!(
+        WAYLAND_SCREEN_SH.contains(r#"pointer_door="${runtime}/computer-pointer""#)
+            && POINTER_C.contains(r#""%s/computer-pointer", runtime"#),
+        "the script and the client have to mean the same socket, and the runtime directory \
+         is what tells one screen from another"
+    );
+}
+
+#[test]
+fn a_pointer_that_died_is_brought_back_by_the_next_start() {
+    let live = WAYLAND_SCREEN_SH
+        .split("if alive; then")
+        .nth(1)
+        .and_then(|rest| rest.split("exit 0").next())
+        .expect("a live screen returns early");
+
+    assert!(
+        live.contains("resident_pointer"),
+        "start runs before every call, and returning early on a live compositor would \
+         leave a screen without its pointer for good"
+    );
+}
+
+#[test]
+fn a_gesture_the_pointer_refused_is_a_gesture_that_failed() {
+    assert!(
+        WAYLAND_INPUT_SH.contains(r#"computer-pointer "$verb" "$@" || exit $?"#),
+        "the script ends on a test of what wtype said, which is true for a pointer verb, so \
+         a press the pointer refused was reported as a press"
+    );
+}
+
+#[test]
+fn a_pointer_that_died_is_brought_back_by_whoever_needs_it_next() {
+    let forward = POINTER_C
+        .split("static int forward(")
+        .nth(1)
+        .expect("a run hands its gesture to the pointer that stays");
+    let revived = forward.find("revive(path)").expect("it starts one");
+    let gave_up = forward
+        .rfind("return 0;")
+        .expect("and falls back only after that");
+
+    assert!(
+        revived < gave_up,
+        "screen 0 is started once, so nothing else would ever start its pointer again"
+    );
+    assert!(
+        POINTER_C
+            .split("static int serve(")
+            .nth(1)
+            .is_some_and(|serve| serve.find("knock(path)") < serve.find("unlink(path)")),
+        "two runs that both found it dead would each start one, and the second would take \
+         the socket from under a pointer that may be holding a button"
+    );
+}
+
+#[test]
+fn a_wrong_word_does_not_end_the_pointer_that_stays() {
+    let gestures = POINTER_C
+        .split("static uint32_t button_code")
+        .nth(1)
+        .and_then(|rest| rest.split("static int meet_compositor").next())
+        .expect("the words are read and acted on between these two");
+
+    assert!(
+        !gestures.contains("exit("),
+        "the resident reads what any caller sends, and an exit on a bad number would drop \
+         every held button and the pointer with it"
+    );
+}
+
+#[test]
+fn a_button_is_held_only_where_something_stays_to_hold_it() {
+    assert!(
+        POINTER_C.contains("if (!resident)") && POINTER_C.contains("return HOMELESS;"),
+        "a press whose device goes away is left down by sway and the application hears \
+         nothing from the pointer until the next whole click"
+    );
+}
+
+#[test]
+fn a_gesture_is_over_when_its_command_returns() {
+    let answer = POINTER_C
+        .split("static void answer(int caller)")
+        .nth(1)
+        .expect("the resident answers a caller");
+    let gesture = answer
+        .find("gesture(count, words)")
+        .expect("it runs the gesture");
+    let trip = answer
+        .find("wl_display_roundtrip")
+        .expect("it waits for the compositor");
+    let ok = answer.find(r#"say(caller, "ok\n")"#).expect("it says so");
+
+    assert!(
+        gesture < trip && trip < ok,
+        "the caller takes a screenshot next, and one taken before the compositor has the \
+         click is a picture of the page before it"
     );
 }
 

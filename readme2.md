@@ -845,7 +845,7 @@ BOX=$(computer new --wayland)
 
 The public desktop API is the same for both profiles.
 
-The X11 image uses Xvfb, fluxbox, x11vnc, ImageMagick, and `xdotool`. The Wayland image uses headless sway, wayvnc, `grim`, and `wtype`.
+The X11 image uses Xvfb, fluxbox, x11vnc, ImageMagick, and `xdotool`. The Wayland image uses headless sway, wayvnc, `grim`, `wtype`, and one virtual pointer per screen that stays for the life of the screen, so a button can be held between two steps as on X11.
 
 Wayland cannot read the global pointer after a person moves it. `cursor()` returns `Unsupported` after a handover until the driver moves the pointer again.
 
