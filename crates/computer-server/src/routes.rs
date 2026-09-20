@@ -8,7 +8,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{any, delete, get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -60,6 +60,9 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{id}/screens/{screen}/viewer/socket",
             get(crate::viewer::socket),
         )
+        .route("/v1/cdp/{ticket}/json", any(crate::cdp::json_root))
+        .route("/v1/cdp/{ticket}/json/{*rest}", any(crate::cdp::json_under))
+        .route("/v1/cdp/{ticket}/devtools/{*rest}", get(crate::cdp::socket))
         .with_state(Arc::clone(&state));
 
     let gated = Router::new()
@@ -67,6 +70,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes", get(list_boxes).post(create_box))
         .route("/v1/boxes/{id}", get(get_box).delete(delete_box))
         .route("/v1/boxes/{id}/fork", post(fork))
+        .route("/v1/boxes/{id}/cdp", post(crate::cdp::ticket))
         .route("/v1/boxes/{id}/pause", post(pause_box))
         .route("/v1/boxes/{id}/resume", post(resume_box))
         .route("/v1/boxes/{id}/stop", post(stop_box))
@@ -243,6 +247,7 @@ async fn delete_box(
         .await;
     state.forget_screens(&id);
     state.tickets.forget(&id);
+    state.cdp_tickets.forget(&id);
 
     Ok(StatusCode::NO_CONTENT)
 }

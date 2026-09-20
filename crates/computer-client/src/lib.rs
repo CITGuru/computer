@@ -542,6 +542,20 @@ impl Client {
         .await
     }
 
+    pub async fn cdp(&self, id: &str, ttl_secs: Option<u64>) -> Result<CdpTicket> {
+        let query = ttl_secs
+            .map(|secs| format!("?ttl_secs={secs}"))
+            .unwrap_or_default();
+
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/cdp{query}"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     pub async fn recording(&self, id: &str, screen: u32) -> Result<RecordingView> {
         self.send(
             reqwest::Method::GET,

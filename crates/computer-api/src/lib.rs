@@ -927,6 +927,13 @@ pub struct ViewerTicket {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CdpTicket {
+    pub url: String,
+    pub ws_url: String,
+    pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordingView {
     pub recording: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

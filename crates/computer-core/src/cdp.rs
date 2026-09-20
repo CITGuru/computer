@@ -132,6 +132,14 @@ impl Devtools {
         self.get("/json/version").await
     }
 
+    pub async fn http(&self, method: &str, path: &str) -> Result<Value> {
+        self.request(method, path).await
+    }
+
+    pub fn socket_url(&self, path: &str) -> String {
+        format!("ws://{}:{}{path}", self.host, self.port)
+    }
+
     pub async fn targets(&self) -> Result<Vec<Target>> {
         let listed = self.get("/json/list").await?;
         Ok(listed

@@ -263,6 +263,8 @@ a server and this endpoint is only the HTTP in front of it.
 | `POST`/`DELETE` `…/screens/{n}/takeover` | hand the screen to a person, and take it back |
 | `GET …/screens/{n}/viewers` | who is watching and who is driving |
 | `POST /v1/boxes/{id}/fork` | build it again from its trace |
+| `POST /v1/boxes/{id}/cdp?ttl_secs=` | an address another library drives the browser by, with a ticket in its path |
+| `/v1/cdp/{ticket}/json/…`, `/v1/cdp/{ticket}/devtools/…` | the browser's DevTools through this server; the ticket admits, no bearer |
 | `GET /v1/catalog` | the app names a launch can ask for |
 | `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
 | `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |

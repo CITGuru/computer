@@ -283,6 +283,34 @@ Groups do not create screens. Many group pages can run through CDP at the same t
 
 This API wraps CDP browser contexts, not Chrome's visual tab groups. Visual tab groups are part of the extension-only `chrome.tabGroups` API.
 
+### Drive the browser with another library
+
+Anything that speaks CDP can drive the box's browser: agent-browser, Playwright, browser-use, Puppeteer. `computer cdp` prints an address that goes through the server, so it works against a server on another machine, and the DevTools port itself never leaves loopback:
+
+```bash
+BOX=$(computer up --url https://example.com)
+
+agent-browser --cdp "$(computer cdp $BOX --ws)" snapshot -i
+```
+
+```js
+const browser = await chromium.connectOverCDP(process.env.CDP);    // CDP=$(computer cdp $BOX)
+```
+
+```python
+session = BrowserSession(cdp_url=os.environ["CDP"])
+```
+
+The address carries a ticket in its path, which is all that admits a client: CDP has no authentication of its own, and these libraries send no bearer. Minting one takes the server's bearer. It lasts an hour, or `--ttl MINUTES`, and dies with the box. Treat it as you would the box's cookies, since whoever holds it can read them.
+
+- `computer cdp <box>` is an `http://` address for a library that reads `/json/version` under it: Playwright, browser-use. Every socket the browser names comes back pointed through the server.
+- `--ws` is the browser's socket. agent-browser needs this form: given an `http://` address it keeps the host and port and drops the path.
+- `--direct` is the box's own port, `http://127.0.0.1:<port>`. Nothing guards it and only this machine reaches it.
+
+A box published beyond loopback, and one in a cloud sandbox, withdraws its DevTools port, so there is no address of either kind for it.
+
+Both drivers can work at once. What another library does is not in `trace`, does not wait for a person who has taken the screen over, and is not held off by a `batch` that holds it. Over REST the ticket is `POST /v1/boxes/{id}/cdp`.
+
 ## Drive a native window by widget name
 
 A web page has Chromium behind it, so `find` and `click_element` know what is on it. A file dialog, a settings panel or an installer has nothing but pixels, and a coordinate worked out from a screenshot is stale the moment the window moves. The accessibility tree is what the toolkit itself publishes about its widgets: their roles, their names, and what pressing one would do.
@@ -1029,7 +1057,7 @@ let pair = computer.credentials();     // the password, under Auth::Password
 
 An open viewer beyond loopback is refused at launch rather than published. The two doors carry separate credentials, so a watch link does not become a control link by changing the port.
 
-DevTools is withdrawn rather than published, because CDP has no authentication and cannot be given one. Reach it through a tunnel, or from inside the box.
+DevTools is withdrawn rather than published, because CDP has no authentication and cannot be given one. Reach it through the server, which admits a ticket it minted (`computer cdp`), or from inside the box.
 
 `network(false)` blocks network access from the desktop. It does not gate the viewer.
 

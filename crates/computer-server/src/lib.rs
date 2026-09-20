@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cdp;
 pub mod error;
 pub mod extract;
 pub mod idempotency;
@@ -31,6 +32,7 @@ pub struct AppState {
     seen: Mutex<HashMap<(String, u32), String>>,
     pub cli: Option<Arc<dyn ContainerCli>>,
     pub tickets: viewer::Tickets,
+    pub cdp_tickets: viewer::Tickets,
 }
 
 impl Default for AppState {
@@ -56,6 +58,7 @@ impl AppState {
             seen: Mutex::new(HashMap::new()),
             cli: None,
             tickets: viewer::Tickets::default(),
+            cdp_tickets: viewer::Tickets::default(),
         }
     }
 
