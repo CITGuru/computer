@@ -2,7 +2,7 @@ use crate::AppState;
 use crate::spec;
 use computer::sandboxes::remote::{self, RemoteApi};
 use computer::{Computer, DockerMachine, Machine, Profile, SystemDocker};
-use computer_api::{Actor, DisplayServer, Placement, Spec, TraceEvent};
+use computer_api::{Actor, Button, DisplayServer, Placement, Spec, TraceEvent};
 use computer_storage::BoxRecord;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -189,6 +189,12 @@ async fn adopt_one(
     }
 
     let computer = taken.map_err(|error| error.to_string())?;
+
+    if running && !frozen {
+        for button in [Button::Left, Button::Middle, Button::Right] {
+            let _ = computer::Desktop::let_go(&computer, button).await;
+        }
+    }
 
     let entry = state
         .registry

@@ -101,6 +101,10 @@ pub async fn mouse(args: &[String]) -> computer::Result<()> {
             println!("{},{}", at.x, at.y);
             Ok(())
         }
+        "down" | "up" => Err(computer::Error::denied(
+            "a button held across commands needs a server, which lets it go when its time \
+             runs out. Run it without --local.",
+        )),
         other => Err(computer::Error::denied(format!("no such op: {other}"))),
     }
 }

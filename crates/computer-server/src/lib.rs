@@ -4,6 +4,7 @@ pub mod error;
 pub mod extract;
 pub mod idempotency;
 pub mod mcp;
+pub mod presses;
 pub mod prune;
 pub mod reap;
 pub mod recover;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub cli: Option<Arc<dyn ContainerCli>>,
     pub tickets: viewer::Tickets,
     pub cdp_tokens: viewer::Tickets,
+    pub presses: presses::Presses,
 }
 
 impl Default for AppState {
@@ -59,6 +61,7 @@ impl AppState {
             cli: None,
             tickets: viewer::Tickets::default(),
             cdp_tokens: viewer::Tickets::default(),
+            presses: presses::Presses::default(),
         }
     }
 

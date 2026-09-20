@@ -251,6 +251,7 @@ async fn delete_box(
     state.forget_screens(&id);
     state.tickets.forget(&id);
     state.cdp_tokens.forget(&id);
+    state.presses.take_box(&id);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -285,6 +286,8 @@ async fn actions(
     let mut windows = Vec::new();
     let mut tabs = Vec::new();
     let mut stopped_at = None;
+    let mut down: Vec<computer_types::Button> = Vec::new();
+    let mut holding: Vec<Holding> = Vec::new();
 
     for (index, action) in batch.actions.iter().enumerate() {
         let outcome = run(
@@ -341,6 +344,30 @@ async fn actions(
             }
         };
 
+        match (&outcome, action) {
+            (
+                Ok(_),
+                Action::MouseDown {
+                    button,
+                    hold_ms: Some(ms),
+                    ..
+                },
+            ) => {
+                down.retain(|held| held != button);
+                holding.retain(|held: &Holding| held.button != *button);
+                holding.push(hold(&state, &id, screen, *button, *ms));
+            }
+            (Ok(_), Action::MouseDown { button, .. }) if !down.contains(button) => {
+                down.push(*button)
+            }
+            (Ok(_), Action::MouseUp { button, .. }) => {
+                down.retain(|held| held != button);
+                holding.retain(|held| held.button != *button);
+                state.presses.close(&id, screen, *button);
+            }
+            _ => {}
+        }
+
         match outcome {
             Ok(did) => {
                 windows.extend(did.window);
@@ -368,6 +395,10 @@ async fn actions(
                 }
             }
         }
+    }
+
+    for button in &down {
+        let_go(&state, &entry, &id, screen, *button).await;
     }
 
     if let Some(ms) = batch.settle_ms {
@@ -406,6 +437,8 @@ async fn actions(
             stopped_at,
             frame,
             cursor,
+            released: down,
+            holding,
         },
     )
 }
@@ -709,15 +742,25 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
     let browser = doing.browser;
 
     match action {
-        Action::Move { to, motion, seed } => match motion.is_instant() {
-            true => desktop.move_to(*to).await?,
-            false => {
-                let from = pointer_start(desktop, spec).await;
-                desktop
-                    .move_along(&path(from, *to, *motion, seed.unwrap_or(0)))
-                    .await?
+        Action::Move {
+            to,
+            motion,
+            seed,
+            pause_ms,
+        } => {
+            match motion.is_instant() {
+                true => desktop.move_to(*to).await?,
+                false => {
+                    let from = pointer_start(desktop, spec).await;
+                    desktop
+                        .move_along(&path(from, *to, *motion, seed.unwrap_or(0)))
+                        .await?
+                }
             }
-        },
+            if let Some(ms) = pause_ms {
+                tokio::time::sleep(Duration::from_millis(*ms).min(MAX_PACE)).await;
+            }
+        }
         Action::Click {
             at,
             button,
@@ -795,6 +838,19 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
 
             desktop.drag_along(*first, &steps, *button, held).await?
         }
+        Action::MouseDown {
+            at,
+            button,
+            motion,
+            seed,
+            ..
+        } => {
+            if let Some(at) = at {
+                approach(desktop, spec, *at, *motion, *seed).await?;
+            }
+            desktop.button_down(*at, *button).await?;
+        }
+        Action::MouseUp { at, button } => desktop.button_up(*at, *button).await?,
         Action::Type { text, delay_ms } => {
             let pace = delay_ms.map(|ms| Duration::from_millis(ms).min(MAX_PACE));
             desktop.type_text(text, pace).await?
@@ -1075,6 +1131,71 @@ async fn pointer_start(desktop: &dyn EngineDesktop, spec: &Spec) -> computer_typ
     }
 }
 
+async fn let_go(
+    state: &AppState,
+    entry: &Entry,
+    id: &str,
+    screen: u32,
+    button: computer_types::Button,
+) {
+    let released = match entry.desktop(screen).await {
+        Ok(target) => target
+            .as_desktop()
+            .let_go(button)
+            .await
+            .map_err(ApiError::from),
+        Err(error) => Err(error),
+    };
+
+    state
+        .record(
+            id,
+            Actor::System,
+            TraceEvent::Acted {
+                screen,
+                action: Action::MouseUp { at: None, button },
+                ok: released.is_ok(),
+                error: released.err().map(|error| error.body),
+            },
+        )
+        .await;
+}
+
+fn hold(
+    state: &Arc<AppState>,
+    id: &str,
+    screen: u32,
+    button: computer_types::Button,
+    ms: u64,
+) -> Holding {
+    let life = Duration::from_millis(ms).min(crate::presses::LONGEST_HOLD);
+    let turn = state.presses.open(id, screen, button);
+    let until = SystemTime::now() + life;
+
+    let (state, id) = (Arc::clone(state), id.to_string());
+    tokio::spawn(async move {
+        tokio::time::sleep(life).await;
+
+        if !state.presses.close_turn(&id, screen, button, turn) {
+            return;
+        }
+        let Ok(entry) = state.registry.get(&id).await else {
+            return;
+        };
+        let Ok(lock) = entry.screen_lock(screen).await else {
+            return;
+        };
+
+        let _held = lock.lock().await;
+        let_go(&state, &entry, &id, screen, button).await;
+    });
+
+    Holding {
+        button,
+        until_ms: millis(until),
+    }
+}
+
 async fn approach(
     desktop: &dyn EngineDesktop,
     spec: &Spec,
@@ -1203,6 +1324,10 @@ async fn start_takeover(
     let held = target
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be handed over"))?;
+
+    for button in state.presses.take_screen(&id, screen) {
+        let_go(&state, &entry, &id, screen, button).await;
+    }
 
     let _ = capture(&state, &id, Actor::Agent, screen, target.as_desktop(), None).await;
 
@@ -1349,6 +1474,9 @@ async fn pause_box(
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.registry.get(&id).await?;
+    for (screen, button) in state.presses.take_box(&id) {
+        let_go(&state, &entry, &id, screen, button).await;
+    }
     entry.computer.pause().await?;
 
     state.record(&id, Actor::Agent, TraceEvent::BoxPaused).await;
@@ -1386,6 +1514,7 @@ async fn stop_box(
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.registry.get(&id).await?;
+    state.presses.take_box(&id);
     entry.computer.stop().await?;
 
     state

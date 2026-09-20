@@ -89,6 +89,40 @@ Three things worth knowing:
   `409` rather than handing back the first request's reply for work that never
   happened.
 
+## A press that waits before it lets go
+
+`mouse_down` and `mouse_up` press a button and let it go as separate actions,
+for what a `drag` cannot say: hold, wait for something, then release. A `move`
+between them drags.
+
+```json
+{ "actions": [
+    { "type": "mouse_down", "at": { "x": 400, "y": 400 } },
+    { "type": "on_page", "what": { "op": "wait_for", "query": "Drop here" } },
+    { "type": "move", "to": { "x": 900, "y": 600 }, "pause_ms": 40 },
+    { "type": "mouse_up" }
+] }
+```
+
+`hold_ms` on `mouse_down` keeps the button down after the batch ends, which is
+how `computer mouse <box> down` and `up` are two commands. Nothing holds the
+screen between two calls, so the server lets the button go itself: after
+`hold_ms`, 60 seconds at most; when a person takes the screen over; before the
+box is paused; and when a server takes the box back after a restart, which lost
+the timer. `holding` names the button and when it will be let go. Without
+`hold_ms` a button never outlives its batch.
+
+`pause_ms` waits after the move, a second at most. A drawing program reads the
+pointer at intervals and merges moves that arrive faster than it reads: without
+a pause GIMP joined the two ends of a stroke and never saw the corner between
+them. 40 is enough.
+
+Both take `at` and `button`, or act where the pointer is. They are safe only
+inside one batch, which holds the screen for the whole run. A button still down
+when the batch ends is let go, even when a step failed or a person took the
+screen over, and `released` names it. The trace records that release, so a fork
+replays it. X11 only: a Wayland box answers `unsupported`.
+
 ## A whole form in one request
 
 Page operations are also actions, so a form is one batch rather than a call per

@@ -412,6 +412,25 @@ pub trait Desktop: Send + Sync {
         })
     }
 
+    async fn button_down(&self, at: Option<Point>, button: Button) -> Result<()> {
+        let _ = (at, button);
+        Err(Error::Unsupported {
+            gaps: vec!["a button held across steps"],
+        })
+    }
+
+    async fn button_up(&self, at: Option<Point>, button: Button) -> Result<()> {
+        let _ = (at, button);
+        Err(Error::Unsupported {
+            gaps: vec!["a button held across steps"],
+        })
+    }
+
+    async fn let_go(&self, button: Button) -> Result<()> {
+        let _ = button;
+        Ok(())
+    }
+
     /// A desktop that cannot pace keystrokes must refuse a `delay`.
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()>;
 

@@ -191,6 +191,74 @@ async fn a_drag_presses_moves_through_the_middle_and_releases() {
 }
 
 #[tokio::test]
+async fn a_button_goes_down_and_up_in_commands_of_their_own() {
+    let host = Arc::new(ScriptedHost::new());
+    let screen = driver(Arc::clone(&host));
+
+    screen
+        .button_down(Some(Point::new(10, 20)), Button::Left)
+        .await
+        .expect("a press");
+    assert_eq!(host.last_line(), "xdotool mousemove -- 10 20 mousedown 1");
+
+    screen
+        .button_up(None, Button::Left)
+        .await
+        .expect("a release where the pointer is");
+    assert_eq!(host.last_line(), "xdotool mouseup 1");
+
+    screen
+        .button_up(Some(Point::new(30, 40)), Button::Right)
+        .await
+        .expect("a release somewhere else");
+    assert_eq!(host.last_line(), "xdotool mousemove -- 30 40 mouseup 3");
+}
+
+#[tokio::test]
+async fn a_button_is_let_go_even_while_a_person_holds_the_screen() {
+    let host = Arc::new(ScriptedHost::new());
+    let gate = Arc::new(ControlGate::new());
+    let screen = driver(Arc::clone(&host)).with_control(Arc::clone(&gate));
+
+    screen
+        .button_down(None, Button::Left)
+        .await
+        .expect("a press");
+    gate.hand_over("a person", SystemTime::now());
+
+    assert!(
+        screen.button_up(None, Button::Left).await.is_err(),
+        "a step is input, and input waits for the person like any other"
+    );
+
+    screen.let_go(Button::Left).await.expect("let go");
+    assert_eq!(
+        host.last_line(),
+        "xdotool mouseup 1",
+        "a button left down would drag everything the person then moves over"
+    );
+}
+
+#[tokio::test]
+async fn a_driver_that_cannot_hold_a_button_says_so() {
+    let host = Arc::new(ScriptedHost::new());
+    let wayland =
+        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
+
+    let refused = wayland
+        .button_down(None, Button::Left)
+        .await
+        .expect_err("its pointer client lets go when it exits");
+    assert!(
+        refused.to_string().contains("a button held across steps"),
+        "{refused}"
+    );
+
+    assert!(wayland.let_go(Button::Left).await.is_ok());
+    assert_eq!(host.count(), 0, "nothing was run to find that out");
+}
+
+#[tokio::test]
 async fn the_clipboard_is_read_with_one_command_and_written_from_a_file() {
     let host = Arc::new(ScriptedHost::new().saying("what was copied"));
     let screen = driver(Arc::clone(&host));

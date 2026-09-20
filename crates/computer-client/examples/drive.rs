@@ -43,6 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         to: Point { x: 640, y: 400 },
                         motion: Default::default(),
                         seed: None,
+                        pause_ms: None,
                     },
                 ],
                 settle_ms: Some(3000),
