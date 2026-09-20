@@ -3,7 +3,7 @@
 The `computer` command.
 
 ```bash
-computer up                        # opens a box, prints its id
+computer new                       # opens a box, prints its id
 computer open $BOX https://example.com
 computer shot $BOX out.png
 computer trace $BOX
@@ -46,4 +46,4 @@ The same limit applies without the flag whenever the server is the ephemeral one
 
 ## Conventions
 
-An id goes to standard output and everything a person reads goes to standard error, so `computer shot $(computer up)` works.
+An id goes to standard output and everything a person reads goes to standard error, so `computer shot $(computer new)` works.

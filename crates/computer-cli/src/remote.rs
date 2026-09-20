@@ -5,10 +5,7 @@ use computer_api::{
     SnapshotOptions, Where, Window, WindowOp,
 };
 use computer_client::{Client, captured_image, frame_png};
-use computer_types::{
-    Button, Desktop, DisplayServer, Feature, Motion, NodeQuery, Placement, Point, Search,
-    Selection, Spec,
-};
+use computer_types::{Button, Motion, NodeQuery, Point, Search, Selection};
 use std::time::Duration;
 
 type Done = Result<(), String>;
@@ -17,46 +14,16 @@ fn wanted(what: &str) -> String {
     format!("expected {what}\n\n{USAGE}")
 }
 
-pub async fn up(client: &Client, args: &[String]) -> Done {
-    let mut desktop = Desktop::default();
+pub async fn new(client: &Client, args: &[String]) -> Done {
+    let asked = crate::spec::asked(args)?;
 
-    if let Some(size) = flag(args, "--size") {
-        let (width, height) = size
-            .split_once(['x', 'X'])
-            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
-            .ok_or_else(|| "--size takes WIDTHxHEIGHT, such as 1920x1080".to_string())?;
-        desktop.width = Some(width);
-        desktop.height = Some(height);
+    if flag(args, "--name").is_some() {
+        return Err("a server names its own boxes: --name is for --local".to_string());
     }
-    if present(args, "--wide-fonts") {
-        desktop.features.push(Feature::WideFonts);
-    }
-    if present(args, "--accessibility") {
-        desktop.features.push(Feature::Accessibility);
-    }
-    if present(args, "--video") {
-        desktop.features.push(Feature::Video);
-    }
-    if present(args, "--wayland") {
-        desktop.server = DisplayServer::Wayland;
-    }
-
-    let mut placement = Placement::default();
-    if let Some(minutes) = flag(args, "--ttl") {
-        let minutes: u64 = minutes
-            .parse()
-            .map_err(|_| "--ttl takes a number of minutes".to_string())?;
-        placement.expires_after_secs = Some(minutes * 60);
-    }
-
-    let spec = Spec {
-        desktop,
-        ..Spec::default()
-    };
 
     eprintln!("opening a box (the first one builds the image) …");
     let created = client
-        .create(&spec, &placement, None)
+        .create(&asked.spec, &asked.placement, None)
         .await
         .map_err(|error| error.to_string())?;
 
@@ -74,7 +41,6 @@ pub async fn up(client: &Client, args: &[String]) -> Done {
             .map_err(|error| error.to_string())?;
     }
 
-    // Only the id goes to stdout, so `computer screenshot $(computer up)` works.
     println!("{}", created.id);
     if let Some(url) = &created.viewer_url {
         eprintln!("  watch it  {url}");
