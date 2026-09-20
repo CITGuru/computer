@@ -454,7 +454,7 @@ Three things differ inside the box:
 | ------- | --------------------- | --------------------------------------------------------------------- |
 | Server  | `Xvfb` plus `fluxbox` | `sway`, headless                                                      |
 | Capture | ImageMagick `import`  | `grim`                                                                |
-| Input   | `xdotool`             | `computer-input` — sway IPC for the pointer, `wtype` for the keyboard |
+| Input   | `xdotool`             | `computer-input` — a virtual pointer that stays, `wtype` for keys     |
 | Viewer  | `x11vnc -viewonly`    | `wayvnc -d`                                                           |
 | Runs as | root                  | an unprivileged user, because sway will not start as root             |
 
@@ -462,6 +462,8 @@ Three things differ inside the box:
 Screens are told apart differently. An X display number is global, so screen `N` is `:N+1`. A Wayland socket is a file, so every screen's compositor is `wayland-1` inside its own `XDG_RUNTIME_DIR`.
 
 Wayland input needs no extra privilege. It does **not** use `ydotool` or `/dev/uinput`, so the box keeps the isolation it was started with.
+
+The pointer is a `zwlr_virtual_pointer_v1` device, and such a device lives only as long as the client that made it. Each screen keeps one `computer-pointer serve` for its whole life and every gesture goes through it, so a button can stay down between two steps — `mouse_down` and `mouse_up` work as they do on X11 — and a menu keeps its hover from one command to the next. If it dies, the next gesture starts it again.
 
 `cursor()` **behaves differently.** No Wayland protocol lets a client read the global pointer position, so the driver reports where it last put the pointer. Once a person has driven the screen that value is stale, and `cursor()` returns `Error::Unsupported` until your next move:
 

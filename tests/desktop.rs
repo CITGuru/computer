@@ -240,22 +240,105 @@ async fn a_button_is_let_go_even_while_a_person_holds_the_screen() {
 }
 
 #[tokio::test]
-async fn a_driver_that_cannot_hold_a_button_says_so() {
+async fn wayland_holds_a_button_through_the_pointer_that_stays() {
     let host = Arc::new(ScriptedHost::new());
     let wayland =
         computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
 
-    let refused = wayland
+    wayland
+        .button_down(Some(Point::new(10, 20)), Button::Left)
+        .await
+        .expect("a press");
+    assert_eq!(host.last_line(), "computer-input down left 10 20");
+
+    wayland
+        .button_up(None, Button::Right)
+        .await
+        .expect("a release where the pointer is");
+    assert_eq!(host.last_line(), "computer-input up right");
+}
+
+#[tokio::test]
+async fn wayland_lets_a_button_go_past_both_of_its_gates() {
+    let host = Arc::new(ScriptedHost::new());
+    let gate = Arc::new(ControlGate::new());
+    let wayland =
+        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0))
+            .with_control(Arc::clone(&gate));
+
+    wayland
         .button_down(None, Button::Left)
         .await
-        .expect_err("its pointer client lets go when it exits");
+        .expect("a press");
+    gate.hand_over("a person", SystemTime::now());
+
+    assert!(
+        wayland.button_up(None, Button::Left).await.is_err(),
+        "a step is input, and input waits for the person like any other"
+    );
+
+    wayland.let_go(Button::Left).await.expect("let go");
+    assert_eq!(
+        host.last_line(),
+        "computer-pointer up left",
+        "computer-input refuses while a person holds the screen, so the release goes to \
+         the pointer itself"
+    );
+}
+
+#[tokio::test]
+async fn a_driver_that_cannot_hold_a_button_says_so() {
+    struct Bare;
+
+    #[async_trait::async_trait]
+    impl Desktop for Bare {
+        async fn screenshot(&self) -> computer::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        async fn move_to(&self, _: Point) -> computer::Result<()> {
+            Ok(())
+        }
+        async fn click(&self, _: Point, _: Button) -> computer::Result<()> {
+            Ok(())
+        }
+        async fn double_click(&self, _: Point, _: Button) -> computer::Result<()> {
+            Ok(())
+        }
+        async fn drag(&self, _: Point, _: Point, _: Button) -> computer::Result<()> {
+            Ok(())
+        }
+        async fn type_text(&self, _: &str, _: Option<std::time::Duration>) -> computer::Result<()> {
+            Ok(())
+        }
+        async fn press(&self, _: &[String], _: &[computer::Held]) -> computer::Result<()> {
+            Ok(())
+        }
+        async fn scroll(&self, _: Point, _: Delta) -> computer::Result<()> {
+            Ok(())
+        }
+        async fn cursor(&self) -> computer::Result<Point> {
+            Ok(Point::new(0, 0))
+        }
+        async fn geometry(&self) -> computer::Result<(u32, u32)> {
+            Ok((1, 1))
+        }
+        async fn alive(&self) -> computer::Result<()> {
+            Ok(())
+        }
+        fn control(&self) -> &Arc<ControlGate> {
+            unreachable!("nothing here asks who holds the screen")
+        }
+    }
+
+    let refused = Bare
+        .button_down(None, Button::Left)
+        .await
+        .expect_err("a driver that was never taught to");
     assert!(
         refused.to_string().contains("a button held across steps"),
         "{refused}"
     );
-
-    assert!(wayland.let_go(Button::Left).await.is_ok());
-    assert_eq!(host.count(), 0, "nothing was run to find that out");
+    assert!(Bare.let_go(Button::Left).await.is_ok());
 }
 
 #[tokio::test]

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub const INPUT_COMMAND: &str = "computer-input";
+pub const POINTER_COMMAND: &str = "computer-pointer";
 
 pub const DISPLAY_NAME: &str = "wayland-1";
 
@@ -86,11 +87,17 @@ fn input_argv(verb: &str, parts: &[String]) -> Vec<String> {
     args
 }
 
+fn button_parts(button: Button, at: Option<Point>) -> Vec<String> {
+    let mut parts = vec![button_name(button).to_string()];
+    parts.extend(at.map(point_parts).unwrap_or_default());
+    parts
+}
+
 fn point_parts(at: Point) -> Vec<String> {
     vec![at.x.to_string(), at.y.to_string()]
 }
 
-/// Not `grim -c`: a synthetic pointer lives for one command, so the seat has no cursor to draw.
+/// Not `grim -c`: headless sway draws no cursor, even with a pointer on the seat.
 fn pointing_argv(at: Point, area: Option<Rect>, scale: Option<u32>) -> Vec<String> {
     let mut draw = vec![
         "convert".to_string(),
@@ -359,6 +366,34 @@ impl Desktop for WaylandDesktop {
         self.act(input_argv("sweep", &parts)).await?;
         self.moved_to(last.at);
         Ok(())
+    }
+
+    async fn button_down(&self, at: Option<Point>, button: Button) -> Result<()> {
+        self.act(input_argv("down", &button_parts(button, at)))
+            .await?;
+        if let Some(at) = at {
+            self.moved_to(at);
+        }
+        Ok(())
+    }
+
+    async fn button_up(&self, at: Option<Point>, button: Button) -> Result<()> {
+        self.act(input_argv("up", &button_parts(button, at)))
+            .await?;
+        if let Some(at) = at {
+            self.moved_to(at);
+        }
+        Ok(())
+    }
+
+    async fn let_go(&self, button: Button) -> Result<()> {
+        self.run(vec![
+            POINTER_COMMAND.to_string(),
+            "up".to_string(),
+            button_name(button).to_string(),
+        ])
+        .await
+        .map(|_| ())
     }
 
     /// `wtype -s` sleeps once before the first key, not between keys, so pace is ignored.

@@ -121,7 +121,9 @@ Both take `at` and `button`, or act where the pointer is. They are safe only
 inside one batch, which holds the screen for the whole run. A button still down
 when the batch ends is let go, even when a step failed or a person took the
 screen over, and `released` names it. The trace records that release, so a fork
-replays it. X11 only: a Wayland box answers `unsupported`.
+replays it. X11 keeps a button down by itself. On Wayland a virtual pointer lives
+only as long as its client, so each screen keeps one `computer-pointer serve`
+for its whole life and every gesture goes through it.
 
 ## A whole form in one request
 
