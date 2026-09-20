@@ -287,10 +287,48 @@ fn every_command_a_driver_runs_is_run_in_a_locale_that_reads_utf8() {
         assert_eq!(
             environment.get("LANG").map(String::as_str),
             Some("C.UTF-8"),
-            "{named}: in the C locale xdotool typed the h of héllo and failed, and wtype \
-             typed nothing at all"
+            "{named}: in the C locale xdotool typed the h of héllo and failed, and the \
+             Wayland keyboard cannot read the text it is handed"
         );
     }
+}
+
+#[tokio::test]
+async fn wayland_holds_a_modifier_through_a_pointer_gesture() {
+    let host = Arc::new(ScriptedHost::new());
+    let wayland =
+        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
+    let held = [computer::Held::Ctrl, computer::Held::Shift];
+
+    wayland
+        .click_with(Point::new(10, 20), Button::Left, &held)
+        .await
+        .expect("a click with two modifiers");
+    assert_eq!(
+        host.last_line(),
+        "computer-input with ctrl,shift click 10 20 left",
+        "one run, so the modifiers come up in the command that put them down"
+    );
+
+    wayland
+        .drag_with(
+            Point::new(1, 2),
+            Point::new(30, 40),
+            Button::Left,
+            &held[1..],
+        )
+        .await
+        .expect("a drag with shift");
+    assert_eq!(
+        host.last_line(),
+        "computer-input with shift drag 1 2 30 40 left"
+    );
+
+    wayland
+        .click_with(Point::new(10, 20), Button::Left, &[])
+        .await
+        .expect("a plain click");
+    assert_eq!(host.last_line(), "computer-input click 10 20 left");
 }
 
 #[tokio::test]

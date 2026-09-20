@@ -1,25 +1,26 @@
-# The pointer is compiled here: Debian packages no client for `zwlr_virtual_pointer_v1`.
+# The pointer and the keyboard are compiled here: Debian packages no client for either protocol.
 FROM debian:bookworm-slim AS pointer
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc libc6-dev libwayland-dev libwayland-bin \
   && rm -rf /var/lib/apt/lists/*
 
-COPY pointer.c wlr-virtual-pointer-unstable-v1.xml /src/
+COPY pointer.c wlr-virtual-pointer-unstable-v1.xml virtual-keyboard-unstable-v1.xml /src/
 RUN cd /src \
-  && wayland-scanner client-header wlr-virtual-pointer-unstable-v1.xml \
-       wlr-virtual-pointer-unstable-v1-client-protocol.h \
-  && wayland-scanner private-code wlr-virtual-pointer-unstable-v1.xml \
-       wlr-virtual-pointer-unstable-v1-protocol.c \
+  && for protocol in wlr-virtual-pointer-unstable-v1 virtual-keyboard-unstable-v1; do \
+       wayland-scanner client-header "$protocol.xml" "$protocol-client-protocol.h" \
+       && wayland-scanner private-code "$protocol.xml" "$protocol-protocol.c" \
+       || exit 1; \
+     done \
   && gcc -O2 -Wall -Wextra -Werror -o computer-pointer \
-       pointer.c wlr-virtual-pointer-unstable-v1-protocol.c -lwayland-client
+       pointer.c wlr-virtual-pointer-unstable-v1-protocol.c \
+       virtual-keyboard-unstable-v1-protocol.c -lwayland-client
 
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       sway \
       wayvnc \
-      wtype \
       grim \
       imagemagick \
       wl-clipboard \
