@@ -268,6 +268,24 @@ fn a_pace_is_a_pause_after_every_key() {
 }
 
 #[test]
+fn the_script_tells_screens_apart_the_way_the_driver_does() {
+    assert!(
+        WAYLAND_INPUT_SH.contains(r#"number="${runtime##*/run-}""#)
+            && !WAYLAND_INPUT_SH.contains("WAYLAND_DISPLAY#"),
+        "every screen's compositor is {DISPLAY_NAME}, so a screen read from that name is \
+         always 0: a person on screen 0 stopped input to every screen, and one on \
+         screen 1 stopped none"
+    );
+
+    let second = computer::servers::wayland::runtime_dir(ScreenId(1));
+    assert_eq!(second, "/tmp/computer/run-2");
+    assert!(
+        WAYLAND_SCREEN_SH.contains(r#"runtime="/tmp/computer/run-${number}""#),
+        "the driver, the screen script and the input script have to mean the same directory"
+    );
+}
+
+#[test]
 fn a_gesture_that_was_refused_is_a_gesture_that_failed() {
     assert!(
         WAYLAND_INPUT_SH.contains(r#"computer-pointer "$verb" "$@" || exit $?"#),

@@ -7,7 +7,15 @@ set -uo pipefail
 verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key|with ...}"
 shift
 
-screen=$(( ${WAYLAND_DISPLAY#wayland-} - 1 ))
+runtime="${XDG_RUNTIME_DIR:-}"
+number="${runtime##*/run-}"
+case "$number" in
+  ''|*[!0-9]*)
+    echo "XDG_RUNTIME_DIR is '${runtime}', which is no screen's runtime directory" >&2
+    exit 2
+    ;;
+esac
+screen=$(( number - 1 ))
 sockfile="/tmp/computer/screen-${screen}.sway"
 token_file="/tmp/computer/screen-${screen}.control"
 
