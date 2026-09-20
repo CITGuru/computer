@@ -511,8 +511,9 @@ pub fn catalogue() -> Value {
                             "properties": {
                                 "tool": {
                                     "type": "string",
-                                    "description": "click, move, drag, draw, scroll, type_text, \
-                                                    press_key, wait, wait_until_still, open_url, \
+                                    "description": "click, move, mouse_down, mouse_up, drag, draw, \
+                                                    scroll, type_text, press_key, wait, \
+                                                    wait_until_still, open_url, \
                                                     open_app, click_element, fill_field, focus, \
                                                     check, dropdown, upload_file, wait_for, \
                                                     hover, drag_element, history, scroll_page, \
@@ -524,7 +525,19 @@ pub fn catalogue() -> Value {
                                                     `through`, a list of {x, y}: one press \
                                                     through every point and one release, which \
                                                     is one stroke where a drag for each leg \
-                                                    would be several."
+                                                    would be several. `mouse_down` and `mouse_up` \
+                                                    press a button and let it go as separate \
+                                                    steps, for a press that has to wait for \
+                                                    something before it lets go: mouse_down, \
+                                                    wait_for, mouse_up. Both take `x` and `y`, or \
+                                                    neither to act where the pointer is, and \
+                                                    `button`; a `move` between them drags, and \
+                                                    `pause_ms` on each `move` (40 is enough) \
+                                                    keeps a drawing program from merging points \
+                                                    that arrive too fast. They \
+                                                    exist only here: a button still down when \
+                                                    the batch ends is let go, and the answer \
+                                                    says so."
                                 },
                                 "arguments": {
                                     "type": "object",
@@ -2523,6 +2536,12 @@ async fn batched(client: &Client, arguments: &Value) -> Result<Answer, String> {
                 .filter(|at| at + 1 < steps.len())
                 .map(|at| format!("{} step(s) did not run", steps.len() - at - 1)),
         )
+        .chain(result.released.iter().map(|button| {
+            format!(
+                "the {} button was still down when the batch ended, and was let go",
+                format!("{button:?}").to_lowercase()
+            )
+        }))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -2742,6 +2761,17 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
             to: point(arguments, "x", "y")?,
             motion: motion(arguments)?,
             seed: seed(arguments),
+            pause_ms: arguments.get("pause_ms").and_then(Value::as_u64),
+        },
+        "mouse_down" => Action::MouseDown {
+            at: spot(arguments)?,
+            button: button(arguments),
+            motion: motion(arguments)?,
+            seed: seed(arguments),
+        },
+        "mouse_up" => Action::MouseUp {
+            at: spot(arguments)?,
+            button: button(arguments),
         },
         "type_text" => Action::Type {
             text: text(arguments, "text")?,
@@ -3143,6 +3173,13 @@ fn point(arguments: &Value, x: &str, y: &str) -> Result<Point, String> {
     })
 }
 
+fn spot(arguments: &Value) -> Result<Option<Point>, String> {
+    match (arguments.get("x"), arguments.get("y")) {
+        (None, None) => Ok(None),
+        _ => point(arguments, "x", "y").map(Some),
+    }
+}
+
 fn button(arguments: &Value) -> Button {
     match arguments.get("button").and_then(Value::as_str) {
         Some("right") => Button::Right,
@@ -3320,6 +3357,48 @@ mod tests {
         assert_eq!(placement.cpus.as_deref(), Some("2"));
         assert_eq!(placement.expires_after_secs, Some(3600));
         assert_eq!(placement.idle_timeout_secs, Some(600));
+    }
+
+    #[test]
+    fn test_a_button_is_a_batch_step_with_a_point_or_without_one() {
+        assert_eq!(
+            action_of(
+                "mouse_down",
+                &json!({ "x": 10, "y": 20, "button": "right" })
+            ),
+            Ok(Action::MouseDown {
+                at: Some(Point { x: 10, y: 20 }),
+                button: Button::Right,
+                motion: Motion::default(),
+                seed: None,
+            })
+        );
+        assert_eq!(
+            action_of("mouse_up", &json!({})),
+            Ok(Action::MouseUp {
+                at: None,
+                button: Button::Left,
+            })
+        );
+        assert!(
+            action_of("mouse_up", &json!({ "x": 10 })).is_err(),
+            "half a point is a mistake, and releasing where the pointer is would hide it"
+        );
+    }
+
+    #[test]
+    fn test_a_move_step_carries_its_pause() {
+        assert!(matches!(
+            action_of("move", &json!({ "x": 10, "y": 20, "pause_ms": 40 })),
+            Ok(Action::Move {
+                pause_ms: Some(40),
+                ..
+            })
+        ));
+        assert!(matches!(
+            action_of("move", &json!({ "x": 10, "y": 20 })),
+            Ok(Action::Move { pause_ms: None, .. })
+        ));
     }
 
     #[test]

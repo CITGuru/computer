@@ -172,6 +172,27 @@ impl Desktop for ScriptedDesktop {
         ))
     }
 
+    async fn button_down(&self, at: Option<Point>, button: Button) -> Result<()> {
+        self.act(match at {
+            Some(at) => format!("button_down {} {} {button:?}", at.x, at.y),
+            None => format!("button_down {button:?}"),
+        })
+    }
+
+    async fn button_up(&self, at: Option<Point>, button: Button) -> Result<()> {
+        self.act(match at {
+            Some(at) => format!("button_up {} {} {button:?}", at.x, at.y),
+            None => format!("button_up {button:?}"),
+        })
+    }
+
+    async fn let_go(&self, button: Button) -> Result<()> {
+        if let Ok(mut acted) = self.acted.lock() {
+            acted.push(format!("let_go {button:?}"));
+        }
+        Ok(())
+    }
+
     async fn move_along(&self, steps: &[crate::motion::Step]) -> Result<()> {
         let last = steps.last().map(|step| step.at).unwrap_or_default();
         self.act(format!("move_along {} {} {}", steps.len(), last.x, last.y))

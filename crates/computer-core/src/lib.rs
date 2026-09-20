@@ -1471,6 +1471,18 @@ impl Desktop for Computer {
         Desktop::drag_along(&self.primary, from, steps, button, held).await
     }
 
+    async fn button_down(&self, at: Option<Point>, button: Button) -> Result<()> {
+        Desktop::button_down(&self.primary, at, button).await
+    }
+
+    async fn button_up(&self, at: Option<Point>, button: Button) -> Result<()> {
+        Desktop::button_up(&self.primary, at, button).await
+    }
+
+    async fn let_go(&self, button: Button) -> Result<()> {
+        Desktop::let_go(&self.primary, button).await
+    }
+
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
         Desktop::wait_until_still(&self.primary, settle, within).await
     }
@@ -2123,6 +2135,18 @@ impl Desktop for Screen {
         held: &[Held],
     ) -> Result<()> {
         self.driver.drag_along(from, steps, button, held).await
+    }
+
+    async fn button_down(&self, at: Option<Point>, button: Button) -> Result<()> {
+        self.driver.button_down(at, button).await
+    }
+
+    async fn button_up(&self, at: Option<Point>, button: Button) -> Result<()> {
+        self.driver.button_up(at, button).await
+    }
+
+    async fn let_go(&self, button: Button) -> Result<()> {
+        self.driver.let_go(button).await
     }
 
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {

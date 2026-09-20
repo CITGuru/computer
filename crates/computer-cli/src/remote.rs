@@ -544,7 +544,17 @@ pub async fn mouse(client: &Client, args: &[String]) -> Done {
         "move" => {
             let to = point(&rest, 1)?;
             let (motion, seed) = motion(args)?;
-            act(client, id, Action::Move { to, motion, seed }).await
+            act(
+                client,
+                id,
+                Action::Move {
+                    to,
+                    motion,
+                    seed,
+                    pause_ms: None,
+                },
+            )
+            .await
         }
         "drag" => {
             let (motion, seed) = motion(args)?;
@@ -1186,6 +1196,13 @@ pub async fn batch(client: &Client, args: &[String]) -> Done {
         }
     }
 
+    for button in &result.released {
+        eprintln!(
+            "the {} button was still down when the batch ended, and was let go",
+            format!("{button:?}").to_lowercase()
+        );
+    }
+
     let refused = result.results.iter().filter(|one| !one.ok).count();
 
     match (result.stopped_at, refused) {
@@ -1253,6 +1270,14 @@ fn name_of(action: &Action) -> String {
         Action::Drag { from, to, .. } => {
             format!("drag {},{} → {},{}", from.x, from.y, to.x, to.y)
         }
+        Action::MouseDown { at, button, .. } => match at {
+            Some(at) => format!("{button:?} button down at {},{}", at.x, at.y).to_lowercase(),
+            None => format!("{button:?} button down").to_lowercase(),
+        },
+        Action::MouseUp { at, button } => match at {
+            Some(at) => format!("{button:?} button up at {},{}", at.x, at.y).to_lowercase(),
+            None => format!("{button:?} button up").to_lowercase(),
+        },
         Action::Type { text, .. } => format!("type {text:?}"),
         Action::Press { chord, then, .. } => match then.is_empty() {
             true => format!("press {chord}"),

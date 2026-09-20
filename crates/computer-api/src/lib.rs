@@ -61,6 +61,8 @@ pub enum Action {
         motion: Motion,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seed: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pause_ms: Option<u64>,
     },
     Click {
         #[serde(default)]
@@ -121,6 +123,22 @@ pub enum Action {
         motion: Motion,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seed: Option<u64>,
+    },
+    MouseDown {
+        #[serde(default)]
+        at: Option<Point>,
+        #[serde(default)]
+        button: Button,
+        #[serde(default, skip_serializing_if = "Motion::is_instant")]
+        motion: Motion,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
+    },
+    MouseUp {
+        #[serde(default)]
+        at: Option<Point>,
+        #[serde(default)]
+        button: Button,
     },
     /// In notches: positive `dy` down, positive `dx` right.
     Scroll {
@@ -614,6 +632,8 @@ pub struct BatchResult {
     /// Empty on a box that publishes no DevTools port.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tabs: Vec<Tab>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub released: Vec<Button>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1161,6 +1181,89 @@ mod tests {
             .is_whole(),
             "the plain path cannot draw one, so a pointer shot must not take it"
         );
+    }
+
+    #[test]
+    fn test_a_button_goes_down_and_up_where_the_pointer_is_unless_told() {
+        let down: Action = serde_json::from_str(r#"{"type":"mouse_down"}"#).expect("parses");
+        assert_eq!(
+            down,
+            Action::MouseDown {
+                at: None,
+                button: Button::Left,
+                motion: Motion::default(),
+                seed: None,
+            }
+        );
+
+        let up: Action =
+            serde_json::from_str(r#"{"type":"mouse_up","at":{"x":30,"y":40},"button":"right"}"#)
+                .expect("parses");
+        assert_eq!(
+            up,
+            Action::MouseUp {
+                at: Some(Point { x: 30, y: 40 }),
+                button: Button::Right,
+            }
+        );
+
+        assert_eq!(
+            serde_json::to_string(&down).expect("writes"),
+            r#"{"type":"mouse_down","at":null,"button":"left"}"#
+        );
+    }
+
+    #[test]
+    fn test_a_move_can_pause_so_a_drawing_program_sees_every_point() {
+        let paced: Action =
+            serde_json::from_str(r#"{"type":"move","to":{"x":10,"y":20},"pause_ms":40}"#)
+                .expect("parses");
+        assert!(matches!(
+            paced,
+            Action::Move {
+                pause_ms: Some(40),
+                ..
+            }
+        ));
+
+        let plain: Action =
+            serde_json::from_str(r#"{"type":"move","to":{"x":10,"y":20}}"#).expect("parses");
+        assert!(matches!(plain, Action::Move { pause_ms: None, .. }));
+        assert_eq!(
+            serde_json::to_string(&plain).expect("writes"),
+            r#"{"type":"move","to":{"x":10,"y":20}}"#,
+            "a move with no pause is the move an older server already takes"
+        );
+    }
+
+    #[test]
+    fn test_a_batch_names_a_button_it_let_go_only_when_it_did() {
+        let quiet = BatchResult {
+            results: Vec::new(),
+            stopped_at: None,
+            frame: None,
+            cursor: None,
+            windows: Vec::new(),
+            tabs: Vec::new(),
+            released: Vec::new(),
+        };
+        assert!(
+            !serde_json::to_string(&quiet)
+                .expect("writes")
+                .contains("released")
+        );
+
+        let said = serde_json::to_string(&BatchResult {
+            released: vec![Button::Left],
+            ..quiet
+        })
+        .expect("writes");
+        assert!(said.contains(r#""released":["left"]"#), "{said}");
+
+        let older: BatchResult =
+            serde_json::from_str(r#"{"results":[],"stopped_at":null,"frame":null,"cursor":null}"#)
+                .expect("an answer from a server that has no such field");
+        assert!(older.released.is_empty());
     }
 
     #[test]

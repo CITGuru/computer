@@ -83,6 +83,15 @@ pub fn parse_cursor(output: &str) -> Option<Point> {
     Some(Point { x: x?, y: y? })
 }
 
+fn button_argv(at: Option<Point>, verb: &str, button: Button) -> Vec<String> {
+    let mut args = match at {
+        Some(at) => point_argv(&["xdotool", "mousemove", "--"], at),
+        None => argv(&["xdotool"]),
+    };
+    args.extend(argv(&[verb, button_number(button)]));
+    args
+}
+
 fn point_argv(command: &[&str], at: Point) -> Vec<String> {
     let mut args = argv(command);
     args.push(at.x.to_string());
@@ -349,6 +358,20 @@ impl Desktop for X11Desktop {
         args.extend(letting_go(held));
 
         self.act(args).await
+    }
+
+    async fn button_down(&self, at: Option<Point>, button: Button) -> Result<()> {
+        self.act(button_argv(at, "mousedown", button)).await
+    }
+
+    async fn button_up(&self, at: Option<Point>, button: Button) -> Result<()> {
+        self.act(button_argv(at, "mouseup", button)).await
+    }
+
+    async fn let_go(&self, button: Button) -> Result<()> {
+        self.run(button_argv(None, "mouseup", button))
+            .await
+            .map(|_| ())
     }
 
     async fn move_along(&self, steps: &[Step]) -> Result<()> {

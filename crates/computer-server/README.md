@@ -89,6 +89,32 @@ Three things worth knowing:
   `409` rather than handing back the first request's reply for work that never
   happened.
 
+## A press that waits before it lets go
+
+`mouse_down` and `mouse_up` press a button and let it go as separate actions,
+for what a `drag` cannot say: hold, wait for something, then release. A `move`
+between them drags.
+
+```json
+{ "actions": [
+    { "type": "mouse_down", "at": { "x": 400, "y": 400 } },
+    { "type": "on_page", "what": { "op": "wait_for", "query": "Drop here" } },
+    { "type": "move", "to": { "x": 900, "y": 600 }, "pause_ms": 40 },
+    { "type": "mouse_up" }
+] }
+```
+
+`pause_ms` waits after the move, a second at most. A drawing program reads the
+pointer at intervals and merges moves that arrive faster than it reads: without
+a pause GIMP joined the two ends of a stroke and never saw the corner between
+them. 40 is enough.
+
+Both take `at` and `button`, or act where the pointer is. They are safe only
+inside one batch, which holds the screen for the whole run. A button still down
+when the batch ends is let go, even when a step failed or a person took the
+screen over, and `released` names it. The trace records that release, so a fork
+replays it. X11 only: a Wayland box answers `unsupported`.
+
 ## A whole form in one request
 
 Page operations are also actions, so a form is one batch rather than a call per
