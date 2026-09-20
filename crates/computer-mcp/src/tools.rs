@@ -8,7 +8,7 @@ use computer_api::{
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{
-    App, Button, Desktop, DisplayServer, Feature, Motion, Placement, Point, Selection, Spec,
+    App, Button, Desktop, DisplayServer, Feature, Motion, Placement, Point, Search, Selection, Spec,
 };
 use serde_json::{Value, json};
 
@@ -1003,6 +1003,65 @@ pub fn catalogue() -> Value {
             ),
         ),
         tool(
+            "list_files",
+            "What a directory in the box holds, one level down. Sizes are bytes; a directory \
+             has none.",
+            with_box(
+                json!({ "path": { "type": "string", "description": "`/` unless you say." } }),
+                &[]
+            )
+        ),
+        tool(
+            "grep",
+            "Lines matching a pattern under a directory, as `path:line:text`. The directory is \
+             required: searching a whole box answers in megabytes. Capped at 200 lines, and the \
+             answer says when it was cut — narrow it with `include` rather than asking again.",
+            with_box(
+                json!({
+                    "pattern": { "type": "string", "description": "A basic regular expression." },
+                    "path": { "type": "string", "description": "The directory to search." },
+                    "include": {
+                        "type": "string",
+                        "description": "Only files whose name matches, as `*.conf`."
+                    },
+                    "ignore_case": { "type": "boolean" },
+                    "limit": { "type": "integer", "description": "Lines, at most 200." }
+                }),
+                &["pattern", "path"]
+            )
+        ),
+        tool(
+            "glob",
+            "Paths whose name matches, as `*.log`. A pattern holding a slash is matched against \
+             the whole path. Capped at 200.",
+            with_box(
+                json!({
+                    "pattern": { "type": "string" },
+                    "path": { "type": "string", "description": "`/` unless you say." },
+                    "limit": { "type": "integer" }
+                }),
+                &["pattern"]
+            )
+        ),
+        tool(
+            "read_file",
+            "Read a file out of the box as text. A file that is not UTF-8 is refused rather \
+             than answered with something that only looks like text.",
+            with_box(json!({ "path": { "type": "string" } }), &["path"])
+        ),
+        tool(
+            "write_file",
+            "Write text into a file in the box, replacing what was there. This is how a file \
+             gets somewhere `upload_file` can hand it to a page.",
+            with_box(
+                json!({
+                    "path": { "type": "string" },
+                    "text": { "type": "string" }
+                }),
+                &["path", "text"]
+            )
+        ),
+        tool(
             "run_command",
             "Run a command inside the box and read its output. This is a shell in the same \
              machine as the desktop, not a way to move the pointer.",
@@ -1729,6 +1788,122 @@ pub async fn call(
                 true => format!("{} … (truncated)", answered.json),
                 false => answered.json,
             }))
+        }
+        "list_files" => {
+            let id = text(arguments, "box_id")?;
+            let path = arguments.get("path").and_then(Value::as_str).unwrap_or("/");
+
+            let listing = client
+                .list_dir(&id, path)
+                .await
+                .map_err(|e| e.to_string())?;
+            if listing.entries.is_empty() {
+                return Ok(Answer::Text(format!("{path} is empty")));
+            }
+
+            let said = listing
+                .entries
+                .iter()
+                .map(|entry| match entry.dir {
+                    true => format!("{}/", entry.name),
+                    false => format!("{} ({} bytes)", entry.name, entry.bytes),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            Ok(Answer::Text(format!("{path}\n{said}")))
+        }
+        "grep" => {
+            let id = text(arguments, "box_id")?;
+            let found = client
+                .grep(
+                    &id,
+                    &Search {
+                        pattern: text(arguments, "pattern")?,
+                        path: text(arguments, "path")?,
+                        include: arguments
+                            .get("include")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        ignore_case: flag(arguments, "ignore_case"),
+                        limit: arguments
+                            .get("limit")
+                            .and_then(Value::as_u64)
+                            .map(|n| n as usize),
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if found.matches.is_empty() {
+                return Ok(Answer::Text("nothing matched".to_string()));
+            }
+
+            let mut said = found
+                .matches
+                .iter()
+                .map(|one| format!("{}:{}:{}", one.path, one.line, one.text))
+                .collect::<Vec<_>>()
+                .join("\n");
+            if found.cut {
+                said.push_str("\n\n(cut here; narrow it with `include` or a deeper path)");
+            }
+
+            Ok(Answer::Text(said))
+        }
+        "glob" => {
+            let id = text(arguments, "box_id")?;
+            let found = client
+                .glob(
+                    &id,
+                    &text(arguments, "pattern")?,
+                    arguments.get("path").and_then(Value::as_str),
+                    arguments
+                        .get("limit")
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if found.paths.is_empty() {
+                return Ok(Answer::Text("nothing matched".to_string()));
+            }
+
+            let mut said = found.paths.join("\n");
+            if found.cut {
+                said.push_str("\n\n(cut here)");
+            }
+
+            Ok(Answer::Text(said))
+        }
+        "read_file" => {
+            let id = text(arguments, "box_id")?;
+            let path = text(arguments, "path")?;
+
+            let bytes = client
+                .read_file(&id, &path)
+                .await
+                .map_err(|e| e.to_string())?;
+            match String::from_utf8(bytes) {
+                Ok(said) => Ok(Answer::Text(said)),
+                Err(bytes) => Err(format!(
+                    "{path} is not text: {} bytes that do not decode",
+                    bytes.into_bytes().len()
+                )),
+            }
+        }
+        "write_file" => {
+            let id = text(arguments, "box_id")?;
+            let path = text(arguments, "path")?;
+            let body = text(arguments, "text")?;
+
+            client
+                .write_file(&id, &path, body.as_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!("{} bytes → {path}", body.len())))
         }
         "run_command" => run(client, arguments).await,
         "hand_over" => {
