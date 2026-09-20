@@ -64,6 +64,7 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 computer \
   && chown -R computer:computer /tmp/computer /home/computer
 
 ENV HOME=/home/computer
+ENV LANG=C.UTF-8
 ENV COMPUTER_SCREEN_WIDTH=1280
 ENV COMPUTER_SCREEN_HEIGHT=800
 

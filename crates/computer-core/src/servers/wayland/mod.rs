@@ -396,16 +396,14 @@ impl Desktop for WaylandDesktop {
         .map(|_| ())
     }
 
-    /// `wtype -s` sleeps once before the first key, not between keys, so pace is ignored.
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
-        if let Some(delay) = delay {
-            tracing::warn!(
-                asked_ms = delay.as_millis() as u64,
-                "this desktop types at one speed; the text is going out at full speed"
-            );
+        match delay {
+            Some(delay) => {
+                let parts = [delay.as_millis().to_string(), text.to_string()];
+                self.act(input_argv("paced", &parts)).await
+            }
+            None => self.act(input_argv("type", &[text.to_string()])).await,
         }
-
-        self.act(input_argv("type", &[text.to_string()])).await
     }
 
     /// One `wtype` run: a process per key would release the hold between keys.

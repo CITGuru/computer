@@ -1394,12 +1394,17 @@ pub struct X11Environment;
 
 impl ScreenEnvironment for X11Environment {
     fn environment(&self, screen: ScreenId) -> BTreeMap<String, String> {
-        BTreeMap::from([(
-            "DISPLAY".to_string(),
-            crate::servers::x11::display_for(screen),
-        )])
+        BTreeMap::from([
+            (
+                "DISPLAY".to_string(),
+                crate::servers::x11::display_for(screen),
+            ),
+            ("LANG".to_string(), UTF8_LOCALE.to_string()),
+        ])
     }
 }
+
+pub const UTF8_LOCALE: &str = "C.UTF-8";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WaylandEnvironment;
@@ -1417,6 +1422,7 @@ impl ScreenEnvironment for WaylandEnvironment {
             ),
             // For an X11 program under Xwayland, which sway puts on `:0`.
             ("DISPLAY".to_string(), ":0".to_string()),
+            ("LANG".to_string(), UTF8_LOCALE.to_string()),
         ])
     }
 }

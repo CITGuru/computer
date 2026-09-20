@@ -4,7 +4,7 @@
 # On the path, so a shell or an `exec` meets the takeover gate too.
 set -uo pipefail
 
-verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|key ...}"
+verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key ...}"
 shift
 
 screen=$(( ${WAYLAND_DISPLAY#wayland-} - 1 ))
@@ -30,11 +30,16 @@ case "$verb" in
   type)
     said=$(wtype -s 120 -- "$@" 2>&1) || true
     ;;
+  paced)
+    pause="${1:?usage: computer-input paced MS TEXT}"
+    shift
+    said=$(wtype -s 120 -d "$pause" -- "$@" 2>&1) || true
+    ;;
   key)
     said=$(wtype -s 120 "$@" 2>&1) || true
     ;;
   *)
-    echo "usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|key ..." >&2
+    echo "usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key ..." >&2
     exit 2
     ;;
 esac

@@ -9,6 +9,23 @@ use computer::image::{
 use computer::{AUTH_ENV, CONTROL_SECRET_ENV, VIEW_SECRET_ENV, VIEWER_USER};
 use computer::{Profile, ScreenId, X11Profile};
 
+#[test]
+fn every_image_starts_what_it_starts_in_a_locale_that_reads_utf8() {
+    for image in ["desktop", "ubuntu", "tiny", "wayland"] {
+        let path = std::path::Path::new(computer::bundle::IMAGES)
+            .join(image)
+            .join("Dockerfile");
+        let dockerfile = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+
+        assert!(
+            dockerfile.contains("ENV LANG=C.UTF-8"),
+            "{image}: the browser and every app the box starts inherit the container's \
+             locale, and with none a file name or a clipboard in another language is bytes"
+        );
+    }
+}
+
 fn viewer_ports() -> Vec<u16> {
     X11Profile.ports().viewer_ports()
 }

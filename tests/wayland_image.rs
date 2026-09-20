@@ -118,7 +118,8 @@ fn every_input_verb_the_driver_sends_is_one_the_script_answers() {
         .expect("the script dispatches on a verb");
 
     for verb in [
-        "move", "click", "dblclick", "drag", "path", "sweep", "scroll", "down", "up", "type", "key",
+        "move", "click", "dblclick", "drag", "path", "sweep", "scroll", "down", "up", "type",
+        "paced", "key",
     ] {
         // Alone or in an alternation, which is how the pointer verbs share one branch.
         assert!(
@@ -249,6 +250,21 @@ fn a_pointer_that_died_is_brought_back_by_the_next_start() {
         live.contains("resident_pointer"),
         "start runs before every call, and returning early on a live compositor would \
          leave a screen without its pointer for good"
+    );
+}
+
+#[test]
+fn a_pace_reaches_the_tool_that_types() {
+    let paced = WAYLAND_INPUT_SH
+        .split("paced)")
+        .nth(1)
+        .and_then(|rest| rest.split(";;").next())
+        .expect("the script paces text");
+
+    assert!(
+        paced.contains(r#"-d "$pause""#) && paced.contains(r#"-- "$@""#),
+        "wtype paces with -d, and the text comes after -- or one that starts with a dash \
+         is read as a flag"
     );
 }
 
