@@ -8,7 +8,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use computer_api::{CdpTicket, ErrorCode};
+use computer_api::{CdpToken, ErrorCode};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
@@ -17,28 +17,28 @@ use std::time::Duration;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{self, protocol::WebSocketConfig};
 
-pub const TICKET_LIFE: Duration = Duration::from_secs(60 * 60);
+pub const TOKEN_LIFE: Duration = Duration::from_secs(60 * 60);
 const LONGEST_LIFE: Duration = Duration::from_secs(24 * 60 * 60);
 
 const LARGEST_MESSAGE: usize = 256 << 20;
 
 #[derive(Debug, Default, Deserialize)]
-pub struct TicketQuery {
+pub struct TokenQuery {
     #[serde(default)]
     ttl_secs: Option<u64>,
 }
 
-pub async fn ticket(
+pub async fn token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     ApiPath(id): ApiPath<String>,
-    ApiQuery(query): ApiQuery<TicketQuery>,
-) -> ApiResult<Json<CdpTicket>> {
+    ApiQuery(query): ApiQuery<TokenQuery>,
+) -> ApiResult<Json<CdpToken>> {
     let entry = state.registry.get(&id).await?;
     let browser = browser_of(&entry)?;
 
     let life = match query.ttl_secs {
-        None => TICKET_LIFE,
+        None => TOKEN_LIFE,
         Some(0) => return Err(ApiError::bad_request("ttl_secs of 0 opens nothing")),
         Some(secs) => Duration::from_secs(secs).min(LONGEST_LIFE),
     };
@@ -51,10 +51,10 @@ pub async fn ticket(
         .ok_or_else(|| ApiError::internal("the browser named no socket of its own"))?
         .to_string();
 
-    let (ticket, until) = state.cdp_tickets.mint_for(&id, 0, life)?;
-    let outside = Outside::of(&headers, &ticket)?;
+    let (token, until) = state.cdp_tokens.mint_for(&id, 0, life)?;
+    let outside = Outside::of(&headers, &token)?;
 
-    Ok(Json(CdpTicket {
+    Ok(Json(CdpToken {
         url: outside.http,
         ws_url: format!("{}{path}", outside.ws),
         expires_at_ms: crate::routes::ms_of(until),
@@ -65,24 +65,24 @@ pub async fn json_root(
     State(state): State<Arc<AppState>>,
     method: Method,
     headers: HeaderMap,
-    ApiPath(ticket): ApiPath<String>,
+    ApiPath(token): ApiPath<String>,
     RawQuery(query): RawQuery,
 ) -> ApiResult<Response> {
-    relayed(&state, &method, &headers, &ticket, "/json", query).await
+    relayed(&state, &method, &headers, &token, "/json", query).await
 }
 
 pub async fn json_under(
     State(state): State<Arc<AppState>>,
     method: Method,
     headers: HeaderMap,
-    ApiPath((ticket, rest)): ApiPath<(String, String)>,
+    ApiPath((token, rest)): ApiPath<(String, String)>,
     RawQuery(query): RawQuery,
 ) -> ApiResult<Response> {
     relayed(
         &state,
         &method,
         &headers,
-        &ticket,
+        &token,
         &format!("/json/{rest}"),
         query,
     )
@@ -93,13 +93,13 @@ async fn relayed(
     state: &AppState,
     method: &Method,
     headers: &HeaderMap,
-    ticket: &str,
+    token: &str,
     path: &str,
     query: Option<String>,
 ) -> ApiResult<Response> {
-    let entry = admitted(state, ticket).await?;
+    let entry = admitted(state, token).await?;
     let browser = browser_of(&entry)?;
-    let outside = Outside::of(headers, ticket)?;
+    let outside = Outside::of(headers, token)?;
 
     let asked = match query {
         Some(query) => format!("{path}?{query}"),
@@ -118,10 +118,10 @@ async fn relayed(
 
 pub async fn socket(
     State(state): State<Arc<AppState>>,
-    ApiPath((ticket, rest)): ApiPath<(String, String)>,
+    ApiPath((token, rest)): ApiPath<(String, String)>,
     upgrade: WebSocketUpgrade,
 ) -> ApiResult<Response> {
-    let entry = admitted(&state, &ticket).await?;
+    let entry = admitted(&state, &token).await?;
     let inside = browser_of(&entry)?.socket_url(&format!("/devtools/{rest}"));
 
     let request = inside
@@ -187,12 +187,12 @@ async fn carry(mut client: WebSocket, mut box_side: BoxSide, entry: Arc<Entry>) 
     let _ = box_side.close(None).await;
 }
 
-async fn admitted(state: &AppState, ticket: &str) -> ApiResult<Arc<Entry>> {
-    let id = state.cdp_tickets.box_of(ticket).ok_or_else(|| {
+async fn admitted(state: &AppState, token: &str) -> ApiResult<Arc<Entry>> {
+    let id = state.cdp_tokens.box_of(token).ok_or_else(|| {
         ApiError::new(
             StatusCode::FORBIDDEN,
             ErrorCode::Denied,
-            "this ticket opens no browser, or it has expired",
+            "this token opens no browser, or it has expired",
         )
     })?;
 
@@ -211,7 +211,7 @@ struct Outside {
 }
 
 impl Outside {
-    fn of(headers: &HeaderMap, ticket: &str) -> ApiResult<Self> {
+    fn of(headers: &HeaderMap, token: &str) -> ApiResult<Self> {
         let host = headers
             .get(header::HOST)
             .and_then(|host| host.to_str().ok())
@@ -229,8 +229,8 @@ impl Outside {
         };
 
         Ok(Self {
-            http: format!("{http}://{host}/v1/cdp/{ticket}"),
-            ws: format!("{ws}://{host}/v1/cdp/{ticket}"),
+            http: format!("{http}://{host}/v1/cdp/{token}"),
+            ws: format!("{ws}://{host}/v1/cdp/{token}"),
         })
     }
 }
@@ -264,7 +264,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const WS: &str = "wss://boxes.example.com/v1/cdp/TICKET";
+    const WS: &str = "wss://boxes.example.com/v1/cdp/TOKEN";
 
     #[test]
     fn test_the_browser_socket_is_pointed_back_through_the_server() {
@@ -276,7 +276,7 @@ mod tests {
 
         assert_eq!(
             version["webSocketDebuggerUrl"],
-            "wss://boxes.example.com/v1/cdp/TICKET/devtools/browser/ff7e0e97"
+            "wss://boxes.example.com/v1/cdp/TOKEN/devtools/browser/ff7e0e97"
         );
         assert_eq!(version["Browser"], "Chrome/152.0.7977.82");
     }
@@ -334,30 +334,30 @@ mod tests {
 
         let (viewer, _) = state.tickets.mint("box-1", 0).expect("a viewer ticket");
         let (cdp, _) = state
-            .cdp_tickets
-            .mint_for("box-1", 0, TICKET_LIFE)
-            .expect("a CDP ticket");
+            .cdp_tokens
+            .mint_for("box-1", 0, TOKEN_LIFE)
+            .expect("a CDP token");
 
-        assert_eq!(state.cdp_tickets.box_of(&cdp).as_deref(), Some("box-1"));
+        assert_eq!(state.cdp_tokens.box_of(&cdp).as_deref(), Some("box-1"));
         assert_eq!(
-            state.cdp_tickets.box_of(&viewer),
+            state.cdp_tokens.box_of(&viewer),
             None,
             "a viewer ticket is handed to a page in somebody's chat window, and DevTools \
              reads every cookie the browser holds"
         );
 
-        state.cdp_tickets.forget("box-1");
-        assert_eq!(state.cdp_tickets.box_of(&cdp), None);
+        state.cdp_tokens.forget("box-1");
+        assert_eq!(state.cdp_tokens.box_of(&cdp), None);
     }
 
     #[test]
-    fn test_a_ticket_past_its_life_opens_nothing() {
+    fn test_a_token_past_its_life_opens_nothing() {
         let state = AppState::default();
-        let (ticket, _) = state
-            .cdp_tickets
+        let (token, _) = state
+            .cdp_tokens
             .mint_for("box-1", 0, Duration::ZERO)
-            .expect("a ticket");
+            .expect("a token");
 
-        assert_eq!(state.cdp_tickets.box_of(&ticket), None);
+        assert_eq!(state.cdp_tokens.box_of(&token), None);
     }
 }

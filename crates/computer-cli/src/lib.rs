@@ -24,8 +24,8 @@ computer — a desktop in a box
                               an address another library drives the box's
                               browser by: agent-browser --cdp, playwright
                               connectOverCDP, browser-use cdp_url. it goes
-                              through the server, which admits whoever holds
-                              it for an hour, or for --ttl. --ws is the
+                              through the server and carries a short-lived
+                              token, good for an hour or for --ttl. --ws is the
                               browser's socket, for a library that takes one.
                               --direct is the box's own port, which only this
                               machine reaches and nothing guards

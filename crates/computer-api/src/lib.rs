@@ -946,7 +946,7 @@ pub struct ViewerTicket {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CdpTicket {
+pub struct CdpToken {
     pub url: String,
     pub ws_url: String,
     pub expires_at_ms: u64,

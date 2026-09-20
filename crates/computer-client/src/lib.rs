@@ -542,7 +542,7 @@ impl Client {
         .await
     }
 
-    pub async fn cdp(&self, id: &str, ttl_secs: Option<u64>) -> Result<CdpTicket> {
+    pub async fn cdp(&self, id: &str, ttl_secs: Option<u64>) -> Result<CdpToken> {
         let query = ttl_secs
             .map(|secs| format!("?ttl_secs={secs}"))
             .unwrap_or_default();

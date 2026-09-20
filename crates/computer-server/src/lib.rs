@@ -32,7 +32,7 @@ pub struct AppState {
     seen: Mutex<HashMap<(String, u32), String>>,
     pub cli: Option<Arc<dyn ContainerCli>>,
     pub tickets: viewer::Tickets,
-    pub cdp_tickets: viewer::Tickets,
+    pub cdp_tokens: viewer::Tickets,
 }
 
 impl Default for AppState {
@@ -58,7 +58,7 @@ impl AppState {
             seen: Mutex::new(HashMap::new()),
             cli: None,
             tickets: viewer::Tickets::default(),
-            cdp_tickets: viewer::Tickets::default(),
+            cdp_tokens: viewer::Tickets::default(),
         }
     }
 

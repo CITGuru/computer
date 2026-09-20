@@ -438,7 +438,7 @@ async fn test_the_viewer_socket_takes_a_ticket_and_no_bearer() {
 }
 
 #[tokio::test]
-async fn test_a_cdp_ticket_is_for_a_box_that_is_here() {
+async fn test_a_cdp_token_is_for_a_box_that_is_here() {
     let (status, body) = send(post("/v1/boxes/box_nope/cdp", "")).await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -446,7 +446,7 @@ async fn test_a_cdp_ticket_is_for_a_box_that_is_here() {
 }
 
 #[tokio::test]
-async fn test_a_cdp_ticket_is_minted_behind_the_bearer_and_used_without_one() {
+async fn test_a_cdp_token_is_minted_behind_the_bearer_and_used_without_one() {
     let gated = || {
         Arc::new(AppState::default().gated(Some(
             computer::Secret::new("0123456789abcdef0123").expect("a secret"),
@@ -470,7 +470,7 @@ async fn test_a_cdp_ticket_is_minted_behind_the_bearer_and_used_without_one() {
     assert_eq!(
         relayed.status(),
         StatusCode::FORBIDDEN,
-        "a library that speaks CDP sends no bearer, so the ticket in the path is the gate"
+        "a library that speaks CDP sends no bearer, so the short-lived token in the path is the gate"
     );
 }
 

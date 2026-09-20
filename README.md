@@ -299,7 +299,7 @@ const browser = await chromium.connectOverCDP(process.env.CDP);    // CDP=$(comp
 session = BrowserSession(cdp_url=os.environ["CDP"])
 ```
 
-The address carries a ticket in its path, which is all that admits a client: CDP has no authentication of its own, and these libraries send no bearer. Minting one takes the server's bearer. It lasts an hour, or `--ttl MINUTES`, and dies with the box. Treat it as you would the box's cookies, since whoever holds it can read them.
+The address carries a short-lived token in its path, which is all that admits a client: CDP has no authentication of its own, and these libraries send no bearer. Minting one takes the server's bearer. It lasts an hour, or `--ttl MINUTES`, and dies with the box. Treat it as you would the box's cookies, since whoever holds it can read them.
 
 - `computer cdp <box>` is an `http://` address for a library that reads `/json/version` under it: Playwright, browser-use. Every socket the browser names comes back pointed through the server.
 - `--ws` is the browser's socket. agent-browser needs this form: given an `http://` address it keeps the host and port and drops the path.
@@ -307,7 +307,7 @@ The address carries a ticket in its path, which is all that admits a client: CDP
 
 A box published beyond loopback, and one in a cloud sandbox, withdraws its DevTools port, so there is no address of either kind for it.
 
-Both drivers can work at once. What another library does is not in `trace`, does not wait for a person who has taken the screen over, and is not held off by a `batch` that holds it. Over REST the ticket is `POST /v1/boxes/{id}/cdp`.
+Both drivers can work at once. What another library does is not in `trace`, does not wait for a person who has taken the screen over, and is not held off by a `batch` that holds it. Over REST the token is `POST /v1/boxes/{id}/cdp`.
 
 ## Drive a native window by widget name
 
@@ -1055,7 +1055,7 @@ let pair = computer.credentials();     // the password, under Auth::Password
 
 An open viewer beyond loopback is refused at launch rather than published. The two doors carry separate credentials, so a watch link does not become a control link by changing the port.
 
-DevTools is withdrawn rather than published, because CDP has no authentication and cannot be given one. Reach it through the server, which admits a ticket it minted (`computer cdp`), or from inside the box.
+DevTools is withdrawn rather than published, because CDP has no authentication and cannot be given one. Reach it through the server, which admits a short-lived token it minted (`computer cdp`), or from inside the box.
 
 `network(false)` blocks network access from the desktop. It does not gate the viewer.
 

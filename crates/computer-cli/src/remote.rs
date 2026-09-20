@@ -136,7 +136,7 @@ pub async fn cdp(client: &Client, args: &[String]) -> Done {
     }
 
     let minutes: Option<u64> = counted(args, "--ttl", "a number of minutes")?;
-    let ticket = client
+    let token = client
         .cdp(id, minutes.map(|minutes| minutes * 60))
         .await
         .map_err(|e| e.to_string())?;
@@ -144,11 +144,11 @@ pub async fn cdp(client: &Client, args: &[String]) -> Done {
     println!(
         "{}",
         match present(args, "--ws") {
-            true => &ticket.ws_url,
-            false => &ticket.url,
+            true => &token.ws_url,
+            false => &token.url,
         }
     );
-    eprintln!("  good until  {}", stamped(ticket.expires_at_ms));
+    eprintln!("  good until  {}", stamped(token.expires_at_ms));
     Ok(())
 }
 
