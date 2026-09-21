@@ -74,6 +74,110 @@ async fn the_image_is_made_sure_of_before_a_container_is_created() {
 }
 
 #[tokio::test]
+async fn a_profile_another_box_holds_is_refused_before_a_container_is_made() {
+    let cli = Arc::new(
+        ScriptedCli::new()
+            .replying(ok())
+            .replying(ok())
+            .replying(ok())
+            .replying(saying("box_1234\n")),
+    );
+
+    let error = Computer::builder()
+        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .profiles("computer-profile-work")
+        .wait_for_ready(None)
+        .launch()
+        .await
+        .expect_err("the profile is held");
+
+    assert!(
+        error
+            .to_string()
+            .contains("computer-profile-work is held by box_1234"),
+        "{error}"
+    );
+    let calls = cli.calls();
+    assert_eq!(
+        calls[3],
+        [
+            "ps",
+            "--all",
+            "--filter",
+            "volume=computer-profile-work",
+            "--format",
+            "{{.Names}}"
+        ],
+        "a stopped box holds the profile too: started again it would share it"
+    );
+    assert!(
+        !calls.iter().any(|call| call[0] == "run"),
+        "the start script deletes a lock from another host, so the refusal has to come first"
+    );
+}
+
+#[tokio::test]
+async fn a_profile_nobody_holds_is_mounted() {
+    let cli = Arc::new(
+        ScriptedCli::new()
+            .replying(ok())
+            .replying(ok())
+            .replying(ok())
+            .replying(ok())
+            .replying(ok())
+            .replying(saying("")),
+    );
+
+    Computer::builder()
+        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .profiles("computer-profile-work")
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box");
+
+    let run = cli
+        .calls()
+        .into_iter()
+        .find(|call| call[0] == "run")
+        .expect("a run");
+    assert!(run.contains(&"computer-profile-work:/home/computer/.browser-profiles".to_string()));
+}
+
+#[tokio::test]
+async fn a_box_is_asked_to_close_its_browser_before_it_is_removed() {
+    let cli = a_working_runtime("");
+
+    let computer = Computer::builder()
+        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .wait_for_ready(None)
+        .keep_on_drop(true)
+        .launch()
+        .await
+        .expect("a box");
+    let name = computer.name().to_string();
+    computer.shutdown().await.expect("removed");
+
+    let calls = cli.calls();
+    let removed = calls
+        .iter()
+        .position(|call| call[0] == "rm")
+        .expect("a removal");
+    assert_eq!(
+        calls[removed - 1][..4],
+        [
+            "exec".to_string(),
+            name,
+            "bash".to_string(),
+            "-c".to_string()
+        ],
+        "a browser killed outright loses the cookies it has not written to its profile"
+    );
+    assert_eq!(calls[removed - 1][4], computer::machine::SETTLE_PROFILE);
+}
+
+#[tokio::test]
 async fn the_ports_the_runtime_mapped_are_the_ones_the_caller_is_handed() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n9223/tcp -> 0.0.0.0:32769\n");
 
@@ -419,6 +523,7 @@ async fn a_box_whose_life_ran_out_is_asked_for_again_when_the_first_ask_fails() 
             .replying(ok())
             .replying(ok())
             .replying(saying(""))
+            .replying(ok())
             .replying(failing("Cannot connect to the Docker daemon"))
             .replying(ok()),
     );

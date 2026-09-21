@@ -1338,6 +1338,14 @@ let computer = Computer::builder()
 
 The profile includes logins, history, extensions, and browser storage. It stays on the host and can be used by only one desktop at a time.
 
+From the CLI or MCP, name the profile when the box is made:
+
+```bash
+computer new --profile work
+```
+
+The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B and microsandbox boxes refuse a profile, since they have no Docker volume.
+
 Use session export when the data must move between hosts. Use a named profile when all browser state must stay on one host.
 
 ### Attach to a running desktop

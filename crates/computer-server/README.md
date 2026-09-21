@@ -93,6 +93,8 @@ curl -s localhost:8080/v1/boxes -H 'content-type: application/json' \
 
 Unknown keys in a spec are refused rather than ignored: a misspelled key that is quietly dropped hands back a box missing the thing it was misspelled for.
 
+`"profile": "work"` in the placement keeps the browser's logins, cookies and history in the volume `computer-profile-work` after the box is gone, and the next box given the name starts with them. A profile that another box holds, running or stopped, is refused with that box's name.
+
 ## Drive it
 
 An agent's step is several actions and one look, so that is the request. The frame the actions produced comes back in the same response.

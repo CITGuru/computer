@@ -1850,7 +1850,13 @@ async fn fork(
             ))
         })?;
 
-    let placement = body.placement.clone().map(Box::new).unwrap_or(placement);
+    let placement = match body.placement.clone() {
+        Some(given) => Box::new(given),
+        None => Box::new(Placement {
+            profile: None,
+            ..*placement
+        }),
+    };
     let new_id = new_id();
     let (builder, resolved) = spec::plan(&spec, &placement, &new_id)?;
     let builder = through(builder, &state);

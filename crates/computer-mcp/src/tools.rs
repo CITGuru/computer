@@ -173,6 +173,13 @@ pub fn catalogue() -> Value {
                     "idle_minutes": {
                         "type": "integer",
                         "description": "Remove the box once nothing has used it for this long."
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "A name for the browser's profile, such as `work`. The \
+                                        logins, cookies and history in it outlive the box, and \
+                                        the next box given the same name starts with them. One \
+                                        box at a time can hold a profile."
                     }
                 }
             }),
@@ -852,7 +859,8 @@ pub fn catalogue() -> Value {
             "Keep the browser's login under a name, to load into another box with `load_state`: \
              the cookies, and the storage of each origin. The server holds it until it \
              restarts; nothing of it comes back to you. With no `origins`, the origins of the \
-             tabs open now.",
+             tabs open now. For a login that outlives the server, launch boxes with a \
+             `profile` instead.",
             with_box(
                 json!({
                     "name": { "type": "string", "description": "Such as `work`." },
@@ -2354,6 +2362,7 @@ fn asked(arguments: &Value) -> (Spec, Placement) {
         cpus: said("cpus"),
         expires_after_secs: whole("ttl_minutes").map(|minutes| minutes * 60),
         idle_timeout_secs: whole("idle_minutes").map(|minutes| minutes * 60),
+        profile: said("profile"),
         ..Placement::default()
     };
 
@@ -3973,6 +3982,7 @@ mod tests {
             "cpus": "2",
             "ttl_minutes": 60,
             "idle_minutes": 10,
+            "profile": "work",
         });
         for name in offered.as_object().expect("properties").keys() {
             assert!(
@@ -4007,6 +4017,7 @@ mod tests {
         assert_eq!(placement.cpus.as_deref(), Some("2"));
         assert_eq!(placement.expires_after_secs, Some(3600));
         assert_eq!(placement.idle_timeout_secs, Some(600));
+        assert_eq!(placement.profile.as_deref(), Some("work"));
     }
 
     #[test]

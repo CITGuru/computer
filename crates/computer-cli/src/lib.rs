@@ -15,7 +15,7 @@ computer — a desktop in a box
       [--app NAME]… [--package PKG]… [--wide-fonts] [--audio] [--video]
       [--dock] [--x11-apps] [--accessibility]
       [--no-network] [--memory SIZE] [--cpus N] [--runtime NAME]
-      [--ttl MINUTES] [--idle MINUTES] [--spec FILE]
+      [--ttl MINUTES] [--idle MINUTES] [--profile NAME] [--spec FILE]
                               open a box and print where to watch it. --app
                               installs one from the catalog, such as gimp or
                               vscode, for the app command below; it and
@@ -28,7 +28,11 @@ computer — a desktop in a box
                               that long after it was last used. --spec is a
                               file of what POST /v1/boxes takes, or - for
                               stdin, for what has no flag: an app of your own,
-                              or who may watch. a flag goes over the file
+                              or who may watch. a flag goes over the file.
+                              --profile keeps the browser's logins, cookies
+                              and history in a volume of that name, and the
+                              next box given the name starts with them; one
+                              box at a time may hold it
   ls                          boxes that are running
   box <box>                   everything the server knows about one
   cdp <box> [--ws] [--ttl MINUTES] [--direct]

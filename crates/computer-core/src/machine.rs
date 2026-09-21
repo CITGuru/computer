@@ -280,6 +280,30 @@ fn if_absent(stderr: &str) -> Option<Error> {
     Some(Error::invalid(format!("the box has no file at {path}")))
 }
 
+pub const SETTLE_PROFILE: &str = r#"grep -q ' /home/computer/.browser-profiles ' /proc/mounts || exit 0
+export LC_ALL=C
+devtools() {
+  exec 3<>/dev/tcp/127.0.0.1/9222 || return 1
+  printf 'GET %s HTTP/1.1\r\nHost: 127.0.0.1:9222\r\n\r\n' "$1" >&3
+  local line length=0 body=""
+  while IFS= read -r -t 3 line <&3; do
+    line=${line%$'\r'}
+    [ -z "$line" ] && break
+    case "$line" in [Cc]ontent-[Ll]ength:*) length=${line#*:} ;; esac
+  done
+  [ "${length// /}" -gt 0 ] 2>/dev/null && IFS= read -r -N "${length// /}" -t 3 body <&3
+  exec 3<&-
+  printf '%s' "$body"
+}
+for id in $(devtools /json/list 2>/dev/null | grep -o '"id": *"[^"]*"' | cut -d '"' -f 4); do
+  devtools "/json/close/$id" >/dev/null 2>&1
+done
+for i in $(seq 50); do
+  pgrep -x chromium >/dev/null || exit 0
+  sleep 0.1
+done
+exit 1"#;
+
 fn arg(value: impl Into<String>) -> String {
     value.into()
 }
@@ -321,6 +345,19 @@ impl DockerMachine {
                 )
                 .await;
         }
+    }
+
+    async fn settle_profile(&self, name: &str) {
+        let _ = self
+            .cli
+            .run(&[
+                arg("exec"),
+                arg(name),
+                arg("bash"),
+                arg("-c"),
+                arg(SETTLE_PROFILE),
+            ])
+            .await;
     }
 
     async fn freeze(&self, verb: &str, name: &str) -> Result<()> {
@@ -411,6 +448,29 @@ impl Machine for DockerMachine {
     }
 
     async fn start(&self, name: &str, config: &Config) -> Result<PortMap> {
+        if let Some(volume) = &config.profiles {
+            let holders = self
+                .cli
+                .run(&[
+                    arg("ps"),
+                    arg("--all"),
+                    arg("--filter"),
+                    format!("volume={volume}"),
+                    arg("--format"),
+                    arg("{{.Names}}"),
+                ])
+                .await?;
+            let holders = holders.stdout_utf8();
+            let holders: Vec<&str> = holders.split_whitespace().collect();
+            if !holders.is_empty() {
+                return Err(Error::denied(format!(
+                    "the profile {volume} is held by {}: two browsers on one profile corrupt \
+                     it, so remove that box first",
+                    holders.join(", ")
+                )));
+            }
+        }
+
         let started = self.cli.run(&run_args(name, config)).await?;
         if started.code != 0 {
             return Err(Error::Unavailable {
@@ -439,6 +499,7 @@ impl Machine for DockerMachine {
     }
 
     async fn halt(&self, name: &str) -> Result<()> {
+        self.settle_profile(name).await;
         self.freeze("stop", name).await
     }
 
@@ -577,6 +638,7 @@ impl Machine for DockerMachine {
     }
 
     async fn remove(&self, name: &str) -> Result<()> {
+        self.settle_profile(name).await;
         let result = self
             .cli
             .run(&[arg("rm"), arg("--force"), arg("--volumes"), arg(name)])
@@ -628,6 +690,24 @@ impl Machine for DockerMachine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_the_script_that_closes_a_profiles_browser_is_shell_bash_reads() {
+        let checked = std::process::Command::new("bash")
+            .args(["-n", "-c", SETTLE_PROFILE])
+            .output()
+            .expect("bash is on every host this builds on");
+        assert!(
+            checked.status.success(),
+            "{}",
+            String::from_utf8_lossy(&checked.stderr)
+        );
+        assert!(
+            SETTLE_PROFILE
+                .starts_with("grep -q ' /home/computer/.browser-profiles ' /proc/mounts || exit 0"),
+            "a box with no profile has nothing to lose, and is left alone"
+        );
+    }
     use crate::testing::ScriptedCli;
 
     fn docker(cli: Arc<ScriptedCli>) -> DockerMachine {

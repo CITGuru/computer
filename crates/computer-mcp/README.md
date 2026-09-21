@@ -84,7 +84,7 @@ Files and commands:
 
 Browser state:
 
-`save_state` · `load_state` · `cookies`
+`save_state` · `load_state` · `cookies`, and `profile` on `launch_box`
 
 Coordination:
 

@@ -253,6 +253,11 @@ impl Machine for MicroVm {
     }
 
     async fn start(&self, name: &str, config: &Config) -> Result<PortMap> {
+        if config.profiles.is_some() {
+            return Err(Error::Unsupported {
+                gaps: vec!["a named browser profile, which needs a Docker volume"],
+            });
+        }
         let plan = plan_for(name, config, port_pairs(&config.publish, free_port));
         self.api.create(&plan).await?;
         self.remember(name, &plan);

@@ -157,6 +157,8 @@ pub struct Placement {
     pub expires_after_secs: Option<u64>,
     #[serde(default)]
     pub idle_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 #[cfg(test)]
