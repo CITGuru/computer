@@ -151,6 +151,15 @@ computer — a desktop in a box
                               cannot: `press tab tab tab --held alt` reaches
                               the third window where `press alt+tab` three
                               times only ever reaches the second
+  keyboard <box> down <key> [--hold SECONDS]
+  keyboard <box> up <key>
+                              press one key and let it go as two commands:
+                              shift for a run of clicks that extend a
+                              selection, space to pan, an arrow a game reads
+                              while it is down. the server lets the key go
+                              after --hold, 10 unless told and 60 at most, and
+                              when a person takes the screen over. a batch does
+                              this with its key_down and key_up steps
 
   mouse <box> move <x> <y> [--smooth | --human] [--seed N]
                               put the pointer somewhere, in device pixels. it
@@ -166,6 +175,11 @@ computer — a desktop in a box
                               with its own command
   mouse <box> drag <x> <y> <x> <y> [button] [--held shift,ctrl]
                               press at the first point, release at the second
+  mouse <box> path <x> <y> <x> <y> … [button] [--held shift,ctrl]
+                              one press, through every point, one release: a
+                              stroke with corners or a curve in it, where a
+                              drag for each leg draws that many strokes. takes
+                              --smooth and --human as a move does
   mouse <box> down [<x> <y>] [button] [--hold SECONDS]
   mouse <box> up [<x> <y>] [button]
                               press a button and let it go as two commands,

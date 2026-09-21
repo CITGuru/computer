@@ -211,12 +211,17 @@ Complete Keyboard and Mouse reference:
 ```text
 computer keyboard <box> type <text> [--delay MS]
 computer keyboard <box> press <key>... [--held shift,ctrl,alt,super]
+computer keyboard <box> down <key> [--hold SECONDS]
+computer keyboard <box> up <key>
 
 computer mouse <box> move <x> <y> [--smooth|--human] [--seed N]
 computer mouse <box> click <x> <y> [left|right|middle] [--double]
                           [--held shift,ctrl,alt,super]
                           [--smooth|--human] [--seed N]
 computer mouse <box> drag <x1> <y1> <x2> <y2> [left|right|middle]
+                         [--held shift,ctrl,alt,super]
+                         [--smooth|--human] [--seed N]
+computer mouse <box> path <x1> <y1> <x2> <y2> ... [left|right|middle]
                          [--held shift,ctrl,alt,super]
                          [--smooth|--human] [--seed N]
 computer mouse <box> down [<x> <y>] [left|right|middle] [--hold SECONDS]
@@ -293,6 +298,17 @@ computer mouse "$BOX" down 400 400 left --hold 10
 computer mouse "$BOX" move 900 600 --smooth
 computer mouse "$BOX" up 900 600 left
 ```
+
+A key can stay down between commands in the same way. Everything typed or clicked while it is down carries it:
+
+```bash
+computer keyboard "$BOX" down shift --hold 20
+computer mouse "$BOX" click 300 200
+computer mouse "$BOX" click 300 400
+computer keyboard "$BOX" up shift
+```
+
+`down` takes one key, not a combination. The server lets a button or a key go after `--hold` (10 seconds unless told, 60 at most), when a person takes the screen over, and before the box is paused.
 
 The Rust API exposes the same low-level operations:
 

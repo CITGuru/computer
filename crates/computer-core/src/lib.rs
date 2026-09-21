@@ -1483,6 +1483,22 @@ impl Desktop for Computer {
         Desktop::let_go(&self.primary, button).await
     }
 
+    async fn key_down(&self, key: &str) -> Result<()> {
+        Desktop::key_down(&self.primary, key).await
+    }
+
+    async fn key_up(&self, key: &str) -> Result<()> {
+        Desktop::key_up(&self.primary, key).await
+    }
+
+    async fn let_key_go(&self, key: &str) -> Result<()> {
+        Desktop::let_key_go(&self.primary, key).await
+    }
+
+    async fn let_keys_go(&self) -> Result<()> {
+        Desktop::let_keys_go(&self.primary).await
+    }
+
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
         Desktop::wait_until_still(&self.primary, settle, within).await
     }
@@ -2147,6 +2163,22 @@ impl Desktop for Screen {
 
     async fn let_go(&self, button: Button) -> Result<()> {
         self.driver.let_go(button).await
+    }
+
+    async fn key_down(&self, key: &str) -> Result<()> {
+        self.driver.key_down(key).await
+    }
+
+    async fn key_up(&self, key: &str) -> Result<()> {
+        self.driver.key_up(key).await
+    }
+
+    async fn let_key_go(&self, key: &str) -> Result<()> {
+        self.driver.let_key_go(key).await
+    }
+
+    async fn let_keys_go(&self) -> Result<()> {
+        self.driver.let_keys_go().await
     }
 
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {

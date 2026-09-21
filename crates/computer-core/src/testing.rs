@@ -193,6 +193,21 @@ impl Desktop for ScriptedDesktop {
         Ok(())
     }
 
+    async fn key_down(&self, key: &str) -> Result<()> {
+        self.act(format!("key_down {key}"))
+    }
+
+    async fn key_up(&self, key: &str) -> Result<()> {
+        self.act(format!("key_up {key}"))
+    }
+
+    async fn let_key_go(&self, key: &str) -> Result<()> {
+        if let Ok(mut acted) = self.acted.lock() {
+            acted.push(format!("let_key_go {key}"));
+        }
+        Ok(())
+    }
+
     async fn move_along(&self, steps: &[crate::motion::Step]) -> Result<()> {
         let last = steps.last().map(|step| step.at).unwrap_or_default();
         self.act(format!("move_along {} {} {}", steps.len(), last.x, last.y))

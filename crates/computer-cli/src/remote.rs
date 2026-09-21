@@ -533,7 +533,7 @@ pub async fn press(client: &Client, args: &[String]) -> Done {
 
 pub async fn mouse(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
-    let op = positional(args, 1, "move, click, down, up, drag, scroll or at")
+    let op = positional(args, 1, "move, click, down, up, drag, path, scroll or at")
         .map_err(|e| e.to_string())?;
 
     let mut rest = args.to_vec();
@@ -566,6 +566,22 @@ pub async fn mouse(client: &Client, args: &[String]) -> Done {
                     from: point(&rest, 1)?,
                     to: point(&rest, 3)?,
                     button: button(rest.get(5)),
+                    held: modifiers(&rest)?,
+                    motion,
+                    seed,
+                },
+            )
+            .await
+        }
+        "path" => {
+            let (through, button) = stroke(&bare(&rest, &["--held", "--seed"]))?;
+            let (motion, seed) = motion(args)?;
+            act(
+                client,
+                id,
+                Action::Path {
+                    through,
+                    button,
                     held: modifiers(&rest)?,
                     motion,
                     seed,
@@ -615,6 +631,41 @@ pub async fn mouse(client: &Client, args: &[String]) -> Done {
 
 const HOLD_MS: u64 = 10_000;
 
+pub fn stroke(named: &[String]) -> Result<(Vec<Point>, Button), String> {
+    let words = named.get(1..).unwrap_or_default();
+    let (numbers, button) = match words.split_last() {
+        Some((last, before)) if last.parse::<u32>().is_err() => match last.as_str() {
+            "left" => (before, Button::Left),
+            "right" => (before, Button::Right),
+            "middle" => (before, Button::Middle),
+            other => return Err(format!("{other} is not a coordinate or a button")),
+        },
+        _ => (words, Button::Left),
+    };
+
+    if numbers.len() % 2 != 0 {
+        return Err(format!(
+            "{} is half a point: a path is x y x y …",
+            numbers.last().map(String::as_str).unwrap_or_default()
+        ));
+    }
+    let through = numbers
+        .chunks(2)
+        .map(|pair| match (pair[0].parse(), pair[1].parse()) {
+            (Ok(x), Ok(y)) => Ok(Point { x, y }),
+            _ => Err(format!(
+                "{} {} is not a point in whole pixels",
+                pair[0], pair[1]
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if through.len() < 2 {
+        return Err("a path needs two points at least: x y x y …".to_string());
+    }
+    Ok((through, button))
+}
+
 fn spot(rest: &[String]) -> Result<(Option<Point>, Button), String> {
     let named = bare(rest, &["--hold", "--seed"]);
 
@@ -625,7 +676,7 @@ fn spot(rest: &[String]) -> Result<(Option<Point>, Button), String> {
 }
 
 pub async fn keyboard(client: &Client, args: &[String]) -> Done {
-    let op = positional(args, 1, "type or press").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "type, press, down or up").map_err(|e| e.to_string())?;
 
     let mut rest = args.to_vec();
     rest.remove(1);
@@ -633,7 +684,50 @@ pub async fn keyboard(client: &Client, args: &[String]) -> Done {
     match op {
         "type" => type_text(client, &rest).await,
         "press" => press(client, &rest).await,
+        "down" => {
+            let id = positional(&rest, 0, "a box").map_err(|e| e.to_string())?;
+            let key = one_key(&rest)?;
+            let seconds: Option<u64> = counted(args, "--hold", "a number of seconds")?;
+
+            let result = acted(
+                client,
+                id,
+                Action::KeyDown {
+                    key,
+                    hold_ms: Some(seconds.map_or(HOLD_MS, |seconds| seconds * 1000)),
+                },
+            )
+            .await?;
+
+            for held in &result.holding_keys {
+                eprintln!(
+                    "{} is down until {}, or until: computer keyboard {id} up {}",
+                    held.key,
+                    stamped(held.until_ms),
+                    held.key
+                );
+            }
+            Ok(())
+        }
+        "up" => {
+            let id = positional(&rest, 0, "a box").map_err(|e| e.to_string())?;
+            let key = one_key(&rest)?;
+            act(client, id, Action::KeyUp { key }).await
+        }
         other => Err(format!("no such op: {other}")),
+    }
+}
+
+fn one_key(rest: &[String]) -> Result<String, String> {
+    let named = bare(rest, &["--hold"]);
+    match named.get(1..).unwrap_or_default() {
+        [key] => Ok(key.clone()),
+        [] => Err("a key is needed: shift, space, a".to_string()),
+        several => Err(format!(
+            "{} is {} keys: down and up take one, and press takes several",
+            several.join(" "),
+            several.len()
+        )),
     }
 }
 
@@ -1245,6 +1339,9 @@ pub async fn batch(client: &Client, args: &[String]) -> Done {
             format!("{button:?}").to_lowercase()
         );
     }
+    for key in &result.released_keys {
+        eprintln!("{key} was still down when the batch ended, and was let go");
+    }
 
     let refused = result.results.iter().filter(|one| !one.ok).count();
 
@@ -1291,6 +1388,29 @@ fn out_lines(out: &Out) -> Vec<String> {
             said
         }
         Out::File(file) => vec![format!("{} read", file.path)],
+        Out::Listing(listing) => match listing.entries.is_empty() {
+            true => vec![format!("{} is empty", listing.path)],
+            false => listing
+                .entries
+                .iter()
+                .map(|entry| match entry.dir {
+                    true => format!("{}/", entry.name),
+                    false => format!("{} ({} bytes)", entry.name, entry.bytes),
+                })
+                .collect(),
+        },
+        Out::Found(found) => found
+            .matches
+            .iter()
+            .map(|one| format!("{}:{}:{}", one.path, one.line, one.text))
+            .chain(found.cut.then(|| "(cut here)".to_string()))
+            .collect(),
+        Out::Globbed(found) => found
+            .paths
+            .iter()
+            .cloned()
+            .chain(found.cut.then(|| "(cut here)".to_string()))
+            .collect(),
         Out::Clipboard(held) => vec![held.text.clone()],
         Out::Recording(state) => vec![match (&state.recording, &state.path) {
             (true, Some(path)) => format!("recording to {path}"),
@@ -1321,6 +1441,8 @@ fn name_of(action: &Action) -> String {
             Some(at) => format!("{button:?} button up at {},{}", at.x, at.y).to_lowercase(),
             None => format!("{button:?} button up").to_lowercase(),
         },
+        Action::KeyDown { key, .. } => format!("{key} down"),
+        Action::KeyUp { key } => format!("{key} up"),
         Action::Type { text, .. } => format!("type {text:?}"),
         Action::Press { chord, then, .. } => match then.is_empty() {
             true => format!("press {chord}"),
@@ -1358,6 +1480,9 @@ fn name_of(action: &Action) -> String {
         Action::Exec { what } => format!("run {}", what.argv.join(" ")),
         Action::ReadFile { path } => format!("read {path}"),
         Action::WriteFile { what } => format!("write {}", what.path),
+        Action::ListFiles { path } => format!("list {path}"),
+        Action::Grep { what } => format!("grep {:?} in {}", what.pattern, what.path),
+        Action::Glob { what } => format!("glob {:?}", what.pattern),
         Action::Clipboard { selection, text } => match text {
             Some(_) => format!("set the {} selection", selection.name()),
             None => format!("read the {} selection", selection.name()),
@@ -1860,5 +1985,45 @@ mod tests {
             spot(&args(&["mybox", "400"])).is_err(),
             "half a point is a mistake, and pressing where the pointer is would hide it"
         );
+    }
+
+    #[test]
+    fn test_a_path_is_points_in_pairs_and_then_a_button() {
+        let line = |listed: &[&str]| stroke(&bare(&args(listed), &["--held", "--seed"]));
+
+        assert_eq!(
+            line(&["mybox", "10", "20", "30", "40", "50", "60"]),
+            Ok((
+                vec![
+                    Point { x: 10, y: 20 },
+                    Point { x: 30, y: 40 },
+                    Point { x: 50, y: 60 }
+                ],
+                Button::Left
+            ))
+        );
+        assert_eq!(
+            line(&[
+                "mybox", "10", "20", "30", "40", "right", "--held", "shift", "--seed", "9"
+            ]),
+            Ok((
+                vec![Point { x: 10, y: 20 }, Point { x: 30, y: 40 }],
+                Button::Right
+            )),
+            "the seed of a glide is not a coordinate, and the button comes last"
+        );
+
+        let half = line(&["mybox", "10", "20", "30"]).expect_err("an odd count");
+        assert!(half.contains("30 is half a point"), "{half}");
+        assert!(
+            line(&["mybox", "10", "20"]).is_err(),
+            "one point is a click, and a path that drew nothing would say it worked"
+        );
+        let wrong = line(&["mybox", "10", "20", "30", "forty"]).expect_err("a word");
+        assert!(
+            wrong.contains("forty is not a coordinate or a button"),
+            "{wrong}"
+        );
+        assert!(line(&["mybox", "10", "-5", "30", "40"]).is_err());
     }
 }

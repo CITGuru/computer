@@ -1,7 +1,7 @@
 use computer::servers::x11::{X11Desktop, port_listening};
 use computer::testing::{ScriptedDesktop, ScriptedHost};
 use computer::{
-    Button, ControlGate, Delta, Desktop, ExecResult, Point, ScreenHost, ScreenId, Selection,
+    Button, ControlGate, Delta, Desktop, ExecResult, Held, Point, ScreenHost, ScreenId, Selection,
 };
 
 fn clipboard(screen: &X11Desktop) -> &dyn computer::Clipboard {
@@ -240,6 +240,117 @@ async fn a_button_is_let_go_even_while_a_person_holds_the_screen() {
 }
 
 #[tokio::test]
+async fn a_key_goes_down_and_up_in_commands_of_their_own() {
+    let host = Arc::new(ScriptedHost::new());
+    let screen = driver(Arc::clone(&host));
+
+    screen.key_down("Shift").await.expect("a press");
+    assert_eq!(host.last_line(), "xdotool keydown shift");
+
+    screen.key_up("shift").await.expect("a release");
+    assert_eq!(host.last_line(), "xdotool keyup shift");
+
+    screen.key_down("esc").await.expect("a named key");
+    assert_eq!(host.last_line(), "xdotool keydown Escape");
+
+    let refused = screen
+        .key_down("ctrl+a")
+        .await
+        .expect_err("two keys in one press");
+    assert!(
+        refused.to_string().contains("more than one key"),
+        "a release would have to name both, and a deadline would let go of half: {refused}"
+    );
+    assert!(screen.key_down(" ").await.is_err(), "no key is named");
+}
+
+#[tokio::test]
+async fn a_held_key_is_not_cleared_by_what_is_typed_under_it() {
+    let host = Arc::new(ScriptedHost::new());
+    let screen = driver(Arc::clone(&host));
+
+    screen.press(&["a".to_string()], &[]).await.expect("a key");
+    assert_eq!(host.last_line(), "xdotool key --clearmodifiers a");
+
+    screen.key_down("shift").await.expect("a press");
+
+    screen.press(&["a".to_string()], &[]).await.expect("a key");
+    assert_eq!(
+        host.last_line(),
+        "xdotool key a",
+        "--clearmodifiers lifts shift for the key and puts it back after, which types a \
+         small letter under a held shift"
+    );
+    screen.type_text("abc", None).await.expect("text");
+    assert_eq!(host.last_line(), "xdotool type -- abc");
+
+    screen
+        .click_with(Point::new(5, 6), Button::Left, &[Held::Shift, Held::Ctrl])
+        .await
+        .expect("a click");
+    assert_eq!(
+        host.last_line(),
+        "xdotool keydown ctrl mousemove -- 5 6 click 1 keyup ctrl",
+        "the release that rides with the click would let go of the shift key_down holds"
+    );
+
+    screen.key_up("shift").await.expect("a release");
+    screen.type_text("abc", None).await.expect("text");
+    assert_eq!(host.last_line(), "xdotool type --clearmodifiers -- abc");
+}
+
+#[tokio::test]
+async fn a_key_is_let_go_even_while_a_person_holds_the_screen() {
+    let host = Arc::new(ScriptedHost::new());
+    let gate = Arc::new(ControlGate::new());
+    let screen = driver(Arc::clone(&host)).with_control(Arc::clone(&gate));
+
+    screen.key_down("shift").await.expect("a press");
+    gate.hand_over("a person", SystemTime::now());
+
+    assert!(
+        screen.key_up("shift").await.is_err(),
+        "a step is input, and input waits for the person like any other"
+    );
+
+    screen.let_key_go("shift").await.expect("let go");
+    assert_eq!(
+        host.last_line(),
+        "xdotool keyup shift",
+        "a shift left down would make capitals of everything the person types"
+    );
+}
+
+#[tokio::test]
+async fn every_key_is_let_go_by_its_code_when_nobody_remembers_which_went_down() {
+    let host = Arc::new(ScriptedHost::new());
+    let screen = driver(Arc::clone(&host));
+
+    screen.key_down("shift").await.expect("a press");
+    screen.let_keys_go().await.expect("let go");
+
+    let sent = host.last().expect("a command");
+    assert_eq!(sent[..4], ["xdotool", "keyup", "--delay", "0"]);
+    assert_eq!(
+        (
+            sent[4].as_str(),
+            sent.last().map(String::as_str),
+            sent.len()
+        ),
+        ("8", Some("255"), 4 + 248),
+        "a server that restarted has no list of what it held, and X11 has no command that \
+         says which keys are down"
+    );
+
+    screen.type_text("abc", None).await.expect("text");
+    assert_eq!(
+        host.last_line(),
+        "xdotool type --clearmodifiers -- abc",
+        "nothing is held any more, so typing clears stray modifiers as it always did"
+    );
+}
+
+#[tokio::test]
 async fn text_is_paced_at_the_speed_that_was_asked_for() {
     let pause = Some(std::time::Duration::from_millis(100));
 
@@ -375,6 +486,64 @@ async fn wayland_lets_a_button_go_past_both_of_its_gates() {
         "computer-pointer up left",
         "computer-input refuses while a person holds the screen, so the release goes to \
          the pointer itself"
+    );
+}
+
+#[tokio::test]
+async fn wayland_holds_a_key_through_the_keyboard_that_stays() {
+    let host = Arc::new(ScriptedHost::new());
+    let wayland =
+        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
+
+    wayland.key_down("Shift").await.expect("a modifier");
+    assert_eq!(
+        host.last_line(),
+        "computer-input key -M shift",
+        "a modifier goes down as one, so the keyboard sends the state every later key carries"
+    );
+    wayland.key_down("cmd").await.expect("a modifier");
+    assert_eq!(host.last_line(), "computer-input key -M logo");
+
+    wayland.key_down("a").await.expect("a key");
+    assert_eq!(host.last_line(), "computer-input key -P a");
+    wayland.key_up("a").await.expect("a release");
+    assert_eq!(host.last_line(), "computer-input key -p a");
+
+    wayland
+        .click_with(Point::new(5, 6), Button::Left, &[Held::Shift, Held::Ctrl])
+        .await
+        .expect("a click");
+    assert_eq!(
+        host.last_line(),
+        "computer-input with ctrl click 5 6 left",
+        "`with` lets go of what it held, which would end the shift key_down holds"
+    );
+
+    wayland.key_up("shift").await.expect("a release");
+    assert_eq!(host.last_line(), "computer-input key -m shift");
+    assert!(wayland.key_down("ctrl+a").await.is_err());
+}
+
+#[tokio::test]
+async fn wayland_lets_a_key_go_past_both_of_its_gates() {
+    let host = Arc::new(ScriptedHost::new());
+    let gate = Arc::new(ControlGate::new());
+    let wayland =
+        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0))
+            .with_control(Arc::clone(&gate));
+
+    wayland.key_down("space").await.expect("a press");
+    gate.hand_over("a person", SystemTime::now());
+    assert!(wayland.key_up("space").await.is_err());
+
+    wayland.let_key_go("space").await.expect("let go");
+    assert_eq!(host.last_line(), "computer-pointer key -p space");
+
+    wayland.let_keys_go().await.expect("let go");
+    assert_eq!(
+        host.last_line(),
+        "computer-pointer release",
+        "the keyboard that stays knows which keys it put down, where a restarted server does not"
     );
 }
 

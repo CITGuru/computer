@@ -1,10 +1,10 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer_api::{
-    Action, ActionBatch, ActionResult, Arrange, AwaitWindow, BoxState, ElementResult, Evaluate,
-    ExecRequest, Find, ForkMode, ForkRequest, Frame, Held, NodeQuery, OnElement, OnNode, OpenIn,
-    Out, PageRead, PageShot, Picture, Reading, RecordOp, Rect, ScrollTo, Shot, SnapshotOptions,
-    Want, Where, WindowOp, WriteFile,
+    Action, ActionBatch, ActionResult, Arrange, AwaitWindow, BatchResult, BoxState, ElementResult,
+    Evaluate, ExecRequest, Find, ForkMode, ForkRequest, Frame, Held, NodeQuery, OnElement, OnNode,
+    OpenIn, Out, PageRead, PageShot, Picture, Reading, RecordOp, Rect, ScrollTo, Shot,
+    SnapshotOptions, Want, Where, WindowOp, WriteFile,
 };
 use computer_client::{Client, captured_image, frame_png};
 use computer_types::{
@@ -497,8 +497,8 @@ pub fn catalogue() -> Value {
              one picture comes back at the end rather than one a step. Use it wherever the steps \
              are already known: filling a form, drawing, opening an app and waiting for its \
              window, or reading a page and acting on what it said. A step that reads — evaluate, \
-             find, snapshot, read_page, screenshot, run_command, clipboard, tabs, windows — \
-             answers in the line for that step.",
+             find, snapshot, read_page, screenshot, run_command, list_files, grep, glob, \
+             clipboard, tabs, windows — answers in the line for that step.",
             with_frame(
                 json!({
                     "actions": {
@@ -511,7 +511,8 @@ pub fn catalogue() -> Value {
                                 "tool": {
                                     "type": "string",
                                     "description": "click, move, mouse_down, mouse_up, drag, draw, \
-                                                    scroll, type_text, press_key, wait, \
+                                                    scroll, type_text, press_key, key_down, \
+                                                    key_up, wait, \
                                                     wait_until_still, open_url, \
                                                     open_app, click_element, fill_field, focus, \
                                                     check, dropdown, upload_file, wait_for, \
@@ -520,6 +521,7 @@ pub fn catalogue() -> Value {
                                                     page_screenshot, screenshot, cursor, \
                                                     windows, wait_for_window, window, tabs, \
                                                     run_command, read_file, write_file, \
+                                                    list_files, grep, glob, \
                                                     clipboard, record or list_apps. `draw` takes \
                                                     `through`, a list of {x, y}: one press \
                                                     through every point and one release, which \
@@ -533,10 +535,11 @@ pub fn catalogue() -> Value {
                                                     `button`; a `move` between them drags, and \
                                                     `pause_ms` on each `move` (40 is enough) \
                                                     keeps a drawing program from merging points \
-                                                    that arrive too fast. They \
-                                                    exist only here: a button still down when \
-                                                    the batch ends is let go, and the answer \
-                                                    says so."
+                                                    that arrive too fast. `key_down` and \
+                                                    `key_up` do the same for one key. A button \
+                                                    or key still down when the batch ends is \
+                                                    let go, and the answer says so, unless its \
+                                                    step gave `hold_seconds`."
                                 },
                                 "arguments": {
                                     "type": "object",
@@ -740,6 +743,39 @@ pub fn catalogue() -> Value {
             )
         ),
         tool(
+            "mouse_down",
+            "Press a button and leave it down, where the pointer is unless given a point; \
+             `mouse_up` lets it go. For a press that has to wait for something before its \
+             release: mouse_down, wait_for, mouse_up. A pointer moved between them drags. The \
+             server lets the button go after `hold_seconds`, and when a person takes the screen \
+             over, so one that is forgotten does not stay down. In a `batch` the same two steps \
+             hold the screen between them, which separate calls cannot.",
+            with_frame(
+                with_motion(json!({
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" },
+                    "button": { "type": "string", "enum": ["left", "right", "middle"] },
+                    "hold_seconds": {
+                        "type": "integer",
+                        "description": "How long it may stay down. 10 unless said, 60 at most."
+                    }
+                })),
+                &[]
+            )
+        ),
+        tool(
+            "mouse_up",
+            "Let go of a button `mouse_down` pressed, where the pointer is unless given a point.",
+            with_frame(
+                json!({
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" },
+                    "button": { "type": "string", "enum": ["left", "right", "middle"] }
+                }),
+                &[]
+            )
+        ),
+        tool(
             "type_text",
             "Type into whatever has keyboard focus. Click the field first. `delay_ms` paces \
              the keystrokes: a few inputs act on every keystroke and drop characters that \
@@ -779,6 +815,30 @@ pub fn catalogue() -> Value {
                 }),
                 &["chord"]
             )
+        ),
+        tool(
+            "key_down",
+            "Press one key and leave it down; `key_up` lets it go. `shift` for a run of clicks \
+             that extend a selection, `space` to pan, an arrow a game reads while it is held. \
+             One key, not a combination: hold two with two calls. Everything typed or clicked \
+             while it is down carries it. The server lets the key go after `hold_seconds`, and \
+             when a person takes the screen over. For a modifier around one click or one key, \
+             `held` on `click` or `press_key` is a single call.",
+            with_frame(
+                json!({
+                    "key": { "type": "string" },
+                    "hold_seconds": {
+                        "type": "integer",
+                        "description": "How long it may stay down. 10 unless said, 60 at most."
+                    }
+                }),
+                &["key"]
+            )
+        ),
+        tool(
+            "key_up",
+            "Let go of a key `key_down` pressed.",
+            with_frame(json!({ "key": { "type": "string" } }), &["key"])
         ),
         tool(
             "scroll",
@@ -1053,6 +1113,22 @@ pub fn catalogue() -> Value {
                     "limit": { "type": "integer" }
                 }),
                 &["pattern"]
+            )
+        ),
+        tool(
+            "clipboard",
+            "Read what the box's clipboard holds, or set it when `text` is given. What is \
+             copied in a box stays in that box, so this is how it gets out, and how text gets \
+             in without being typed. `primary` is the selection a middle click pastes.",
+            with_box(
+                json!({
+                    "text": {
+                        "type": "string",
+                        "description": "Set the clipboard to this. Without it, read."
+                    },
+                    "selection": { "type": "string", "enum": ["clipboard", "primary"] }
+                }),
+                &[]
             )
         ),
         tool(
@@ -1777,6 +1853,57 @@ pub async fn call(
         "click" => act(client, arguments, action_of(name, arguments)?, 600).await,
         "type_text" => act(client, arguments, action_of(name, arguments)?, 400).await,
         "press_key" => act(client, arguments, action_of(name, arguments)?, 400).await,
+        "mouse_down" | "key_down" => {
+            let action = match action_of(name, arguments)? {
+                Action::MouseDown {
+                    at,
+                    button,
+                    motion,
+                    seed,
+                    hold_ms,
+                } => Action::MouseDown {
+                    at,
+                    button,
+                    motion,
+                    seed,
+                    hold_ms: hold_ms.or(Some(HOLD_MS)),
+                },
+                Action::KeyDown { key, hold_ms } => Action::KeyDown {
+                    key,
+                    hold_ms: hold_ms.or(Some(HOLD_MS)),
+                },
+                other => other,
+            };
+            act_saying(client, arguments, action, 400, held_until).await
+        }
+        "mouse_up" | "key_up" => act(client, arguments, action_of(name, arguments)?, 400).await,
+        "clipboard" => {
+            let id = text(arguments, "box_id")?;
+            let selection = selection(arguments);
+
+            match arguments.get("text").and_then(Value::as_str) {
+                Some(given) => {
+                    client
+                        .set_clipboard(&id, 0, given, selection)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(Answer::Text(format!(
+                        "{} characters are on the clipboard",
+                        given.chars().count()
+                    )))
+                }
+                None => {
+                    let held = client
+                        .clipboard(&id, 0, selection)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    Ok(Answer::Text(match held.is_empty() {
+                        true => "the clipboard is empty".to_string(),
+                        false => held,
+                    }))
+                }
+            }
+        }
         "scroll" => act(client, arguments, action_of(name, arguments)?, 400).await,
         "drag" => act(client, arguments, action_of(name, arguments)?, 400).await,
         "wait_until_still" => act(client, arguments, action_of(name, arguments)?, 0).await,
@@ -1809,59 +1936,17 @@ pub async fn call(
                 .list_dir(&id, path)
                 .await
                 .map_err(|e| e.to_string())?;
-            if listing.entries.is_empty() {
-                return Ok(Answer::Text(format!("{path} is empty")));
-            }
 
-            let said = listing
-                .entries
-                .iter()
-                .map(|entry| match entry.dir {
-                    true => format!("{}/", entry.name),
-                    false => format!("{} ({} bytes)", entry.name, entry.bytes),
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            Ok(Answer::Text(format!("{path}\n{said}")))
+            Ok(Answer::Text(said_listing(&listing)))
         }
         "grep" => {
             let id = text(arguments, "box_id")?;
             let found = client
-                .grep(
-                    &id,
-                    &Search {
-                        pattern: text(arguments, "pattern")?,
-                        path: text(arguments, "path")?,
-                        include: arguments
-                            .get("include")
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
-                        ignore_case: flag(arguments, "ignore_case"),
-                        limit: arguments
-                            .get("limit")
-                            .and_then(Value::as_u64)
-                            .map(|n| n as usize),
-                    },
-                )
+                .grep(&id, &search_of(arguments)?)
                 .await
                 .map_err(|e| e.to_string())?;
 
-            if found.matches.is_empty() {
-                return Ok(Answer::Text("nothing matched".to_string()));
-            }
-
-            let mut said = found
-                .matches
-                .iter()
-                .map(|one| format!("{}:{}:{}", one.path, one.line, one.text))
-                .collect::<Vec<_>>()
-                .join("\n");
-            if found.cut {
-                said.push_str("\n\n(cut here; narrow it with `include` or a deeper path)");
-            }
-
-            Ok(Answer::Text(said))
+            Ok(Answer::Text(said_found(&found)))
         }
         "glob" => {
             let id = text(arguments, "box_id")?;
@@ -1878,16 +1963,7 @@ pub async fn call(
                 .await
                 .map_err(|e| e.to_string())?;
 
-            if found.paths.is_empty() {
-                return Ok(Answer::Text("nothing matched".to_string()));
-            }
-
-            let mut said = found.paths.join("\n");
-            if found.cut {
-                said.push_str("\n\n(cut here)");
-            }
-
-            Ok(Answer::Text(said))
+            Ok(Answer::Text(said_globbed(&found)))
         }
         "read_file" => {
             let id = text(arguments, "box_id")?;
@@ -2541,6 +2617,13 @@ async fn batched(client: &Client, arguments: &Value) -> Result<Answer, String> {
                 format!("{button:?}").to_lowercase()
             )
         }))
+        .chain(
+            result
+                .released_keys
+                .iter()
+                .map(|key| format!("{key} was still down when the batch ended, and was let go")),
+        )
+        .chain(held_until(&result))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -2607,6 +2690,9 @@ fn saw(out: &Out) -> String {
             format!("exit {}: {said}", ran.code)
         }
         Out::File(file) => format!("{} read", file.path),
+        Out::Listing(listing) => said_listing(listing),
+        Out::Found(found) => said_found(found),
+        Out::Globbed(found) => said_globbed(found),
         Out::Clipboard(held) => format!("{:?}", held.text),
         Out::Recording(state) => match (&state.recording, &state.path) {
             (true, Some(path)) => format!("recording to {path}"),
@@ -2615,6 +2701,101 @@ fn saw(out: &Out) -> String {
             (false, None) => "not recording".to_string(),
         },
         Out::Apps(names) => names.join(", "),
+    }
+}
+
+fn said_listing(listing: &computer_api::Listing) -> String {
+    if listing.entries.is_empty() {
+        return format!("{} is empty", listing.path);
+    }
+
+    let said = listing
+        .entries
+        .iter()
+        .map(|entry| match entry.dir {
+            true => format!("{}/", entry.name),
+            false => format!("{} ({} bytes)", entry.name, entry.bytes),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!("{}\n{said}", listing.path)
+}
+
+fn said_found(found: &computer_api::Found) -> String {
+    if found.matches.is_empty() {
+        return "nothing matched".to_string();
+    }
+
+    let mut said = found
+        .matches
+        .iter()
+        .map(|one| format!("{}:{}:{}", one.path, one.line, one.text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if found.cut {
+        said.push_str("\n\n(cut here; narrow it with `include` or a deeper path)");
+    }
+    said
+}
+
+fn said_globbed(found: &computer_api::Globbed) -> String {
+    if found.paths.is_empty() {
+        return "nothing matched".to_string();
+    }
+
+    let mut said = found.paths.join("\n");
+    if found.cut {
+        said.push_str("\n\n(cut here)");
+    }
+    said
+}
+
+const HOLD_MS: u64 = 10_000;
+
+fn hold_ms(arguments: &Value) -> Option<u64> {
+    arguments
+        .get("hold_seconds")
+        .and_then(Value::as_u64)
+        .map(|seconds| seconds.saturating_mul(1000))
+}
+
+fn held_until(result: &BatchResult) -> Option<String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or_default();
+    let left = |until_ms: u64| until_ms.saturating_sub(now).div_ceil(1000);
+
+    let said: Vec<String> = result
+        .holding
+        .iter()
+        .map(|held| {
+            format!(
+                "the {} button stays down for {} s, or until mouse_up",
+                format!("{:?}", held.button).to_lowercase(),
+                left(held.until_ms)
+            )
+        })
+        .chain(result.holding_keys.iter().map(|held| {
+            format!(
+                "{} stays down for {} s, or until key_up",
+                held.key,
+                left(held.until_ms)
+            )
+        }))
+        .collect();
+
+    match said.is_empty() {
+        true => None,
+        false => Some(said.join("; ")),
+    }
+}
+
+fn selection(arguments: &Value) -> Selection {
+    match arguments.get("selection").and_then(Value::as_str) {
+        Some("primary") => Selection::Primary,
+        _ => Selection::Clipboard,
     }
 }
 
@@ -2767,11 +2948,18 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
             button: button(arguments),
             motion: motion(arguments)?,
             seed: seed(arguments),
-            hold_ms: None,
+            hold_ms: hold_ms(arguments),
         },
         "mouse_up" => Action::MouseUp {
             at: spot(arguments)?,
             button: button(arguments),
+        },
+        "key_down" => Action::KeyDown {
+            key: text(arguments, "key")?,
+            hold_ms: hold_ms(arguments),
+        },
+        "key_up" => Action::KeyUp {
+            key: text(arguments, "key")?,
         },
         "type_text" => Action::Type {
             text: text(arguments, "text")?,
@@ -2990,11 +3178,31 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
                 contents_base64: text(arguments, "contents_base64")?,
             },
         },
-        "clipboard" => Action::Clipboard {
-            selection: match arguments.get("selection").and_then(Value::as_str) {
-                Some("primary") => Selection::Primary,
-                _ => Selection::Clipboard,
+        "list_files" => Action::ListFiles {
+            path: arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .unwrap_or("/")
+                .to_string(),
+        },
+        "grep" => Action::Grep {
+            what: search_of(arguments)?,
+        },
+        "glob" => Action::Glob {
+            what: computer_api::Globbing {
+                pattern: text(arguments, "pattern")?,
+                path: arguments
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                limit: arguments
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize),
             },
+        },
+        "clipboard" => Action::Clipboard {
+            selection: selection(arguments),
             text: arguments
                 .get("text")
                 .and_then(Value::as_str)
@@ -3020,6 +3228,22 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
     })
 }
 
+fn search_of(arguments: &Value) -> Result<Search, String> {
+    Ok(Search {
+        pattern: text(arguments, "pattern")?,
+        path: text(arguments, "path")?,
+        include: arguments
+            .get("include")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ignore_case: flag(arguments, "ignore_case"),
+        limit: arguments
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize),
+    })
+}
+
 fn tab_of(arguments: &Value) -> Option<String> {
     arguments
         .get("tab")
@@ -3032,6 +3256,16 @@ async fn act(
     arguments: &Value,
     action: Action,
     settle_ms: u64,
+) -> Result<Answer, String> {
+    act_saying(client, arguments, action, settle_ms, |_| None).await
+}
+
+async fn act_saying(
+    client: &Client,
+    arguments: &Value,
+    action: Action,
+    settle_ms: u64,
+    say: impl Fn(&BatchResult) -> Option<String>,
 ) -> Result<Answer, String> {
     let id = text(arguments, "box_id")?;
     let how = shots(arguments)?;
@@ -3073,9 +3307,10 @@ async fn act(
         });
     }
 
+    let done = say(&result).unwrap_or_else(|| "done".to_string());
     let said = match result.cursor {
-        Some(at) => format!("done; the pointer is at {},{}", at.x, at.y),
-        None => "done".to_string(),
+        Some(at) => format!("{done}; the pointer is at {},{}", at.x, at.y),
+        None => done,
     };
 
     match how.wanted() {
@@ -3385,6 +3620,158 @@ mod tests {
             action_of("mouse_up", &json!({ "x": 10 })).is_err(),
             "half a point is a mistake, and releasing where the pointer is would hide it"
         );
+        assert!(
+            matches!(
+                action_of("mouse_down", &json!({ "hold_seconds": 5 })),
+                Ok(Action::MouseDown {
+                    hold_ms: Some(5000),
+                    ..
+                })
+            ),
+            "a step that says how long is the one press a batch does not let go at its end"
+        );
+    }
+
+    #[test]
+    fn test_a_key_is_a_step_and_a_tool_that_holds_one_key() {
+        assert_eq!(
+            action_of("key_down", &json!({ "key": "shift" })),
+            Ok(Action::KeyDown {
+                key: "shift".to_string(),
+                hold_ms: None,
+            })
+        );
+        assert_eq!(
+            action_of("key_down", &json!({ "key": "space", "hold_seconds": 30 })),
+            Ok(Action::KeyDown {
+                key: "space".to_string(),
+                hold_ms: Some(30_000),
+            })
+        );
+        assert_eq!(
+            action_of("key_up", &json!({ "key": "shift" })),
+            Ok(Action::KeyUp {
+                key: "shift".to_string()
+            })
+        );
+        assert!(action_of("key_down", &json!({})).is_err());
+
+        let listed = catalogue();
+        let tools = listed.as_array().expect("a list");
+        for name in ["mouse_down", "mouse_up", "key_down", "key_up", "clipboard"] {
+            assert!(
+                tools.iter().any(|tool| tool["name"] == name),
+                "{name} is a step of a batch, and an agent that holds a press across its own \
+                 thinking cannot put that in one"
+            );
+        }
+        for name in ["mouse_down", "key_down"] {
+            let one = tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .expect("offered");
+            assert_eq!(
+                one["inputSchema"]["properties"]["hold_seconds"]["type"], "integer",
+                "{name} outlives its call, so it says for how long"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_press_that_stays_down_says_for_how_long() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock")
+            .as_millis() as u64;
+        let quiet = BatchResult {
+            results: Vec::new(),
+            stopped_at: None,
+            frame: None,
+            cursor: None,
+            windows: Vec::new(),
+            tabs: Vec::new(),
+            released: Vec::new(),
+            holding: Vec::new(),
+            released_keys: Vec::new(),
+            holding_keys: Vec::new(),
+        };
+        assert_eq!(held_until(&quiet), None);
+
+        let said = held_until(&BatchResult {
+            holding: vec![computer_api::Holding {
+                button: Button::Left,
+                until_ms: now + 9_500,
+            }],
+            holding_keys: vec![computer_api::HoldingKey {
+                key: "shift".to_string(),
+                until_ms: now + 30_000,
+            }],
+            ..quiet
+        })
+        .expect("two presses");
+        assert_eq!(
+            said,
+            "the left button stays down for 10 s, or until mouse_up; \
+             shift stays down for 30 s, or until key_up"
+        );
+    }
+
+    #[test]
+    fn test_the_file_tools_are_batch_steps_that_answer_in_their_line() {
+        assert_eq!(
+            action_of("list_files", &json!({})),
+            Ok(Action::ListFiles {
+                path: "/".to_string()
+            })
+        );
+        assert!(matches!(
+            action_of("grep", &json!({ "pattern": "TODO", "path": "/src", "ignore_case": true })),
+            Ok(Action::Grep { what }) if what.pattern == "TODO" && what.ignore_case
+        ));
+        assert!(
+            action_of("grep", &json!({ "pattern": "TODO" })).is_err(),
+            "a search with no directory is a search of the whole box"
+        );
+        assert!(matches!(
+            action_of("glob", &json!({ "pattern": "*.png", "limit": 5 })),
+            Ok(Action::Glob { what }) if what.pattern == "*.png" && what.limit == Some(5)
+        ));
+
+        let listed = saw(&Out::Listing(computer_api::Listing {
+            path: "/tmp".to_string(),
+            entries: vec![
+                computer_types::DirEntry {
+                    name: "shots".to_string(),
+                    dir: true,
+                    bytes: 0,
+                },
+                computer_types::DirEntry {
+                    name: "a.txt".to_string(),
+                    dir: false,
+                    bytes: 12,
+                },
+            ],
+        }));
+        assert_eq!(listed, "/tmp\nshots/\na.txt (12 bytes)");
+
+        assert_eq!(
+            saw(&Out::Globbed(computer_api::Globbed {
+                paths: Vec::new(),
+                cut: false
+            })),
+            "nothing matched"
+        );
+        assert_eq!(
+            saw(&Out::Found(computer_api::Found {
+                matches: vec![computer_types::Match {
+                    path: "/src/a.rs".to_string(),
+                    line: 3,
+                    text: "// TODO".to_string(),
+                }],
+                cut: true,
+            })),
+            "/src/a.rs:3:// TODO\n\n(cut here; narrow it with `include` or a deeper path)"
+        );
     }
 
     #[test]
@@ -3417,8 +3804,12 @@ mod tests {
             "history",
             "scroll_page",
             "click",
+            "mouse_down",
+            "mouse_up",
             "type_text",
             "press_key",
+            "key_down",
+            "key_up",
             "scroll",
             "drag",
             "window",
@@ -3808,7 +4199,7 @@ mod tests {
         let listed = catalogue();
         let tools = listed.as_array().expect("a list");
 
-        for name in ["click", "click_element", "drag"] {
+        for name in ["click", "click_element", "drag", "mouse_down", "mouse_up"] {
             let one = tools
                 .iter()
                 .find(|tool| tool["name"] == name)

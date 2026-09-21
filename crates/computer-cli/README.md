@@ -103,6 +103,14 @@ computer keyboard "$BOX" type "https://example.org" --delay 20
 computer keyboard "$BOX" press enter
 ```
 
+Hold a key or a button across commands. The server lets it go after `--hold`, 10 seconds unless told:
+
+```bash
+computer keyboard "$BOX" down shift --hold 20
+computer mouse "$BOX" click 300 200
+computer keyboard "$BOX" up shift
+```
+
 Run several dependent actions under one screen lock:
 
 ```bash
