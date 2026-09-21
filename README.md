@@ -38,7 +38,15 @@ Install Rust 1.85 or newer and one supported runtime:
 
 There's no need to fetch or manage a separate desktop image. The image is built automatically from source the first time you launch a desktop. The initial build takes a few minutes, but later desktops with the same configuration start in seconds.
 
-### Install the commands
+### Installation
+
+#### Using Curl
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
+```
+
+#### Build from source
 
 Build and install `computer` and `computerd` from the current source:
 
