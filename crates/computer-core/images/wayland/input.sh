@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
-# Input arrives as devices: the pointer via `computer-pointer`, keys via `wtype`.
+# Input arrives as devices, a pointer and a keyboard, both made by `computer-pointer`.
 # Not sway's `seat cursor`: on a headless backend it exits zero and moves nothing.
 # On the path, so a shell or an `exec` meets the takeover gate too.
 set -uo pipefail
 
-verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|key ...}"
+verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key|with ...}"
 shift
 
-screen=$(( ${WAYLAND_DISPLAY#wayland-} - 1 ))
+runtime="${XDG_RUNTIME_DIR:-}"
+number="${runtime##*/run-}"
+case "$number" in
+  ''|*[!0-9]*)
+    echo "XDG_RUNTIME_DIR is '${runtime}', which is no screen's runtime directory" >&2
+    exit 2
+    ;;
+esac
+screen=$(( number - 1 ))
 sockfile="/tmp/computer/screen-${screen}.sway"
 token_file="/tmp/computer/screen-${screen}.control"
 
@@ -22,25 +30,11 @@ fi
 [ -s "$sockfile" ] || { echo "screen ${screen} is not running" >&2; exit 1; }
 
 case "$verb" in
-  move|click|dblclick|drag|path|sweep|scroll|down|up)
+  move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key|with)
     computer-pointer "$verb" "$@" || exit $?
     ;;
-  # `-s` first: the first key races the keymap, so `KEYBOARD` arrives as `EYBOARD`.
-  # `--` next, or text starting with a dash is read as a flag.
-  type)
-    said=$(wtype -s 120 -- "$@" 2>&1) || true
-    ;;
-  key)
-    said=$(wtype -s 120 "$@" 2>&1) || true
-    ;;
   *)
-    echo "usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|key ..." >&2
+    echo "usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key|with ..." >&2
     exit 2
     ;;
 esac
-
-# `wtype` exits zero whatever happens; its output is the only signal.
-if [ -n "${said:-}" ]; then
-  echo "$said" >&2
-  exit 1
-fi

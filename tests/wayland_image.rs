@@ -1,6 +1,6 @@
 use computer::bundle::{
-    POINTER_C, SWAY_CONFIG, VIRTUAL_POINTER_XML, WAYLAND_BROWSER_SH, WAYLAND_DOCKERFILE,
-    WAYLAND_INPUT_SH, WAYLAND_SCREEN_SH, WAYLAND_START_SH,
+    POINTER_C, SWAY_CONFIG, VIRTUAL_KEYBOARD_XML, VIRTUAL_POINTER_XML, WAYLAND_BROWSER_SH,
+    WAYLAND_DOCKERFILE, WAYLAND_INPUT_SH, WAYLAND_SCREEN_SH, WAYLAND_START_SH,
 };
 use computer::image::{DEVTOOLS_BRIDGE_PORT, DEVTOOLS_PORT, HEIGHT_ENV, WIDTH_ENV};
 use computer::servers::wayland::{DISPLAY_NAME, INPUT_COMMAND};
@@ -118,7 +118,8 @@ fn every_input_verb_the_driver_sends_is_one_the_script_answers() {
         .expect("the script dispatches on a verb");
 
     for verb in [
-        "move", "click", "dblclick", "drag", "path", "sweep", "scroll", "down", "up", "type", "key",
+        "move", "click", "dblclick", "drag", "path", "sweep", "scroll", "down", "up", "type",
+        "paced", "key", "with",
     ] {
         // Alone or in an alternation, which is how the pointer verbs share one branch.
         assert!(
@@ -148,7 +149,6 @@ fn the_image_carries_every_binary_the_driver_calls() {
     for binary in [
         "sway",
         "wayvnc",
-        "wtype",
         "grim",
         "wl-clipboard",
         "chromium",
@@ -253,12 +253,123 @@ fn a_pointer_that_died_is_brought_back_by_the_next_start() {
 }
 
 #[test]
-fn a_gesture_the_pointer_refused_is_a_gesture_that_failed() {
+fn a_pace_is_a_pause_after_every_key() {
+    let typing = POINTER_C
+        .split("static const char *type_text(")
+        .nth(1)
+        .and_then(|rest| rest.split("static const char *one_key(").next())
+        .expect("the keyboard types text");
+
+    assert!(
+        typing.contains("settle(pause > 0 ? pause : 2)"),
+        "the pace is the gap the application sees between two keys, and wtype, which this \
+         replaced, was never handed it"
+    );
+}
+
+#[test]
+fn the_script_tells_screens_apart_the_way_the_driver_does() {
+    assert!(
+        WAYLAND_INPUT_SH.contains(r#"number="${runtime##*/run-}""#)
+            && !WAYLAND_INPUT_SH.contains("WAYLAND_DISPLAY#"),
+        "every screen's compositor is {DISPLAY_NAME}, so a screen read from that name is \
+         always 0: a person on screen 0 stopped input to every screen, and one on \
+         screen 1 stopped none"
+    );
+
+    let second = computer::servers::wayland::runtime_dir(ScreenId(1));
+    assert_eq!(second, "/tmp/computer/run-2");
+    assert!(
+        WAYLAND_SCREEN_SH.contains(r#"runtime="/tmp/computer/run-${number}""#),
+        "the driver, the screen script and the input script have to mean the same directory"
+    );
+}
+
+#[test]
+fn a_gesture_that_was_refused_is_a_gesture_that_failed() {
     assert!(
         WAYLAND_INPUT_SH.contains(r#"computer-pointer "$verb" "$@" || exit $?"#),
-        "the script ends on a test of what wtype said, which is true for a pointer verb, so \
-         a press the pointer refused was reported as a press"
+        "a press the pointer refused was once reported as a press, because the script \
+         ended on a test that was true for every pointer verb"
     );
+    assert!(
+        !WAYLAND_INPUT_SH.contains("wtype") && !WAYLAND_DOCKERFILE.contains("wtype"),
+        "wtype numbers its own key codes and Chrome reads some of them as Backspace or \
+         Control, so a text lost its colon and the space before a Korean letter"
+    );
+}
+
+#[test]
+fn ascii_is_typed_on_the_keys_a_us_keyboard_has() {
+    assert!(
+        POINTER_C.contains(r#"include \"pc+us+inet(evdev)\""#),
+        "a page reads the code of a key as well as what it types, and a shortcut is \
+         matched on it: H has to arrive as KeyH with Shift, not as the first free code"
+    );
+    assert!(
+        POINTER_C.contains("zwp_virtual_keyboard_v1_modifiers(keys, mods, 0, 0, group)"),
+        "a Shift key event alone typed a small a: the compositor takes the modifier state \
+         of a virtual keyboard from the keyboard, not from its keys"
+    );
+}
+
+#[test]
+fn every_other_character_is_a_second_group_on_the_same_keys() {
+    assert!(
+        POINTER_C.contains("symbols[Group%zu]"),
+        "Chrome types a character only from a key code it knows, so a letter of another \
+         script goes where a keyboard of that script has it: on a printable key, in \
+         another group"
+    );
+    assert!(
+        POINTER_C.contains("extra_count = 0;"),
+        "three groups of forty-seven keys hold 141 characters, and a text with more of \
+         them starts the table again rather than dropping the rest"
+    );
+}
+
+#[test]
+fn text_crosses_to_the_pointer_that_stays_byte_for_byte() {
+    assert!(
+        POINTER_C.contains(r#"say(door, typed ? "typehex" : "pacedhex")"#)
+            && POINTER_C.contains("unhex(words[rest])"),
+        "a gesture is one line of words split on spaces, and text has spaces, new lines \
+         and a leading dash of its own"
+    );
+}
+
+#[test]
+fn a_modifier_is_held_through_a_gesture_and_let_go_after_it() {
+    let with = POINTER_C
+        .split(r#"strcmp(verb, "with") == 0"#)
+        .nth(1)
+        .expect("a gesture can be given modifiers");
+    let pressed = with.find("hold(down[at], 1)").expect("they go down");
+    let ran = with
+        .find("gesture(count - 2, words + 2)")
+        .expect("the gesture runs");
+    let released = with.find("hold(down[--held], 0)").expect("they come up");
+
+    assert!(
+        pressed < ran && ran < released,
+        "the release is not skipped when the gesture inside is refused, or shift stays \
+         down for everything after it"
+    );
+}
+
+#[test]
+fn both_protocols_are_carried_and_compiled_here() {
+    assert!(VIRTUAL_KEYBOARD_XML.contains("zwp_virtual_keyboard_manager_v1"));
+    for protocol in [
+        "wlr-virtual-pointer-unstable-v1",
+        "virtual-keyboard-unstable-v1",
+    ] {
+        assert!(
+            WAYLAND_DOCKERFILE.contains(&format!("{protocol}-protocol.c"))
+                && WAYLAND_DOCKERFILE.contains(protocol),
+            "{protocol}: Debian packages no client for it"
+        );
+    }
 }
 
 #[test]
@@ -333,22 +444,40 @@ fn a_gesture_is_over_when_its_command_returns() {
 
 #[test]
 fn the_first_keystroke_is_not_swallowed_by_a_keymap_that_is_not_ready() {
-    // wtype's first key races the keymap, so `KEYBOARD` arrives as `EYBOARD`.
+    // The first key races a new keymap, so `KEYBOARD` arrives as `EYBOARD`.
     assert!(
-        WAYLAND_INPUT_SH.contains("wtype -s 120"),
-        "the new device needs a pause to become real"
+        POINTER_C.contains("#define KEYMAP_SETTLE 120"),
+        "an application needs a moment to read a keymap it was just sent"
     );
+
+    for typing in [
+        "static const char *type_text(",
+        "static const char *press_keys(",
+    ] {
+        let body = POINTER_C.split(typing).nth(1).expect("the keyboard types");
+        let settled = body
+            .find("keymap_settled()")
+            .expect("it waits for the keymap");
+        let first_key = body
+            .find("tap(")
+            .or_else(|| body.find("one_key(name"))
+            .expect("then it presses a key");
+
+        assert!(
+            settled < first_key,
+            "{typing} presses before the keymap is read"
+        );
+    }
 }
 
 #[test]
-fn a_tool_that_cannot_fail_loudly_is_made_to() {
-    // `wtype` exits zero whatever happens; its output is the only signal.
+fn a_key_nobody_has_is_an_error_and_not_a_silence() {
     assert!(
-        WAYLAND_INPUT_SH.contains("said=$(wtype"),
+        POINTER_C.contains(r#""unknown key: %.100s""#)
+            && POINTER_C.contains(r#""unknown modifier: %.100s""#),
         "an input command that reports success while the screen stays put is \
          the failure this image is hardest to debug through"
     );
-    assert!(WAYLAND_INPUT_SH.contains("exit 1"));
 }
 
 #[test]

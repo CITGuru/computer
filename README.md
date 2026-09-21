@@ -436,7 +436,7 @@ By default, the crate removes a desktop when its handle is dropped. This also cl
 
 ### Run on Wayland instead of X11
 
-Two images ship. `X11Profile` is the default — Xvfb, fluxbox, x11vnc and `xdotool`. `WaylandProfile` runs the same box on sway headless, wayvnc, `grim` and `wtype`:
+Two images ship. `X11Profile` is the default — Xvfb, fluxbox, x11vnc and `xdotool`. `WaylandProfile` runs the same box on sway headless, wayvnc, `grim` and a pointer and keyboard of its own:
 
 ```rust
 let computer = Computer::builder()
@@ -454,7 +454,7 @@ Three things differ inside the box:
 | ------- | --------------------- | --------------------------------------------------------------------- |
 | Server  | `Xvfb` plus `fluxbox` | `sway`, headless                                                      |
 | Capture | ImageMagick `import`  | `grim`                                                                |
-| Input   | `xdotool`             | `computer-input` — a virtual pointer that stays, `wtype` for keys     |
+| Input   | `xdotool`             | `computer-input` — a virtual pointer and keyboard that stay           |
 | Viewer  | `x11vnc -viewonly`    | `wayvnc -d`                                                           |
 | Runs as | root                  | an unprivileged user, because sway will not start as root             |
 
@@ -463,7 +463,9 @@ Screens are told apart differently. An X display number is global, so screen `N`
 
 Wayland input needs no extra privilege. It does **not** use `ydotool` or `/dev/uinput`, so the box keeps the isolation it was started with.
 
-The pointer is a `zwlr_virtual_pointer_v1` device, and such a device lives only as long as the client that made it. Each screen keeps one `computer-pointer serve` for its whole life and every gesture goes through it, so a button can stay down between two steps — `mouse_down` and `mouse_up` work as they do on X11 — and a menu keeps its hover from one command to the next. If it dies, the next gesture starts it again.
+The pointer is a `zwlr_virtual_pointer_v1` device and the keyboard a `zwp_virtual_keyboard_v1`, and such a device lives only as long as the client that made it. Each screen keeps one `computer-pointer serve` for its whole life and every gesture and every key goes through it, so a button can stay down between two steps — `mouse_down` and `mouse_up` work as they do on X11 — a modifier can be held through a click, and a menu keeps its hover from one command to the next. If it dies, the next gesture starts it again.
+
+The keyboard is a US layout, so `H` reaches a page as `KeyH` with Shift and a shortcut matches on the code it expects. A character the layout does not have — `é`, `日`, `Привет` — is put on the same printable keys in another group, which is where a keyboard of that script has it; Chrome types a character only from a key code it knows. One limit is Chrome's and not the keyboard's: a key event there carries sixteen bits, so an emoji typed as a key is dropped. `fill` on a page inserts it, and an X11 program under Xwayland takes it as a key.
 
 `cursor()` **behaves differently.** No Wayland protocol lets a client read the global pointer position, so the driver reports where it last put the pointer. Once a person has driven the screen that value is stale, and `cursor()` returns `Error::Unsupported` until your next move:
 
@@ -722,7 +724,7 @@ computer mouse <box> click 640 400 left --held shift,ctrl
 computer wait <box> --settle 400 --within 10000
 ```
 
-Modifiers are X11 only. Holding a key across a click on Wayland needs a virtual keyboard that this image's pointer does not make, so the Wayland driver refuses rather than dropping the modifier and clicking anyway.
+Modifiers are held on both. X11 chains the press, the click and the release in one `xdotool` run; on Wayland the pointer that stays holds the keys through the gesture and lets them go after it, also when the gesture is refused.
 
 ## Give control to a person
 

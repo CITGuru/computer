@@ -87,6 +87,17 @@ fn input_argv(verb: &str, parts: &[String]) -> Vec<String> {
     args
 }
 
+fn holding(held: &[Held], verb: &str, parts: &[String]) -> Vec<String> {
+    if held.is_empty() {
+        return input_argv(verb, parts);
+    }
+
+    let names: Vec<&str> = held.iter().map(|one| one.keysym()).collect();
+    let mut through = vec![names.join(","), verb.to_string()];
+    through.extend_from_slice(parts);
+    input_argv("with", &through)
+}
+
 fn button_parts(button: Button, at: Option<Point>) -> Vec<String> {
     let mut parts = vec![button_name(button).to_string()];
     parts.extend(at.map(point_parts).unwrap_or_default());
@@ -306,9 +317,13 @@ impl Desktop for WaylandDesktop {
     }
 
     async fn click(&self, at: Point, button: Button) -> Result<()> {
+        self.click_with(at, button, &[]).await
+    }
+
+    async fn click_with(&self, at: Point, button: Button, held: &[Held]) -> Result<()> {
         let mut parts = point_parts(at);
         parts.push(button_name(button).to_string());
-        self.act(input_argv("click", &parts)).await?;
+        self.act(holding(held, "click", &parts)).await?;
         self.moved_to(at);
         Ok(())
     }
@@ -322,10 +337,14 @@ impl Desktop for WaylandDesktop {
     }
 
     async fn drag(&self, from: Point, to: Point, button: Button) -> Result<()> {
+        self.drag_with(from, to, button, &[]).await
+    }
+
+    async fn drag_with(&self, from: Point, to: Point, button: Button, held: &[Held]) -> Result<()> {
         let mut parts = point_parts(from);
         parts.extend(point_parts(to));
         parts.push(button_name(button).to_string());
-        self.act(input_argv("drag", &parts)).await?;
+        self.act(holding(held, "drag", &parts)).await?;
         self.moved_to(to);
         Ok(())
     }
@@ -350,20 +369,15 @@ impl Desktop for WaylandDesktop {
         button: Button,
         held: &[Held],
     ) -> Result<()> {
-        if !held.is_empty() {
-            return Err(Error::Unsupported {
-                gaps: vec!["modifiers"],
-            });
-        }
         let Some(last) = steps.last() else {
-            return self.click(from, button).await;
+            return self.click_with(from, button, held).await;
         };
         let mut parts = vec![button_name(button).to_string(), Self::pause_ms(steps)];
         parts.extend(point_parts(from));
         for step in steps {
             parts.extend(point_parts(step.at));
         }
-        self.act(input_argv("sweep", &parts)).await?;
+        self.act(holding(held, "sweep", &parts)).await?;
         self.moved_to(last.at);
         Ok(())
     }
@@ -396,20 +410,17 @@ impl Desktop for WaylandDesktop {
         .map(|_| ())
     }
 
-    /// `wtype -s` sleeps once before the first key, not between keys, so pace is ignored.
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
-        if let Some(delay) = delay {
-            tracing::warn!(
-                asked_ms = delay.as_millis() as u64,
-                "this desktop types at one speed; the text is going out at full speed"
-            );
+        match delay {
+            Some(delay) => {
+                let parts = [delay.as_millis().to_string(), text.to_string()];
+                self.act(input_argv("paced", &parts)).await
+            }
+            None => self.act(input_argv("type", &[text.to_string()])).await,
         }
-
-        self.act(input_argv("type", &[text.to_string()])).await
     }
 
-    /// One `wtype` run: a process per key would release the hold between keys.
-    /// Held shift reaches apps as a modifier, so `a` stays `a` where X11 gives `A`.
+    /// One run, so the modifiers come up in the command that put them down.
     async fn press(&self, chords: &[String], held: &[Held]) -> Result<()> {
         let mut parts = Vec::new();
 
@@ -721,7 +732,8 @@ mod tests {
         assert_eq!(
             chord("cmd+enter"),
             vec!["-M", "logo", "-k", "Return", "-m", "logo"],
-            "wtype calls the super key logo, and a caller should not have to"
+            "the keyboard in the box knows the super key as logo too, and a caller should \
+             not have to"
         );
     }
 

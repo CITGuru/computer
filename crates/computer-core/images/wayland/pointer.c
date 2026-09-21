@@ -1,7 +1,8 @@
 // A virtual pointer lives only as long as its client, so one client stays and takes every gesture.
 
-#define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE
 
+#include "virtual-keyboard-unstable-v1-client-protocol.h"
 #include "wlr-virtual-pointer-unstable-v1-client-protocol.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -11,6 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <time.h>
@@ -29,6 +32,8 @@ static struct wl_seat *seat;
 static struct wl_output *output;
 static struct zwlr_virtual_pointer_manager_v1 *manager;
 static struct zwlr_virtual_pointer_v1 *pointer;
+static struct zwp_virtual_keyboard_manager_v1 *keys_manager;
+static struct zwp_virtual_keyboard_v1 *keys;
 
 static int resident;
 static char fault[200];
@@ -47,6 +52,9 @@ static void registry_global(void *data, struct wl_registry *registry, uint32_t n
 	} else if (strcmp(interface, zwlr_virtual_pointer_manager_v1_interface.name) == 0) {
 		manager = wl_registry_bind(registry, name,
 		                           &zwlr_virtual_pointer_manager_v1_interface, 1);
+	} else if (strcmp(interface, zwp_virtual_keyboard_manager_v1_interface.name) == 0) {
+		keys_manager = wl_registry_bind(registry, name,
+		                                &zwp_virtual_keyboard_manager_v1_interface, 1);
 	} else if (strcmp(interface, wl_output_interface.name) == 0 && output == NULL) {
 		output = wl_registry_bind(registry, name, &wl_output_interface, 2);
 	}
@@ -180,10 +188,415 @@ static const char *USAGE =
     "                        scroll X Y DOWN [RIGHT]   (negative goes up and left)\n"
     "                        down BUTTON [X Y]         (stays down: needs the resident pointer)\n"
     "                        up BUTTON [X Y]\n"
+    "                        type TEXT\n"
+    "                        paced MS TEXT             (a pause of MS after each key)\n"
+    "                        key [-M MOD | -m MOD | -k KEY | -P KEY | -p KEY] ...\n"
+    "                        with MOD[,MOD] GESTURE    (the modifiers held through it)\n"
     "                        serve SOCKET              (the resident pointer of one screen)\n";
 
 static const char *HOMELESS =
     "a button stays down only under the resident pointer, and this screen has none";
+
+struct board_key {
+	const char *name;
+	uint32_t code;
+	char plain;
+	char shifted;
+};
+
+static const struct board_key BOARD[] = {
+    {"AE01", 2, '1', '!'},  {"AE02", 3, '2', '@'},  {"AE03", 4, '3', '#'},  {"AE04", 5, '4', '$'},
+    {"AE05", 6, '5', '%'},  {"AE06", 7, '6', '^'},  {"AE07", 8, '7', '&'},  {"AE08", 9, '8', '*'},
+    {"AE09", 10, '9', '('}, {"AE10", 11, '0', ')'}, {"AE11", 12, '-', '_'}, {"AE12", 13, '=', '+'},
+    {"AD01", 16, 'q', 'Q'}, {"AD02", 17, 'w', 'W'}, {"AD03", 18, 'e', 'E'}, {"AD04", 19, 'r', 'R'},
+    {"AD05", 20, 't', 'T'}, {"AD06", 21, 'y', 'Y'}, {"AD07", 22, 'u', 'U'}, {"AD08", 23, 'i', 'I'},
+    {"AD09", 24, 'o', 'O'}, {"AD10", 25, 'p', 'P'}, {"AD11", 26, '[', '{'}, {"AD12", 27, ']', '}'},
+    {"AC01", 30, 'a', 'A'}, {"AC02", 31, 's', 'S'}, {"AC03", 32, 'd', 'D'}, {"AC04", 33, 'f', 'F'},
+    {"AC05", 34, 'g', 'G'}, {"AC06", 35, 'h', 'H'}, {"AC07", 36, 'j', 'J'}, {"AC08", 37, 'k', 'K'},
+    {"AC09", 38, 'l', 'L'}, {"AC10", 39, ';', ':'}, {"AC11", 40, '\'', '"'}, {"TLDE", 41, '`', '~'},
+    {"BKSL", 43, '\\', '|'}, {"AB01", 44, 'z', 'Z'}, {"AB02", 45, 'x', 'X'}, {"AB03", 46, 'c', 'C'},
+    {"AB04", 47, 'v', 'V'}, {"AB05", 48, 'b', 'B'}, {"AB06", 49, 'n', 'N'}, {"AB07", 50, 'm', 'M'},
+    {"AB08", 51, ',', '<'}, {"AB09", 52, '.', '>'}, {"AB10", 53, '/', '?'},
+};
+
+#define BOARD_KEYS (sizeof BOARD / sizeof BOARD[0])
+#define EXTRA_GROUPS 3
+#define MOST_EXTRAS (BOARD_KEYS * EXTRA_GROUPS)
+#define KEYMAP_SETTLE 120
+
+#define KEY_SHIFT 42
+#define MOD_SHIFT 1
+
+struct named_key {
+	const char *name;
+	uint32_t code;
+};
+
+static const struct named_key NAMED[] = {
+    {"Return", 28},   {"Enter", 28},   {"KP_Enter", 96}, {"Escape", 1},     {"space", 57},
+    {"Tab", 15},      {"BackSpace", 14}, {"Delete", 111}, {"Insert", 110},  {"Up", 103},
+    {"Down", 108},    {"Left", 105},   {"Right", 106},   {"Home", 102},     {"End", 107},
+    {"Prior", 104},   {"Page_Up", 104}, {"Next", 109},   {"Page_Down", 109}, {"Menu", 127},
+    {"Print", 99},    {"Pause", 119},  {"Caps_Lock", 58}, {"F1", 59},       {"F2", 60},
+    {"F3", 61},       {"F4", 62},      {"F5", 63},       {"F6", 64},        {"F7", 65},
+    {"F8", 66},       {"F9", 67},      {"F10", 68},      {"F11", 87},       {"F12", 88},
+};
+
+struct held_key {
+	const char *name;
+	uint32_t code;
+	uint32_t mask;
+};
+
+static const struct held_key HELD[] = {
+    {"shift", KEY_SHIFT, MOD_SHIFT}, {"ctrl", 29, 4}, {"control", 29, 4}, {"alt", 56, 8},
+    {"super", 125, 64},              {"logo", 125, 64}, {"win", 125, 64}, {"meta", 125, 64},
+};
+
+struct spelled_key {
+	const char *name;
+	char is;
+};
+
+static const struct spelled_key SPELLED[] = {
+    {"minus", '-'},      {"equal", '='},       {"plus", '+'},        {"underscore", '_'},
+    {"bracketleft", '['}, {"bracketright", ']'}, {"braceleft", '{'}, {"braceright", '}'},
+    {"semicolon", ';'},  {"colon", ':'},       {"apostrophe", '\''}, {"quotedbl", '"'},
+    {"grave", '`'},      {"asciitilde", '~'},  {"backslash", '\\'},  {"bar", '|'},
+    {"comma", ','},      {"period", '.'},      {"slash", '/'},       {"less", '<'},
+    {"greater", '>'},    {"question", '?'},    {"exclam", '!'},      {"at", '@'},
+    {"numbersign", '#'}, {"dollar", '$'},      {"percent", '%'},     {"asciicircum", '^'},
+    {"ampersand", '&'},  {"asterisk", '*'},    {"parenleft", '('},   {"parenright", ')'},
+};
+
+static uint32_t extras[BOARD_KEYS * EXTRA_GROUPS];
+static size_t extra_count;
+static uint32_t mods;
+static uint32_t keymap_at;
+
+static const char *NO_KEYBOARD = "this compositor does not offer zwp_virtual_keyboard_v1";
+
+static int load_keymap(void) {
+	char *text = NULL;
+	size_t size = 0;
+	FILE *out = open_memstream(&text, &size);
+	if (out == NULL) {
+		return 1;
+	}
+
+	fputs("xkb_keymap {\n xkb_keycodes { include \"evdev+aliases(qwerty)\" };\n"
+	      " xkb_types { include \"complete\" };\n xkb_compat { include \"complete\" };\n"
+	      " xkb_symbols { include \"pc+us+inet(evdev)\"\n",
+	      out);
+	for (size_t at = 0; at < BOARD_KEYS && at < extra_count; at++) {
+		fprintf(out, "  key <%s> { symbols[Group1] = [ U%04X, U%04X ]", BOARD[at].name,
+		        (unsigned)BOARD[at].plain, (unsigned)BOARD[at].shifted);
+		for (size_t more = 0; more < EXTRA_GROUPS; more++) {
+			size_t slot = at + more * BOARD_KEYS;
+			if (slot < extra_count) {
+				fprintf(out, ", symbols[Group%zu] = [ U%04X ]", more + 2, (unsigned)extras[slot]);
+			}
+		}
+		fputs(" };\n", out);
+	}
+	fputs(" };\n};\n", out);
+	if (fclose(out) != 0) {
+		free(text);
+		return 1;
+	}
+
+	int fd = memfd_create("computer-keymap", MFD_CLOEXEC);
+	int failed = fd < 0 || write(fd, text, size + 1) != (ssize_t)size + 1;
+	if (!failed) {
+		zwp_virtual_keyboard_v1_keymap(keys, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fd, size + 1);
+		failed = wl_display_roundtrip(display) < 0;
+		keymap_at = now_ms();
+	}
+	if (fd >= 0) {
+		close(fd);
+	}
+	free(text);
+	return failed;
+}
+
+static void keymap_settled(void) {
+	uint32_t since = now_ms() - keymap_at;
+	if (since < KEYMAP_SETTLE) {
+		settle(KEYMAP_SETTLE - since);
+	}
+}
+
+static void key_event(uint32_t code, uint32_t down) {
+	zwp_virtual_keyboard_v1_key(keys, now_ms(), code, down);
+}
+
+static void state(uint32_t group) {
+	zwp_virtual_keyboard_v1_modifiers(keys, mods, 0, 0, group);
+}
+
+static const struct held_key *held_named(const char *name) {
+	for (size_t at = 0; at < sizeof HELD / sizeof HELD[0]; at++) {
+		if (strcasecmp(name, HELD[at].name) == 0) {
+			return &HELD[at];
+		}
+	}
+	return NULL;
+}
+
+static void hold(const struct held_key *one, int down) {
+	if (down) {
+		key_event(one->code, 1);
+		mods |= one->mask;
+	} else {
+		mods &= ~one->mask;
+		key_event(one->code, 0);
+	}
+	state(0);
+}
+
+static int extra_slot(uint32_t point) {
+	for (size_t at = 0; at < extra_count; at++) {
+		if (extras[at] == point) {
+			return (int)at;
+		}
+	}
+	return -1;
+}
+
+static int on_board(uint32_t point, uint32_t *code, int *shifted) {
+	for (size_t at = 0; at < BOARD_KEYS; at++) {
+		if (point == (uint32_t)BOARD[at].plain || point == (uint32_t)BOARD[at].shifted) {
+			*code = BOARD[at].code;
+			*shifted = point == (uint32_t)BOARD[at].shifted;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void tap(uint32_t code, int shifted, uint32_t group) {
+	int lend = shifted && !(mods & MOD_SHIFT);
+	if (lend) {
+		hold(&HELD[0], 1);
+	}
+	if (group != 0) {
+		state(group);
+	}
+	key_event(code, 1);
+	key_event(code, 0);
+	if (group != 0) {
+		state(0);
+	}
+	if (lend) {
+		hold(&HELD[0], 0);
+	}
+}
+
+static size_t next_point(const char *text, uint32_t *point) {
+	const unsigned char *at = (const unsigned char *)text;
+	size_t width = at[0] < 0x80 ? 1 : (at[0] >> 5) == 0x6 ? 2 : (at[0] >> 4) == 0xE ? 3 : (at[0] >> 3) == 0x1E ? 4 : 0;
+
+	if (width == 0) {
+		*point = 0xFFFD;
+		return 1;
+	}
+	*point = width == 1 ? at[0] : at[0] & (0xFF >> (width + 1));
+	for (size_t more = 1; more < width; more++) {
+		if ((at[more] & 0xC0) != 0x80) {
+			*point = 0xFFFD;
+			return more;
+		}
+		*point = (*point << 6) | (at[more] & 0x3F);
+	}
+	return width;
+}
+
+static int plain_key(uint32_t point) {
+	uint32_t code;
+	int shifted;
+	return point == ' ' || point == '\n' || point == '\t' || point == '\r' ||
+	       on_board(point, &code, &shifted);
+}
+
+static int learn(const char *text) {
+	size_t before = extra_count;
+	uint32_t point;
+
+	for (const char *at = text; *at != '\0'; at += next_point(at, &point)) {
+		next_point(at, &point);
+		if (plain_key(point) || extra_slot(point) >= 0) {
+			continue;
+		}
+		if (extra_count == MOST_EXTRAS) {
+			break;
+		}
+		extras[extra_count++] = point;
+	}
+
+	if (extra_count == before) {
+		return 0;
+	}
+	return load_keymap();
+}
+
+static const char *type_text(const char *text, long pause) {
+	if (keys == NULL) {
+		return NO_KEYBOARD;
+	}
+	if (learn(text) != 0) {
+		return "the compositor would not take the keymap";
+	}
+	keymap_settled();
+
+	uint32_t point;
+	for (const char *at = text; *at != '\0'; at += next_point(at, &point)) {
+		next_point(at, &point);
+
+		uint32_t code = 0;
+		int shifted = 0;
+		if (point == '\r') {
+			continue;
+		} else if (point == ' ') {
+			tap(57, 0, 0);
+		} else if (point == '\n') {
+			tap(28, 0, 0);
+		} else if (point == '\t') {
+			tap(15, 0, 0);
+		} else if (on_board(point, &code, &shifted)) {
+			tap(code, shifted, 0);
+		} else {
+			int slot = extra_slot(point);
+			if (slot < 0) {
+				extra_count = 0;
+				if (learn(at) != 0) {
+					return "the compositor would not take the keymap";
+				}
+				keymap_settled();
+				slot = extra_slot(point);
+			}
+			tap(BOARD[(size_t)slot % BOARD_KEYS].code, 0, (uint32_t)slot / BOARD_KEYS + 1);
+		}
+		settle(pause > 0 ? pause : 2);
+	}
+	return NULL;
+}
+
+static const char *one_key(const char *name, int down, int up) {
+	uint32_t code = 0, group = 0;
+	int shifted = 0, found = 0;
+
+	for (size_t at = 0; at < sizeof NAMED / sizeof NAMED[0] && !found; at++) {
+		if (strcasecmp(name, NAMED[at].name) == 0) {
+			code = NAMED[at].code;
+			found = 1;
+		}
+	}
+
+	uint32_t point = 0;
+	for (size_t at = 0; at < sizeof SPELLED / sizeof SPELLED[0] && !found && point == 0; at++) {
+		if (strcmp(name, SPELLED[at].name) == 0) {
+			point = (uint32_t)SPELLED[at].is;
+		}
+	}
+	if (!found && point == 0 && name[0] != '\0' && name[next_point(name, &point)] != '\0') {
+		snprintf(fault, sizeof fault, "unknown key: %.100s", name);
+		return fault;
+	}
+
+	if (!found && !on_board(point, &code, &shifted)) {
+		char lone[5] = {0};
+		memcpy(lone, name, strnlen(name, 4));
+		if (learn(lone) != 0) {
+			return "the compositor would not take the keymap";
+		}
+		int slot = extra_slot(point);
+		if (slot < 0) {
+			snprintf(fault, sizeof fault, "unknown key: %.100s", name);
+			return fault;
+		}
+		code = BOARD[(size_t)slot % BOARD_KEYS].code;
+		group = (uint32_t)slot / BOARD_KEYS + 1;
+	}
+	keymap_settled();
+
+	int lend = shifted && down && !(mods & MOD_SHIFT);
+	if (lend) {
+		hold(&HELD[0], 1);
+	}
+	if (group != 0) {
+		state(group);
+	}
+	if (down) {
+		key_event(code, 1);
+	}
+	if (up) {
+		key_event(code, 0);
+	}
+	if (group != 0) {
+		state(0);
+	}
+	if (lend) {
+		hold(&HELD[0], 0);
+	}
+	return NULL;
+}
+
+static const char *press_keys(int count, char **words) {
+	if (keys == NULL) {
+		return NO_KEYBOARD;
+	}
+	if (count == 0 || count % 2 != 0) {
+		return USAGE;
+	}
+	keymap_settled();
+
+	for (int at = 0; at + 1 < count; at += 2) {
+		const char *how = words[at];
+		const char *name = words[at + 1];
+		const char *wrong = NULL;
+
+		if (strcmp(how, "-M") == 0 || strcmp(how, "-m") == 0) {
+			const struct held_key *one = held_named(name);
+			if (one == NULL) {
+				snprintf(fault, sizeof fault, "unknown modifier: %.100s", name);
+				return fault;
+			}
+			hold(one, how[1] == 'M');
+		} else if (strcmp(how, "-k") == 0) {
+			wrong = one_key(name, 1, 1);
+		} else if (strcmp(how, "-P") == 0) {
+			wrong = one_key(name, 1, 0);
+		} else if (strcmp(how, "-p") == 0) {
+			wrong = one_key(name, 0, 1);
+		} else {
+			return USAGE;
+		}
+
+		if (wrong != NULL) {
+			return wrong;
+		}
+		settle(2);
+	}
+	return NULL;
+}
+
+static char *unhex(const char *hex) {
+	size_t size = strlen(hex) / 2;
+	char *text = malloc(size + 1);
+	if (text == NULL) {
+		return NULL;
+	}
+	for (size_t at = 0; at < size; at++) {
+		unsigned int byte = 0;
+		if (sscanf(hex + at * 2, "%2x", &byte) != 1) {
+			free(text);
+			return NULL;
+		}
+		text[at] = (char)byte;
+	}
+	text[size] = '\0';
+	return text;
+}
 
 static long *numbers(int count, char **words) {
 	long *read = calloc((size_t)count + 1, sizeof *read);
@@ -307,6 +720,68 @@ static const char *gesture(int count, char **words) {
 			settle(20);
 		}
 		button(code, strcmp(verb, "down") == 0 ? 1 : 0);
+	} else if (strcmp(verb, "type") == 0 && rest == 1) {
+		return type_text(words[1], 0);
+	} else if (strcmp(verb, "paced") == 0 && rest == 2) {
+		long pause = number(words[1]);
+		if (fault[0] != '\0') {
+			return fault;
+		}
+		return type_text(words[2], pause);
+	} else if ((strcmp(verb, "typehex") == 0 && rest == 1) ||
+	           (strcmp(verb, "pacedhex") == 0 && rest == 2)) {
+		long pause = rest == 2 ? number(words[1]) : 0;
+		char *text = unhex(words[rest]);
+		if (fault[0] != '\0' || text == NULL) {
+			free(text);
+			return fault[0] != '\0' ? fault : "the text did not arrive whole";
+		}
+		const char *wrong = type_text(text, pause);
+		free(text);
+		return wrong;
+	} else if (strcmp(verb, "key") == 0) {
+		return press_keys(rest, words + 1);
+	} else if (strcmp(verb, "with") == 0 && rest >= 2 && strcmp(words[2], "with") != 0) {
+		if (keys == NULL) {
+			return NO_KEYBOARD;
+		}
+
+		const struct held_key *down[8];
+		size_t held = 0;
+		for (const char *at = words[1]; *at != '\0';) {
+			size_t length = strcspn(at, ",");
+			char name[16] = {0};
+			if (length == 0 || length >= sizeof name || held == sizeof down / sizeof down[0]) {
+				return USAGE;
+			}
+			memcpy(name, at, length);
+			down[held] = held_named(name);
+			if (down[held] == NULL) {
+				snprintf(fault, sizeof fault, "unknown modifier: %.100s", name);
+				return fault;
+			}
+			held++;
+			at += length + (at[length] == ',');
+		}
+
+		keymap_settled();
+		for (size_t at = 0; at < held; at++) {
+			hold(down[at], 1);
+		}
+		settle(20);
+
+		const char *wrong = gesture(count - 2, words + 2);
+		static char kept[sizeof fault];
+		if (wrong == fault) {
+			memcpy(kept, fault, sizeof kept);
+			wrong = kept;
+		}
+
+		settle(20);
+		while (held > 0) {
+			hold(down[--held], 0);
+		}
+		return wrong;
 	} else {
 		return USAGE;
 	}
@@ -345,9 +820,17 @@ static int meet_compositor(void) {
 	}
 
 	pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(manager, seat);
+	if (keys_manager != NULL) {
+		keys = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(keys_manager, seat);
+	}
 
 	// Before any event: events sent before the compositor makes the device are dropped.
 	wl_display_roundtrip(display);
+
+	if (keys != NULL && load_keymap() != 0) {
+		fputs("the compositor would not take the keymap\n", stderr);
+		return 1;
+	}
 	return 0;
 }
 
@@ -572,9 +1055,27 @@ static int forward(int count, char **words, int *status) {
 	}
 
 	signal(SIGPIPE, SIG_IGN);
-	for (int at_word = 0; at_word < count; at_word++) {
-		say(door, words[at_word]);
-		say(door, at_word + 1 < count ? " " : "\n");
+
+	int typed = strcmp(words[0], "type") == 0 && count == 2;
+	int paced = strcmp(words[0], "paced") == 0 && count == 3;
+	if (typed || paced) {
+		say(door, typed ? "typehex" : "pacedhex");
+		if (paced) {
+			say(door, " ");
+			say(door, words[1]);
+		}
+		say(door, " ");
+		for (const unsigned char *at = (const unsigned char *)words[count - 1]; *at != '\0'; at++) {
+			char pair[3];
+			snprintf(pair, sizeof pair, "%02x", *at);
+			say(door, pair);
+		}
+		say(door, "\n");
+	} else {
+		for (int at_word = 0; at_word < count; at_word++) {
+			say(door, words[at_word]);
+			say(door, at_word + 1 < count ? " " : "\n");
+		}
 	}
 
 	char reply[1200];

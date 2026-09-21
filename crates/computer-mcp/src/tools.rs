@@ -156,8 +156,7 @@ pub fn catalogue() -> Value {
                     "wayland": {
                         "type": "boolean",
                         "description": "Run sway in place of X11, for work that is about \
-                                        Wayland itself. It cannot hold a modifier through a \
-                                        click."
+                                        Wayland itself."
                     },
                     "network": {
                         "type": "boolean",

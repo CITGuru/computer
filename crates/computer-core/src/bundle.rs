@@ -32,6 +32,8 @@ pub const SWAY_CONFIG: &str = include_str!("../images/wayland/sway.config");
 pub const POINTER_C: &str = include_str!("../images/wayland/pointer.c");
 pub const VIRTUAL_POINTER_XML: &str =
     include_str!("../images/wayland/wlr-virtual-pointer-unstable-v1.xml");
+pub const VIRTUAL_KEYBOARD_XML: &str =
+    include_str!("../images/wayland/virtual-keyboard-unstable-v1.xml");
 
 pub const IMAGE_NAME: &str = "computer-desktop";
 
@@ -78,6 +80,7 @@ pub static WAYLAND: Bundle = Bundle {
         ("sway.config", SWAY_CONFIG),
         ("pointer.c", POINTER_C),
         ("wlr-virtual-pointer-unstable-v1.xml", VIRTUAL_POINTER_XML),
+        ("virtual-keyboard-unstable-v1.xml", VIRTUAL_KEYBOARD_XML),
         ("a11y.py", A11Y_PY),
     ],
 };

@@ -113,7 +113,7 @@ fn along(steps: &[Step]) -> Vec<String> {
     args
 }
 
-/// One chained command: a held key is released when the process that pressed it exits.
+/// One command: a key stays down after its process exits, so the release rides with the press.
 fn holding(held: &[Held]) -> Vec<String> {
     let mut args = argv(&["xdotool"]);
 
@@ -415,7 +415,7 @@ impl Desktop for X11Desktop {
 
         if let Some(delay) = delay {
             args.push("--delay".to_string());
-            args.push(delay.as_millis().to_string());
+            args.push((delay.as_millis() * 2).to_string());
         }
         // `--` last, or text beginning with a dash is read as a flag.
         args.push("--".to_string());

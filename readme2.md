@@ -187,7 +187,7 @@ computer mouse "$BOX" click 640 400 left --held shift
 computer mouse "$BOX" drag 100 100 400 300 left --held ctrl
 ```
 
-Modifier pointer operations are available on X11. The Wayland driver refuses them because it cannot keep a virtual key held across the pointer operation.
+Modifier pointer operations are available on X11 and on Wayland.
 
 ### Wait for the screen
 
@@ -845,7 +845,7 @@ BOX=$(computer new --wayland)
 
 The public desktop API is the same for both profiles.
 
-The X11 image uses Xvfb, fluxbox, x11vnc, ImageMagick, and `xdotool`. The Wayland image uses headless sway, wayvnc, `grim`, `wtype`, and one virtual pointer per screen that stays for the life of the screen, so a button can be held between two steps as on X11.
+The X11 image uses Xvfb, fluxbox, x11vnc, ImageMagick, and `xdotool`. The Wayland image uses headless sway, wayvnc, `grim`, and one virtual pointer and keyboard per screen that stay for the life of the screen, so a button or a modifier can be held between two steps as on X11.
 
 Wayland cannot read the global pointer after a person moves it. `cursor()` returns `Unsupported` after a handover until the driver moves the pointer again.
 
