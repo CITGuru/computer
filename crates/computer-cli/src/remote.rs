@@ -1,10 +1,11 @@
 use crate::{USAGE, bare, flag, framing, positional, present, wheel};
 use computer_api::{
-    Action, ActionBatch, Arrange, BatchResult, ConsoleRead, Evaluate, Find, ForkMode, ForkRequest,
-    Held, OnElement, OnNode, OpenIn, Out, PagePdf, PageShot, Picture, Reading, RecordOp, Rect,
-    Shot, SnapshotOptions, Where, Window, WindowOp,
+    Action, ActionBatch, Arrange, BatchResult, ConsoleRead, CookieSet, Evaluate, Find, ForkMode,
+    ForkRequest, Held, LoadState, OnElement, OnNode, OpenIn, Out, PagePdf, PageShot, Picture,
+    Reading, RecordOp, Rect, SaveState, SetCookies, Shot, SnapshotOptions, StateView, Where,
+    Window, WindowOp,
 };
-use computer_client::{Client, captured_image, frame_png, printed_pdf};
+use computer_client::{Client, captured_image, cookies_from_curl, frame_png, printed_pdf};
 use computer_types::{Button, Motion, NodeQuery, Point, Search, Selection};
 use std::time::Duration;
 
@@ -534,6 +535,236 @@ pub async fn press(client: &Client, args: &[String]) -> Done {
         },
     )
     .await
+}
+
+pub async fn state(client: &Client, args: &[String]) -> Done {
+    match args.first().map(String::as_str) {
+        Some("list") => {
+            let names = client.states().await.map_err(|e| e.to_string())?;
+            if names.is_empty() {
+                println!("no state is saved on this server");
+            }
+            for name in names {
+                println!("{name}");
+            }
+            return Ok(());
+        }
+        Some("rm") => {
+            let name = positional(args, 1, "a state name").map_err(|e| e.to_string())?;
+            client.forget_state(name).await.map_err(|e| e.to_string())?;
+            eprintln!("{name} is gone");
+            return Ok(());
+        }
+        _ => {}
+    }
+
+    let id = positional(args, 0, "a box, list or rm").map_err(|e| e.to_string())?;
+    let op = positional(args, 1, "save or load").map_err(|e| e.to_string())?;
+    let rest = bare(args, &["--name", "--origin"]);
+    let name = flag(args, "--name").map(str::to_string);
+    let file = rest.get(2);
+
+    match (op, &name, file) {
+        ("save" | "load", Some(_), Some(_)) => {
+            Err("a file or --name, one of them: --name keeps it on the server".to_string())
+        }
+        ("save" | "load", None, None) => Err(format!(
+            "{op} needs a file, or --name for a state the server keeps"
+        )),
+        ("save", _, _) => {
+            let view = client
+                .save_state(
+                    id,
+                    &SaveState {
+                        origins: every(args, "--origin"),
+                        name: name.clone(),
+                        session_storage: present(args, "--session-storage"),
+                        indexed_db: present(args, "--indexed-db"),
+                        no_local_storage: present(args, "--no-local-storage"),
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            if let Some(file) = file {
+                write_private(file, view.session_json.as_deref().unwrap_or_default())?;
+            }
+            println!("saved {}", said_state(&view));
+            match (&view.name, file) {
+                (Some(name), _) => eprintln!("the server keeps it as {name} until it restarts"),
+                (None, Some(file)) => eprintln!("written to {file}; it holds live logins"),
+                (None, None) => {}
+            }
+            for gap in &view.incomplete {
+                eprintln!("not saved: {gap}");
+            }
+            Ok(())
+        }
+        ("load", _, _) => {
+            let what = match file {
+                Some(file) => LoadState {
+                    session_json: Some(
+                        std::fs::read_to_string(file)
+                            .map_err(|error| format!("{file}: {error}"))?,
+                    ),
+                    ..LoadState::default()
+                },
+                None => LoadState {
+                    name,
+                    ..LoadState::default()
+                },
+            };
+            let view = client
+                .load_state(id, &what)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("loaded {}", said_state(&view));
+            Ok(())
+        }
+        (other, _, _) => Err(format!("no such op: {other}")),
+    }
+}
+
+fn said_state(view: &StateView) -> String {
+    format!(
+        "{} cookies and the storage of {} origin(s), for {}",
+        view.cookies,
+        view.stored,
+        view.origins.join(", ")
+    )
+}
+
+fn every(args: &[String], name: &str) -> Vec<String> {
+    args.windows(2)
+        .filter(|pair| pair[0] == name)
+        .flat_map(|pair| pair[1].split(','))
+        .map(str::trim)
+        .filter(|one| !one.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn write_private(path: &str, text: &str) -> Done {
+    use std::io::Write;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        if std::path::Path::new(path).exists() {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| format!("{path}: {error}"))?;
+        }
+    }
+
+    options
+        .open(path)
+        .and_then(|mut file| file.write_all(text.as_bytes()))
+        .map_err(|error| format!("{path}: {error}"))
+}
+
+pub async fn cookies(client: &Client, args: &[String]) -> Done {
+    let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
+    let rest = bare(
+        args,
+        &["--url", "--curl", "--domain", "--path", "--expires"],
+    );
+    let url = flag(args, "--url");
+
+    match rest.get(1).map(String::as_str) {
+        None | Some("list") => {
+            let cookies = client.cookies(id, url).await.map_err(|e| e.to_string())?;
+            if cookies.is_empty() {
+                println!("no cookies");
+            }
+            for cookie in &cookies {
+                let mut said = format!(
+                    "{}={}  {}{}",
+                    cookie.name, cookie.value, cookie.domain, cookie.path
+                );
+                if cookie.secure {
+                    said.push_str("  secure");
+                }
+                if cookie.http_only {
+                    said.push_str("  http-only");
+                }
+                if let Some(expires) = cookie.expires {
+                    said.push_str(&format!("  until {}", stamped((expires * 1000.0) as u64)));
+                }
+                println!("{said}");
+            }
+            Ok(())
+        }
+        Some("set") => {
+            let (url, mut cookies) = match flag(args, "--curl") {
+                Some(command) => {
+                    let (url, cookies) = cookies_from_curl(command)?;
+                    (Some(url), cookies)
+                }
+                None => {
+                    let cookies = rest[2..]
+                        .iter()
+                        .map(|pair| {
+                            pair.split_once('=')
+                                .map(|(name, value)| CookieSet {
+                                    name: name.to_string(),
+                                    value: value.to_string(),
+                                    ..CookieSet::default()
+                                })
+                                .ok_or_else(|| format!("{pair} is not NAME=VALUE"))
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    (url.map(str::to_string), cookies)
+                }
+            };
+            if cookies.is_empty() {
+                return Err("set takes NAME=VALUE, one or more, or --curl".to_string());
+            }
+
+            let expires =
+                counted::<u64>(args, "--expires", "a number of seconds")?.map(|seconds| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|now| now.as_secs_f64())
+                        .unwrap_or_default()
+                        + seconds as f64
+                });
+            for cookie in &mut cookies {
+                cookie.domain = flag(args, "--domain").map(str::to_string);
+                cookie.path = flag(args, "--path").map(str::to_string);
+                cookie.expires = expires;
+                cookie.http_only = present(args, "--http-only");
+                if present(args, "--secure") {
+                    cookie.secure = Some(true);
+                }
+            }
+
+            let set = client
+                .set_cookies(id, &SetCookies { url, cookies })
+                .await
+                .map_err(|e| e.to_string())?;
+            for cookie in &set {
+                println!("set {} for {}{}", cookie.name, cookie.domain, cookie.path);
+            }
+            Ok(())
+        }
+        Some("clear") => {
+            if url.is_none() && !present(args, "--all") {
+                return Err(
+                    "clear takes --url for one site's cookies, or --all for every one".to_string(),
+                );
+            }
+            let cleared = client
+                .clear_cookies(id, url)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("cleared {} cookies", cleared.cleared);
+            Ok(())
+        }
+        Some(other) => Err(format!("no such op: {other}")),
+    }
 }
 
 pub async fn mouse(client: &Client, args: &[String]) -> Done {

@@ -12,6 +12,7 @@ pub mod recover;
 pub mod registry;
 pub mod routes;
 pub mod spec;
+pub mod states;
 pub mod viewer;
 
 use computer::ContainerCli;
@@ -37,6 +38,7 @@ pub struct AppState {
     pub cdp_tokens: viewer::Tickets,
     pub presses: presses::Presses,
     pub labels: labels::Labels,
+    pub states: states::States,
 }
 
 impl Default for AppState {
@@ -65,6 +67,7 @@ impl AppState {
             cdp_tokens: viewer::Tickets::default(),
             presses: presses::Presses::default(),
             labels: labels::Labels::default(),
+            states: states::States::default(),
         }
     }
 

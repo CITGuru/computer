@@ -82,6 +82,10 @@ Files and commands:
 
 `list_files` · `grep` · `glob` · `read_file` · `write_file` · `clipboard` · `run_command`
 
+Browser state:
+
+`save_state` · `load_state` · `cookies`
+
 Coordination:
 
 `batch` · `hand_over` · `reclaim_screen`

@@ -2,7 +2,14 @@ use std::fmt::Write;
 
 pub const VARIABLE: &str = "COMPUTER_CONTENT_BOUNDARIES";
 
-pub const PAGE_TEXT: [&str; 5] = ["read_page", "snapshot", "find", "evaluate", "console"];
+pub const PAGE_TEXT: [&str; 6] = [
+    "read_page",
+    "snapshot",
+    "find",
+    "evaluate",
+    "console",
+    "cookies",
+];
 
 pub fn asked() -> bool {
     std::env::var(VARIABLE).is_ok_and(|value| !matches!(value.as_str(), "" | "0" | "false"))

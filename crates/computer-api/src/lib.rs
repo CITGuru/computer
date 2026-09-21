@@ -917,6 +917,134 @@ pub struct PagePdf {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SaveState {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub origins: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub session_storage: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub indexed_db: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_local_storage: bool,
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LoadState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_json: Option<String>,
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateView {
+    pub origins: Vec<String>,
+    pub cookies: usize,
+    pub stored: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incomplete: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_json: Option<String>,
+}
+
+impl std::fmt::Debug for LoadState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadState")
+            .field("name", &self.name)
+            .field("session_json", &self.session_json.as_ref().map(String::len))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for StateView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StateView")
+            .field("origins", &self.origins)
+            .field("cookies", &self.cookies)
+            .field("stored", &self.stored)
+            .field("incomplete", &self.incomplete)
+            .field("name", &self.name)
+            .field("session_json", &self.session_json.as_ref().map(String::len))
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct Cookie {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<f64>,
+    #[serde(default)]
+    pub http_only: bool,
+    #[serde(default)]
+    pub secure: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_site: Option<String>,
+}
+
+impl std::fmt::Debug for Cookie {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cookie")
+            .field("name", &self.name)
+            .field("value", &format_args!("<{} bytes>", self.value.len()))
+            .field("domain", &self.domain)
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CookieSet {
+    pub name: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<f64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub http_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secure: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub same_site: Option<String>,
+}
+
+impl std::fmt::Debug for CookieSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CookieSet")
+            .field("name", &self.name)
+            .field("value", &format_args!("<{} bytes>", self.value.len()))
+            .field("domain", &self.domain)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetCookies {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub cookies: Vec<CookieSet>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cleared {
+    pub cleared: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConsoleRead {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub errors: bool,

@@ -246,6 +246,25 @@ computer — a desktop in a box
                               `browser wait`, for what neither can see
   clip <box> [text] [--primary]
                               read a selection, or set it
+  state <box> save <file> [--origin URL]… [--session-storage] [--indexed-db]
+                              [--no-local-storage]
+  state <box> save --name NAME [--origin URL]…
+  state <box> load <file> | --name NAME
+  state list | rm <name>
+                              carry a login from one box to another: the
+                              cookies, and the storage of each origin. with no
+                              --origin, the origins of the tabs open now. a
+                              file holds live logins and is written 0600;
+                              --name leaves it with the server instead, until
+                              it restarts
+  cookies <box> [--url URL]
+  cookies <box> set NAME=VALUE… --url URL [--domain D] [--path P]
+                              [--secure] [--http-only] [--expires SECONDS]
+  cookies <box> set --curl '<curl command>'
+  cookies <box> clear --url URL | --all
+                              read, set and clear the browser's cookies. --url
+                              keeps to the cookies that site is sent. --curl
+                              takes what a browser's copy as cURL gives
   takeover <box>              open the input viewer and print its URL
   release <box>               close it and take the screen back
   file <box> ls [dir]         what is in a directory, `/` unless told
@@ -387,6 +406,8 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "widget" => remote::widget(client, args).await,
         "mouse" => remote::mouse(client, args).await,
         "keyboard" => remote::keyboard(client, args).await,
+        "state" => remote::state(client, args).await,
+        "cookies" => remote::cookies(client, args).await,
         "record" => remote::record(client, args).await,
         "wait" => remote::wait(client, args).await,
         "clip" => remote::clip(client, args).await,

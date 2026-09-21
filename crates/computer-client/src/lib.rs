@@ -456,6 +456,61 @@ impl Client {
         .await
     }
 
+    pub async fn save_state(&self, id: &str, what: &SaveState) -> Result<StateView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/state/save"),
+            Some(serde_json::json!(what)),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn load_state(&self, id: &str, what: &LoadState) -> Result<StateView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/state/load"),
+            Some(serde_json::json!(what)),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn states(&self) -> Result<Vec<String>> {
+        self.send(reqwest::Method::GET, "/v1/states", None, &[])
+            .await
+    }
+
+    pub async fn forget_state(&self, name: &str) -> Result<()> {
+        self.nothing(
+            reqwest::Method::DELETE,
+            &format!("/v1/states/{}", query_value(name)),
+            None,
+            &[],
+        )
+        .await
+    }
+
+    pub async fn cookies(&self, id: &str, url: Option<&str>) -> Result<Vec<Cookie>> {
+        self.send(reqwest::Method::GET, &cookie_path(id, url), None, &[])
+            .await
+    }
+
+    pub async fn set_cookies(&self, id: &str, what: &SetCookies) -> Result<Vec<Cookie>> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/cookies"),
+            Some(serde_json::json!(what)),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn clear_cookies(&self, id: &str, url: Option<&str>) -> Result<Cleared> {
+        self.send(reqwest::Method::DELETE, &cookie_path(id, url), None, &[])
+            .await
+    }
+
     pub async fn console(&self, id: &str, what: &ConsoleRead) -> Result<ConsoleView> {
         self.send(
             reqwest::Method::POST,
@@ -836,6 +891,103 @@ pub fn printed_pdf(printed: &Printed) -> Result<Vec<u8>> {
     decode(printed.pdf_base64.as_deref().unwrap_or_default())
 }
 
+fn cookie_path(id: &str, url: Option<&str>) -> String {
+    match url {
+        Some(url) => format!("/v1/boxes/{id}/cookies?url={}", query_value(url)),
+        None => format!("/v1/boxes/{id}/cookies"),
+    }
+}
+
+pub fn cookies_from_curl(command: &str) -> std::result::Result<(String, Vec<CookieSet>), String> {
+    let words = shell_words(command)?;
+    let mut url = None;
+    let mut pairs = Vec::new();
+
+    let mut rest = words.iter().peekable();
+    while let Some(word) = rest.next() {
+        let lower = word.to_ascii_lowercase();
+        match lower.as_str() {
+            "-b" | "--cookie" => pairs.extend(rest.next().map(String::as_str)),
+            "-h" | "--header" => {
+                if let Some(header) = rest.next()
+                    && let Some((name, value)) = header.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("cookie")
+                {
+                    pairs.push(value);
+                }
+            }
+            "--url" => url = rest.next().cloned(),
+            _ if word.starts_with("http://") || word.starts_with("https://") => {
+                url.get_or_insert_with(|| word.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let url = url.ok_or("the command names no http or https address")?;
+    let cookies: Vec<CookieSet> = pairs
+        .iter()
+        .flat_map(|pairs| pairs.split(';'))
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(name, value)| CookieSet {
+            name: name.trim().to_string(),
+            value: value.trim().to_string(),
+            ..CookieSet::default()
+        })
+        .filter(|cookie| !cookie.name.is_empty())
+        .collect();
+
+    match cookies.is_empty() {
+        true => Err("the command sends no cookies: no -b, --cookie or Cookie: header".to_string()),
+        false => Ok((url, cookies)),
+    }
+}
+
+fn shell_words(line: &str) -> std::result::Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut started = false;
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars();
+
+    while let Some(one) = chars.next() {
+        match (quote, one) {
+            (Some(q), _) if one == q => quote = None,
+            (Some('"'), '\\') => word.extend(chars.next()),
+            (Some(_), _) => word.push(one),
+            (None, '\'' | '"') => {
+                quote = Some(one);
+                started = true;
+            }
+            (None, '\\') => match chars.next() {
+                Some('\n') | None => {}
+                Some(next) => {
+                    word.push(next);
+                    started = true;
+                }
+            },
+            (None, _) if one.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (None, _) => {
+                word.push(one);
+                started = true;
+            }
+        }
+    }
+
+    if quote.is_some() {
+        return Err("the command has a quote that is never closed".to_string());
+    }
+    if started {
+        words.push(word);
+    }
+    Ok(words)
+}
+
 fn query_value(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
 
@@ -876,5 +1028,60 @@ fn name_of(selection: Selection) -> &'static str {
     match selection {
         Selection::Clipboard => "clipboard",
         Selection::Primary => "primary",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_the_cookies_a_copied_curl_command_sends_are_read_from_it() {
+        let copied = r#"curl 'https://app.example.com/api/me' \
+  -H 'accept: application/json' \
+  -H 'cookie: sid=abc123; theme=dark' \
+  -b "consent=yes" \
+  --compressed"#;
+
+        let (url, cookies) = cookies_from_curl(copied).expect("cookies");
+        assert_eq!(url, "https://app.example.com/api/me");
+        let named: Vec<(&str, &str)> = cookies
+            .iter()
+            .map(|cookie| (cookie.name.as_str(), cookie.value.as_str()))
+            .collect();
+        assert_eq!(
+            named,
+            [("sid", "abc123"), ("theme", "dark"), ("consent", "yes")]
+        );
+        assert!(
+            cookies.iter().all(|cookie| cookie.domain.is_none()),
+            "the server takes the domain from the address, as the browser did"
+        );
+    }
+
+    #[test]
+    fn test_a_curl_command_with_no_address_or_no_cookies_is_refused() {
+        assert!(cookies_from_curl("curl -H 'cookie: a=b'").is_err());
+        assert!(cookies_from_curl("curl https://example.com -H 'accept: */*'").is_err());
+        assert!(
+            cookies_from_curl("curl 'https://example.com -b a=b").is_err(),
+            "a quote left open would read the rest of the line as one word"
+        );
+    }
+
+    #[test]
+    fn test_a_saved_state_never_prints_what_it_holds() {
+        let view = StateView {
+            session_json: Some(r#"{"cookies":[{"value":"secret"}]}"#.to_string()),
+            ..StateView::default()
+        };
+        assert!(!format!("{view:?}").contains("secret"));
+
+        let cookie = CookieSet {
+            name: "sid".to_string(),
+            value: "secret".to_string(),
+            ..CookieSet::default()
+        };
+        assert!(!format!("{cookie:?}").contains("secret"));
     }
 }

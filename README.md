@@ -850,6 +850,29 @@ let tabs = browser.import_session(&session).await?;
 
 `Carry::default()` includes cookies and local storage. Enable IndexedDB for sites that store login state there. Session data grants account access and must be handled as a credential.
 
+From the CLI, save to a file or leave it with the server under a name:
+
+```bash
+computer state "$BOX" save login.json --origin https://mail.example.com
+computer state "$OTHER" load login.json
+
+computer state "$BOX" save --name work
+computer state "$OTHER" load --name work
+computer state list
+computer state rm work
+```
+
+With no `--origin`, the origins of the tabs open now are saved. The file is written readable by its owner only. A named state stays with the server until it restarts; the MCP tools `save_state` and `load_state` use names only, so the login never passes through the model.
+
+Read, set and clear single cookies:
+
+```bash
+computer cookies "$BOX" --url https://example.com
+computer cookies "$BOX" set theme=dark --url https://example.com
+computer cookies "$BOX" set --curl "$(pbpaste)"      # a browser's "copy as cURL"
+computer cookies "$BOX" clear --url https://example.com
+```
+
 ### CLI command reference
 
 These are all commands under `computer browser`:

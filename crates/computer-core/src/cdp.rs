@@ -299,6 +299,63 @@ impl Devtools {
         Ok(session)
     }
 
+    pub async fn cookies(&self, url: Option<&str>) -> Result<Vec<Cookie>> {
+        let all = self.browser_call("Storage.getCookies", json!({})).await?;
+
+        Ok(all
+            .get("cookies")
+            .and_then(Value::as_array)
+            .map(|cookies| {
+                cookies
+                    .iter()
+                    .filter_map(cookie_in)
+                    .filter(|cookie| url.is_none_or(|url| covers(url, &cookie.domain)))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    pub async fn set_cookies(&self, cookies: &[Cookie]) -> Result<()> {
+        let cookies: Vec<Value> = cookies.iter().map(cookie_out).collect();
+        self.browser_call("Storage.setCookies", json!({ "cookies": cookies }))
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn clear_cookies(&self, url: Option<&str>) -> Result<usize> {
+        let gone = self.cookies(url).await?;
+
+        match url {
+            None => {
+                self.browser_call("Storage.clearCookies", json!({})).await?;
+            }
+            Some(_) if gone.is_empty() => {}
+            Some(_) => {
+                let mut page = self.first_page().await?;
+                for cookie in &gone {
+                    page.call(
+                        "Network.deleteCookies",
+                        json!({ "name": cookie.name, "domain": cookie.domain, "path": cookie.path }),
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(gone.len())
+    }
+
+    pub async fn open_origins(&self) -> Result<Vec<String>> {
+        let mut origins: Vec<String> = Vec::new();
+        for target in self.pages().await? {
+            if let Some(origin) = origin_of(&target.url)
+                && !origins.contains(&origin)
+            {
+                origins.push(origin);
+            }
+        }
+        Ok(origins)
+    }
+
     /// Returns the tabs left open: session storage lives only as long as its tab.
     pub async fn import_session(&self, session: &Session) -> Result<Vec<Page>> {
         let cookies: Vec<Value> = session
@@ -3972,6 +4029,44 @@ const IDB_IMPORT: &str = r#"(async (databases) => {
   return 'ok';
 })"#;
 
+pub fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if !matches!(scheme, "http" | "https") {
+        return None;
+    }
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|host| !host.is_empty())?;
+    Some(format!("{scheme}://{host}"))
+}
+
+impl Cookie {
+    pub fn for_url(url: &str, name: &str, value: &str) -> Result<Self> {
+        let origin = origin_of(url)
+            .ok_or_else(|| Error::invalid(format!("{url} is not an http or https address")))?;
+        let host = origin
+            .split("//")
+            .nth(1)
+            .unwrap_or_default()
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+
+        Ok(Self {
+            name: name.to_string(),
+            value: value.to_string(),
+            domain: host,
+            path: "/".to_string(),
+            expires: None,
+            http_only: false,
+            secure: origin.starts_with("https://"),
+            same_site: None,
+        })
+    }
+}
+
 fn covers(origin: &str, domain: &str) -> bool {
     let host = origin
         .split("//")
@@ -4884,6 +4979,43 @@ mod tests {
             NEARBY.contains("if (crowd) found = [];"),
             "a match whose parent is the whole form would list the form"
         );
+    }
+
+    #[test]
+    fn test_an_origin_is_the_scheme_and_host_of_a_web_address() {
+        assert_eq!(
+            origin_of("https://mail.example.com:8443/inbox?x=1").as_deref(),
+            Some("https://mail.example.com:8443")
+        );
+        assert_eq!(
+            origin_of("http://localhost/").as_deref(),
+            Some("http://localhost")
+        );
+        for none in [
+            "about:blank",
+            "data:text/html,<p>",
+            "chrome://newtab/",
+            "https://",
+        ] {
+            assert_eq!(
+                origin_of(none),
+                None,
+                "{none} has no origin a cookie belongs to"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_cookie_for_an_address_is_for_its_host_and_its_scheme() {
+        let secure =
+            Cookie::for_url("https://shop.example.com/cart", "sid", "abc").expect("a cookie");
+        assert_eq!(
+            (secure.domain.as_str(), secure.path.as_str(), secure.secure),
+            ("shop.example.com", "/", true)
+        );
+        let plain = Cookie::for_url("http://localhost:3000/", "sid", "abc").expect("a cookie");
+        assert_eq!((plain.domain.as_str(), plain.secure), ("localhost", false));
+        assert!(Cookie::for_url("example.com", "sid", "abc").is_err());
     }
 
     #[test]

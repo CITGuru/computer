@@ -139,6 +139,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/page/screenshot", post(page_screenshot))
         .route("/v1/boxes/{id}/page/pdf", post(page_pdf))
         .route("/v1/boxes/{id}/page/console", post(page_console))
+        .route("/v1/boxes/{id}/state/save", post(save_state))
+        .route("/v1/boxes/{id}/state/load", post(load_state))
+        .route("/v1/states", get(list_states))
+        .route("/v1/states/{name}", delete(forget_state))
+        .route(
+            "/v1/boxes/{id}/cookies",
+            get(list_cookies).post(set_cookies).delete(clear_cookies),
+        )
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::auth::gate,
@@ -2650,6 +2658,212 @@ async fn captured_page(state: &AppState, id: &str, body: &PageShot) -> ApiResult
         image_base64: BASE64.encode(&image),
         annotated,
     })
+}
+
+async fn save_state(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<SaveState>,
+) -> ApiResult<Json<StateView>> {
+    if let Some(name) = &body.name {
+        crate::states::States::valid(name).map_err(ApiError::bad_request)?;
+    }
+
+    let browser = debugger(&state, &id).await?;
+    let origins = match body.origins.is_empty() {
+        true => browser.open_origins().await?,
+        false => body.origins.clone(),
+    };
+    if origins.is_empty() {
+        return Err(ApiError::bad_request(
+            "no web page is open, so there is nothing to save: name an origin, such as \
+             https://example.com",
+        ));
+    }
+
+    let carry = computer::Carry {
+        cookies: true,
+        local_storage: !body.no_local_storage,
+        session_storage: body.session_storage,
+        indexed_db: body.indexed_db,
+    };
+    let session = browser.export_session(&origins, carry).await?;
+    let json = serde_json::to_string(&session)
+        .map_err(|error| ApiError::internal(format!("the state would not serialise: {error}")))?;
+
+    let mut view = state_view(&session);
+    match &body.name {
+        Some(name) => {
+            state.states.keep(name, json);
+            view.name = Some(name.clone());
+        }
+        None => view.session_json = Some(json),
+    }
+    Ok(Json(view))
+}
+
+async fn load_state(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<LoadState>,
+) -> ApiResult<Json<StateView>> {
+    let json = match (&body.name, &body.session_json) {
+        (Some(name), None) => state
+            .states
+            .get(name)
+            .ok_or_else(|| ApiError::not_found(format!("no state is saved as {name}")))?,
+        (None, Some(json)) => json.clone(),
+        _ => {
+            return Err(ApiError::bad_request(
+                "give a name or a session_json, one of them",
+            ));
+        }
+    };
+    let session: computer::Session = serde_json::from_str(&json)
+        .map_err(|error| ApiError::bad_request(format!("the state would not parse: {error}")))?;
+
+    debugger(&state, &id)
+        .await?
+        .import_session(&session)
+        .await?;
+
+    Ok(Json(StateView {
+        name: body.name.clone(),
+        ..state_view(&session)
+    }))
+}
+
+fn state_view(session: &computer::Session) -> StateView {
+    let stored: std::collections::BTreeSet<&String> = session
+        .storage
+        .keys()
+        .chain(session.session_storage.keys())
+        .chain(session.databases.keys())
+        .collect();
+
+    StateView {
+        origins: session.origins.clone(),
+        cookies: session.cookies.len(),
+        stored: stored.len(),
+        incomplete: session.incomplete.clone(),
+        name: None,
+        session_json: None,
+    }
+}
+
+async fn list_states(State(state): State<Arc<AppState>>) -> Json<Vec<String>> {
+    Json(state.states.names())
+}
+
+async fn forget_state(
+    State(state): State<Arc<AppState>>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult<StatusCode> {
+    match state.states.forget(&name) {
+        true => Ok(StatusCode::NO_CONTENT),
+        false => Err(ApiError::not_found(format!("no state is saved as {name}"))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct CookieQuery {
+    #[serde(default)]
+    url: Option<String>,
+}
+
+async fn list_cookies(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<CookieQuery>,
+) -> ApiResult<Json<Vec<Cookie>>> {
+    let cookies = debugger(&state, &id)
+        .await?
+        .cookies(query.url.as_deref())
+        .await?;
+    Ok(Json(cookies.into_iter().map(cookie_out).collect()))
+}
+
+async fn set_cookies(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<SetCookies>,
+) -> ApiResult<Json<Vec<Cookie>>> {
+    if body.cookies.is_empty() {
+        return Err(ApiError::bad_request("no cookies were given"));
+    }
+    let cookies = body
+        .cookies
+        .iter()
+        .map(|one| cookie_in(one, body.url.as_deref()))
+        .collect::<ApiResult<Vec<_>>>()?;
+
+    debugger(&state, &id).await?.set_cookies(&cookies).await?;
+    Ok(Json(cookies.into_iter().map(cookie_out).collect()))
+}
+
+async fn clear_cookies(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(query): ApiQuery<CookieQuery>,
+) -> ApiResult<Json<Cleared>> {
+    let cleared = debugger(&state, &id)
+        .await?
+        .clear_cookies(query.url.as_deref())
+        .await?;
+    Ok(Json(Cleared { cleared }))
+}
+
+fn cookie_in(one: &CookieSet, url: Option<&str>) -> ApiResult<computer::Cookie> {
+    if one.name.is_empty() || one.name.contains([';', '=', ' ']) || one.value.contains(';') {
+        return Err(ApiError::bad_request(format!(
+            "{:?} is not a cookie a browser takes: a name has no ; = or space, and a value no ;",
+            one.name
+        )));
+    }
+
+    let mut cookie = match (&one.domain, url) {
+        (None, Some(url)) => computer::Cookie::for_url(url, &one.name, &one.value)?,
+        (Some(domain), url) => computer::Cookie {
+            name: one.name.clone(),
+            value: one.value.clone(),
+            domain: domain.clone(),
+            path: "/".to_string(),
+            expires: None,
+            http_only: false,
+            secure: url.is_some_and(|url| url.starts_with("https://")),
+            same_site: None,
+        },
+        (None, None) => {
+            return Err(ApiError::bad_request(format!(
+                "{} has no domain: give it one, or give the url it is for",
+                one.name
+            )));
+        }
+    };
+
+    if let Some(path) = &one.path {
+        cookie.path = path.clone();
+    }
+    if let Some(secure) = one.secure {
+        cookie.secure = secure;
+    }
+    cookie.expires = one.expires;
+    cookie.http_only = one.http_only;
+    cookie.same_site = one.same_site.clone();
+    Ok(cookie)
+}
+
+fn cookie_out(cookie: computer::Cookie) -> Cookie {
+    Cookie {
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+        expires: cookie.expires,
+        http_only: cookie.http_only,
+        secure: cookie.secure,
+        same_site: cookie.same_site,
+    }
 }
 
 const CONSOLE_LINES: usize = 200;
