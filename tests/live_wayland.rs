@@ -122,8 +122,8 @@ const PROBE: &str = "data:text/html,\
 
 /// `moves` counts only motion with a button held, which is what makes a drag a drag.
 const RECORDERS: &str = r#"
-    window.seen = { click: null, down: null, up: null, moves: 0, doubles: 0 };
-    onclick     = e => { seen.click = e.clientX + ',' + e.clientY; };
+    window.seen = { click: null, down: null, up: null, moves: 0, doubles: 0, shifted: null };
+    onclick     = e => { seen.click = e.clientX + ',' + e.clientY; seen.shifted = e.shiftKey; };
     onmousedown = e => { seen.down = e.clientX + ',' + e.clientY; };
     onmousemove = e => { if (e.buttons) { seen.moves++; } };
     onmouseup   = e => { seen.up = e.clientX + ',' + e.clientY; };
@@ -205,21 +205,31 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     );
     println!("  the wheel scrolled the page to {scrolled}");
 
-    // No held modifiers: this compositor's pointer makes no virtual keyboard.
     computer
         .primary()
         .wait_until_still(Duration::from_millis(300), Duration::from_secs(15))
         .await?;
     println!("  the screen settled rather than being slept on");
 
-    let refused = computer
+    computer
         .primary()
-        .click_with(Point::new(10, 10), Button::Left, &[computer::Held::Shift])
-        .await;
-    assert!(
-        refused.is_err(),
-        "a modifier this compositor cannot hold has to be refused, not dropped"
+        .click_with(Point::new(640, 400), Button::Left, &[computer::Held::Shift])
+        .await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        page.evaluate("seen.shifted").await?,
+        serde_json::json!(true),
+        "the keyboard that stays holds the modifier through the click"
     );
+
+    computer.click(Point::new(640, 400), Button::Left).await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        page.evaluate("seen.shifted").await?,
+        serde_json::json!(false),
+        "shift left down would make every later click a selection"
+    );
+    println!("  shift was held through one click and let go before the next");
 
     computer
         .scroll(Point::new(640, 500), Delta::right(5))
