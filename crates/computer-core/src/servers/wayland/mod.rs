@@ -427,19 +427,21 @@ impl Desktop for WaylandDesktop {
     }
 
     async fn key_down(&self, key: &str) -> Result<()> {
-        self.act(input_argv("key", &key_parts(key, true)?)).await?;
+        self.act(input_argv("press", &key_parts(key, true)?))
+            .await?;
         self.down.set(&crate::servers::x11::one_key(key)?, true);
         Ok(())
     }
 
     async fn key_up(&self, key: &str) -> Result<()> {
-        self.act(input_argv("key", &key_parts(key, false)?)).await?;
+        self.act(input_argv("press", &key_parts(key, false)?))
+            .await?;
         self.down.set(&crate::servers::x11::one_key(key)?, false);
         Ok(())
     }
 
     async fn let_key_go(&self, key: &str) -> Result<()> {
-        let mut args = vec![POINTER_COMMAND.to_string(), "key".to_string()];
+        let mut args = vec![POINTER_COMMAND.to_string(), "press".to_string()];
         args.extend(key_parts(key, false)?);
         self.down.set(&crate::servers::x11::one_key(key)?, false);
         self.run(args).await.map(|_| ())
@@ -479,7 +481,7 @@ impl Desktop for WaylandDesktop {
             parts.push(one.keysym().to_string());
         }
 
-        self.act(input_argv("key", &parts)).await
+        self.act(input_argv("press", &parts)).await
     }
 
     async fn scroll(&self, at: Point, by: Delta) -> Result<()> {

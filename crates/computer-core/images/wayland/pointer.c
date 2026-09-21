@@ -190,7 +190,7 @@ static const char *USAGE =
     "                        up BUTTON [X Y]\n"
     "                        type TEXT\n"
     "                        paced MS TEXT             (a pause of MS after each key)\n"
-    "                        key [-M MOD | -m MOD | -k KEY | -P KEY | -p KEY] ...\n"
+    "                        press [-M MOD | -m MOD | -k KEY | -P KEY | -p KEY] ...\n"
     "                        release                   (every key still down comes up)\n"
     "                        with MOD[,MOD] GESTURE    (the modifiers held through it)\n"
     "                        serve SOCKET              (the resident pointer of one screen)\n";
@@ -762,7 +762,7 @@ static const char *gesture(int count, char **words) {
 		const char *wrong = type_text(text, pause);
 		free(text);
 		return wrong;
-	} else if (strcmp(verb, "key") == 0) {
+	} else if (strcmp(verb, "press") == 0) {
 		return press_keys(rest, words + 1);
 	} else if (strcmp(verb, "release") == 0 && rest == 0) {
 		if (keys == NULL) {

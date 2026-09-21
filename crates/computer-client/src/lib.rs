@@ -450,12 +450,27 @@ impl Client {
         self.send(
             reqwest::Method::POST,
             &format!("/v1/boxes/{id}/page/screenshot"),
-            Some(serde_json::json!({
-                "full": shot.full,
-                "format": shot.format,
-                "quality": shot.quality,
-                "tab": shot.tab,
-            })),
+            Some(serde_json::json!(shot)),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn console(&self, id: &str, what: &ConsoleRead) -> Result<ConsoleView> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/page/console"),
+            Some(serde_json::json!(what)),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn page_pdf(&self, id: &str, what: &PagePdf) -> Result<Printed> {
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/boxes/{id}/page/pdf"),
+            Some(serde_json::json!(what)),
             &[],
         )
         .await
@@ -815,6 +830,10 @@ pub fn frame_png(frame: &Frame) -> Result<Option<Vec<u8>>> {
 
 pub fn captured_image(taken: &Captured) -> Result<Vec<u8>> {
     decode(&taken.image_base64)
+}
+
+pub fn printed_pdf(printed: &Printed) -> Result<Vec<u8>> {
+    decode(printed.pdf_base64.as_deref().unwrap_or_default())
 }
 
 fn query_value(value: &str) -> String {

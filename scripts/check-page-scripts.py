@@ -15,7 +15,7 @@ DEMO = ["demos/jev/src/view.js", "demos/jev/src/through.js", "demos/jev/static/a
 
 
 def constants(src):
-    for name in ("MATCH", "SELECTOR", "DESCRIBE", "SNAPSHOT", "REACH", "REF_STATE", "WATCH", "CHANGED", "QUIET", "BOX", "NAMED", "NEARBY", "FILLABLE", "ASSIGN", "RICH", "PICK", "FILE_INPUT"):
+    for name in ("MATCH", "SELECTOR", "OFFSET", "DESCRIBE", "SNAPSHOT", "REACH", "REF_STATE", "WATCH", "CHANGED", "QUIET", "BOX", "NAMED", "NEARBY", "FILLABLE", "ASSIGN", "RICH", "PICK", "FILE_INPUT", "HIGHLIGHT", "ANNOTATE"):
         found = re.search(r"const " + name + r': &str = r#"(.*?)"#;', src, re.S)
         if not found:
             sys.exit(f"{name} is not in {SOURCE} under the name this expects")
@@ -28,11 +28,14 @@ def main():
 
     # `describe()` splices SELECTOR in by string replacement, which no compiler sees.
     scripts["DESCRIBE"] = scripts["DESCRIBE"].replace("SELECTOR_FN", scripts["SELECTOR"])
-    for spliced in ("BOX", "NAMED", "NEARBY", "FILLABLE", "ASSIGN", "RICH", "PICK", "FILE_INPUT"):
+    for spliced in ("BOX", "NAMED", "NEARBY", "FILLABLE", "ASSIGN", "RICH", "PICK", "FILE_INPUT", "HIGHLIGHT"):
         scripts[spliced] = scripts[spliced].replace("MATCH_FN", scripts["MATCH"])
     for spliced in ("NAMED", "NEARBY"):
         scripts[spliced] = scripts[spliced].replace("SELECTOR_FN", scripts["SELECTOR"])
-    scripts["SNAPSHOT"] = scripts["SNAPSHOT"].replace("DESCRIBE_FN", scripts["DESCRIBE"])
+    for spliced in ("DESCRIBE", "REACH", "HIGHLIGHT", "ANNOTATE"):
+        scripts[spliced] = scripts[spliced].replace("OFFSET_FN", scripts["OFFSET"])
+    for spliced in ("SNAPSHOT", "HIGHLIGHT"):
+        scripts[spliced] = scripts[spliced].replace("DESCRIBE_FN", scripts["DESCRIBE"])
 
     failed = False
     for name, body in scripts.items():

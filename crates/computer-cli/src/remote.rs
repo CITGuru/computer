@@ -1,10 +1,10 @@
 use crate::{USAGE, bare, flag, framing, positional, present, wheel};
 use computer_api::{
-    Action, ActionBatch, Arrange, BatchResult, Evaluate, Find, ForkMode, ForkRequest, Held,
-    OnElement, OnNode, OpenIn, Out, PageShot, Picture, Reading, RecordOp, Rect, Shot,
-    SnapshotOptions, Where, Window, WindowOp,
+    Action, ActionBatch, Arrange, BatchResult, ConsoleRead, Evaluate, Find, ForkMode, ForkRequest,
+    Held, OnElement, OnNode, OpenIn, Out, PagePdf, PageShot, Picture, Reading, RecordOp, Rect,
+    Shot, SnapshotOptions, Where, Window, WindowOp,
 };
-use computer_client::{Client, captured_image, frame_png};
+use computer_client::{Client, captured_image, frame_png, printed_pdf};
 use computer_types::{Button, Motion, NodeQuery, Point, Search, Selection};
 use std::time::Duration;
 
@@ -35,6 +35,7 @@ pub async fn new(client: &Client, args: &[String]) -> Done {
                 Action::OpenUrl {
                     url: url.to_string(),
                     target: OpenIn::Blank,
+                    label: None,
                 },
             )
             .await
@@ -259,12 +260,16 @@ pub async fn open(client: &Client, args: &[String]) -> Done {
         Action::OpenUrl {
             url: url.to_string(),
             target,
+            label: flag(args, "--label").map(str::to_string),
         },
     )
     .await?;
 
     for tab in &result.tabs {
-        println!("{}", tab.id);
+        match &tab.label {
+            Some(label) => println!("{} {label}", tab.id),
+            None => println!("{}", tab.id),
+        }
     }
 
     Ok(())
@@ -1248,6 +1253,7 @@ fn op_of(what: &computer_api::OnElement) -> &'static str {
         O::Upload { .. } => "upload",
         O::WaitFor { .. } => "wait",
         O::Hover { .. } => "hover",
+        O::Highlight { .. } => "highlight",
         O::Focus { .. } => "focus",
         O::Check { on, .. } => match on {
             true => "check",
@@ -1379,7 +1385,10 @@ fn out_lines(out: &Out) -> Vec<String> {
         },
         Out::Tabs(tabs) => tabs
             .iter()
-            .map(|tab| format!("{} {:?} {}", tab.id, tab.title, tab.url))
+            .map(|tab| match &tab.label {
+                Some(label) => format!("{} [{label}] {:?} {}", tab.id, tab.title, tab.url),
+                None => format!("{} {:?} {}", tab.id, tab.title, tab.url),
+            })
             .collect(),
         Out::Ran(ran) => {
             let mut said = vec![format!("exit {}", ran.code)];
@@ -1441,6 +1450,8 @@ fn name_of(action: &Action) -> String {
             Some(at) => format!("{button:?} button up at {},{}", at.x, at.y).to_lowercase(),
             None => format!("{button:?} button up").to_lowercase(),
         },
+        Action::Dialog { accept: true, .. } => "accept the dialog".to_string(),
+        Action::Dialog { accept: false, .. } => "dismiss the dialog".to_string(),
         Action::KeyDown { key, .. } => format!("{key} down"),
         Action::KeyUp { key } => format!("{key} up"),
         Action::Type { text, .. } => format!("type {text:?}"),
@@ -1546,7 +1557,8 @@ const UPLOADS: &str = "/tmp/computer/uploads";
 
 const SETTLE_MS: u64 = 600;
 
-const VALUED: [&str; 13] = [
+const VALUED: [&str; 14] = [
+    "--for",
     "--fn",
     "--quality",
     "--scope",
@@ -1569,8 +1581,8 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         &rest,
         1,
         "read, snapshot, find, click, fill, focus, check, uncheck, select, \
-         deselect, options, upload, wait, hover, drag, eval, screenshot, tabs, \
-         switch, close, back, forward or reload",
+         deselect, options, upload, wait, hover, highlight, drag, eval, screenshot, pdf, tabs, \
+         switch, close, back, forward, reload, dialog, console or errors",
     )
     .map_err(|e| e.to_string())?;
 
@@ -1582,12 +1594,81 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
     };
 
     match op {
-        "read" => return read_page(client, id, args).await,
-        "snapshot" => return snapshot_page(client, id, args).await,
-        "find" => return find_on_page(client, id, args, &rest).await,
-        "eval" => return evaluate_on_page(client, id, args, &rest).await,
+        "read" | "snapshot" | "find" | "eval" | "console" | "errors" => {
+            let bounded =
+                present(args, "--content-boundaries") || computer_mcp::boundaries::asked();
+            let (opening, closing) = match bounded {
+                true => computer_mcp::boundaries::markers(),
+                false => (String::new(), String::new()),
+            };
+
+            if bounded {
+                println!("{opening}");
+            }
+            let done = match op {
+                "read" => read_page(client, id, args).await,
+                "snapshot" => snapshot_page(client, id, args).await,
+                "find" => find_on_page(client, id, args, &rest).await,
+                "console" | "errors" => {
+                    read_console(
+                        client,
+                        id,
+                        args,
+                        op == "errors" || present(args, "--errors"),
+                    )
+                    .await
+                }
+                _ => evaluate_on_page(client, id, args, &rest).await,
+            };
+            if bounded {
+                println!("{closing}");
+            }
+            return done;
+        }
         "screenshot" => return capture_page(client, id, args, &rest).await,
+        "pdf" => {
+            let printed = client
+                .page_pdf(
+                    id,
+                    &PagePdf {
+                        landscape: present(args, "--landscape"),
+                        no_background: present(args, "--no-background"),
+                        tab: tab.map(str::to_string),
+                        path: None,
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            let document = printed_pdf(&printed).map_err(|e| e.to_string())?;
+            let out = rest
+                .get(2)
+                .cloned()
+                .unwrap_or_else(|| "page.pdf".to_string());
+            std::fs::write(&out, &document).map_err(|error| format!("{out}: {error}"))?;
+
+            eprintln!("{} bytes → {out}", document.len());
+            return Ok(());
+        }
         "tabs" => return list_tabs(client, id).await,
+        "dialog" => {
+            let accept =
+                match positional(&rest, 2, "accept or dismiss").map_err(|e| e.to_string())? {
+                    "accept" => true,
+                    "dismiss" => false,
+                    other => return Err(format!("{other} is not accept or dismiss")),
+                };
+            let text = rest
+                .get(3..)
+                .filter(|words| !words.is_empty())
+                .map(|words| words.join(" "));
+            if let (false, Some(_)) = (accept, &text) {
+                return Err(
+                    "text goes into a prompt that is accepted, not one dismissed".to_string(),
+                );
+            }
+            return act(client, id, Action::Dialog { accept, text }).await;
+        }
         "switch" => {
             let which = query(2)?;
             client
@@ -1621,6 +1702,7 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
             query: query(2)?,
             button,
             double: present(args, "--double"),
+            new_tab: present(args, "--new-tab"),
             motion,
             seed,
         },
@@ -1696,6 +1778,11 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
             motion,
             seed,
         },
+        "highlight" => OnElement::Highlight {
+            query: query(2)?,
+            ms: counted::<u64>(args, "--for", "a number of seconds")?
+                .map(|seconds| seconds.saturating_mul(1000)),
+        },
         "back" => OnElement::History { go: Where::Back },
         "forward" => OnElement::History { go: Where::Forward },
         "reload" => OnElement::History { go: Where::Reload },
@@ -1707,6 +1794,12 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         .await
         .map_err(|e| e.to_string())?;
 
+    for said in &result.alerts {
+        println!("an alert said {said:?}, and was accepted");
+    }
+    if let Some(tab) = &result.tab {
+        println!("opened tab {} {:?}, now on screen", tab.id, tab.title);
+    }
     for option in &result.options {
         println!("{option}");
     }
@@ -1728,6 +1821,41 @@ pub async fn browser(client: &Client, args: &[String]) -> Done {
         }
     }
 
+    Ok(())
+}
+
+async fn read_console(client: &Client, id: &str, args: &[String], errors: bool) -> Done {
+    let view = client
+        .console(
+            id,
+            &ConsoleRead {
+                errors,
+                clear: present(args, "--clear"),
+                limit: counted(args, "--limit", "a number of lines")?,
+                tab: flag(args, "--tab").map(str::to_string),
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if view.earlier > 0 {
+        println!("({} earlier lines left out)", view.earlier);
+    }
+    if view.lines.is_empty() {
+        println!(
+            "{}",
+            match errors {
+                true => "no errors since the page loaded",
+                false => "nothing logged since the page loaded",
+            }
+        );
+    }
+    for line in &view.lines {
+        match &line.at {
+            Some(at) => println!("{:<9} {}  ({at})", line.level, line.text),
+            None => println!("{:<9} {}", line.level, line.text),
+        }
+    }
     Ok(())
 }
 
@@ -1857,10 +1985,14 @@ async fn capture_page(client: &Client, id: &str, args: &[String], rest: &[String
                 format,
                 quality: counted(args, "--quality", "a quality between 1 and 100")?,
                 tab: flag(args, "--tab").map(str::to_string),
+                annotate: present(args, "--annotate"),
             },
         )
         .await
         .map_err(|e| e.to_string())?;
+    if let Some(drawn) = taken.annotated {
+        eprintln!("{drawn} controls numbered as the last snapshot numbered them");
+    }
 
     let image = captured_image(&taken).map_err(|e| e.to_string())?;
 
@@ -1909,8 +2041,12 @@ async fn list_tabs(client: &Client, id: &str) -> Done {
     }
     for tab in &tabs {
         println!(
-            "{}{} {:?} {}",
+            "{}{}{} {:?} {}",
             tab.id,
+            match &tab.label {
+                Some(label) => format!(" [{label}]"),
+                None => String::new(),
+            },
             match tab.visible {
                 true => " (on screen)",
                 false => "",

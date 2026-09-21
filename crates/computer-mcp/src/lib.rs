@@ -1,3 +1,4 @@
+pub mod boundaries;
 mod jsonrpc;
 mod tools;
 mod ui;
@@ -16,12 +17,22 @@ pub struct Server {
     client: Client,
     /// Where a browser reaches the box server: the client's base unless a proxy hides it.
     origin: String,
+    bounded: bool,
 }
 
 impl Server {
     pub fn new(client: Client) -> Self {
         let origin = client.base().to_string();
-        Self { client, origin }
+        Self {
+            client,
+            origin,
+            bounded: boundaries::asked(),
+        }
+    }
+
+    pub fn content_boundaries(mut self, bounded: bool) -> Self {
+        self.bounded = bounded;
+        self
     }
 
     pub fn reached_at(mut self, origin: impl Into<String>) -> Self {
@@ -118,6 +129,14 @@ impl Server {
                 let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
                 match tools::call(&self.client, &self.origin, name, &arguments).await {
+                    Ok(tools::Answer::Text(text))
+                        if self.bounded && boundaries::PAGE_TEXT.contains(&name) =>
+                    {
+                        Response::ok(
+                            id,
+                            tools::Answer::Text(boundaries::wrap(&text)).into_content(),
+                        )
+                    }
                     Ok(answer) => Response::ok(id, answer.into_content()),
                     Err(why) => Response::ok(id, tools::Answer::failure(why)),
                 }

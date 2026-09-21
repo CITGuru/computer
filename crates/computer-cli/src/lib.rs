@@ -56,9 +56,11 @@ computer — a desktop in a box
                               --pointer draws the pointer, which a capture
                               leaves out. --tab raises that page first, and
                               still captures the desktop around it
-  open <box> <url> [--target blank|current]
+  open <box> <url> [--target blank|current] [--label NAME]
                               open a URL in the box's browser, and say which tab
-                              it landed in. a new tab unless told `current`
+                              it landed in. a new tab unless told `current`.
+                              --label names the tab, and every --tab, switch
+                              and close then takes the name as well as the id
   app <box> <name> [args…]    open an application, and wait until it has drawn
   apps                        the application names a box can be given
   window <box> list           what is on the screen
@@ -84,6 +86,9 @@ computer — a desktop in a box
            [--quiet MS] [--tab ID]
   browser <box> find [<query>] [--role R] [--exact] [--scroll] [--limit N]
   browser <box> click <query> [--double] [--button right] [--human] [--tab ID]
+                              [--new-tab]
+                              --new-tab opens a link in a tab of its own, as a
+                              middle click does, brings it forward and names it
   browser <box> drag <query> <query> [--button right] [--human]
   browser <box> fill <query> <value>
                               type into a field, or set a control a person does
@@ -91,6 +96,17 @@ computer — a desktop in a box
                               time take the value whole. anything with its own
                               verb — a dropdown, a checkbox, a file input, a
                               button — is refused and told which
+  browser <box> pdf [out.pdf] [--landscape] [--no-background] [--tab ID]
+                              print the page to a PDF, as the browser's own
+                              print does: every page of it, with its text as
+                              text
+  browser <box> dialog accept [text] | dismiss
+                              answer the alert, confirm or prompt a page has
+                              open. no page tool answers while one is up, and
+                              the tool that opened it says what it says. an
+                              alert is accepted by itself; text goes into a
+                              prompt. the answer is a key on the screen, so it
+                              reaches a dialog no session saw open
   browser <box> focus <query>  the keyboard, without the click that would
                               otherwise carry it and fire the page's handlers
   browser <box> check <query> | uncheck <query>
@@ -116,8 +132,27 @@ computer — a desktop in a box
                               for javascript to be truthy — a count, a URL,
                               anything no flag here names
   browser <box> hover <query> [--human]
+  browser <box> highlight <query> [--for SECONDS]
+                              draw a box around it for a person watching, or for
+                              a screenshot: 3 seconds unless told, 60 at most
   browser <box> eval <expression> [--timeout MS] [--limit N]
   browser <box> screenshot [file] [--full] [--format png|jpeg] [--quality N]
+                              [--annotate]
+                              --annotate draws each control's number from the
+                              last snapshot over it, as @e12
+  browser <box> console [--errors] [--clear] [--limit N] [--tab ID]
+  browser <box> errors
+                              what the page logged since it loaded: console
+                              calls, uncaught errors, and what the browser
+                              reported, such as a load that failed. --clear
+                              empties it after reading, so the next read has
+                              only what came after
+  browser <box> read | snapshot | find | eval … --content-boundaries
+                              put what the page wrote between two markers that
+                              hold a nonce the page cannot know, so a model can
+                              tell the page's words from the tool's. the
+                              variable COMPUTER_CONTENT_BOUNDARIES=1 does it for
+                              every call, and for the MCP tools
   browser <box> tabs | switch <tab> | close <tab>
   browser <box> back | forward | reload
                               drive the web page by what is on it rather than

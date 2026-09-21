@@ -150,6 +150,11 @@ pub enum Action {
     KeyUp {
         key: String,
     },
+    Dialog {
+        accept: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
     /// In notches: positive `dy` down, positive `dx` right.
     Scroll {
         at: Point,
@@ -162,6 +167,8 @@ pub enum Action {
         #[serde(default)]
         target: OpenIn,
         url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
     Wait {
         ms: u64,
@@ -476,6 +483,8 @@ pub enum OnElement {
         button: Button,
         #[serde(default)]
         double: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        new_tab: bool,
         #[serde(default, skip_serializing_if = "Motion::is_instant")]
         motion: Motion,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -550,6 +559,11 @@ pub enum OnElement {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seed: Option<u64>,
     },
+    Highlight {
+        query: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ms: Option<u64>,
+    },
     History {
         go: Where,
     },
@@ -600,6 +614,10 @@ pub struct ElementResult {
     pub at: Option<Point>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delta: Option<Changes>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alerts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<Tab>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -830,6 +848,8 @@ pub struct Tab {
     pub title: String,
     pub url: String,
     pub visible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -878,6 +898,58 @@ pub struct PageShot {
     pub quality: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub annotate: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PagePdf {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub landscape: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_background: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsoleRead {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub errors: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConsoleLine {
+    pub level: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConsoleView {
+    pub lines: Vec<ConsoleLine>,
+    #[serde(default)]
+    pub earlier: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Printed {
+    pub bytes: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf_base64: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -893,6 +965,8 @@ pub struct Captured {
     pub format: Picture,
     pub bytes: usize,
     pub image_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotated: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1348,6 +1422,70 @@ mod tests {
             said,
             r#"{"is":"globbed","saw":{"paths":["/tmp/a.png"],"cut":false}}"#
         );
+    }
+
+    #[test]
+    fn test_a_tab_can_be_named_when_it_opens_and_a_link_opened_in_its_own() {
+        let named: Action = serde_json::from_str(
+            r#"{"type":"open_url","url":"https://example.com","label":"docs"}"#,
+        )
+        .expect("parses");
+        assert!(matches!(&named, Action::OpenUrl { label: Some(label), .. } if label == "docs"));
+        assert_eq!(
+            serde_json::to_string(&Action::OpenUrl {
+                target: OpenIn::Blank,
+                url: "https://example.com".to_string(),
+                label: None,
+            })
+            .expect("writes"),
+            r#"{"type":"open_url","target":"blank","url":"https://example.com"}"#,
+            "an open with no label is the open an older server already takes"
+        );
+
+        let click: OnElement =
+            serde_json::from_str(r#"{"op":"click","query":"Docs","new_tab":true}"#)
+                .expect("parses");
+        assert!(matches!(click, OnElement::Click { new_tab: true, .. }));
+        let plain: OnElement =
+            serde_json::from_str(r#"{"op":"click","query":"Docs"}"#).expect("parses");
+        assert!(
+            !serde_json::to_string(&plain)
+                .expect("writes")
+                .contains("new_tab")
+        );
+
+        let older: Tab = serde_json::from_str(r#"{"id":"A","title":"t","url":"u","visible":true}"#)
+            .expect("a tab from a server with no labels");
+        assert_eq!(older.label, None);
+    }
+
+    #[test]
+    fn test_a_dialog_is_accepted_or_dismissed_and_a_prompt_takes_text() {
+        let accepted: Action =
+            serde_json::from_str(r#"{"type":"dialog","accept":true,"text":"Ada"}"#)
+                .expect("parses");
+        assert_eq!(
+            accepted,
+            Action::Dialog {
+                accept: true,
+                text: Some("Ada".to_string())
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&Action::Dialog {
+                accept: false,
+                text: None
+            })
+            .expect("writes"),
+            r#"{"type":"dialog","accept":false}"#
+        );
+        assert!(
+            serde_json::from_str::<Action>(r#"{"type":"dialog"}"#).is_err(),
+            "a dialog answered with neither would be answered by whichever was the default"
+        );
+
+        let older: ElementResult = serde_json::from_str("{}").expect("an answer with no alerts");
+        assert!(older.alerts.is_empty());
     }
 
     #[test]

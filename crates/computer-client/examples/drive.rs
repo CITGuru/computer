@@ -38,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Action::OpenUrl {
                         url: "https://example.com".to_string(),
                         target: Default::default(),
+                        label: None,
                     },
                     Action::Move {
                         to: Point { x: 640, y: 400 },

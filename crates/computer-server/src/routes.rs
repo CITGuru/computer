@@ -137,6 +137,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/page/element", post(on_element))
         .route("/v1/boxes/{id}/page/evaluate", post(evaluate))
         .route("/v1/boxes/{id}/page/screenshot", post(page_screenshot))
+        .route("/v1/boxes/{id}/page/pdf", post(page_pdf))
+        .route("/v1/boxes/{id}/page/console", post(page_console))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state),
             crate::auth::gate,
@@ -253,6 +255,7 @@ async fn delete_box(
     state.tickets.forget(&id);
     state.cdp_tokens.forget(&id);
     state.presses.take_box(&id);
+    state.labels.forget(&id);
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -642,7 +645,10 @@ async fn reaching(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
         Action::Tabs => Out::Tabs(listed_tabs(doing.state, doing.id).await?),
         Action::OnTab { tab, close } => {
             match close {
-                true => debugger(doing.state, doing.id).await?.close(tab).await?,
+                true => {
+                    let tab = tab_named(doing.state, doing.id, tab);
+                    debugger(doing.state, doing.id).await?.close(&tab).await?
+                }
                 false => {
                     named(doing.state, doing.id, tab)
                         .await?
@@ -905,6 +911,31 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
         Action::MouseUp { at, button } => desktop.button_up(*at, *button).await?,
         Action::KeyDown { key, .. } => desktop.key_down(key).await?,
         Action::KeyUp { key } => desktop.key_up(key).await?,
+        Action::Dialog { accept, text } => {
+            let held = doing.held("cannot answer a dialog")?;
+
+            let front = held.active_window().await.ok().flatten();
+            if !front.is_some_and(|window| is_browser(&window.class)) {
+                let browser = held
+                    .windows()
+                    .await?
+                    .into_iter()
+                    .find(|window| is_browser(&window.class))
+                    .ok_or_else(|| ApiError::bad_request("no browser window is on this screen"))?;
+                held.focus(&browser.id).await?;
+            }
+
+            if let (true, Some(text)) = (accept, text) {
+                desktop.press(&["ctrl+a".to_string()], &[]).await?;
+                desktop.type_text(text, None).await?;
+            }
+            let key = match accept {
+                true => "Return",
+                false => "Escape",
+            };
+            desktop.press(&[key.to_string()], &[]).await?;
+            *doing.page = None;
+        }
         Action::Type { text, delay_ms } => {
             let pace = delay_ms.map(|ms| Duration::from_millis(ms).min(MAX_PACE));
             desktop.type_text(text, pace).await?
@@ -915,8 +946,11 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
             desktop.press(&all, held).await?
         }
         Action::Scroll { at, dx, dy } => desktop.scroll(*at, Delta { dx: *dx, dy: *dy }).await?,
-        Action::OpenUrl { url, target } => {
+        Action::OpenUrl { url, target, label } => {
             *doing.page = None;
+            if let Some(label) = label {
+                crate::labels::Labels::valid(label).map_err(ApiError::bad_request)?;
+            }
 
             match (browser, target) {
                 (Some(browser), OpenIn::Blank) => {
@@ -925,7 +959,9 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
                     // `PUT /json/new` does not raise it.
                     fresh.bring_to_front().await?;
 
-                    doing.tabs.push(tab_out(&opened, true));
+                    let mut tab = tab_out(&opened, true);
+                    labelled(doing.state, doing.id, label.as_ref(), &mut tab)?;
+                    doing.tabs.push(tab);
 
                     let _ = browser.tidy(TABS).await;
                 }
@@ -936,7 +972,14 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
                     };
                     showing.navigate(url).await?;
 
-                    doing.tabs.push(tab_out(showing.target(), true));
+                    let mut tab = tab_out(showing.target(), true);
+                    labelled(doing.state, doing.id, label.as_ref(), &mut tab)?;
+                    doing.tabs.push(tab);
+                }
+                (None, _) if label.is_some() => {
+                    return Err(ApiError::bad_request(
+                        "a label names a tab, and this box publishes no DevTools port to see one by",
+                    ));
                 }
                 (None, _) => {
                     let screen = screen.ok_or_else(|| {
@@ -968,8 +1011,14 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
                 .page
                 .as_mut()
                 .ok_or_else(|| ApiError::not_found("no page is on screen"))?;
+            let browser = browser
+                .ok_or_else(|| ApiError::bad_request("this box publishes no DevTools port"))?;
 
-            apply(page, what.clone(), Duration::ZERO).await?;
+            let result = apply_in(browser, page, what.clone(), Duration::ZERO).await?;
+            if let Some(tab) = result.tab {
+                doing.tabs.push(tab);
+                *doing.page = None;
+            }
         }
         Action::OnNode { what } => {
             on_tree(desktop, what.clone()).await?;
@@ -1631,6 +1680,11 @@ async fn grep(
     Ok(Json(found(&entry.computer, &body).await?))
 }
 
+fn is_browser(class: &str) -> bool {
+    let class = class.to_ascii_lowercase();
+    class.contains("chrom") || class.contains("firefox")
+}
+
 async fn found(computer: &computer::Computer, search: &Search) -> ApiResult<Found> {
     if search.pattern.is_empty() {
         return Err(ApiError::bad_request(
@@ -2247,8 +2301,9 @@ async fn on_element(
 
     let mut page = page_for(&state, &id, query.tab.as_deref()).await?;
     let settle = Duration::from_millis(query.settle_ms.unwrap_or_default()).min(MAX_PAUSE);
+    let browser = debugger(&state, &id).await?;
 
-    Ok(Json(apply(&mut page, body, settle).await?))
+    Ok(Json(apply_in(&browser, &mut page, body, settle).await?))
 }
 
 async fn missing(state: &AppState, id: &str, paths: &[String]) -> ApiResult<()> {
@@ -2317,6 +2372,11 @@ async fn apply(
         result.changed = page.changed().await.ok().flatten();
     }
 
+    if let Some(open) = page.blocked() {
+        return Err(computer::Error::denied(open).into());
+    }
+    result.alerts = page.take_alerts();
+
     // A new document has no numbers and reports nothing; a pushState keeps both.
     if listed {
         result.delta = page
@@ -2339,10 +2399,15 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
             query,
             button,
             double,
+            new_tab,
             motion,
             seed,
         } => {
             let seed = seed.unwrap_or(0);
+            let button = match new_tab {
+                true => computer_types::Button::Middle,
+                false => button,
+            };
             let on = match double {
                 true => {
                     page.double_click_on_with(&query, button, motion, seed)
@@ -2356,6 +2421,13 @@ async fn applied(page: &mut computer::Page, what: OnElement) -> ApiResult<Elemen
                 ..ElementResult::default()
             }
         }
+        OnElement::Highlight { query, ms } => ElementResult {
+            element: Some(element_out(
+                page.highlight(&query, Duration::from_millis(ms.unwrap_or(HIGHLIGHT_MS)))
+                    .await?,
+            )),
+            ..ElementResult::default()
+        },
         OnElement::Fill { query, text } => {
             page.fill(&query, &text).await?;
             ElementResult::default()
@@ -2553,7 +2625,13 @@ async fn captured_page(state: &AppState, id: &str, body: &PageShot) -> ApiResult
     };
 
     let mut page = page_for(state, id, body.tab.as_deref()).await?;
-    let image = page.capture(&shot).await?;
+    let (image, annotated) = match body.annotate {
+        true => {
+            let (image, drawn) = page.capture_annotated(&shot).await?;
+            (image, Some(drawn))
+        }
+        false => (page.capture(&shot).await?, None),
+    };
 
     state
         .record(
@@ -2570,7 +2648,87 @@ async fn captured_page(state: &AppState, id: &str, body: &PageShot) -> ApiResult
         format,
         bytes: image.len(),
         image_base64: BASE64.encode(&image),
+        annotated,
     })
+}
+
+const CONSOLE_LINES: usize = 200;
+
+async fn page_console(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<ConsoleRead>,
+) -> ApiResult<Json<ConsoleView>> {
+    let mut page = page_for(&state, &id, body.tab.as_deref()).await?;
+    let heard = page.console(body.clear).await?;
+
+    let lines: Vec<ConsoleLine> = heard
+        .into_iter()
+        .filter(|entry| !body.errors || entry.is_error())
+        .map(|entry| ConsoleLine {
+            level: entry.level,
+            text: entry.text.chars().take(2000).collect(),
+            at: entry.at,
+        })
+        .collect();
+
+    let limit = body
+        .limit
+        .unwrap_or(CONSOLE_LINES)
+        .clamp(1, CONSOLE_LINES * 5);
+    let earlier = lines.len().saturating_sub(limit);
+
+    Ok(Json(ConsoleView {
+        lines: lines.into_iter().skip(earlier).collect(),
+        earlier,
+    }))
+}
+
+async fn page_pdf(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<PagePdf>,
+) -> ApiResult<Json<Printed>> {
+    let mut page = page_for(&state, &id, body.tab.as_deref()).await?;
+    let document = page.pdf(body.landscape, !body.no_background).await?;
+
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::PageCaptured {
+                full: true,
+                bytes: document.len(),
+            },
+        )
+        .await;
+
+    let Some(path) = body.path else {
+        return Ok(Json(Printed {
+            bytes: document.len(),
+            path: None,
+            pdf_base64: Some(BASE64.encode(&document)),
+        }));
+    };
+
+    let entry = state.registry.get(&id).await?;
+    entry.computer.write_file(&path, &document).await?;
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::FileWritten {
+                path: path.clone(),
+                bytes: document.len(),
+            },
+        )
+        .await;
+
+    Ok(Json(Printed {
+        bytes: document.len(),
+        path: Some(path),
+        pdf_base64: None,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2594,11 +2752,16 @@ async fn listed_tabs(state: &AppState, id: &str) -> ApiResult<Vec<Tab>> {
         _ => None,
     };
 
-    Ok(browser
-        .pages()
-        .await?
+    let pages = browser.pages().await?;
+    let live: Vec<String> = pages.iter().map(|target| target.id.clone()).collect();
+    state.labels.keep(id, &live);
+
+    Ok(pages
         .iter()
-        .map(|target| tab_out(target, showing.as_deref() == Some(target.id.as_str())))
+        .map(|target| Tab {
+            label: state.labels.of(id, &target.id),
+            ..tab_out(target, showing.as_deref() == Some(target.id.as_str()))
+        })
         .collect())
 }
 
@@ -2615,6 +2778,7 @@ async fn close_tab(
     State(state): State<Arc<AppState>>,
     ApiPath((id, tab)): ApiPath<(String, String)>,
 ) -> ApiResult<StatusCode> {
+    let tab = tab_named(&state, &id, &tab);
     debugger(&state, &id).await?.close(&tab).await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -2638,12 +2802,13 @@ async fn page_for(state: &AppState, id: &str, tab: Option<&str>) -> ApiResult<co
 
 async fn named(state: &AppState, id: &str, tab: &str) -> ApiResult<computer::Page> {
     let browser = debugger(state, id).await?;
+    let tab = &tab_named(state, id, tab);
 
     let target = browser
         .pages()
         .await?
         .into_iter()
-        .find(|target| target.id == tab)
+        .find(|target| &target.id == tab)
         .ok_or_else(|| ApiError::not_found(format!("this box has no tab {tab}")))?;
 
     Ok(browser.attach(&target).await?)
@@ -2668,7 +2833,87 @@ fn tab_out(target: &computer::cdp::Target, visible: bool) -> Tab {
         title: target.title.clone(),
         url: target.url.clone(),
         visible,
+        label: None,
     }
+}
+
+fn tab_named(state: &AppState, id: &str, word: &str) -> String {
+    state
+        .labels
+        .target(id, word)
+        .unwrap_or_else(|| word.to_string())
+}
+
+fn labelled(state: &AppState, id: &str, label: Option<&String>, tab: &mut Tab) -> ApiResult<()> {
+    if let Some(label) = label {
+        crate::labels::Labels::valid(label).map_err(ApiError::bad_request)?;
+        state.labels.set(id, label, &tab.id);
+        tab.label = Some(label.clone());
+    }
+    Ok(())
+}
+
+const NEW_TAB: Duration = Duration::from_secs(4);
+
+const HIGHLIGHT_MS: u64 = 3000;
+
+async fn opened_since(
+    browser: &computer::Devtools,
+    before: &[String],
+) -> ApiResult<computer::cdp::Target> {
+    let deadline = Instant::now() + NEW_TAB;
+
+    loop {
+        let fresh = browser
+            .pages()
+            .await?
+            .into_iter()
+            .find(|target| !before.contains(&target.id));
+        if let Some(fresh) = fresh {
+            return Ok(fresh);
+        }
+        if Instant::now() >= deadline {
+            return Err(computer::Error::denied(
+                "the click opened no tab: only a link opens one, and a button that calls \
+                 window.open needs a plain click",
+            )
+            .into());
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+async fn apply_in(
+    browser: &computer::Devtools,
+    page: &mut computer::Page,
+    what: OnElement,
+    settle: Duration,
+) -> ApiResult<ElementResult> {
+    if !matches!(&what, OnElement::Click { new_tab: true, .. }) {
+        return apply(page, what, settle).await;
+    }
+
+    let before: Vec<String> = browser
+        .pages()
+        .await?
+        .into_iter()
+        .map(|target| target.id)
+        .collect();
+    let mut result = apply(page, what, settle).await?;
+
+    let opened = opened_since(browser, &before).await?;
+    browser.attach(&opened).await?.bring_to_front().await?;
+
+    let settled = browser
+        .pages()
+        .await?
+        .into_iter()
+        .find(|target| target.id == opened.id)
+        .unwrap_or(opened);
+    result.url = Some(settled.url.clone());
+    result.navigated = true;
+    result.tab = Some(tab_out(&settled, true));
+    Ok(result)
 }
 
 fn snapshot_out(taken: computer::Snapshot) -> Snapshot {

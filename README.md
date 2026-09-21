@@ -862,10 +862,11 @@ computer browser <box> find [QUERY] [--role ROLE] [--exact] [--scroll]
                             [--limit N] [--tab ID]
 
 computer browser <box> click <query> [--double] [--button left|right|middle]
-                             [--smooth|--human] [--seed N] [--tab ID]
+                             [--new-tab] [--smooth|--human] [--seed N] [--tab ID]
 computer browser <box> drag <from-query> <to-query> [--button left|right|middle]
                             [--smooth|--human] [--seed N] [--tab ID]
 computer browser <box> hover <query> [--smooth|--human] [--seed N] [--tab ID]
+computer browser <box> highlight <query> [--for SECONDS] [--tab ID]
 computer browser <box> focus <query> [--tab ID]
 computer browser <box> fill <query> <value> [--tab ID]
 computer browser <box> check <query> [--tab ID]
@@ -884,17 +885,27 @@ computer browser <box> forward [--tab ID]
 computer browser <box> reload [--tab ID]
 
 computer browser <box> eval <expression> [--timeout MS] [--limit N] [--tab ID]
+computer browser <box> console [--errors] [--clear] [--limit N] [--tab ID]
+computer browser <box> errors [--clear] [--limit N] [--tab ID]
 computer browser <box> screenshot [FILE] [--full] [--format png|jpeg]
-                                  [--quality N] [--tab ID]
+                                  [--quality N] [--annotate] [--tab ID]
+computer browser <box> pdf [FILE] [--landscape] [--no-background] [--tab ID]
+computer browser <box> dialog accept [TEXT] | dismiss
 computer browser <box> tabs
 computer browser <box> switch <tab>
 computer browser <box> close <tab>
 ```
 
+`--tab` takes a tab id or the label `open --label` gave it. `read`, `snapshot`, `find`, `eval` and `console` take `--content-boundaries`, which puts what the page wrote between two markers that hold a nonce the page cannot know; `COMPUTER_CONTENT_BOUNDARIES=1` does the same for every call and for the MCP tools.
+
+A query reaches into a frame of the same origin as the page, and a snapshot numbers the controls in it. A frame from another origin is left out.
+
+A page dialog stops every page tool. An alert is accepted by itself, and the action that opened it says what it said. A confirm, a prompt or a leave-page dialog makes that action fail at once with its words, and any other page tool say the page is not answering; `dialog accept` or `dialog dismiss` answers it with a key on the screen.
+
 Opening a page and exporting a CDP endpoint are top-level commands:
 
 ```text
-computer open <box> <url> [--target blank|current]
+computer open <box> <url> [--target blank|current] [--label NAME]
 computer cdp <box> [--ws] [--ttl MINUTES] [--direct]
 ```
 

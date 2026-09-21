@@ -12,6 +12,11 @@ use tokio::net::TcpStream;
 
 pub const TIMEOUT: Duration = Duration::from_secs(30);
 
+const ANSWERS_WITHIN: Duration = Duration::from_secs(3);
+
+const SILENT: &str = "the page is not answering, as a page with a dialog open does not: look at the \
+                      screen, and answer a dialog with dialog accept or dialog dismiss";
+
 pub const EVENT_QUEUE: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,8 +179,16 @@ impl Devtools {
     }
 
     pub async fn attach(&self, target: &Target) -> Result<Page> {
+        let mut connection = Connection::open(&self.host, self.port, &target.ws_path).await?;
+
+        match tokio::time::timeout(ANSWERS_WITHIN, connection.call("Page.enable", json!({}))).await
+        {
+            Ok(enabled) => enabled.map(|_| ())?,
+            Err(_) => return Err(Error::denied(SILENT)),
+        }
+
         Ok(Page {
-            connection: Connection::open(&self.host, self.port, &target.ws_path).await?,
+            connection,
             target: target.clone(),
         })
     }
@@ -398,13 +411,26 @@ impl Devtools {
     }
 
     pub async fn visible_page(&self) -> Result<Option<Page>> {
+        let mut silent = None;
+
         for target in self.pages().await? {
-            let mut page = self.attach(&target).await?;
+            let mut page = match self.attach(&target).await {
+                Ok(page) => page,
+                Err(error @ Error::Denied { .. }) => {
+                    silent.get_or_insert(error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if page.visible().await.unwrap_or(false) {
                 return Ok(Some(page));
             }
         }
-        Ok(None)
+
+        match silent {
+            Some(error) => Err(error),
+            None => Ok(None),
+        }
     }
 
     pub async fn first_page(&self) -> Result<Page> {
@@ -683,6 +709,120 @@ fn required_string(result: &Value, field: &str, method: &str) -> Result<String> 
         .ok_or_else(|| Error::denied(format!("{method} returned no {field}")))
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConsoleEntry {
+    pub level: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+    pub when: f64,
+}
+
+impl ConsoleEntry {
+    pub fn is_error(&self) -> bool {
+        matches!(self.level.as_str(), "error" | "exception" | "assert")
+    }
+
+    fn of(message: &Value) -> Option<Self> {
+        let params = message.get("params")?;
+        let place = |url: Option<&str>, line: Option<u64>| {
+            url.filter(|url| !url.is_empty()).map(|url| {
+                let short: String = url.chars().take(100).collect();
+                match line {
+                    Some(line) => format!("{short}:{}", line + 1),
+                    None => short,
+                }
+            })
+        };
+
+        match message.get("method").and_then(Value::as_str)? {
+            "Runtime.consoleAPICalled" => {
+                let words: Vec<String> = params
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .map(|args| args.iter().map(spoken).collect())
+                    .unwrap_or_default();
+                let frame = params.pointer("/stackTrace/callFrames/0");
+                Some(Self {
+                    level: params.get("type").and_then(Value::as_str)?.to_string(),
+                    text: words.join(" "),
+                    at: place(
+                        frame
+                            .and_then(|frame| frame.get("url"))
+                            .and_then(Value::as_str),
+                        frame
+                            .and_then(|frame| frame.get("lineNumber"))
+                            .and_then(Value::as_u64),
+                    ),
+                    when: params.get("timestamp").and_then(Value::as_f64)?,
+                })
+            }
+            "Runtime.exceptionThrown" => {
+                let details = params.get("exceptionDetails")?;
+                let said = details
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Uncaught");
+                let what = details
+                    .pointer("/exception/description")
+                    .and_then(Value::as_str)
+                    .and_then(|description| description.lines().next())
+                    .unwrap_or_default();
+                Some(Self {
+                    level: "exception".to_string(),
+                    text: format!("{said} {what}").trim().to_string(),
+                    at: place(
+                        details.get("url").and_then(Value::as_str),
+                        details.get("lineNumber").and_then(Value::as_u64),
+                    ),
+                    when: params.get("timestamp").and_then(Value::as_f64)?,
+                })
+            }
+            "Log.entryAdded" => {
+                let entry = params.get("entry")?;
+                let source = entry
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("browser");
+                Some(Self {
+                    level: entry.get("level").and_then(Value::as_str)?.to_string(),
+                    text: format!(
+                        "[{source}] {}",
+                        entry
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                    ),
+                    at: place(
+                        entry.get("url").and_then(Value::as_str),
+                        entry.get("lineNumber").and_then(Value::as_u64),
+                    ),
+                    when: entry.get("timestamp").and_then(Value::as_f64)?,
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+fn spoken(argument: &Value) -> String {
+    match (
+        argument.get("value"),
+        argument.get("unserializableValue"),
+        argument.get("description"),
+    ) {
+        (Some(Value::String(text)), _, _) => text.clone(),
+        (Some(value), _, _) if !value.is_object() && !value.is_array() => value.to_string(),
+        (_, Some(Value::String(odd)), _) => odd.clone(),
+        (_, _, Some(Value::String(description))) => description.clone(),
+        _ => argument
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Event {
     pub method: String,
@@ -695,6 +835,34 @@ struct Connection {
     events: VecDeque<Event>,
     dropped: usize,
     closed: bool,
+    alerts: Vec<String>,
+    blocked: Option<String>,
+}
+
+fn dialog_opening(message: &Value) -> Option<(String, String)> {
+    if message.get("method").and_then(Value::as_str) != Some("Page.javascriptDialogOpening") {
+        return None;
+    }
+    let params = message.get("params")?;
+    let text = |name: &str| {
+        params
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    Some((text("type"), text("message")))
+}
+
+fn dialog_refusal(kind: &str, message: &str) -> String {
+    let kind = match kind {
+        "beforeunload" => "leave-page dialog".to_string(),
+        other => other.to_string(),
+    };
+    format!(
+        "the page opened a {kind} that says {message:?}: answer it with dialog accept or dialog \
+         dismiss, and nothing else on this page answers until then"
+    )
 }
 
 impl Connection {
@@ -705,7 +873,32 @@ impl Connection {
             events: VecDeque::new(),
             dropped: 0,
             closed: false,
+            alerts: Vec::new(),
+            blocked: None,
         })
+    }
+
+    async fn met(&mut self, message: &Value) -> Result<()> {
+        if let Some((kind, said)) = dialog_opening(message) {
+            if kind != "alert" {
+                let refusal = dialog_refusal(&kind, &said);
+                self.blocked = Some(refusal.clone());
+                return Err(Error::denied(refusal));
+            }
+
+            let id = self.next;
+            self.next += 1;
+            let accept = json!({
+                "id": id,
+                "method": "Page.handleJavaScriptDialog",
+                "params": { "accept": true },
+            });
+            send_text(&mut self.socket, &accept.to_string()).await?;
+            self.alerts.push(said);
+        }
+
+        self.remember(message);
+        Ok(())
     }
 
     async fn call(&mut self, method: &str, params: Value) -> Result<Value> {
@@ -737,11 +930,43 @@ impl Connection {
                 return Ok(message.get("result").cloned().unwrap_or(Value::Null));
             }
 
-            self.remember(&message);
+            self.met(&message).await?;
 
             if SystemTime::now() >= deadline {
                 return Err(Error::Timeout {
                     after: within,
+                    detail: format!("{method} was never answered"),
+                });
+            }
+        }
+    }
+
+    async fn call_gathering(&mut self, method: &str, params: Value) -> Result<Vec<Value>> {
+        let id = self.next;
+        self.next += 1;
+
+        let request = json!({ "id": id, "method": method, "params": params });
+        send_text(&mut self.socket, &request.to_string()).await?;
+
+        let deadline = SystemTime::now() + TIMEOUT;
+        let mut gathered = Vec::new();
+        loop {
+            let frame = read_text(&mut self.socket).await?;
+            let message: Value = serde_json::from_str(&frame)
+                .map_err(|error| Error::transport(error.to_string(), false))?;
+
+            if message.get("id").and_then(Value::as_u64) == Some(id) {
+                if let Some(error) = message.get("error") {
+                    return Err(Error::denied(format!("{method}: {error}")));
+                }
+                return Ok(gathered);
+            }
+            if message.get("method").is_some() {
+                gathered.push(message);
+            }
+            if SystemTime::now() >= deadline {
+                return Err(Error::Timeout {
+                    after: TIMEOUT,
                     detail: format!("{method} was never answered"),
                 });
             }
@@ -773,7 +998,7 @@ impl Connection {
                     params: message.get("params").cloned().unwrap_or(Value::Null),
                 });
             }
-            self.remember(&message);
+            self.met(&message).await?;
 
             if SystemTime::now() >= deadline {
                 return Err(Error::Timeout {
@@ -1092,10 +1317,20 @@ const MATCH: &str = r#"(q, exact) => {
     if (!el || seen.has(el)) return;
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
-    const style = getComputedStyle(el);
+    const style = el.ownerDocument.defaultView.getComputedStyle(el);
     if (style.visibility === 'hidden' || style.display === 'none') return;
     seen.add(el); out.push(el);
   };
+
+  const docs = [];
+  const gather = doc => {
+    docs.push(doc);
+    for (const frame of doc.querySelectorAll('iframe, frame')) {
+      try { if (frame.contentDocument) gather(frame.contentDocument); } catch (e) {}
+    }
+  };
+  gather(document);
+  const all = q => docs.flatMap(doc => Array.from(doc.querySelectorAll(q)));
 
   const ref = /^@e(\d+)$/.exec(q.trim());
   if (ref) {
@@ -1104,10 +1339,10 @@ const MATCH: &str = r#"(q, exact) => {
     return out;
   }
 
-  try { document.querySelectorAll(q).forEach(add); } catch (e) {}
+  try { all(q).forEach(add); } catch (e) {}
 
   for (const by of ['[name=', '[id=', '[placeholder=', '[aria-label=']) {
-    try { document.querySelectorAll(by + JSON.stringify(q) + ']').forEach(add); } catch (e) {}
+    try { all(by + JSON.stringify(q) + ']').forEach(add); } catch (e) {}
   }
 
   const want = q.trim().toLowerCase();
@@ -1128,11 +1363,11 @@ const MATCH: &str = r#"(q, exact) => {
     : [el => words(el) === want, el => words(el).includes(want)];
 
   for (const pass of passes) {
-    for (const el of document.querySelectorAll(clickable)) if (pass(el)) add(el);
+    for (const el of all(clickable)) if (pass(el)) add(el);
 
     // Innermost only: an ancestor's innerText contains its descendants'.
     const hits = [];
-    for (const el of document.querySelectorAll('*')) if (pass(el)) hits.push(el);
+    for (const el of all('*')) if (pass(el)) hits.push(el);
     for (const el of hits) {
       if (hits.some(other => other !== el && el.contains(other))) continue;
       add(el);
@@ -1174,7 +1409,7 @@ pub const ROLES: &str = "button, link, textbox, checkbox, radio, combobox, optio
 
 const SELECTOR: &str = r#"(el) => {
   const alone = q => {
-    try { return document.querySelectorAll(q).length === 1; } catch (e) { return false; }
+    try { return el.ownerDocument.querySelectorAll(q).length === 1; } catch (e) { return false; }
   };
 
   if (el.id && alone('#' + CSS.escape(el.id))) return '#' + CSS.escape(el.id);
@@ -1207,7 +1442,13 @@ const SELECTOR: &str = r#"(el) => {
 
 fn describe() -> String {
     // Only the name: the parens around it in DESCRIBE make it callable.
-    DESCRIBE.replace("SELECTOR_FN", SELECTOR)
+    DESCRIBE
+        .replace("SELECTOR_FN", SELECTOR)
+        .replace("OFFSET_FN", OFFSET)
+}
+
+fn reaching() -> String {
+    REACH.replace("OFFSET_FN", OFFSET)
 }
 
 fn checkbox() -> String {
@@ -1355,6 +1596,76 @@ const RICH: &str = r#"(query, empty) => {
 
 const NO_DROPDOWN: &str = "no dropdown matched";
 
+const HIGHLIGHT: &str = r#"(query, ms) => {
+  const el = (MATCH_FN)(query, false).find(Boolean);
+  if (!el) return 'null';
+  el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+
+  const o = (OFFSET_FN)(el), own = el.getBoundingClientRect();
+  const r = { left: own.left + o.x, top: own.top + o.y, width: own.width, height: own.height };
+  const mark = document.createElement('div');
+  mark.setAttribute('data-computer-mark', '');
+  Object.assign(mark.style, {
+    position: 'absolute', left: (r.left + scrollX - 3) + 'px', top: (r.top + scrollY - 3) + 'px',
+    width: (r.width + 6) + 'px', height: (r.height + 6) + 'px', boxSizing: 'border-box',
+    border: '3px solid #ff2d55', background: 'rgba(255, 45, 85, 0.12)', borderRadius: '3px',
+    zIndex: '2147483647', pointerEvents: 'none',
+  });
+  document.documentElement.appendChild(mark);
+  setTimeout(() => mark.remove(), ms);
+  return JSON.stringify((DESCRIBE_FN)(el));
+}"#;
+
+const ANNOTATE: &str = r#"(full) => {
+  const layer = document.createElement('div');
+  layer.setAttribute('data-computer-annotations', '');
+  Object.assign(layer.style, {
+    position: 'absolute', left: '0', top: '0', width: '0', height: '0',
+    zIndex: '2147483647', pointerEvents: 'none',
+  });
+
+  let drawn = 0;
+  (window.__computerRefs || []).forEach((el, at) => {
+    if (!el || !el.isConnected) return;
+    const o = (OFFSET_FN)(el), own = el.getBoundingClientRect();
+    const r = { left: own.left + o.x, top: own.top + o.y, width: own.width, height: own.height,
+                right: own.right + o.x, bottom: own.bottom + o.y };
+    if (r.width < 1 || r.height < 1) return;
+    if (!full && (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth)) return;
+
+    const x = r.left + scrollX, y = r.top + scrollY;
+    const edge = document.createElement('div');
+    Object.assign(edge.style, {
+      position: 'absolute', left: x + 'px', top: y + 'px', width: r.width + 'px',
+      height: r.height + 'px', boxSizing: 'border-box', border: '2px solid #ff2d55',
+    });
+    const tag = document.createElement('div');
+    tag.textContent = '@e' + (at + 1);
+    Object.assign(tag.style, {
+      position: 'absolute', left: x + 'px', top: Math.max(0, y - 15) + 'px',
+      font: 'bold 11px/13px monospace', color: '#fff', background: '#ff2d55',
+      padding: '1px 3px', borderRadius: '2px', whiteSpace: 'nowrap',
+    });
+    layer.append(edge, tag);
+    drawn++;
+  });
+
+  document.documentElement.appendChild(layer);
+  return drawn;
+}"#;
+
+const UNANNOTATE: &str =
+    "document.querySelectorAll('[data-computer-annotations]').forEach(layer => layer.remove())";
+
+fn highlight() -> String {
+    HIGHLIGHT
+        .replace("MATCH_FN", MATCH)
+        .replace("DESCRIBE_FN", &describe())
+        .replace("OFFSET_FN", OFFSET)
+}
+
+pub const LONGEST_HIGHLIGHT: Duration = Duration::from_secs(60);
+
 const FILE_INPUT: &str = r#"(query) => {
   const takes = el => el && el.tagName === 'INPUT' && el.type === 'file';
   const seen = (MATCH_FN)(query, false).find(takes);
@@ -1410,8 +1721,22 @@ pub struct Ready {
     pub enabled: bool,
 }
 
+const OFFSET: &str = r#"(el) => {
+  let x = 0, y = 0;
+  for (let win = el.ownerDocument.defaultView; win && win.frameElement; win = win.parent) {
+    const host = win.frameElement;
+    const box = host.getBoundingClientRect();
+    const style = win.parent.getComputedStyle(host);
+    x += box.left + host.clientLeft + parseFloat(style.paddingLeft);
+    y += box.top + host.clientTop + parseFloat(style.paddingTop);
+  }
+  return { x, y };
+}"#;
+
 const DESCRIBE: &str = r#"(el) => {
-  const r = el.getBoundingClientRect();
+  const o = (OFFSET_FN)(el);
+  const own = el.getBoundingClientRect();
+  const r = { left: own.left + o.x, top: own.top + o.y, width: own.width, height: own.height };
   const x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
   const inside = x >= 0 && y >= 0 && x < innerWidth && y < innerHeight;
 
@@ -1425,7 +1750,7 @@ const DESCRIBE: &str = r#"(el) => {
   };
   const label = el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
                 el.getAttribute('title') ||
-                (el.id && (document.querySelector('label[for=' + JSON.stringify(el.id) + ']') || {}).innerText) ||
+                (el.id && (el.ownerDocument.querySelector('label[for=' + JSON.stringify(el.id) + ']') || {}).innerText) ||
                 wrapping() ||
                 undefined;
 
@@ -1474,11 +1799,14 @@ const SNAPSHOT: &str = r#"(root, limit, mode, scope) => {
   const shown = el => {
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return false;
-    const style = getComputedStyle(el);
+    const style = el.ownerDocument.defaultView.getComputedStyle(el);
     return style.visibility !== 'hidden' && style.display !== 'none';
   };
+  const within = node => [node, ...Array.from(node.querySelectorAll('iframe, frame')).flatMap(frame => {
+    try { return frame.contentDocument ? within(frame.contentDocument) : []; } catch (e) { return []; }
+  })];
 
-  const found = Array.from(root.querySelectorAll(controls)).filter(shown);
+  const found = within(root).flatMap(node => Array.from(node.querySelectorAll(controls))).filter(shown);
   const page = { url: location.href, title: document.title, total: found.length };
 
   // Only a snapshot hands numbers out: an agent must have seen a number before it can
@@ -1554,14 +1882,33 @@ const REACH: &str = r#"(el) => {
 
   // The middle, then each line (a wrapped link has its middle in the gap between
   // lines), then the quarters: an icon covers the middle of a field, a dialog all of it.
-  const box = el.getBoundingClientRect();
+  const o = (OFFSET_FN)(el);
+  const shift = r => ({ left: r.left + o.x, top: r.top + o.y, width: r.width, height: r.height });
+  const hit = p => {
+    let doc = document, x = p.x, y = p.y;
+    let node = doc.elementFromPoint(x, y);
+    while (node && (node.tagName === 'IFRAME' || node.tagName === 'FRAME')) {
+      let inner = null;
+      try { inner = node.contentDocument; } catch (e) {}
+      if (!inner) break;
+      const b = node.getBoundingClientRect(), s = doc.defaultView.getComputedStyle(node);
+      x -= b.left + node.clientLeft + parseFloat(s.paddingLeft);
+      y -= b.top + node.clientTop + parseFloat(s.paddingTop);
+      doc = inner;
+      node = doc.elementFromPoint(x, y);
+    }
+    return node;
+  };
+
+  const box = shift(el.getBoundingClientRect());
   const quarters = [[0.25, 0.5], [0.75, 0.5], [0.5, 0.25], [0.5, 0.75]].map(([fx, fy]) =>
     ({ x: Math.round(box.left + box.width * fx), y: Math.round(box.top + box.height * fy) }));
-  const points = [centre(box), ...Array.from(el.getClientRects()).map(centre), ...quarters];
+  const lines = Array.from(el.getClientRects()).map(shift);
+  const points = [centre(box), ...lines.map(centre), ...quarters];
   let covered = null;
   for (const p of points) {
     if (!inside(p)) continue;
-    const top = document.elementFromPoint(p.x, p.y);
+    const top = hit(p);
     if (!top) continue;
     if (top === el || el.contains(top)) return { at: p };
     if (!covered) covered = name(top);
@@ -1826,6 +2173,14 @@ impl Page {
         self.connection.dropped
     }
 
+    pub fn take_alerts(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.connection.alerts)
+    }
+
+    pub fn blocked(&self) -> Option<&str> {
+        self.connection.blocked.as_deref()
+    }
+
     pub fn take_events(&mut self) -> Vec<Event> {
         self.connection.dropped = 0;
         self.connection.events.drain(..).collect()
@@ -2076,6 +2431,84 @@ impl Page {
             .ok_or_else(|| Error::denied("the capture came back with no image"))?;
 
         base64_decode(encoded).ok_or_else(|| Error::denied("the capture is not valid base64"))
+    }
+
+    pub async fn capture_annotated(&mut self, shot: &PageShot) -> Result<(Vec<u8>, usize)> {
+        let numbered = self
+            .evaluate("Array.isArray(window.__computerRefs)")
+            .await?;
+        if numbered != Value::Bool(true) {
+            self.snapshot(None, Some(0)).await?;
+        }
+
+        let drawn = self
+            .evaluate(&format!(
+                "({})({})",
+                ANNOTATE.replace("OFFSET_FN", OFFSET),
+                shot.full
+            ))
+            .await?
+            .as_u64()
+            .unwrap_or(0) as usize;
+        let taken = self.capture(shot).await;
+        let _ = self.evaluate(UNANNOTATE).await;
+
+        Ok((taken?, drawn))
+    }
+
+    pub async fn highlight(&mut self, query: &str, lasting: Duration) -> Result<Element> {
+        let ms = lasting.min(LONGEST_HIGHLIGHT).as_millis();
+        let found = self
+            .evaluate(&format!("({})({}, {ms})", highlight(), json!(query)))
+            .await?;
+
+        let found = found.as_str().unwrap_or("null");
+        if found == "null" {
+            return Err(Error::denied(match self.ref_state(query).await? {
+                Some(why) => why,
+                None => format!("nothing on the page matched {query}"),
+            }));
+        }
+        serde_json::from_str(found)
+            .map_err(|error| Error::denied(format!("the page would not parse: {error}")))
+    }
+
+    pub async fn console(&mut self, clear: bool) -> Result<Vec<ConsoleEntry>> {
+        let mut heard = self
+            .connection
+            .call_gathering("Runtime.enable", json!({}))
+            .await?;
+        heard.extend(
+            self.connection
+                .call_gathering("Log.enable", json!({}))
+                .await?,
+        );
+
+        let mut entries: Vec<ConsoleEntry> = heard.iter().filter_map(ConsoleEntry::of).collect();
+        entries.sort_by(|one, other| one.when.total_cmp(&other.when));
+
+        if clear {
+            self.call("Runtime.discardConsoleEntries", json!({}))
+                .await?;
+            self.call("Log.clear", json!({})).await?;
+        }
+        Ok(entries)
+    }
+
+    pub async fn pdf(&mut self, landscape: bool, background: bool) -> Result<Vec<u8>> {
+        let answer = self
+            .call(
+                "Page.printToPDF",
+                json!({ "landscape": landscape, "printBackground": background }),
+            )
+            .await?;
+
+        let encoded = answer
+            .get("data")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::denied("the print came back with no document"))?;
+
+        base64_decode(encoded).ok_or_else(|| Error::denied("the document is not valid base64"))
     }
 
     pub async fn click(&mut self, at: Point, button: Button) -> Result<()> {
@@ -2707,7 +3140,7 @@ impl Page {
                  const el = ({MATCH})({}, false).find(Boolean);
                  if (!el) return 'gone';
                  el.focus({{ preventScroll: true }});
-                 return document.activeElement === el ? 'ok' : 'refused';
+                 return el.ownerDocument.activeElement === el ? 'ok' : 'refused';
                }})()"#,
             json!(query)
         ))
@@ -2922,10 +3355,11 @@ impl Page {
                          if (!el) return 'null';
                          // Instant: a smooth scroll moves the element after it was measured.
                          el.scrollIntoView({{ block: 'center', inline: 'center', behavior: 'instant' }});
-                         return JSON.stringify({{ element: ({describe})(el), reach: ({REACH})(el) }});
+                         return JSON.stringify({{ element: ({describe})(el), reach: ({reach})(el) }});
                        }})()"#,
                     json!(query),
-                    describe = describe()
+                    describe = describe(),
+                    reach = reaching()
                 ))
                 .await?;
 
@@ -4079,7 +4513,7 @@ mod tests {
             "an ancestor that matches only through a descendant is dropped"
         );
         assert!(
-            MATCH.contains("querySelectorAll(clickable)"),
+            MATCH.contains("for (const el of all(clickable)) if (pass(el)) add(el);"),
             "and clickables are still swept first, so a button beats its own span"
         );
     }
@@ -4157,7 +4591,7 @@ mod tests {
     #[test]
     fn test_a_press_asks_what_is_under_the_point_first() {
         assert!(
-            REACH.contains("document.elementFromPoint(p.x, p.y)"),
+            REACH.contains("doc.elementFromPoint(x, y)") && REACH.contains("const top = hit(p);"),
             "the point is asked, not the element"
         );
         assert!(
@@ -4165,7 +4599,8 @@ mod tests {
             "the element or anything inside it is a hit; an ancestor is not"
         );
         assert!(
-            REACH.contains("...Array.from(el.getClientRects()).map(centre)"),
+            REACH.contains("const lines = Array.from(el.getClientRects()).map(shift);")
+                && REACH.contains("...lines.map(centre)"),
             "a link wrapped over two lines is tried line by line"
         );
         assert!(
@@ -4181,7 +4616,7 @@ mod tests {
             "the quarters of the box are tried after its middle"
         );
         assert!(
-            REACH.contains("...Array.from(el.getClientRects()).map(centre), ...quarters]"),
+            REACH.contains("[centre(box), ...lines.map(centre), ...quarters]"),
             "and after each line, so an inline element is still tried line by line first"
         );
     }
@@ -4448,6 +4883,141 @@ mod tests {
         assert!(
             NEARBY.contains("if (crowd) found = [];"),
             "a match whose parent is the whole form would list the form"
+        );
+    }
+
+    #[test]
+    fn test_a_console_line_is_read_from_each_way_the_page_can_log() {
+        let logged = ConsoleEntry::of(&json!({
+            "method": "Runtime.consoleAPICalled",
+            "params": {
+                "type": "warning",
+                "timestamp": 2.0,
+                "args": [
+                    { "type": "string", "value": "total" },
+                    { "type": "number", "value": 42 },
+                    { "type": "object", "description": "Object" },
+                    { "type": "number", "unserializableValue": "NaN" }
+                ],
+                "stackTrace": { "callFrames": [{ "url": "https://example.com/app.js", "lineNumber": 9 }] }
+            }
+        }))
+        .expect("a console call");
+        assert_eq!(logged.level, "warning");
+        assert_eq!(logged.text, "total 42 Object NaN");
+        assert_eq!(logged.at.as_deref(), Some("https://example.com/app.js:10"));
+        assert!(!logged.is_error());
+
+        let thrown = ConsoleEntry::of(&json!({
+            "method": "Runtime.exceptionThrown",
+            "params": {
+                "timestamp": 1.0,
+                "exceptionDetails": {
+                    "text": "Uncaught (in promise)",
+                    "exception": { "description": "Error: no handler\n    at main (app.js:3:9)" }
+                }
+            }
+        }))
+        .expect("an uncaught error");
+        assert_eq!(thrown.text, "Uncaught (in promise) Error: no handler");
+        assert!(
+            thrown.is_error(),
+            "an uncaught error is what `errors` is for"
+        );
+
+        let network = ConsoleEntry::of(&json!({
+            "method": "Log.entryAdded",
+            "params": { "entry": { "source": "network", "level": "error", "text": "Failed to load resource", "timestamp": 3.0 } }
+        }))
+        .expect("a browser log line");
+        assert_eq!(network.text, "[network] Failed to load resource");
+        assert!(network.is_error());
+
+        assert_eq!(
+            ConsoleEntry::of(&json!({ "method": "Runtime.executionContextCreated", "params": {} })),
+            None
+        );
+    }
+
+    #[test]
+    fn test_a_frame_of_the_same_origin_is_part_of_the_page() {
+        assert!(
+            MATCH.contains("gather(frame.contentDocument)") && MATCH.contains("catch (e) {}"),
+            "a query reaches into a frame the page could read itself, and a frame from \
+             another origin throws, so it is passed over rather than ending the match"
+        );
+        assert!(
+            SNAPSHOT.contains("within(frame.contentDocument)"),
+            "a snapshot numbers the controls in a frame, or a query could reach what no \
+             snapshot names"
+        );
+        assert!(
+            REACH.contains("x -= b.left + node.clientLeft + parseFloat(s.paddingLeft);"),
+            "the top document sees the frame at the point, so the hit is asked again inside it"
+        );
+        for (name, script) in [
+            ("describe", describe()),
+            ("reach", reaching()),
+            ("highlight", highlight()),
+        ] {
+            assert!(
+                script.contains("win.frameElement") && !script.contains("OFFSET_FN"),
+                "{name}: a rectangle in a frame is measured from the frame; a click needs it \
+                 measured from the page"
+            );
+        }
+    }
+
+    #[test]
+    fn test_what_is_drawn_over_a_page_leaves_it_as_it_was() {
+        let marked = highlight();
+        assert!(!marked.contains("MATCH_FN") && !marked.contains("DESCRIBE_FN"));
+        assert!(
+            HIGHLIGHT.contains("setTimeout(() => mark.remove(), ms)"),
+            "the server holds no session to take the mark away, so the page does it itself"
+        );
+        assert!(
+            HIGHLIGHT.contains("pointerEvents: 'none'")
+                && ANNOTATE.contains("pointerEvents: 'none'"),
+            "a mark that took clicks would be what the next click lands on"
+        );
+        assert!(
+            ANNOTATE.contains("'@e' + (at + 1)"),
+            "the number drawn is the query the caller types"
+        );
+        assert!(
+            UNANNOTATE.contains("[data-computer-annotations]")
+                && ANNOTATE.contains("setAttribute('data-computer-annotations', '')"),
+            "what the capture drew is taken away by the same name"
+        );
+    }
+
+    #[test]
+    fn test_a_dialog_is_read_from_the_event_that_opens_it() {
+        let opened = json!({
+            "method": "Page.javascriptDialogOpening",
+            "params": { "type": "confirm", "message": "Delete it?", "url": "https://example.com/" }
+        });
+        assert_eq!(
+            dialog_opening(&opened),
+            Some(("confirm".to_string(), "Delete it?".to_string()))
+        );
+        assert_eq!(
+            dialog_opening(&json!({ "method": "Page.frameNavigated", "params": {} })),
+            None
+        );
+        assert_eq!(dialog_opening(&json!({ "id": 4, "result": {} })), None);
+
+        let refusal = dialog_refusal("confirm", "Delete it?");
+        assert!(
+            refusal.contains("a confirm that says \"Delete it?\"")
+                && refusal.contains("dialog accept or dialog dismiss"),
+            "the call that opened it is never answered while it is up, so the refusal is the \
+             only place its words reach the caller: {refusal}"
+        );
+        assert!(
+            dialog_refusal("beforeunload", "").contains("leave-page dialog"),
+            "beforeunload is the event's word, not one a caller knows"
         );
     }
 

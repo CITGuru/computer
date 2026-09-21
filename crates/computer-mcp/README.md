@@ -31,6 +31,8 @@ Configure a host that launches local MCP processes:
 
 Add `COMPUTER_SERVER_TOKEN` when the selected server requires one. If no server is configured or listening, `computer mcp` starts an embedded server. Use a long-lived `computerd` when traces, forks, expiry, or durable storage matter.
 
+Set `COMPUTER_CONTENT_BOUNDARIES=1` to have `read_page`, `snapshot`, `find`, `evaluate` and `console` put what the page wrote between two markers holding a nonce the page cannot know, so a model can tell the page's words from the tool's. On `computerd` it covers `/mcp`.
+
 Logs go to stderr. Stdout carries JSON-RPC only.
 
 ## Streamable HTTP configuration
@@ -70,7 +72,7 @@ Box and screen management:
 
 Pages:
 
-`open_url` · `tabs` · `read_page` · `page_screenshot` · `snapshot` · `find` · `click_element` · `fill_field` · `focus` · `check` · `dropdown` · `upload_file` · `wait_for` · `hover` · `drag_element` · `history` · `scroll_page` · `evaluate`
+`open_url` · `tabs` · `read_page` · `page_screenshot` · `page_pdf` · `snapshot` · `find` · `click_element` · `fill_field` · `focus` · `check` · `dropdown` · `upload_file` · `wait_for` · `hover` · `highlight` · `drag_element` · `history` · `scroll_page` · `evaluate` · `console` · `dialog`
 
 Desktop and native applications:
 

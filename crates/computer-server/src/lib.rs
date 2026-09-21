@@ -3,6 +3,7 @@ pub mod cdp;
 pub mod error;
 pub mod extract;
 pub mod idempotency;
+pub mod labels;
 pub mod mcp;
 pub mod presses;
 pub mod prune;
@@ -35,6 +36,7 @@ pub struct AppState {
     pub tickets: viewer::Tickets,
     pub cdp_tokens: viewer::Tickets,
     pub presses: presses::Presses,
+    pub labels: labels::Labels,
 }
 
 impl Default for AppState {
@@ -62,6 +64,7 @@ impl AppState {
             tickets: viewer::Tickets::default(),
             cdp_tokens: viewer::Tickets::default(),
             presses: presses::Presses::default(),
+            labels: labels::Labels::default(),
         }
     }
 
