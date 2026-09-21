@@ -4,7 +4,7 @@
 # On the path, so a shell or an `exec` meets the takeover gate too.
 set -uo pipefail
 
-verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key|with ...}"
+verb="${1:?usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|press|with ...}"
 shift
 
 runtime="${XDG_RUNTIME_DIR:-}"
@@ -30,11 +30,11 @@ fi
 [ -s "$sockfile" ] || { echo "screen ${screen} is not running" >&2; exit 1; }
 
 case "$verb" in
-  move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key|with)
+  move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|press|with)
     computer-pointer "$verb" "$@" || exit $?
     ;;
   *)
-    echo "usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|key|with ..." >&2
+    echo "usage: computer-input move|click|dblclick|drag|path|sweep|scroll|down|up|type|paced|press|with ..." >&2
     exit 2
     ;;
 esac

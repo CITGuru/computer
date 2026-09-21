@@ -253,6 +253,12 @@ pub fn catalogue() -> Value {
                     "quality": {
                         "type": "integer",
                         "description": "jpeg only, 1 to 100. 70 unless said."
+                    },
+                    "annotate": {
+                        "type": "boolean",
+                        "description": "Draw each control's number from the last snapshot over \
+                                        it, as `@e12`, so the picture says which ref is which. \
+                                        A page no snapshot has numbered is numbered first."
                     }
                 }),
                 &[]
@@ -270,6 +276,12 @@ pub fn catalogue() -> Value {
                         "description": "`blank`, the default, opens a tab and raises it, and the \
                                         answer carries its id. `current` navigates the page on \
                                         screen, leaving every other tab where it was."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "A name for the tab: letters, digits, - and _. Every \
+                                        `tab` argument then takes it as well as the id, until \
+                                        the tab closes."
                     }
                 }),
                 &["url"]
@@ -450,6 +462,12 @@ pub fn catalogue() -> Value {
                         "description": "Click it twice: a file to open, a word to select, a row \
                                         to expand. A page counts two clicks, which two separate \
                                         calls to this do not give it."
+                    },
+                    "new_tab": {
+                        "type": "boolean",
+                        "description": "Open the link in a tab of its own, as a middle click \
+                                        does, and bring that tab forward. The answer names it. \
+                                        The page it was on stays where it was."
                     }
                 })),
                 &["query"]
@@ -512,7 +530,7 @@ pub fn catalogue() -> Value {
                                     "type": "string",
                                     "description": "click, move, mouse_down, mouse_up, drag, draw, \
                                                     scroll, type_text, press_key, key_down, \
-                                                    key_up, wait, \
+                                                    key_up, dialog, wait, \
                                                     wait_until_still, open_url, \
                                                     open_app, click_element, fill_field, focus, \
                                                     check, dropdown, upload_file, wait_for, \
@@ -651,6 +669,19 @@ pub fn catalogue() -> Value {
              hover has nothing to click until the pointer arrives.",
             with_page(
                 with_motion(json!({ "query": { "type": "string" } })),
+                &["query"]
+            )
+        ),
+        tool(
+            "highlight",
+            "Draw a box around the thing a query names, for a person watching the screen or a \
+             screenshot to show: what you are about to press, or what you found. It goes by \
+             itself after `seconds` and takes no clicks while it is up.",
+            with_page(
+                json!({
+                    "query": { "type": "string" },
+                    "seconds": { "type": "integer", "description": "3 unless said, 60 at most." }
+                }),
                 &["query"]
             )
         ),
@@ -814,6 +845,57 @@ pub fn catalogue() -> Value {
                     }
                 }),
                 &["chord"]
+            )
+        ),
+        tool(
+            "console",
+            "What the page logged since it loaded: its console calls, its uncaught errors, \
+             and what the browser reported about it, such as a request that failed. Use it \
+             when a page does nothing after a click, or shows an error it does not explain. \
+             `errors` keeps only the failures; `clear` empties it after this read, so the next \
+             one holds only what came after.",
+            with_tab(
+                json!({
+                    "errors": { "type": "boolean" },
+                    "clear": { "type": "boolean" },
+                    "limit": { "type": "integer", "description": "The newest lines, 200 unless said." }
+                }),
+                &[]
+            )
+        ),
+        tool(
+            "page_pdf",
+            "Print the page to a PDF file in the box, as the browser's own print does: every \
+             page of it, with its text as text. The file stays in the box, where `upload_file` \
+             can hand it to a page and `run_command` can work on it.",
+            with_tab(
+                json!({
+                    "path": { "type": "string", "description": "Where in the box to write it." },
+                    "landscape": { "type": "boolean" },
+                    "no_background": {
+                        "type": "boolean",
+                        "description": "Leave out background colours and images, as a printer would."
+                    }
+                }),
+                &["path"]
+            )
+        ),
+        tool(
+            "dialog",
+            "Answer the confirm, prompt or leave-page dialog a page has open. While one is up no \
+             page tool answers: the tool that opened it fails at once and says what the dialog \
+             says, and any other says the page is not answering. An alert needs no answer, it is \
+             accepted by itself and the tool that opened it says what it said. The answer is a \
+             key on the screen, so it also reaches a dialog that opened by itself.",
+            with_frame(
+                json!({
+                    "accept": {
+                        "type": "boolean",
+                        "description": "true presses OK, false presses Cancel."
+                    },
+                    "text": { "type": "string", "description": "What to put in a prompt before OK." }
+                }),
+                &["accept"]
             )
         ),
         tool(
@@ -1368,17 +1450,22 @@ pub async fn call(
                             .get("tab")
                             .and_then(Value::as_str)
                             .map(str::to_string),
+                        annotate: flag(arguments, "annotate"),
                     },
                 )
                 .await
                 .map_err(|e| e.to_string())?;
 
             let image = captured_image(&taken).map_err(|e| e.to_string())?;
+            let whole = match full {
+                true => "the whole page".to_string(),
+                false => "the page, as far as it is in view".to_string(),
+            };
 
             Ok(Answer::Drawn {
-                text: match full {
-                    true => "the whole page".to_string(),
-                    false => "the page, as far as it is in view".to_string(),
+                text: match taken.annotated {
+                    Some(drawn) => format!("{whole}, with {drawn} controls numbered"),
+                    None => whole,
                 },
                 image,
                 mime: match taken.format {
@@ -1387,7 +1474,9 @@ pub async fn call(
                 },
             })
         }
-        "open_url" => act(client, arguments, action_of(name, arguments)?, 2500).await,
+        "open_url" => {
+            act_saying(client, arguments, action_of(name, arguments)?, 2500, landed).await
+        }
         "open_app" => act(client, arguments, action_of(name, arguments)?, 0).await,
         "tabs" => {
             let id = text(arguments, "box_id")?;
@@ -1406,8 +1495,12 @@ pub async fn call(
                             .iter()
                             .map(|tab| {
                                 format!(
-                                    "{}{} {:?} {}",
+                                    "{}{}{} {:?} {}",
                                     tab.id,
+                                    match &tab.label {
+                                        Some(label) => format!(" [{label}]"),
+                                        None => String::new(),
+                                    },
                                     match tab.visible {
                                         true => " (on screen)",
                                         false => "",
@@ -1762,6 +1855,15 @@ pub async fn call(
             )
             .await
         }
+        "highlight" => {
+            element(
+                client,
+                arguments,
+                on_element_of(name, arguments)?,
+                "highlighted",
+            )
+            .await
+        }
         "drag_element" => {
             element(
                 client,
@@ -1876,7 +1978,9 @@ pub async fn call(
             };
             act_saying(client, arguments, action, 400, held_until).await
         }
-        "mouse_up" | "key_up" => act(client, arguments, action_of(name, arguments)?, 400).await,
+        "mouse_up" | "key_up" | "dialog" => {
+            act(client, arguments, action_of(name, arguments)?, 400).await
+        }
         "clipboard" => {
             let id = text(arguments, "box_id")?;
             let selection = selection(arguments);
@@ -1927,6 +2031,48 @@ pub async fn call(
                 true => format!("{} … (truncated)", answered.json),
                 false => answered.json,
             }))
+        }
+        "console" => {
+            let id = text(arguments, "box_id")?;
+            let errors = flag(arguments, "errors");
+            let view = client
+                .console(
+                    &id,
+                    &computer_api::ConsoleRead {
+                        errors,
+                        clear: flag(arguments, "clear"),
+                        limit: arguments
+                            .get("limit")
+                            .and_then(Value::as_u64)
+                            .map(|n| n as usize),
+                        tab: tab_of(arguments),
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(said_console(&view, errors)))
+        }
+        "page_pdf" => {
+            let id = text(arguments, "box_id")?;
+            let printed = client
+                .page_pdf(
+                    &id,
+                    &computer_api::PagePdf {
+                        landscape: flag(arguments, "landscape"),
+                        no_background: flag(arguments, "no_background"),
+                        tab: tab_of(arguments),
+                        path: Some(text(arguments, "path")?),
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(format!(
+                "{} bytes → {}",
+                printed.bytes,
+                printed.path.unwrap_or_default()
+            )))
         }
         "list_files" => {
             let id = text(arguments, "box_id")?;
@@ -2541,7 +2687,23 @@ fn ended(said: String, result: &ElementResult) -> String {
     }
 }
 
+fn landed(result: &BatchResult) -> Option<String> {
+    let tab = result.tabs.first()?;
+    Some(match &tab.label {
+        Some(label) => format!("opened in tab {} [{label}]", tab.id),
+        None => format!("opened in tab {}", tab.id),
+    })
+}
+
 fn told(said: String, result: &ElementResult) -> String {
+    let said = result.alerts.iter().fold(said, |said, alert| {
+        format!("{said}\nan alert said {alert:?}, and was accepted")
+    });
+    let said = match &result.tab {
+        Some(tab) => format!("{said}\nit opened in tab {}, now on screen", tab.id),
+        None => said,
+    };
+
     match &result.delta {
         Some(delta) => format!("{said}\n{}", delta.lines(false).join("\n")),
         None => said,
@@ -2704,6 +2866,27 @@ fn saw(out: &Out) -> String {
     }
 }
 
+fn said_console(view: &computer_api::ConsoleView, errors: bool) -> String {
+    if view.lines.is_empty() {
+        return match errors {
+            true => "no errors since the page loaded".to_string(),
+            false => "nothing logged since the page loaded".to_string(),
+        };
+    }
+
+    let lines = view.lines.iter().map(|line| match &line.at {
+        Some(at) => format!("{}: {}  ({at})", line.level, line.text),
+        None => format!("{}: {}", line.level, line.text),
+    });
+    match view.earlier {
+        0 => lines.collect::<Vec<_>>().join("\n"),
+        earlier => std::iter::once(format!("({earlier} earlier lines left out)"))
+            .chain(lines)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
 fn said_listing(listing: &computer_api::Listing) -> String {
     if listing.entries.is_empty() {
         return format!("{} is empty", listing.path);
@@ -2807,6 +2990,7 @@ fn on_element_of(tool: &str, arguments: &Value) -> Result<OnElement, String> {
             query: text(arguments, "query")?,
             button: button(arguments),
             double: flag(arguments, "double"),
+            new_tab: flag(arguments, "new_tab"),
             motion: motion(arguments)?,
             seed: seed(arguments),
         },
@@ -2845,6 +3029,13 @@ fn on_element_of(tool: &str, arguments: &Value) -> Result<OnElement, String> {
             query: text(arguments, "query")?,
             motion: motion(arguments)?,
             seed: seed(arguments),
+        },
+        "highlight" => OnElement::Highlight {
+            query: text(arguments, "query")?,
+            ms: arguments
+                .get("seconds")
+                .and_then(Value::as_u64)
+                .map(|seconds| seconds.saturating_mul(1000)),
         },
         "drag_element" => OnElement::Drag {
             from: text(arguments, "from")?,
@@ -2961,6 +3152,16 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
         "key_up" => Action::KeyUp {
             key: text(arguments, "key")?,
         },
+        "dialog" => Action::Dialog {
+            accept: arguments
+                .get("accept")
+                .and_then(Value::as_bool)
+                .ok_or("accept is required: true for OK, false for Cancel")?,
+            text: arguments
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        },
         "type_text" => Action::Type {
             text: text(arguments, "text")?,
             delay_ms: arguments.get("delay_ms").and_then(Value::as_u64),
@@ -3024,6 +3225,10 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
                 Some(other) => return Err(format!("target is blank or current, not {other:?}")),
             },
             url: text(arguments, "url")?,
+            label: arguments
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::to_string),
         },
         "open_app" => Action::Launch {
             app: text(arguments, "app")?,
@@ -3101,6 +3306,7 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
                     .and_then(Value::as_u64)
                     .map(|one| one as u32),
                 tab: tab_of(arguments),
+                annotate: flag(arguments, "annotate"),
             },
         },
         "screenshot" => Action::Capture {
@@ -3675,6 +3881,131 @@ mod tests {
                 "{name} outlives its call, so it says for how long"
             );
         }
+    }
+
+    #[test]
+    fn test_the_console_says_where_each_line_came_from() {
+        let view = computer_api::ConsoleView {
+            lines: vec![
+                computer_api::ConsoleLine {
+                    level: "exception".to_string(),
+                    text: "Uncaught TypeError: x is null".to_string(),
+                    at: Some("https://example.com/app.js:3".to_string()),
+                },
+                computer_api::ConsoleLine {
+                    level: "log".to_string(),
+                    text: "ready".to_string(),
+                    at: None,
+                },
+            ],
+            earlier: 4,
+        };
+        assert_eq!(
+            said_console(&view, false),
+            "(4 earlier lines left out)\n\
+             exception: Uncaught TypeError: x is null  (https://example.com/app.js:3)\n\
+             log: ready"
+        );
+        assert_eq!(
+            said_console(
+                &computer_api::ConsoleView {
+                    lines: Vec::new(),
+                    earlier: 0
+                },
+                true
+            ),
+            "no errors since the page loaded"
+        );
+        assert!(
+            crate::boundaries::PAGE_TEXT.contains(&"console"),
+            "a page writes its own console, so it is quoted like any page text"
+        );
+    }
+
+    #[test]
+    fn test_a_tab_is_named_on_open_and_a_link_can_open_in_its_own() {
+        assert!(matches!(
+            action_of("open_url", &json!({ "url": "https://example.com", "label": "docs" })),
+            Ok(Action::OpenUrl { label: Some(label), .. }) if label == "docs"
+        ));
+        assert!(matches!(
+            on_element_of(
+                "click_element",
+                &json!({ "query": "Docs", "new_tab": true })
+            ),
+            Ok(OnElement::Click { new_tab: true, .. })
+        ));
+
+        let opened = BatchResult {
+            results: Vec::new(),
+            stopped_at: None,
+            frame: None,
+            cursor: None,
+            windows: Vec::new(),
+            tabs: vec![computer_api::Tab {
+                id: "A1".to_string(),
+                title: String::new(),
+                url: String::new(),
+                visible: true,
+                label: Some("docs".to_string()),
+            }],
+            released: Vec::new(),
+            holding: Vec::new(),
+            released_keys: Vec::new(),
+            holding_keys: Vec::new(),
+        };
+        assert_eq!(
+            landed(&opened).as_deref(),
+            Some("opened in tab A1 [docs]"),
+            "the tool says the answer carries the id, so the answer has to"
+        );
+
+        let said = told(
+            "clicked".to_string(),
+            &ElementResult {
+                tab: opened.tabs.first().cloned(),
+                ..ElementResult::default()
+            },
+        );
+        assert_eq!(said, "clicked\nit opened in tab A1, now on screen");
+    }
+
+    #[test]
+    fn test_a_dialog_is_answered_by_a_tool_and_by_a_step() {
+        assert_eq!(
+            action_of("dialog", &json!({ "accept": true, "text": "Ada" })),
+            Ok(Action::Dialog {
+                accept: true,
+                text: Some("Ada".to_string())
+            })
+        );
+        assert_eq!(
+            action_of("dialog", &json!({ "accept": false })),
+            Ok(Action::Dialog {
+                accept: false,
+                text: None
+            })
+        );
+        assert!(
+            action_of("dialog", &json!({})).is_err(),
+            "OK and Cancel are opposite answers, so neither is the default"
+        );
+        assert!(
+            catalogue()
+                .as_array()
+                .expect("a list")
+                .iter()
+                .any(|tool| tool["name"] == "dialog")
+        );
+
+        let said = told(
+            "clicked".to_string(),
+            &ElementResult {
+                alerts: vec!["Saved".to_string()],
+                ..ElementResult::default()
+            },
+        );
+        assert_eq!(said, "clicked\nan alert said \"Saved\", and was accepted");
     }
 
     #[test]

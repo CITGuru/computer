@@ -119,7 +119,7 @@ fn every_input_verb_the_driver_sends_is_one_the_script_answers() {
 
     for verb in [
         "move", "click", "dblclick", "drag", "path", "sweep", "scroll", "down", "up", "type",
-        "paced", "key", "with",
+        "paced", "press", "with",
     ] {
         // Alone or in an alternation, which is how the pointer verbs share one branch.
         assert!(

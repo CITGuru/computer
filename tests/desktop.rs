@@ -498,16 +498,16 @@ async fn wayland_holds_a_key_through_the_keyboard_that_stays() {
     wayland.key_down("Shift").await.expect("a modifier");
     assert_eq!(
         host.last_line(),
-        "computer-input key -M shift",
+        "computer-input press -M shift",
         "a modifier goes down as one, so the keyboard sends the state every later key carries"
     );
     wayland.key_down("cmd").await.expect("a modifier");
-    assert_eq!(host.last_line(), "computer-input key -M logo");
+    assert_eq!(host.last_line(), "computer-input press -M logo");
 
     wayland.key_down("a").await.expect("a key");
-    assert_eq!(host.last_line(), "computer-input key -P a");
+    assert_eq!(host.last_line(), "computer-input press -P a");
     wayland.key_up("a").await.expect("a release");
-    assert_eq!(host.last_line(), "computer-input key -p a");
+    assert_eq!(host.last_line(), "computer-input press -p a");
 
     wayland
         .click_with(Point::new(5, 6), Button::Left, &[Held::Shift, Held::Ctrl])
@@ -520,7 +520,7 @@ async fn wayland_holds_a_key_through_the_keyboard_that_stays() {
     );
 
     wayland.key_up("shift").await.expect("a release");
-    assert_eq!(host.last_line(), "computer-input key -m shift");
+    assert_eq!(host.last_line(), "computer-input press -m shift");
     assert!(wayland.key_down("ctrl+a").await.is_err());
 }
 
@@ -537,7 +537,7 @@ async fn wayland_lets_a_key_go_past_both_of_its_gates() {
     assert!(wayland.key_up("space").await.is_err());
 
     wayland.let_key_go("space").await.expect("let go");
-    assert_eq!(host.last_line(), "computer-pointer key -p space");
+    assert_eq!(host.last_line(), "computer-pointer press -p space");
 
     wayland.let_keys_go().await.expect("let go");
     assert_eq!(

@@ -241,7 +241,10 @@ The reading itself is `computer::Page::read`, so a library user gets it without 
 | `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
 | `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
 | `GET /v1/boxes/{id}/page/snapshot?scope=&limit=&delta=&quiet_ms=` | every control on the page in order, numbered; or what changed since the last one |
-| `POST /v1/boxes/{id}/page/element` | click, fill, dropdown, upload, hover, drag, wait, history or scroll, by query |
+| `POST /v1/boxes/{id}/page/element` | click, fill, dropdown, upload, hover, highlight, drag, wait, history or scroll, by query; `new_tab` on a click opens the link in its own tab |
+| `POST /v1/boxes/{id}/page/console` | what the page logged since it loaded; `errors` keeps the failures, `clear` empties it |
+| `POST /v1/boxes/{id}/page/pdf` | the page printed to PDF, as base64, or into the box at `path` |
+| `POST /v1/boxes/{id}/page/screenshot` | the page as the browser drew it; `annotate` draws each snapshot number over its control |
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |
