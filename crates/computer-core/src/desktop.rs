@@ -431,6 +431,29 @@ pub trait Desktop: Send + Sync {
         Ok(())
     }
 
+    async fn key_down(&self, key: &str) -> Result<()> {
+        let _ = key;
+        Err(Error::Unsupported {
+            gaps: vec!["a key held across steps"],
+        })
+    }
+
+    async fn key_up(&self, key: &str) -> Result<()> {
+        let _ = key;
+        Err(Error::Unsupported {
+            gaps: vec!["a key held across steps"],
+        })
+    }
+
+    async fn let_key_go(&self, key: &str) -> Result<()> {
+        let _ = key;
+        Ok(())
+    }
+
+    async fn let_keys_go(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// A desktop that cannot pace keystrokes must refuse a `delay`.
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()>;
 

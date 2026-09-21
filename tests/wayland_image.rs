@@ -422,6 +422,35 @@ fn a_button_is_held_only_where_something_stays_to_hold_it() {
 }
 
 #[test]
+fn the_keyboard_that_stays_can_let_go_of_every_key_it_put_down() {
+    let event = POINTER_C
+        .split("static void key_event(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("one place sends a key");
+    assert!(
+        event.contains("down_codes[down_count++] = code")
+            && event.contains("down_codes[at] = down_codes[--down_count]"),
+        "a modifier and a plain key both pass through here, so both are remembered"
+    );
+
+    let release = POINTER_C
+        .split("static void release_keys(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("a release of everything");
+    assert!(
+        release.contains("key_event(down_codes[down_count - 1], 0)")
+            && release.contains("mods = 0"),
+        "a server that restarted has forgotten which keys it held; the keyboard has not"
+    );
+    assert!(
+        POINTER_C.contains(r#"strcmp(verb, "release") == 0 && rest == 0"#),
+        "the driver sends this word when it takes a box back"
+    );
+}
+
+#[test]
 fn a_gesture_is_over_when_its_command_returns() {
     let answer = POINTER_C
         .split("static void answer(int caller)")

@@ -191,6 +191,7 @@ static const char *USAGE =
     "                        type TEXT\n"
     "                        paced MS TEXT             (a pause of MS after each key)\n"
     "                        key [-M MOD | -m MOD | -k KEY | -P KEY | -p KEY] ...\n"
+    "                        release                   (every key still down comes up)\n"
     "                        with MOD[,MOD] GESTURE    (the modifiers held through it)\n"
     "                        serve SOCKET              (the resident pointer of one screen)\n";
 
@@ -269,10 +270,14 @@ static const struct spelled_key SPELLED[] = {
     {"ampersand", '&'},  {"asterisk", '*'},    {"parenleft", '('},   {"parenright", ')'},
 };
 
+#define MOST_DOWN 32
+
 static uint32_t extras[BOARD_KEYS * EXTRA_GROUPS];
 static size_t extra_count;
 static uint32_t mods;
 static uint32_t keymap_at;
+static uint32_t down_codes[MOST_DOWN];
+static size_t down_count;
 
 static const char *NO_KEYBOARD = "this compositor does not offer zwp_virtual_keyboard_v1";
 
@@ -328,6 +333,16 @@ static void keymap_settled(void) {
 
 static void key_event(uint32_t code, uint32_t down) {
 	zwp_virtual_keyboard_v1_key(keys, now_ms(), code, down);
+
+	size_t at = 0;
+	while (at < down_count && down_codes[at] != code) {
+		at++;
+	}
+	if (down && at == down_count && down_count < MOST_DOWN) {
+		down_codes[down_count++] = code;
+	} else if (!down && at < down_count) {
+		down_codes[at] = down_codes[--down_count];
+	}
 }
 
 static void state(uint32_t group) {
@@ -351,6 +366,14 @@ static void hold(const struct held_key *one, int down) {
 		mods &= ~one->mask;
 		key_event(one->code, 0);
 	}
+	state(0);
+}
+
+static void release_keys(void) {
+	while (down_count > 0) {
+		key_event(down_codes[down_count - 1], 0);
+	}
+	mods = 0;
 	state(0);
 }
 
@@ -741,6 +764,11 @@ static const char *gesture(int count, char **words) {
 		return wrong;
 	} else if (strcmp(verb, "key") == 0) {
 		return press_keys(rest, words + 1);
+	} else if (strcmp(verb, "release") == 0 && rest == 0) {
+		if (keys == NULL) {
+			return NO_KEYBOARD;
+		}
+		release_keys();
 	} else if (strcmp(verb, "with") == 0 && rest >= 2 && strcmp(words[2], "with") != 0) {
 		if (keys == NULL) {
 			return NO_KEYBOARD;

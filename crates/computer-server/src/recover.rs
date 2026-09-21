@@ -194,6 +194,7 @@ async fn adopt_one(
         for button in [Button::Left, Button::Middle, Button::Right] {
             let _ = computer::Desktop::let_go(&computer, button).await;
         }
+        let _ = computer::Desktop::let_keys_go(&computer).await;
     }
 
     let entry = state

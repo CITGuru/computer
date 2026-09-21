@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::machine::{MachineHost, ScreenHost};
 use crate::motion::Step;
 use crate::screens::ControlGate;
-use crate::servers::{a11y, settled, still_argv};
+use crate::servers::{KeysDown, a11y, settled, still_argv};
 use crate::{
     Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Held, Node,
     NodeQuery, Point, Rect, ScreenId, Selection,
@@ -48,6 +48,20 @@ pub fn keysym(key: &str) -> String {
         _ => return key.to_string(),
     }
     .to_string()
+}
+
+pub fn one_key(key: &str) -> Result<String> {
+    let key = key.trim();
+
+    if key.is_empty() {
+        return Err(Error::denied("a key to hold is needed"));
+    }
+    if key.len() > 1 && key.contains('+') {
+        return Err(Error::denied(format!(
+            "{key} is more than one key: hold each with its own key_down"
+        )));
+    }
+    Ok(keysym(key))
 }
 
 pub fn chord(input: &str) -> String {
@@ -121,6 +135,12 @@ fn holding(held: &[Held]) -> Vec<String> {
         args.push("keydown".to_string());
         args.push(one.keysym().to_string());
     }
+    args
+}
+
+fn every_key_up() -> Vec<String> {
+    let mut args = argv(&["xdotool", "keyup", "--delay", "0"]);
+    args.extend((8..=255).map(|code: u32| code.to_string()));
     args
 }
 
@@ -246,6 +266,7 @@ pub struct X11Desktop {
     host: Arc<dyn ScreenHost>,
     screen: ScreenId,
     control: Arc<ControlGate>,
+    down: KeysDown,
 }
 
 impl X11Desktop {
@@ -254,6 +275,7 @@ impl X11Desktop {
             host,
             screen,
             control: Arc::new(ControlGate::new()),
+            down: KeysDown::default(),
         }
     }
 
@@ -321,6 +343,7 @@ impl Desktop for X11Desktop {
     }
 
     async fn click_with(&self, at: Point, button: Button, held: &[Held]) -> Result<()> {
+        let held = &self.down.without(held);
         let mut args = holding(held);
         args.extend(point_argv(&["mousemove", "--"], at));
         args.push("click".to_string());
@@ -343,6 +366,7 @@ impl Desktop for X11Desktop {
     }
 
     async fn drag_with(&self, from: Point, to: Point, button: Button, held: &[Held]) -> Result<()> {
+        let held = &self.down.without(held);
         let number = button_number(button);
         let mut args = holding(held);
         args.extend(point_argv(&["mousemove", "--"], from));
@@ -374,6 +398,33 @@ impl Desktop for X11Desktop {
             .map(|_| ())
     }
 
+    async fn key_down(&self, key: &str) -> Result<()> {
+        let key = one_key(key)?;
+        self.act(argv(&["xdotool", "keydown", &key])).await?;
+        self.down.set(&key, true);
+        Ok(())
+    }
+
+    async fn key_up(&self, key: &str) -> Result<()> {
+        let key = one_key(key)?;
+        self.act(argv(&["xdotool", "keyup", &key])).await?;
+        self.down.set(&key, false);
+        Ok(())
+    }
+
+    async fn let_key_go(&self, key: &str) -> Result<()> {
+        let key = one_key(key)?;
+        self.down.set(&key, false);
+        self.run(argv(&["xdotool", "keyup", &key]))
+            .await
+            .map(|_| ())
+    }
+
+    async fn let_keys_go(&self) -> Result<()> {
+        self.down.clear();
+        self.run(every_key_up()).await.map(|_| ())
+    }
+
     async fn move_along(&self, steps: &[Step]) -> Result<()> {
         let mut args = argv(&["xdotool"]);
         args.extend(along(steps));
@@ -387,6 +438,7 @@ impl Desktop for X11Desktop {
         button: Button,
         held: &[Held],
     ) -> Result<()> {
+        let held = &self.down.without(held);
         let number = button_number(button);
         let mut args = holding(held);
         args.extend(point_argv(&["mousemove", "--"], from));
@@ -411,7 +463,10 @@ impl Desktop for X11Desktop {
     }
 
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
-        let mut args = argv(&["xdotool", "type", "--clearmodifiers"]);
+        let mut args = argv(&["xdotool", "type"]);
+        if !self.down.any() {
+            args.push("--clearmodifiers".to_string());
+        }
 
         if let Some(delay) = delay {
             args.push("--delay".to_string());
@@ -425,7 +480,10 @@ impl Desktop for X11Desktop {
 
     /// `--clearmodifiers` only when nothing is held, as it would drop the held keys.
     async fn press(&self, chords: &[String], held: &[Held]) -> Result<()> {
-        if let ([one], true) = (chords, held.is_empty()) {
+        let held = &self.down.without(held);
+        let nothing_down = held.is_empty() && !self.down.any();
+
+        if let ([one], true) = (chords, nothing_down) {
             let mut args = argv(&["xdotool", "key", "--clearmodifiers"]);
             args.push(chord(one));
             return self.act(args).await;

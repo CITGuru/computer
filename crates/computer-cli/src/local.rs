@@ -72,7 +72,7 @@ pub async fn open(args: &[String]) -> computer::Result<()> {
 }
 
 pub async fn mouse(args: &[String]) -> computer::Result<()> {
-    let op = positional(args, 1, "move, click, drag, scroll or at")?.to_string();
+    let op = positional(args, 1, "move, click, drag, path, scroll or at")?.to_string();
 
     let mut rest = args.to_vec();
     rest.remove(1);
@@ -93,6 +93,21 @@ pub async fn mouse(args: &[String]) -> computer::Result<()> {
                     button(rest.get(5)),
                     &modifiers(&rest)?,
                 )
+                .await
+        }
+        "path" => {
+            let (through, button) = crate::remote::stroke(&bare(&rest, &["--held", "--seed"]))
+                .map_err(computer::Error::denied)?;
+            let steps: Vec<computer::motion::Step> = through[1..]
+                .iter()
+                .map(|at| computer::motion::Step {
+                    at: *at,
+                    pause: Duration::ZERO,
+                })
+                .collect();
+
+            let computer = attach(&rest).await?;
+            computer::Desktop::drag_along(&computer, through[0], &steps, button, &modifiers(&rest)?)
                 .await
         }
         "at" => {
@@ -118,6 +133,10 @@ pub async fn keyboard(args: &[String]) -> computer::Result<()> {
     match op.as_str() {
         "type" => type_text(&rest).await,
         "press" => press(&rest).await,
+        "down" | "up" => Err(computer::Error::denied(
+            "a key held across commands needs a server, which lets it go when its time runs \
+             out. Run it without --local.",
+        )),
         other => Err(computer::Error::denied(format!("no such op: {other}"))),
     }
 }

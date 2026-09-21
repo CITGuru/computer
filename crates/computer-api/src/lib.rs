@@ -142,6 +142,14 @@ pub enum Action {
         #[serde(default)]
         button: Button,
     },
+    KeyDown {
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hold_ms: Option<u64>,
+    },
+    KeyUp {
+        key: String,
+    },
     /// In notches: positive `dy` down, positive `dx` right.
     Scroll {
         at: Point,
@@ -223,6 +231,15 @@ pub enum Action {
     WriteFile {
         what: WriteFile,
     },
+    ListFiles {
+        path: String,
+    },
+    Grep {
+        what: computer_types::Search,
+    },
+    Glob {
+        what: Globbing,
+    },
     /// Reads the selection, or sets it when `text` is given.
     Clipboard {
         #[serde(default)]
@@ -257,6 +274,9 @@ pub enum Out {
     Tabs(Vec<Tab>),
     Ran(ExecResponse),
     File(ReadFile),
+    Listing(Listing),
+    Found(Found),
+    Globbed(Globbed),
     Clipboard(ClipboardView),
     Recording(RecordingView),
     Apps(Vec<String>),
@@ -638,11 +658,21 @@ pub struct BatchResult {
     pub released: Vec<Button>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holding: Vec<Holding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub released_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holding_keys: Vec<HoldingKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Holding {
     pub button: Button,
+    pub until_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldingKey {
+    pub key: String,
     pub until_ms: u64,
 }
 
@@ -923,6 +953,16 @@ pub struct WriteFile {
 pub struct ReadFile {
     pub path: String,
     pub contents_base64: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Globbing {
+    pub pattern: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1251,10 +1291,138 @@ mod tests {
                 button: Button::Left,
                 until_ms: 1_700_000_000_000,
             }],
+            released_keys: Vec::new(),
+            holding_keys: Vec::new(),
         })
         .expect("writes");
         assert!(
             said.contains(r#""holding":[{"button":"left","until_ms":1700000000000}]"#),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn test_the_file_steps_take_what_the_file_routes_take() {
+        let listed: Action =
+            serde_json::from_str(r#"{"type":"list_files","path":"/tmp"}"#).expect("parses");
+        assert_eq!(
+            listed,
+            Action::ListFiles {
+                path: "/tmp".to_string()
+            }
+        );
+
+        let searched: Action = serde_json::from_str(
+            r#"{"type":"grep","what":{"pattern":"TODO","path":"/src","include":"*.rs"}}"#,
+        )
+        .expect("parses");
+        assert!(matches!(
+            &searched,
+            Action::Grep { what } if what.pattern == "TODO" && what.include.as_deref() == Some("*.rs")
+        ));
+
+        let globbed: Action =
+            serde_json::from_str(r#"{"type":"glob","what":{"pattern":"**/*.png"}}"#)
+                .expect("parses");
+        assert_eq!(
+            globbed,
+            Action::Glob {
+                what: Globbing {
+                    pattern: "**/*.png".to_string(),
+                    path: None,
+                    limit: None,
+                }
+            }
+        );
+        assert!(
+            serde_json::from_str::<Action>(r#"{"type":"glob","what":{"patern":"*"}}"#).is_err(),
+            "a misspelt field would glob for nothing and say it found nothing"
+        );
+
+        let said = serde_json::to_string(&Out::Globbed(Globbed {
+            paths: vec!["/tmp/a.png".to_string()],
+            cut: false,
+        }))
+        .expect("writes");
+        assert_eq!(
+            said,
+            r#"{"is":"globbed","saw":{"paths":["/tmp/a.png"],"cut":false}}"#
+        );
+    }
+
+    #[test]
+    fn test_a_key_goes_down_and_stays_down_only_when_told_how_long() {
+        let plain: Action =
+            serde_json::from_str(r#"{"type":"key_down","key":"shift"}"#).expect("parses");
+        assert_eq!(
+            plain,
+            Action::KeyDown {
+                key: "shift".to_string(),
+                hold_ms: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&plain).expect("writes"),
+            r#"{"type":"key_down","key":"shift"}"#
+        );
+
+        let held: Action =
+            serde_json::from_str(r#"{"type":"key_down","key":"space","hold_ms":5000}"#)
+                .expect("parses");
+        assert!(matches!(
+            held,
+            Action::KeyDown {
+                hold_ms: Some(5000),
+                ..
+            }
+        ));
+
+        let up: Action =
+            serde_json::from_str(r#"{"type":"key_up","key":"shift"}"#).expect("parses");
+        assert_eq!(
+            up,
+            Action::KeyUp {
+                key: "shift".to_string()
+            }
+        );
+        assert!(
+            serde_json::from_str::<Action>(r#"{"type":"key_down"}"#).is_err(),
+            "a key hold with no key would hold nothing"
+        );
+    }
+
+    #[test]
+    fn test_a_batch_names_a_key_it_let_go_or_still_holds_only_when_it_did() {
+        let quiet = BatchResult {
+            results: Vec::new(),
+            stopped_at: None,
+            frame: None,
+            cursor: None,
+            windows: Vec::new(),
+            tabs: Vec::new(),
+            released: Vec::new(),
+            holding: Vec::new(),
+            released_keys: Vec::new(),
+            holding_keys: Vec::new(),
+        };
+        let said = serde_json::to_string(&quiet).expect("writes");
+        assert!(
+            !said.contains("released_keys") && !said.contains("holding_keys"),
+            "{said}"
+        );
+
+        let said = serde_json::to_string(&BatchResult {
+            released_keys: vec!["shift".to_string()],
+            holding_keys: vec![HoldingKey {
+                key: "space".to_string(),
+                until_ms: 1_700_000_000_000,
+            }],
+            ..quiet
+        })
+        .expect("writes");
+        assert!(said.contains(r#""released_keys":["shift"]"#), "{said}");
+        assert!(
+            said.contains(r#""holding_keys":[{"key":"space","until_ms":1700000000000}]"#),
             "{said}"
         );
     }
@@ -1293,6 +1461,8 @@ mod tests {
             tabs: Vec::new(),
             released: Vec::new(),
             holding: Vec::new(),
+            released_keys: Vec::new(),
+            holding_keys: Vec::new(),
         };
         assert!(
             !serde_json::to_string(&quiet)

@@ -132,6 +132,8 @@ Three things worth knowing:
 
 `hold_ms` on `mouse_down` keeps the button down after the batch ends, which is how `computer mouse <box> down` and `up` are two commands. Nothing holds the screen between two calls, so the server lets the button go itself: after `hold_ms`, 60 seconds at most; when a person takes the screen over; before the box is paused; and when a server takes the box back after a restart, which lost the timer. `holding` names the button and when it will be let go. Without `hold_ms` a button never outlives its batch.
 
+`key_down` and `key_up` do the same for one key: `{ "type": "key_down", "key": "shift" }`, then the clicks that extend a selection, then `key_up`. `key` is one key, not a combination. It takes `hold_ms` as `mouse_down` does, the server lets it go at the same four moments, and `released_keys` and `holding_keys` name it. When a server takes a box back after a restart it lets every key go, because it no longer knows which were down.
+
 `pause_ms` waits after the move, a second at most. A drawing program reads the pointer at intervals and merges moves that arrive faster than it reads: without a pause GIMP joined the two ends of a stroke and never saw the corner between them. 40 is enough.
 
 Both take `at` and `button`, or act where the pointer is. They are safe only inside one batch, which holds the screen for the whole run. A button still down when the batch ends is let go, even when a step failed or a person took the screen over, and `released` names it. The trace records that release, so a fork replays it. X11 keeps a button down by itself. On Wayland a virtual pointer lives only as long as its client, so each screen keeps one `computer-pointer serve` for its whole life and every gesture goes through it.

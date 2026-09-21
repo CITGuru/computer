@@ -1265,13 +1265,16 @@ const NAMED: &str = r#"(query, kind) => {
   return null;
 }"#;
 
-const NEARBY: &str = r#"(query) => {
+const NEARBY: &str = r#"(query, kind) => {
   const el = (MATCH_FN)(query, false).find(Boolean);
   if (!el) return null;
 
-  const fields = node => Array.from(node.querySelectorAll(
-    'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset])' +
-    ':not([type=image]), textarea, select, [contenteditable=""], [contenteditable="true"]'));
+  const wanted = kind === 'select' ? 'select'
+    : kind === 'file' ? 'input[type=file]'
+    : 'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset])' +
+      ':not([type=image]), textarea, select, [contenteditable=""], [contenteditable="true"]';
+  const reachable = field => kind === 'file' || field.getClientRects().length > 0;
+  const fields = node => Array.from(node.querySelectorAll(wanted)).filter(reachable);
   const refs = window.__computerRefs || [];
   const named = field => {
     const at = refs.indexOf(field);
@@ -1349,6 +1352,25 @@ const RICH: &str = r#"(query, empty) => {
   if (empty) document.execCommand('delete');
   return 'ok';
 }"#;
+
+const NO_DROPDOWN: &str = "no dropdown matched";
+
+const FILE_INPUT: &str = r#"(query) => {
+  const takes = el => el && el.tagName === 'INPUT' && el.type === 'file';
+  const seen = (MATCH_FN)(query, false).find(takes);
+  if (seen) return seen;
+
+  try {
+    const hidden = document.querySelector(query);
+    return takes(hidden) ? hidden : undefined;
+  } catch (_) {
+    return undefined;
+  }
+}"#;
+
+fn file_input() -> String {
+    FILE_INPUT.replace("MATCH_FN", MATCH)
+}
 
 const PICK: &str = r#"(query, wanted, drop) => {
   const el = (MATCH_FN)(query, false).find(e => e.tagName === 'SELECT');
@@ -2629,15 +2651,21 @@ impl Page {
             Some(verb @ ("select" | "check" | "click" | "upload")) => Err(Error::denied(format!(
                 "{query} does not take typing: use {verb}"
             ))),
-            _ => Err(Error::denied(self.holds_no_value(query).await)),
+            _ => Err(Error::denied(
+                self.near(query, "any", format!("{query} holds no value"), "field")
+                    .await,
+            )),
         }
     }
 
-    async fn holds_no_value(&mut self, query: &str) -> String {
-        let plain = format!("{query} holds no value");
-
+    async fn near(&mut self, query: &str, kind: &str, plain: String, noun: &str) -> String {
         let Ok(seen) = self
-            .evaluate(&format!("({nearby})({})", json!(query), nearby = nearby()))
+            .evaluate(&format!(
+                "({nearby})({}, {})",
+                json!(query),
+                json!(kind),
+                nearby = nearby()
+            ))
             .await
         else {
             return plain;
@@ -2656,13 +2684,13 @@ impl Page {
         match fields.as_slice() {
             [] if tag.is_empty() => plain,
             [] if crowd => format!(
-                "{plain}: it matched <{tag}>, and {count} fields are {where_} it, too many to \
+                "{plain}: it matched <{tag}>, and {count} {noun}s are {where_} it, too many to \
                  name; take a snapshot"
             ),
-            [] => format!("{plain}: it matched <{tag}>, with no field in it or beside it"),
-            [one] => format!("{plain}: it matched <{tag}>, and the field {where_} it is {one}"),
+            [] => format!("{plain}: it matched <{tag}>, with no {noun} in it or beside it"),
+            [one] => format!("{plain}: it matched <{tag}>, and the {noun} {where_} it is {one}"),
             several => format!(
-                "{plain}: it matched <{tag}>, and the fields {where_} it are {}",
+                "{plain}: it matched <{tag}>, and the {noun}s {where_} it are {}",
                 several.join(", ")
             ),
         }
@@ -2785,7 +2813,11 @@ impl Page {
             .await?;
 
         if let Some(no) = answered.get("no").and_then(Value::as_str) {
-            return Err(Error::denied(format!("{no}: {query}")));
+            let plain = format!("{no}: {query}");
+            return Err(Error::denied(match no == NO_DROPDOWN {
+                true => self.near(query, "select", plain, "dropdown").await,
+                false => plain,
+            }));
         }
 
         Ok(answered
@@ -2807,20 +2839,23 @@ impl Page {
             .call(
                 "Runtime.evaluate",
                 json!({
-                    "expression": format!(
-                        "({MATCH})({}, false).find(e => e.tagName === 'INPUT' && e.type === 'file')",
-                        json!(query)
-                    ),
+                    "expression": format!("({FILE_INPUT})({})", json!(query), FILE_INPUT = file_input()),
                     "returnByValue": false,
                 }),
             )
             .await?;
 
-        let object = handle
+        let Some(object) = handle
             .get("result")
             .and_then(|result| result.get("objectId"))
             .and_then(Value::as_str)
-            .ok_or_else(|| Error::denied(format!("no file input matched {query}")))?;
+            .map(str::to_string)
+        else {
+            let plain = format!("no file input matched {query}");
+            return Err(Error::denied(
+                self.near(query, "file", plain, "file input").await,
+            ));
+        };
 
         self.call(
             "DOM.setFileInputFiles",
@@ -4413,6 +4448,39 @@ mod tests {
         assert!(
             NEARBY.contains("if (crowd) found = [];"),
             "a match whose parent is the whole form would list the form"
+        );
+    }
+
+    #[test]
+    fn test_a_file_input_nobody_can_see_still_takes_a_file() {
+        let script = file_input();
+
+        assert!(!script.contains("MATCH_FN"), "the matcher is spliced in");
+        assert!(
+            FILE_INPUT.contains("document.querySelector(query)")
+                && FILE_INPUT.contains("catch (_)"),
+            "a page hides its file input behind a button it styles, and words are not a \
+             selector, so a query that is not one finds nothing rather than throwing"
+        );
+        assert!(
+            NEARBY.contains("kind === 'file' || field.getClientRects().length > 0"),
+            "a refusal names only what the next call can reach: any file input, and the \
+             other controls only where they are drawn"
+        );
+    }
+
+    #[test]
+    fn test_a_refused_dropdown_or_upload_names_only_controls_of_its_kind() {
+        assert!(
+            NEARBY.contains("kind === 'select' ? 'select'")
+                && NEARBY.contains("kind === 'file' ? 'input[type=file]'"),
+            "a text field beside the words is no dropdown, and naming it would send the \
+             caller to a second refusal"
+        );
+        assert!(
+            PICK.contains(&format!("return {{ no: '{NO_DROPDOWN}' }};")),
+            "only the refusal that found no dropdown looks for one nearby; a disabled \
+             dropdown was found"
         );
     }
 

@@ -74,11 +74,11 @@ Pages:
 
 Desktop and native applications:
 
-`screenshot` · `click` · `type_text` · `press_key` · `scroll` · `wait_until_still` · `drag` · `cursor` · `window` · `widget` · `open_app` · `list_apps` · `record`
+`screenshot` · `click` · `mouse_down` · `mouse_up` · `type_text` · `press_key` · `key_down` · `key_up` · `scroll` · `wait_until_still` · `drag` · `cursor` · `window` · `widget` · `open_app` · `list_apps` · `record`
 
 Files and commands:
 
-`list_files` · `grep` · `glob` · `read_file` · `write_file` · `run_command`
+`list_files` · `grep` · `glob` · `read_file` · `write_file` · `clipboard` · `run_command`
 
 Coordination:
 

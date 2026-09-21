@@ -2,6 +2,7 @@ use crate::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::idempotency::{self, Lookup, Replies};
+use crate::presses::Pressed;
 use crate::registry::{AsDesktop, Entry};
 use crate::spec;
 use axum::body::Body;
@@ -286,8 +287,8 @@ async fn actions(
     let mut windows = Vec::new();
     let mut tabs = Vec::new();
     let mut stopped_at = None;
-    let mut down: Vec<computer_types::Button> = Vec::new();
-    let mut holding: Vec<Holding> = Vec::new();
+    let mut down: Vec<Pressed> = Vec::new();
+    let mut holding: Vec<(Pressed, u64)> = Vec::new();
 
     for (index, action) in batch.actions.iter().enumerate() {
         let outcome = run(
@@ -344,28 +345,33 @@ async fn actions(
             }
         };
 
-        match (&outcome, action) {
-            (
-                Ok(_),
-                Action::MouseDown {
-                    button,
-                    hold_ms: Some(ms),
-                    ..
-                },
-            ) => {
-                down.retain(|held| held != button);
-                holding.retain(|held: &Holding| held.button != *button);
-                holding.push(hold(&state, &id, screen, *button, *ms));
+        let pressed = match action {
+            Action::MouseDown {
+                button, hold_ms, ..
+            } => Some((Pressed::Button(*button), true, *hold_ms)),
+            Action::MouseUp { button, .. } => Some((Pressed::Button(*button), false, None)),
+            Action::KeyDown { key, hold_ms } => Some((Pressed::key(key), true, *hold_ms)),
+            Action::KeyUp { key } => Some((Pressed::key(key), false, None)),
+            _ => None,
+        };
+
+        if let (Ok(_), Some((pressed, is_down, hold_ms))) = (&outcome, pressed) {
+            down.retain(|held| held != &pressed);
+            holding.retain(|(held, _)| held != &pressed);
+
+            match (is_down, hold_ms) {
+                (true, Some(ms)) => {
+                    let until = hold(&state, &id, screen, &pressed, ms);
+                    holding.push((pressed, until));
+                }
+                (true, None) => {
+                    state.presses.close(&id, screen, &pressed);
+                    down.push(pressed);
+                }
+                (false, _) => {
+                    state.presses.close(&id, screen, &pressed);
+                }
             }
-            (Ok(_), Action::MouseDown { button, .. }) if !down.contains(button) => {
-                down.push(*button)
-            }
-            (Ok(_), Action::MouseUp { button, .. }) => {
-                down.retain(|held| held != button);
-                holding.retain(|held| held.button != *button);
-                state.presses.close(&id, screen, *button);
-            }
-            _ => {}
         }
 
         match outcome {
@@ -397,8 +403,8 @@ async fn actions(
         }
     }
 
-    for button in &down {
-        let_go(&state, &entry, &id, screen, *button).await;
+    for pressed in &down {
+        let_go(&state, &entry, &id, screen, pressed).await;
     }
 
     if let Some(ms) = batch.settle_ms {
@@ -437,8 +443,40 @@ async fn actions(
             stopped_at,
             frame,
             cursor,
-            released: down,
-            holding,
+            released: down
+                .iter()
+                .filter_map(|pressed| match pressed {
+                    Pressed::Button(button) => Some(*button),
+                    Pressed::Key(_) => None,
+                })
+                .collect(),
+            holding: holding
+                .iter()
+                .filter_map(|(pressed, until_ms)| match pressed {
+                    Pressed::Button(button) => Some(Holding {
+                        button: *button,
+                        until_ms: *until_ms,
+                    }),
+                    Pressed::Key(_) => None,
+                })
+                .collect(),
+            released_keys: down
+                .iter()
+                .filter_map(|pressed| match pressed {
+                    Pressed::Key(key) => Some(key.clone()),
+                    Pressed::Button(_) => None,
+                })
+                .collect(),
+            holding_keys: holding
+                .iter()
+                .filter_map(|(pressed, until_ms)| match pressed {
+                    Pressed::Key(key) => Some(HoldingKey {
+                        key: key.clone(),
+                        until_ms: *until_ms,
+                    }),
+                    Pressed::Button(_) => None,
+                })
+                .collect(),
         },
     )
 }
@@ -693,6 +731,20 @@ async fn reaching(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
 
             return Ok(Did::default());
         }
+        Action::ListFiles { path } => Out::Listing(Listing {
+            path: path.clone(),
+            entries: doing.entry.computer.list_dir(path).await?,
+        }),
+        Action::Grep { what } => Out::Found(found(&doing.entry.computer, what).await?),
+        Action::Glob { what } => Out::Globbed(
+            globbed(
+                &doing.entry.computer,
+                &what.pattern,
+                what.path.as_deref(),
+                what.limit,
+            )
+            .await?,
+        ),
         Action::Clipboard { selection, text } => {
             let held = doing.held("has no clipboard")?;
 
@@ -851,6 +903,8 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
             desktop.button_down(*at, *button).await?;
         }
         Action::MouseUp { at, button } => desktop.button_up(*at, *button).await?,
+        Action::KeyDown { key, .. } => desktop.key_down(key).await?,
+        Action::KeyUp { key } => desktop.key_up(key).await?,
         Action::Type { text, delay_ms } => {
             let pace = delay_ms.map(|ms| Duration::from_millis(ms).min(MAX_PACE));
             desktop.type_text(text, pace).await?
@@ -1131,19 +1185,13 @@ async fn pointer_start(desktop: &dyn EngineDesktop, spec: &Spec) -> computer_typ
     }
 }
 
-async fn let_go(
-    state: &AppState,
-    entry: &Entry,
-    id: &str,
-    screen: u32,
-    button: computer_types::Button,
-) {
+async fn let_go(state: &AppState, entry: &Entry, id: &str, screen: u32, pressed: &Pressed) {
     let released = match entry.desktop(screen).await {
-        Ok(target) => target
-            .as_desktop()
-            .let_go(button)
-            .await
-            .map_err(ApiError::from),
+        Ok(target) => match pressed {
+            Pressed::Button(button) => target.as_desktop().let_go(*button).await,
+            Pressed::Key(key) => target.as_desktop().let_key_go(key).await,
+        }
+        .map_err(ApiError::from),
         Err(error) => Err(error),
     };
 
@@ -1153,7 +1201,7 @@ async fn let_go(
             Actor::System,
             TraceEvent::Acted {
                 screen,
-                action: Action::MouseUp { at: None, button },
+                action: pressed.release(),
                 ok: released.is_ok(),
                 error: released.err().map(|error| error.body),
             },
@@ -1161,22 +1209,16 @@ async fn let_go(
         .await;
 }
 
-fn hold(
-    state: &Arc<AppState>,
-    id: &str,
-    screen: u32,
-    button: computer_types::Button,
-    ms: u64,
-) -> Holding {
+fn hold(state: &Arc<AppState>, id: &str, screen: u32, pressed: &Pressed, ms: u64) -> u64 {
     let life = Duration::from_millis(ms).min(crate::presses::LONGEST_HOLD);
-    let turn = state.presses.open(id, screen, button);
+    let turn = state.presses.open(id, screen, pressed);
     let until = SystemTime::now() + life;
 
-    let (state, id) = (Arc::clone(state), id.to_string());
+    let (state, id, pressed) = (Arc::clone(state), id.to_string(), pressed.clone());
     tokio::spawn(async move {
         tokio::time::sleep(life).await;
 
-        if !state.presses.close_turn(&id, screen, button, turn) {
+        if !state.presses.close_turn(&id, screen, &pressed, turn) {
             return;
         }
         let Ok(entry) = state.registry.get(&id).await else {
@@ -1187,13 +1229,10 @@ fn hold(
         };
 
         let _held = lock.lock().await;
-        let_go(&state, &entry, &id, screen, button).await;
+        let_go(&state, &entry, &id, screen, &pressed).await;
     });
 
-    Holding {
-        button,
-        until_ms: millis(until),
-    }
+    millis(until)
 }
 
 async fn approach(
@@ -1325,8 +1364,8 @@ async fn start_takeover(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be handed over"))?;
 
-    for button in state.presses.take_screen(&id, screen) {
-        let_go(&state, &entry, &id, screen, button).await;
+    for pressed in state.presses.take_screen(&id, screen) {
+        let_go(&state, &entry, &id, screen, &pressed).await;
     }
 
     let _ = capture(&state, &id, Actor::Agent, screen, target.as_desktop(), None).await;
@@ -1474,8 +1513,8 @@ async fn pause_box(
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.registry.get(&id).await?;
-    for (screen, button) in state.presses.take_box(&id) {
-        let_go(&state, &entry, &id, screen, button).await;
+    for (screen, pressed) in state.presses.take_box(&id) {
+        let_go(&state, &entry, &id, screen, &pressed).await;
     }
     entry.computer.pause().await?;
 
@@ -1588,23 +1627,27 @@ async fn grep(
     ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<Search>,
 ) -> ApiResult<Json<Found>> {
-    if body.pattern.is_empty() {
+    let entry = state.registry.get(&id).await?;
+    Ok(Json(found(&entry.computer, &body).await?))
+}
+
+async fn found(computer: &computer::Computer, search: &Search) -> ApiResult<Found> {
+    if search.pattern.is_empty() {
         return Err(ApiError::bad_request(
             "a search with no pattern matches every line",
         ));
     }
 
-    let asked = body
+    let asked = search
         .limit
         .unwrap_or(computer::MATCHES)
         .clamp(1, computer::MATCHES);
-    let entry = state.registry.get(&id).await?;
-    let mut matches = entry.computer.grep(&body).await?;
+    let mut matches = computer.grep(search).await?;
 
     let cut = matches.len() > asked;
     matches.truncate(asked);
 
-    Ok(Json(Found { matches, cut }))
+    Ok(Found { matches, cut })
 }
 
 async fn glob(
@@ -1612,24 +1655,33 @@ async fn glob(
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<GlobQuery>,
 ) -> ApiResult<Json<Globbed>> {
-    let asked = query
-        .limit
-        .unwrap_or(computer::MATCHES)
-        .clamp(1, computer::MATCHES);
     let entry = state.registry.get(&id).await?;
-    let mut paths = entry
-        .computer
-        .glob(
+    Ok(Json(
+        globbed(
+            &entry.computer,
             &query.pattern,
-            query.path.as_deref().unwrap_or("/"),
+            query.path.as_deref(),
             query.limit,
         )
-        .await?;
+        .await?,
+    ))
+}
+
+async fn globbed(
+    computer: &computer::Computer,
+    pattern: &str,
+    path: Option<&str>,
+    limit: Option<usize>,
+) -> ApiResult<Globbed> {
+    let asked = limit
+        .unwrap_or(computer::MATCHES)
+        .clamp(1, computer::MATCHES);
+    let mut paths = computer.glob(pattern, path.unwrap_or("/"), limit).await?;
 
     let cut = paths.len() > asked;
     paths.truncate(asked);
 
-    Ok(Json(Globbed { paths, cut }))
+    Ok(Globbed { paths, cut })
 }
 
 #[derive(Debug, Deserialize)]

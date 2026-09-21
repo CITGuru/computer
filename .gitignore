@@ -11,6 +11,7 @@
 
 # The README's animation is part of the README.
 !media/demo.gif
+!media/bird_drawing.png
 .DS_Store
 # The page is built by crates/computer-mcp/ui/build.sh and committed as screen.html.
 node_modules/

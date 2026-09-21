@@ -7,7 +7,7 @@ use crate::machine::MachineHost;
 use crate::machine::ScreenHost;
 use crate::motion::Step;
 use crate::screens::ControlGate;
-use crate::servers::{a11y, settled, still_argv};
+use crate::servers::{KeysDown, a11y, settled, still_argv};
 use crate::{
     Button, Clipboard, Delta, Desktop, DesktopFactory, DisplayServer, ExecResult, Held, Node,
     NodeQuery, Point, Rect, ScreenId, Selection,
@@ -96,6 +96,17 @@ fn holding(held: &[Held], verb: &str, parts: &[String]) -> Vec<String> {
     let mut through = vec![names.join(","), verb.to_string()];
     through.extend_from_slice(parts);
     input_argv("with", &through)
+}
+
+fn key_parts(key: &str, down: bool) -> Result<Vec<String>> {
+    let key = crate::servers::x11::one_key(key)?;
+
+    Ok(match (modifier(&key), down) {
+        (Some(name), true) => vec!["-M".to_string(), name.to_string()],
+        (Some(name), false) => vec!["-m".to_string(), name.to_string()],
+        (None, true) => vec!["-P".to_string(), key],
+        (None, false) => vec!["-p".to_string(), key],
+    })
 }
 
 fn button_parts(button: Button, at: Option<Point>) -> Vec<String> {
@@ -226,6 +237,7 @@ pub struct WaylandDesktop {
     screen: ScreenId,
     control: Arc<ControlGate>,
     pointer: Mutex<Option<Tracked>>,
+    down: KeysDown,
 }
 
 impl WaylandDesktop {
@@ -235,6 +247,7 @@ impl WaylandDesktop {
             screen,
             control: Arc::new(ControlGate::new()),
             pointer: Mutex::new(None),
+            down: KeysDown::default(),
         }
     }
 
@@ -323,7 +336,8 @@ impl Desktop for WaylandDesktop {
     async fn click_with(&self, at: Point, button: Button, held: &[Held]) -> Result<()> {
         let mut parts = point_parts(at);
         parts.push(button_name(button).to_string());
-        self.act(holding(held, "click", &parts)).await?;
+        self.act(holding(&self.down.without(held), "click", &parts))
+            .await?;
         self.moved_to(at);
         Ok(())
     }
@@ -344,7 +358,8 @@ impl Desktop for WaylandDesktop {
         let mut parts = point_parts(from);
         parts.extend(point_parts(to));
         parts.push(button_name(button).to_string());
-        self.act(holding(held, "drag", &parts)).await?;
+        self.act(holding(&self.down.without(held), "drag", &parts))
+            .await?;
         self.moved_to(to);
         Ok(())
     }
@@ -377,7 +392,8 @@ impl Desktop for WaylandDesktop {
         for step in steps {
             parts.extend(point_parts(step.at));
         }
-        self.act(holding(held, "sweep", &parts)).await?;
+        self.act(holding(&self.down.without(held), "sweep", &parts))
+            .await?;
         self.moved_to(last.at);
         Ok(())
     }
@@ -410,6 +426,32 @@ impl Desktop for WaylandDesktop {
         .map(|_| ())
     }
 
+    async fn key_down(&self, key: &str) -> Result<()> {
+        self.act(input_argv("key", &key_parts(key, true)?)).await?;
+        self.down.set(&crate::servers::x11::one_key(key)?, true);
+        Ok(())
+    }
+
+    async fn key_up(&self, key: &str) -> Result<()> {
+        self.act(input_argv("key", &key_parts(key, false)?)).await?;
+        self.down.set(&crate::servers::x11::one_key(key)?, false);
+        Ok(())
+    }
+
+    async fn let_key_go(&self, key: &str) -> Result<()> {
+        let mut args = vec![POINTER_COMMAND.to_string(), "key".to_string()];
+        args.extend(key_parts(key, false)?);
+        self.down.set(&crate::servers::x11::one_key(key)?, false);
+        self.run(args).await.map(|_| ())
+    }
+
+    async fn let_keys_go(&self) -> Result<()> {
+        self.down.clear();
+        self.run(vec![POINTER_COMMAND.to_string(), "release".to_string()])
+            .await
+            .map(|_| ())
+    }
+
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
         match delay {
             Some(delay) => {
@@ -422,6 +464,7 @@ impl Desktop for WaylandDesktop {
 
     /// One run, so the modifiers come up in the command that put them down.
     async fn press(&self, chords: &[String], held: &[Held]) -> Result<()> {
+        let held = &self.down.without(held);
         let mut parts = Vec::new();
 
         for one in held {
