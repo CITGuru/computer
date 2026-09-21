@@ -12,14 +12,9 @@ let png = frame_png(result.frame.as_ref().unwrap())?;
 client.delete(&box_.id).await?;
 ```
 
-`cargo run -p computer-client --example drive` does the whole round trip:
-launch, drive, read a frame, ask again with the hash you already hold and get
-nothing back, set and read the clipboard, run a command, fork, read the trace,
-and remove both boxes.
+`cargo run -p computer-client --example drive` does the whole round trip: launch, drive, read a frame, ask again with the hash you already hold and get nothing back, set and read the clipboard, run a command, fork, read the trace, and remove both boxes.
 
-Every endpoint is here. REST being the complete surface is the promise the
-server makes, and a client that had to reach past it for one verb would mean the
-promise was not kept.
+Every endpoint is here. REST being the complete surface is the promise the server makes, and a client that had to reach past it for one verb would mean the promise was not kept.
 
 ## Errors arrive as refusals
 
@@ -32,5 +27,4 @@ match client.act_once(&id, 9, action).await {
 }
 ```
 
-`delete` sends the confirmation header for you: reaching for a method called
-`delete` is the confirmation that header exists to get.
+`delete` sends the confirmation header for you: reaching for a method called `delete` is the confirmation that header exists to get.

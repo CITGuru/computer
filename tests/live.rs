@@ -279,6 +279,87 @@ async fn buttons_on_an_element(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+#[ignore = "needs a container runtime"]
+async fn page_controls_follow_their_labels() {
+    let computer = Computer::launch().await.expect("a box");
+    let outcome = labelled_controls(&computer).await;
+    computer.shutdown().await.expect("it goes away");
+    outcome.expect("every step");
+}
+
+const LABELLED_FORM: &str = r#"
+    document.body.innerHTML = `
+      <label for="text">Text input</label><input id="text">
+      <label>Wrapped input<input id="wrapped"></label>
+      <label for="menu">Dropdown</label>
+      <select id="menu"><option>One</option><option>Two</option></select>
+      <label for="file">File input</label><input id="file" type="file">
+      <div><span>Company</span><input id="company"></div>
+    `;
+    "ready"
+"#;
+
+async fn labelled_controls(computer: &Computer) -> computer::Result<()> {
+    let devtools = computer.browser().expect("a published DevTools port");
+    let mut page = devtools
+        .open_page(
+            "data:text/html,<title>labels</title>",
+            Duration::from_secs(30),
+        )
+        .await?;
+    page.wait_for_load(Duration::from_secs(20)).await?;
+    page.evaluate(LABELLED_FORM).await?;
+    page.snapshot(None, None).await?;
+
+    page.fill("Text input", "agent").await?;
+    page.fill("Wrapped input", "wrapped").await?;
+    page.focus("Text input").await?;
+    assert_eq!(
+        page.evaluate(
+            "[document.querySelector('#text').value, \
+              document.querySelector('#wrapped').value, document.activeElement.id]",
+        )
+        .await?,
+        serde_json::json!(["agent", "wrapped", "text"])
+    );
+
+    assert_eq!(
+        page.options("Dropdown").await?,
+        ["One".to_string(), "Two".to_string()]
+    );
+    assert_eq!(
+        page.choose("Dropdown", &["Two".to_string()], false).await?,
+        ["Two".to_string()]
+    );
+
+    computer
+        .write_file("/tmp/computer-labelled-upload.txt", b"one")
+        .await?;
+    page.upload(
+        "File input",
+        &["/tmp/computer-labelled-upload.txt".to_string()],
+    )
+    .await?;
+    assert_eq!(
+        page.evaluate("document.querySelector('#file').files[0].name")
+            .await?,
+        serde_json::json!("computer-labelled-upload.txt")
+    );
+
+    let refused = page
+        .fill("Company", "Acme")
+        .await
+        .expect_err("nearby text is not an explicit label");
+    assert!(
+        refused.to_string().contains("the field beside it is @e5"),
+        "{refused}"
+    );
+
+    page.close().await.ok();
+    Ok(())
+}
+
 const WIDE: &str = "data:text/html,<div%20style=\"width:4000px;height:4000px\"></div>";
 
 #[tokio::test]

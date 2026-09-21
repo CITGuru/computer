@@ -4,30 +4,66 @@
 
 ![Nine frames of a desktop being driven from Rust: a page opening, a URL typed, text selected by a drag, a context menu, a paste, and a second screen](./media/demo.gif)
 
-## Requirements
+## Contents
 
-Install Rust and one supported runtime:
+- [Quick start](#quick-start)
+- [Choose an interface](#choose-an-interface)
+- [Choose how to control the desktop](#choose-how-to-control-the-desktop)
+- [Desktop operations](#desktop-operations)
+- [Accessibility operations](#accessibility-operations)
+- [Browser operations](#browser-operations)
+- [Display and window operations](#display-and-window-operations)
+- [Human control](#human-control)
+- [Configure a desktop](#configure-a-desktop)
+- [Box lifecycle and history](#box-lifecycle-and-history)
+- [Server, REST, and MCP](#server-rest-and-mcp)
+- [Runtimes](#runtimes)
+- [Custom desktops and runtimes](#custom-desktops-and-runtimes)
+- [What is inside the box](#what-is-inside-the-box)
+- [Security](#security)
+- [Examples](#examples)
+- [Workspace crates](#workspace-crates)
+- [Development and testing](#development-and-testing)
+
+## Quick start
+
+### Requirements
+
+Install Rust 1.85 or newer and one supported runtime:
 
 - Docker
 - Podman
 - nerdctl
 - microsandbox, for a microVM instead of a container
 
-You do not need to download or build a desktop image. The crate contains the image source and builds it when you launch the first desktop.
+There's no need to fetch or manage a separate desktop image. The image is built automatically from source the first time you launch a desktop. The initial build takes a few minutes, but later desktops with the same configuration start in seconds.
 
-## Quick start
+### Install the commands
 
-One crate holds both halves.
-
-For the commands, take a build rather than compiling one:
+Build and install `computer` and `computerd` from the current source:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
+git clone https://github.com/CITGuru/computer.git
+cd computer
+cargo install --path . --locked
 ```
 
-macOS and Linux, on x86-64 and arm64. You get two: `computer`, which drives a box from a shell and serves MCP to an agent, and `computerd`, the server that keeps running. `COMPUTER_INSTALL_DIR` moves them and `COMPUTER_VERSION` pins a tag.
+`computer` controls desktops from a shell and serves MCP over stdio. `computerd` keeps the REST and HTTP MCP service running.
 
-To drive a desktop from your own program, take the API:
+Start and control a desktop:
+
+```bash
+BOX=$(computer new)
+computer open "$BOX" https://example.com
+computer screenshot "$BOX" screen.png
+computer rm "$BOX"
+```
+
+See the [CLI guide](crates/computer-cli/README.md) for server and remote-fleet use.
+
+### Use the Rust API
+
+Add the API without the command dependencies:
 
 ```toml
 [dependencies]
@@ -35,327 +71,1104 @@ computer = { git = "https://github.com/CITGuru/computer", default-features = fal
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-`default-features = false` leaves out the commands and everything they need.
-
-From this repository, you can run the bundled example:
-
-```bash
-cargo run --example quickstart
-```
-
-The basic API is:
+Launch a desktop, open a page, send input, and take a screenshot:
 
 ```rust
 use computer::{Button, Computer, Point};
 
 #[tokio::main]
 async fn main() -> computer::Result<()> {
-let computer = Computer::launch().await?;
+    let computer = Computer::launch().await?;
 
-let viewer_url = computer.viewer_url().unwrap_or_default();
-tracing::info!(%viewer_url, "desktop is ready");
+    computer.open_url("https://example.com").await?;
+    computer.click(Point::new(640, 81), Button::Left).await?;
+    computer.type_text("driven from rust").await?;
 
-computer.open_url("https://example.com").await?;
-computer.click(Point::new(640, 81), Button::Left).await?;
-computer.type_text("driven from rust").await?;
+    let _png = computer.screenshot().await?;
 
-let png = computer.screenshot().await?;
-
-computer.shutdown().await
+    computer.shutdown().await
 }
 ```
 
-`Computer::launch()` starts one 1280x800 screen. The viewer URL lets you watch that screen in a browser. `shutdown()` stops and removes the container.
+CLI:
 
-## What is inside the box
+```bash
+BOX=$(computer new --url https://example.com)
+computer mouse "$BOX" click 640 81 left
+computer keyboard "$BOX" type "driven from the CLI"
+computer screenshot "$BOX" screen.png
+computer rm "$BOX"
+```
 
-Each box uses `debian:bookworm-slim` and includes:
+`Computer::launch()` starts one 1280x800 screen. `viewer_url()` returns a browser URL where you can watch it. `shutdown()` stops and removes the container.
 
+From this repository, run the complete example:
 
-| Component                           | Purpose                                                    |
-| ----------------------------------- | ---------------------------------------------------------- |
-| `Xvfb`                              | Provides a virtual X server for each screen                |
-| `fluxbox`                           | Manages windows and keyboard focus                         |
-| `chromium`                          | Provides a browser with a separate profile for each screen |
-| `x11vnc`, `websockify`, and `noVNC` | Let you view and control the desktop from a browser        |
-| `xdotool`                           | Controls the pointer, keyboard, and scrolling              |
-| ImageMagick `import`                | Captures PNG screenshots                                   |
-| `xclip`                             | Reads and writes the clipboard and primary selections      |
-| `socat`                             | Bridges the DevTools port to one the runtime can forward   |
-| An `xdotool` guard                  | Refuses input from anything while a person has the screen  |
+```bash
+cargo run --example quickstart
+```
 
+## Choose an interface
 
-The image tag includes a hash of its source files. When an image source file changes, the crate creates a new tag. `tests/image.rs` checks that the code and image configuration agree. These checks do not need a container runtime.
+### CLI
 
-## Control the desktop
+The `computer` command starts an ephemeral local server when no daemon is available. Start `computerd` when you need persistent traces, forks, remote access, or a fleet that survives command exits.
 
-Use coordinates from a recent screenshot. The top-left corner is `(0, 0)`. Coordinates are device pixels.
+```bash
+computerd
+
+computer new --url https://example.com
+computer ls
+```
+
+Set `COMPUTER_SERVER_URL` and, when required, `COMPUTER_SERVER_TOKEN` to use a remote server. Add `--local` to bypass the server for the smaller set of direct local commands.
+
+See the [CLI guide](crates/computer-cli/README.md).
+
+### Rust
+
+The root `computer` package exports the desktop API. Disable its default `cli` feature when an application needs only the library:
+
+```toml
+computer = { git = "https://github.com/CITGuru/computer", default-features = false }
+```
+
+Optional features add the E2B client, microsandbox library binding, and daemon storage backends: `e2b`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
+
+### REST and Rust client
+
+`computerd` exposes the complete remote API under `/v1`. The API supports box creation and lifecycle, action batches, frames, pages, windows, files, commands, takeovers, CDP access, traces, and forks.
+
+Use [`computer-client`](crates/computer-client) from Rust or use HTTP directly. The wire types are in [`computer-api`](crates/computer-api).
+
+### MCP
+
+Use either interface:
+
+- `computer mcp --stdio` for a local stdio MCP server
+- `http://<server>/mcp` for Streamable HTTP served by `computerd`
+
+Both interfaces expose the same boxes and tools. Hosts that support [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) can show the live desktop beside tool results.
+
+## Choose how to control the desktop
+
+The crate provides three control methods. You can use more than one method in the same task.
+
+**Screen coordinates** work with any visible application. Take a screenshot, select a point, and send mouse or keyboard input. Use this method when the application exposes no structured interface.
+
+**Accessibility nodes** expose native widgets by role and name. Use them for file dialogs, settings panels, installers, and other native interfaces where coordinates can become stale.
+
+**Chrome DevTools** controls Chromium pages directly. Use it to navigate, inspect the DOM, find elements, fill forms, evaluate JavaScript, and manage isolated browser sessions.
+
+## Desktop operations
+
+### Mouse and keyboard
+
+Coordinates use device pixels. The top-left corner is `(0, 0)`.
 
 ```rust
 let png = computer.screenshot().await?;
+
 computer.move_to((640, 400)).await?;
 computer.click((640, 400), Button::Left).await?;
 computer.double_click((640, 400), Button::Left).await?;
 computer.drag((100, 100), (400, 300), Button::Left).await?;
+
 computer.type_text("hello").await?;
 computer.press("ctrl+shift+p").await?;
+
 computer.scroll((640, 400), Delta::down(3)).await?;
 computer.scroll((640, 400), Delta::right(3)).await?;
+
 let pointer = computer.cursor().await?;
 ```
 
-Common key names work as expected. For example, the crate converts `enter` to `Return`, `cmd` to `super`, and `pageup` to `Prior`. Other names pass directly to `xdotool`.
-
-`scroll` turns the wheel at a point, in notches, so whatever sits under that point moves rather than whatever holds focus. Positive `dy` goes down and positive `dx` goes right; a `Delta` carrying both is one diagonal gesture and not two.
-
-From the command line the same gesture has a shorter spelling, and the point is optional:
+CLI:
 
 ```bash
-computer mouse <box> scroll down            # three notches, at the middle of the screen
-computer mouse <box> scroll right 6
-computer mouse <box> scroll 640 400 up 2    # at a point
-computer mouse <box> scroll 640 400 -2 -2   # both axes at once
+computer screenshot "$BOX" frame.png
+computer mouse "$BOX" move 640 400
+computer mouse "$BOX" click 640 400 left
+computer mouse "$BOX" click 640 400 left --double
+computer mouse "$BOX" drag 100 100 400 300 left
+computer keyboard "$BOX" type "hello"
+computer keyboard "$BOX" press "ctrl+shift+p"
+computer mouse "$BOX" scroll 640 400 down 3
+computer mouse "$BOX" scroll 640 400 right 3
+computer mouse "$BOX" at
 ```
 
-### Important coordinate rules
+Complete Keyboard and Mouse reference:
 
-- Screenshots do not show the pointer. Use `cursor()` when you need its current position.
+```text
+computer keyboard <box> type <text> [--delay MS]
+computer keyboard <box> press <key>... [--held shift,ctrl,alt,super]
+
+computer mouse <box> move <x> <y> [--smooth|--human] [--seed N]
+computer mouse <box> click <x> <y> [left|right|middle] [--double]
+                          [--held shift,ctrl,alt,super]
+                          [--smooth|--human] [--seed N]
+computer mouse <box> drag <x1> <y1> <x2> <y2> [left|right|middle]
+                         [--held shift,ctrl,alt,super]
+                         [--smooth|--human] [--seed N]
+computer mouse <box> down [<x> <y>] [left|right|middle] [--hold SECONDS]
+                         [--smooth|--human] [--seed N]
+computer mouse <box> up [<x> <y>] [left|right|middle]
+
+computer mouse <box> scroll [<x> <y>] up|down|left|right [NOTCHES]
+computer mouse <box> scroll <x> <y> <DY> [DX]
+computer mouse <box> at
+```
+
+The left button is the default. `--held` applies to a single click or a drag, not to `--double`. A scroll without coordinates uses the centre of the screen. In the signed form, positive `DY` moves down and positive `DX` moves right. `down` and `up` need the server and are not available with `--local`.
+
+`scroll` moves the content below the given point. Positive `dy` moves down and positive `dx` moves right. A delta with both values sends one diagonal gesture.
+
+Common key names work as expected. The crate converts names such as `enter`, `cmd`, and `pageup` to the display server's key names.
+
+Keep these coordinate rules:
+
+- Screenshots do not show the pointer. Use `cursor()` to read its position.
 - Do not calculate a click from a scaled screenshot.
-- Take a new screenshot after a person or another process changes the desktop. Old coordinates might no longer select the correct item.
+- Take a new screenshot after a person or another process changes the desktop.
+- Take a new screenshot after an operation opens or raises a browser tab.
 
-## Work with files and commands
-
-You can run commands and move files between the host and the desktop:
+Hold modifiers as part of the pointer operation:
 
 ```rust
+let screen = computer.primary();
+let at = Point::new(640, 400);
+let from = Point::new(100, 100);
+let to = Point::new(400, 300);
+
+screen.click_with(at, Button::Left, &[Held::Shift]).await?;
+screen.drag_with(from, to, Button::Left, &[Held::Ctrl]).await?;
+```
+
+CLI:
+
+```bash
+computer mouse "$BOX" click 640 400 left --held shift
+computer mouse "$BOX" drag 100 100 400 300 left --held ctrl
+```
+
+Modifier pointer operations are available on X11 and on Wayland.
+
+Move the pointer with a smooth line or a repeatable human-like curve:
+
+```bash
+computer mouse "$BOX" move 640 400 --smooth
+computer mouse "$BOX" click 640 400 left --human --seed 42
+computer mouse "$BOX" drag 100 100 400 300 left --human --seed 42
+```
+
+The Rust API exposes the generated steps through `motion::path` and sends a full path in one operation:
+
+```rust
+use computer::{Desktop as _, Motion, Point, motion};
+
+let from = Point::new(100, 100);
+let to = Point::new(400, 300);
+let steps = motion::path(from, to, Motion::Human, 42);
+computer.move_along(&steps).await?;
+computer
+    .drag_along(from, &steps, Button::Left, &[Held::Shift])
+    .await?;
+```
+
+Instant motion stays the default.
+
+Use separate button operations only when a normal drag cannot express the interaction:
+
+```bash
+computer mouse "$BOX" down 400 400 left --hold 10
+computer mouse "$BOX" move 900 600 --smooth
+computer mouse "$BOX" up 900 600 left
+```
+
+The Rust API exposes the same low-level operations:
+
+```rust
+use computer::Desktop as _;
+
+computer
+    .button_down(Some(Point::new(400, 400)), Button::Left)
+    .await?;
+computer.move_to(Point::new(900, 600)).await?;
+computer
+    .button_up(Some(Point::new(900, 600)), Button::Left)
+    .await?;
+computer.let_go(Button::Left).await?;
+```
+
+The server holds a CLI `down` for 10 seconds by default and 60 seconds at most. It releases the button when that limit ends, when a person takes control, or at the end of an action batch.
+
+Pace text for applications that drop characters:
+
+```rust
+computer
+    .type_text("typed at a visible pace")
+    .every(Duration::from_millis(20))
+    .await?;
+
+computer
+    .press(["tab", "tab", "tab"])
+    .holding([Held::Alt])
+    .await?;
+```
+
+```bash
+computer keyboard "$BOX" type "typed at a visible pace" --delay 20
+computer keyboard "$BOX" press tab tab tab --held alt
+```
+
+`cursor()` reads the pointer without moving it. `find_cursor()` may move the pointer on a display server where probing is the only way to find it:
+
+```rust
+let last_known = computer.cursor().await?;
+let measured = computer.find_cursor().await?;
+```
+
+### Wait for the screen
+
+Wait for drawing to stop instead of using a fixed sleep:
+
+```rust
+computer
+    .wait_until_still(
+        Duration::from_millis(400),
+        Duration::from_secs(10),
+    )
+    .await?;
+```
+
+CLI:
+
+```bash
+computer wait "$BOX" --settle 400 --within 10000
+```
+
+An animated screen can reach the deadline without becoming still.
+
+### Screenshots and captures
+
+`screenshot()` returns a full-size PNG. `capture()` can select a region or window and can reduce its size:
+
+```rust
+let screen = computer.primary();
+
+let full = screen.screenshot().await?;
+let region = screen
+    .capture(&Shot::region(Rect::new(
+        Point::new(100, 80),
+        400,
+        300,
+    )))
+    .await?;
+let window_id = screen
+    .windows()
+    .await?
+    .into_iter()
+    .next()
+    .ok_or_else(|| computer::Error::denied("no window is open"))?
+    .id;
+let window = screen.capture(&Shot::window(&window_id)).await?;
+let small = screen
+    .capture(&Shot::window(&window_id).scaled(50))
+    .await?;
+```
+
+CLI:
+
+```bash
+computer screenshot "$BOX" full.png
+computer screenshot "$BOX" region.png --at 100,80 --size 400x300
+computer screenshot "$BOX" window.png --window 42
+computer screenshot "$BOX" small.png --window 42 --scale 50
+computer screenshot "$BOX" pointer.png --pointer
+```
+
+A window capture looks up the current window position when it runs. Scaling reduces the bytes sent to an agent, but scaled captures must not be used to calculate input coordinates.
+
+### Files and commands
+
+Run commands and move files between the host and the desktop:
+
+```rust
+use computer::Search;
+
 let output = computer.exec(["ls", "-la", "/tmp"]).await?;
-computer.write_file("/tmp/input.png", &bytes).await?;
+let input = std::fs::read("input.png")?;
+computer.write_file("/tmp/input.png", &input).await?;
+let bytes = computer.read_file("/tmp/input.png").await?;
+computer.upload("input.pdf", "/tmp/input.pdf").await?;
 computer.download("/tmp/output.gif", "output.gif").await?;
 
-let endpoint = computer.devtools();
+let entries = computer.list_dir("/tmp").await?;
+let matches = computer
+    .grep(&Search {
+        pattern: "needle".to_string(),
+        path: "/workspace".to_string(),
+        include: Some("*.rs".to_string()),
+        ignore_case: false,
+        limit: None,
+    })
+    .await?;
+let paths = computer.glob("*.png", "/tmp", None).await?;
+
 let logs = computer.logs().await?;
 ```
 
-`devtools()` returns the Chrome DevTools Protocol endpoint for screen 0.
+CLI:
 
-### Which page a coordinate addresses
-
-`open_url()` opens a **new tab and raises it**. Every coordinate you worked out from an earlier screenshot then belongs to a page that is no longer on screen, and a click sent against one of them lands on the new page — silently, because a frame never says which page it is.
-
-The desktop API points at pixels and the browser thinks in pages. These join them:
-
-```rust
-let mut page = computer.browser().unwrap()
-    .open_page("https://example.com", Duration::from_secs(20)).await?;
-
-computer.open_url("https://example.net").await?;   // this takes the screen
-assert!(!page.visible().await?);                    // so the first page is not it
-
-page.bring_to_front().await?;                       // and back
-assert!(page.visible().await?);
+```bash
+computer exec "$BOX" -- ls -la /tmp
+computer file "$BOX" put ./input.png /tmp/input.png
+computer file "$BOX" get /tmp/output.gif ./output.gif
+computer file "$BOX" ls /tmp
+computer file "$BOX" grep "needle" /workspace --include "*.rs"
+computer file "$BOX" glob "*.png" /tmp
 ```
 
-`visible()` asks the page itself, so it is an answer rather than a guess about tab ordering. `Devtools::visible_page()` goes the other way — it hands you the page the screen is actually showing.
+Search results are capped in the box before they cross the wire. Commands in the direct Rust API have a two-minute default limit. Use `exec_within(argv, duration)` when a command needs a different limit.
 
-Take a fresh screenshot after anything opens a tab, or put the page you meant back in front first.
+The CLI `file` commands use the server API and are not available with `--local`.
 
-Every command is bounded. `exec` gives up after two minutes, as does each call the driver makes for you, so a screen that stops answering does not hold your program. Use `exec_within(argv, duration)` when a command needs a different limit.
+### Clipboard
 
-## Move the pointer as a person would
-
-Every pointer action jumps unless told otherwise. `Motion::Smooth` eases it along a line; `Motion::Human` eases it along a curve a person might draw, over 100 to 700 ms by distance, bent to one side by up to 36 px, with the side and the size drawn from a seed so the same seed draws the same path:
+Each screen has its own clipboard and primary selection:
 
 ```rust
-use computer::{Motion, motion::path};
-
-let steps = path(from, to, Motion::Human, 42);   // every step and its pause
-computer.move_along(&steps).await?;
-computer.drag_along(from, &path(from, to, Motion::Human, 43), Button::Left, &[]).await?;
-
-let mut page = computer.browser().unwrap().first_page().await?;
-page.click_on_with("Sign in", Button::Left, Motion::Human, 42).await?;
-page.drag_on("Card", "Done column", Button::Left, Motion::Smooth, 0).await?;
-```
-
-On X11 the whole path goes to the box as one command, so the pauses are pauses and not round trips. On Wayland the pointer client walks it the same way. On a page the steps are pointer moves the page sees, and the page remembers where the pointer ended, so the next path starts there. A drag on a page passes through the middle even when instant, since an application that tracks motion ignores a teleport, and both ends must fit in the window at once.
-
-Through the server, `click`, `drag`, `click_element`, `hover` and `drag_element` take `motion` and `seed`, and the CLI takes `--smooth`, `--human` and `--seed`. Instant stays the default: nothing slows down unless asked.
-
-## Use the clipboard
-
-Each screen has its own selections. Text copied on screen 0 is not on screen 1.
-
-```rust
-computer.set_clipboard("ready to paste").await?;   // ctrl+v pastes this
+computer.set_clipboard("ready to paste").await?;
 let text = computer.clipboard().await?;
 
-computer.set_selection(Selection::Primary, "middle-click paste").await?;
-let dragged = computer.selection(Selection::Primary).await?;
+computer
+    .set_selection(Selection::Primary, "middle-click paste")
+    .await?;
+let selected = computer.selection(Selection::Primary).await?;
 ```
 
-X11 has two selections, and they hold different text. `CLIPBOARD` is what copy and paste uses. `PRIMARY` is what dragging the mouse over text fills, and what a middle click pastes. Reading one when you meant the other returns text that looks correct and is not.
+CLI:
 
-Reading a selection that holds nothing returns an empty string, because a screen where nobody has copied anything yet is normal.
-
-A selection is not only text. Whoever owns one offers it in several types, and a picture copied out of a page is offered as `image/png`:
-
-```rust
-let offered = computer.clipboard_targets(Selection::Clipboard).await?;
-let png = computer.clipboard_bytes(Selection::Clipboard, "image/png").await?;
-computer.set_clipboard_bytes(Selection::Clipboard, "image/png", &bytes).await?;
+```bash
+computer clip "$BOX" "ready to paste"
+computer clip "$BOX"
+computer clip "$BOX" "middle-click paste" --primary
+computer clip "$BOX" --primary
 ```
 
-While a person controls the screen, you can read the selections but not write them.
+`CLIPBOARD` is used by copy and paste. `PRIMARY` is filled when text is selected and is pasted by a middle click.
 
-## Control Chromium directly
-
-Synthetic input goes through the screen, so its coordinates come from a screenshot. The DevTools protocol asks the browser instead, and works even when no screen is running.
+Selections can also contain binary data:
 
 ```rust
-let browser = computer.browser().expect("a published DevTools port");
+let targets = computer
+    .clipboard_targets(Selection::Clipboard)
+    .await?;
+let png = computer
+    .clipboard_bytes(Selection::Clipboard, "image/png")
+    .await?;
+computer
+    .set_clipboard_bytes(Selection::Clipboard, "image/png", &png)
+    .await?;
+```
+
+While a person controls the screen, the program can read selections but cannot change them.
+
+## Accessibility operations
+
+Accessibility operations use the semantic tree that native applications publish through AT-SPI. Enable the required image packages when you launch the desktop:
+
+```rust
+let computer = Computer::builder()
+    .accessibility()
+    .launch()
+    .await?;
+let screen = computer.primary();
+```
+
+CLI:
+
+```bash
+BOX=$(computer new --accessibility)
+```
+
+### Read and find nodes
+
+Read the tree or search it by widget name and role:
+
+```rust
+let tree = screen.nodes(None, Some(4)).await?;
+
+let street = NodeQuery {
+    query: "Street".to_string(),
+    role: Some("text".to_string()),
+    ..NodeQuery::default()
+};
+
+let fields = screen.find_nodes(&street, Some(10)).await?;
+```
+
+CLI:
+
+```bash
+computer widget "$BOX" tree --depth 4
+computer widget "$BOX" find "Street" --role text --limit 10
+```
+
+`find_nodes` returns the best match first. A query can match a widget's own name or the label beside it. The `node.labelled` field shows when a nearby label produced the match.
+
+### Focus, set, and invoke nodes
+
+```rust
+screen.focus_node(&street).await?;
+screen.set_node(&street, "12 Bishop Street").await?;
+
+let ok = NodeQuery {
+    query: "OK".to_string(),
+    ..NodeQuery::default()
+};
+screen.invoke_node(&ok, None).await?;
+```
+
+CLI:
+
+```bash
+computer widget "$BOX" focus "Street" --role text
+computer widget "$BOX" fill "Street" "12 Bishop Street" --role text
+computer widget "$BOX" press "OK"
+```
+
+`invoke_node` runs a widget action without moving the pointer. The toolkit controls the action names. GTK can call an action `click` while Qt calls it `Press`.
+
+Each node can also contain its centre point. Use that point when the application must receive a real pointer click:
+
+```rust
+if let Some(at) = fields.first().and_then(|node| node.at) {
+    screen.click(at, Button::Left).await?;
+}
+```
+
+CLI:
+
+```bash
+computer mouse "$BOX" click 640 400 left
+```
+
+Applications and custom widgets can publish incomplete trees. Use screenshots and normal input when a useful node is not available.
+
+
+## Browser operations
+
+Browser operations use Chrome DevTools Protocol (CDP) to control Chromium by page structure instead of desktop pixels. They keep working when the Chromium window moves or another desktop window covers it.
+
+Use three levels of browser control:
+
+- `read` returns the rendered document as Markdown, text, or HTML.
+- `snapshot`, `find`, and element actions inspect and operate on controls by query or reference.
+- `eval` and `Page::call` are escape hatches for behavior that the higher-level API does not wrap.
+
+Prefer page operations for websites. Use screenshots and desktop input for browser chrome, permission prompts, native file dialogs, and anything outside the page. Browser operations require a reachable CDP endpoint.
+
+### Typical CLI workflow
+
+Open a page, inspect its controls, act by reference or name, wait for the result, and read only what changed:
+
+```bash
+BOX=$(computer new --url https://www.selenium.dev/selenium/web/web-form.html)
+
+computer browser "$BOX" snapshot --urls --quiet 400
+# @e2 textbox "Text input"
+# @e8 combobox "Dropdown (select)"
+# @e12 checkbox "Default checkbox"
+# @e15 button "Submit"
+
+computer browser "$BOX" fill @e2 "agent"
+computer browser "$BOX" select @e8 "Two"
+computer browser "$BOX" check @e12
+computer browser "$BOX" click @e15
+computer browser "$BOX" wait "Received!" --within 10000
+computer browser "$BOX" snapshot --delta
+```
+
+A query can be visible text, an accessible name, an element ID, a CSS selector, or an `@eN` reference from `snapshot`. Use a reference after you inspect a page because it identifies one specific element. Use text or a selector when no snapshot exists. Add `--exact` when a partial text match could select the wrong control.
+
+Use the operation that matches the control:
+
+- `fill` types into text fields and assigns values to controls such as dates, colours, and sliders.
+- `check` and `uncheck` set checkbox state without toggling an already-correct value.
+- `options`, `select`, and `deselect` operate on dropdowns.
+- `upload` assigns files directly to a file input; it does not open a native chooser.
+- `focus`, `hover`, `click`, and `drag` send the corresponding page interaction.
+
+`fill`, `focus`, dropdown, and upload operations follow an explicit HTML label to its control, whether the label uses `for` or wraps the control. They do not guess that arbitrary nearby text names a field. If a query matches non-control content, the refusal names fields inside or beside it by reference or selector; when too many fields are nearby, it asks for a snapshot.
+
+Do not use `fill` as a substitute for those specialized operations. It refuses a dropdown, checkbox, file input, or button and reports the correct operation.
+
+### Open and manage pages
+
+Chrome DevTools controls a page without screen coordinates:
+
+```rust
+let browser = computer
+    .browser()
+    .expect("a published DevTools port");
 
 let mut page = browser
     .open_page("https://example.com", Duration::from_secs(20))
     .await?;
 
-page.title().await?;
-page.evaluate("document.querySelectorAll('a').length").await?;
-page.screenshot().await?;                    // the page, without the window
+let title = page.title().await?;
+let links = page
+    .evaluate("Array.from(document.links).map(a => a.href)")
+    .await?;
+let png = page.screenshot().await?;
+
 page.navigate("https://example.org").await?;
 ```
 
-`Page::call` sends any protocol method and returns the answer, so you can use parts of the protocol this crate does not wrap. Use `open_page` rather than `open` followed by a wait: a new tab shows `about:blank`, which is already loaded, so a wait returns before your page arrives.
+CLI:
 
-### Read a page once, then drive it by number
+```bash
+TAB=$(computer open "$BOX" https://example.com)
+computer browser "$BOX" eval "document.title" --tab "$TAB"
+computer browser "$BOX" eval "Array.from(document.links).map(a => a.href)" --tab "$TAB"
+computer browser "$BOX" screenshot page.png --tab "$TAB"
+computer open "$BOX" https://example.org --target current
+```
+
+`Page::call` sends any Chrome DevTools Protocol method that the crate does not wrap.
+
+Use `open_page` rather than `open` followed by a load wait. A new tab first shows `about:blank`, which is already loaded.
+
+### Find and act on elements
+
+Pages provide higher-level operations for common browser tasks:
+
+```rust
+let fields = page.find("input", Some(10), None, None).await?;
+page.fill("Email", "agent@example.com").await?;
+page.choose(
+    "Country",
+    &["United Kingdom".to_string()],
+    false,
+)
+    .await?;
+page.upload("Attachment", &["/tmp/report.pdf".to_string()])
+    .await?;
+page.click_on("Submit", Button::Left).await?;
+```
+
+CLI:
+
+```bash
+computer browser "$BOX" find input --limit 10
+computer browser "$BOX" fill "Email" "agent@example.com"
+computer browser "$BOX" select "Country" "United Kingdom"
+computer browser "$BOX" upload "Attachment" /tmp/report.pdf
+computer browser "$BOX" click "Submit"
+```
+
+These operations use page structure. They do not depend on the position of the Chromium window.
+
+The browser API also has operations for focus, checkboxes, radio buttons, dropdown options, hover, drag, history, scrolling, and waits. A query can be visible text, an accessible name, an ID, a selector, or an element reference from a snapshot.
+
+### Read and snapshot a page
+
+Read rendered page content as Markdown, text, or raw HTML:
+
+```rust
+let read = page
+    .read(Reading::Markdown, Some(4_000), Some(20))
+    .await?;
+
+println!("{}\n{}", read.title, read.text);
+```
+
+```bash
+computer browser "$BOX" read --limit 4000
+```
+
+A screenshot says where pixels are. A page read returns text beyond the viewport and the destination behind each link.
+
+Snapshot the interactive controls in document order and address them by stable references:
 
 ```rust
 let taken = page.snapshot(None, None).await?;
-for control in &taken.elements {
-    println!("{}", control.text);             // "@e3" is in control.r#ref
+for element in &taken.elements {
+    println!("{}", element.text);
 }
 
-page.fill("@e3", "toby@example.com").await?;
 page.click_on("@e4", Button::Left).await?;
+let changed = page.snapshot_delta(None, None).await?;
 ```
 
-`snapshot` lists every control on the page in document order — links, buttons, fields, dropdowns, checkboxes, tabs, menu items — with the headings between them, and numbers each. A number such as `@e3` is then a query for `find`, `click_on`, `fill`, `wait_for` and the rest, so a page is read once and driven by number rather than by words that may match twice. The numbers live in the page, so an element keeps its number across snapshots of the same document; a navigation forgets them with the elements. The first argument is a scope — a query as `find` takes one — that narrows the listing to what its first match holds, such as one form, and `total` says how many the page offered when the limit cut the listing short.
-
-A press asks the point what sits on top there before it lands. A scrim, or a dialog still fading out, is given a few hundred milliseconds to go, and one that stays is named in the refusal — `covered by <div#calendar>` — rather than pressed through. The scroll that brings the element into view is instant whatever the page's `scroll-behavior`, so the element is where it was measured. A page between documents, as after a redirect, is waited for rather than failed: `evaluate` retries for two seconds before saying the page is still loading.
-
-A ref cannot go stale silently. It names the element itself rather than a position, so when the page re-renders and that element leaves, `@e3` matches nothing and the action is refused with the reason: it left, or no snapshot of this page gave the number out. What the page keeps for it is a hole, so the numbers after it hold still.
-
-Knowing the listing is out of date without paying for a new one is the other half:
-
-```rust
-let taken = page.snapshot(None, None).await?;            // the whole listing, numbered
-page.click_on("@e4", Button::Left).await?;
-
-let since = page.snapshot_delta(None, None).await?;      // only what the click changed
-let delta = since.delta.expect("a snapshot to compare with");
-for control in &delta.added {
-    println!("+ {}", control.text);
-}
+```bash
+computer browser "$BOX" snapshot --urls
+computer browser "$BOX" click @e4
+computer browser "$BOX" snapshot --delta
 ```
 
-`snapshot_delta` compares the page with the last snapshot of the same scope and answers only the difference: `added`, `changed` and `gone`, with a count of what stayed the same. The comparison is what each control is and says, not where it sits, so scrolling is not a change. The first snapshot of a document has nothing to compare with, so it answers in full and says so in `delta.first`.
+References stay with an element while the document stays loaded. A navigation clears them. A removed element leaves a hole instead of letting an old reference select a different control.
 
-Through the server, every element action ends the same way — the controls it made appear, change or leave — so a menu that opened is named by ref without another snapshot. That report comes from `remember` before the action and `changes` after it, and neither numbers a page: only a snapshot hands numbers out, because an agent has to have seen a number before it can name one, or a number kept from the last page would land on something on this one. A page nobody has snapshotted gets no report, and a ref named on it is refused with the reason. `quiet_ms` on a snapshot lists a page only once it has stopped changing.
+After a page has been snapshotted, server and CLI element actions also report the controls they made appear, change, or leave. This often removes the need for a second full snapshot.
 
-### Isolate browser sessions with groups
+### Wait for browser state
 
-A browser group is a Chromium browser context inside screen 0. Groups share the Chromium process but keep cookies, local storage, IndexedDB, and service workers separate:
+Wait for content, its removal, an enabled control, a quiet page, a loaded document, or a JavaScript condition:
 
 ```rust
-let browser = computer.browser().expect("a published DevTools port");
+page.wait_for("Done", false, Duration::from_secs(10))
+    .await?;
+page.quiet(
+    Duration::from_millis(400),
+    Duration::from_secs(10),
+)
+    .await?;
+```
+
+```bash
+computer browser "$BOX" wait "Done" --within 10000
+computer browser "$BOX" wait ".spinner" --gone
+computer browser "$BOX" wait "Submit" --enabled
+computer browser "$BOX" wait --load
+computer browser "$BOX" wait --quiet 400
+computer browser "$BOX" wait "Success" --or "Payment failed,Try again"
+computer browser "$BOX" wait --fn "location.pathname === '/done'"
+```
+
+Use browser waits after an action starts a fetch. `--or` waits for the first of several outcomes. `--fn` waits until a JavaScript expression is truthy. Use screen stillness for desktop drawing that browser state cannot describe.
+
+### Capture a page
+
+A page screenshot excludes the desktop window, address bar, and pointer. It can capture the complete scrollable document:
+
+```bash
+computer browser "$BOX" screenshot page.png
+computer browser "$BOX" screenshot page.jpg --full --format jpeg --quality 70
+```
+
+### Keep page and screen state aligned
+
+`open_url()` opens and raises a new tab. Coordinates from an earlier screenshot then address the new frontmost page.
+
+Use page visibility methods before you mix DevTools operations with screen coordinates:
+
+```rust
+let mut page = browser
+    .open_page("https://example.com", Duration::from_secs(20))
+    .await?;
+
+computer.open_url("https://example.net").await?;
+assert!(!page.visible().await?);
+
+page.bring_to_front().await?;
+assert!(page.visible().await?);
+```
+
+CLI:
+
+```bash
+TAB=$(computer open "$BOX" https://example.com)
+computer open "$BOX" https://example.net
+computer browser "$BOX" tabs
+computer browser "$BOX" switch "$TAB"
+computer screenshot "$BOX" current-page.png --tab "$TAB"
+```
+
+`browser.visible_page().await?` returns the page that the screen currently shows.
+
+### Connect another CDP library
+
+Mint a short-lived CDP address through `computerd`:
+
+```bash
+export CDP=$(computer cdp "$BOX")
+agent-browser --cdp "$(computer cdp "$BOX" --ws)" snapshot -i
+```
+
+Playwright can pass `$CDP` to `connectOverCDP`, and browser-use can use it as `cdp_url`. The address contains a token in its path. It lasts one hour by default, can be changed with `--ttl`, and expires with the box.
+
+`computer cdp "$BOX" --direct` prints the unguarded loopback port instead. Use it only on the box host. The proxied address is the correct form for remote servers.
+
+`computer cdp` uses the server API and is not available with `--local`.
+
+### Isolate browser sessions
+
+A browser group is a Chromium browser context. Groups share the Chromium process but keep cookies, local storage, IndexedDB, and service workers separate:
+
+```rust
 let group = browser.create_group().await?;
-
 let mut page = group
     .open_page("https://example.com", Duration::from_secs(20))
     .await?;
 
-page.evaluate("localStorage.setItem('agent', 'one')").await?;
+page.evaluate("localStorage.setItem('agent', 'one')")
+    .await?;
+
 group.close().await?;
 ```
 
-This is additive. `Devtools::open_page` still uses the default browser context, each screen still has its own browser profile, and `BrowserGroup::open_page` creates a page in the group. Use `groups()` to list non-default contexts and `pages()` or `targets()` on a group to list what it owns.
+Groups do not create screens. Only one page can be frontmost. Call `bring_to_front()` before you use screen coordinates.
 
-Groups do not create screens. Many group pages can run through CDP at the same time, but they belong to screen 0's Chromium and only one can be frontmost on the desktop. Call `bring_to_front()` before using screen coordinates. Cleanup is explicit because dropping a Rust value cannot await Chromium's disposal command.
+### Carry a login between desktops
 
-This API wraps CDP browser contexts, not Chrome's visual tab groups. Visual tab groups are part of the extension-only `chrome.tabGroups` API.
-
-### Drive the browser with another library
-
-Anything that speaks CDP can drive the box's browser: agent-browser, Playwright, browser-use, Puppeteer. `computer cdp` prints an address that goes through the server, so it works against a server on another machine, and the DevTools port itself never leaves loopback:
-
-```bash
-agent-browser --cdp "$(computer cdp <box> --ws)" snapshot -i
-```
-
-```js
-const browser = await chromium.connectOverCDP(process.env.CDP);    // CDP=$(computer cdp <box>)
-```
-
-```python
-session = BrowserSession(cdp_url=os.environ["CDP"])
-```
-
-The address carries a short-lived token in its path, which is all that admits a client: CDP has no authentication of its own, and these libraries send no bearer. Minting one takes the server's bearer. It lasts an hour, or `--ttl MINUTES`, and dies with the box. Treat it as you would the box's cookies, since whoever holds it can read them.
-
-- `computer cdp <box>` is an `http://` address for a library that reads `/json/version` under it: Playwright, browser-use. Every socket the browser names comes back pointed through the server.
-- `--ws` is the browser's socket. agent-browser needs this form: given an `http://` address it keeps the host and port and drops the path.
-- `--direct` is the box's own port, `http://127.0.0.1:<port>`. Nothing guards it and only this machine reaches it.
-
-A box published beyond loopback, and one in a cloud sandbox, withdraws its DevTools port, so there is no address of either kind for it.
-
-Both drivers can work at once. What another library does is not in `trace`, does not wait for a person who has taken the screen over, and is not held off by a `batch` that holds it. Over REST the token is `POST /v1/boxes/{id}/cdp`.
-
-## Drive a native window by widget name
-
-A web page has Chromium behind it, so `find` and `click_element` know what is on it. A file dialog, a settings panel or an installer has nothing but pixels, and a coordinate worked out from a screenshot is stale the moment the window moves. The accessibility tree is what the toolkit itself publishes about its widgets: their roles, their names, and what pressing one would do.
-
-Here's how to use the accessibility feature:
+Export the parts of a browser session that belong to named origins:
 
 ```rust
-let computer = Computer::builder().accessibility().launch().await?;
+let origins = ["https://example.com".to_string()];
+let session = browser
+    .export_session(&origins, Carry::default())
+    .await?;
+
+let tabs = browser.import_session(&session).await?;
+```
+
+`Carry::default()` includes cookies and local storage. Enable IndexedDB for sites that store login state there. Session data grants account access and must be handled as a credential.
+
+### CLI command reference
+
+These are all commands under `computer browser`:
+
+```text
+computer browser <box> read [--format markdown|text|raw] [--limit N] [--tab ID]
+computer browser <box> snapshot [--scope QUERY] [--limit N] [--urls] [--delta]
+                                [--quiet MS] [--tab ID]
+computer browser <box> find [QUERY] [--role ROLE] [--exact] [--scroll]
+                            [--limit N] [--tab ID]
+
+computer browser <box> click <query> [--double] [--button left|right|middle]
+                             [--smooth|--human] [--seed N] [--tab ID]
+computer browser <box> drag <from-query> <to-query> [--button left|right|middle]
+                            [--smooth|--human] [--seed N] [--tab ID]
+computer browser <box> hover <query> [--smooth|--human] [--seed N] [--tab ID]
+computer browser <box> focus <query> [--tab ID]
+computer browser <box> fill <query> <value> [--tab ID]
+computer browser <box> check <query> [--tab ID]
+computer browser <box> uncheck <query> [--tab ID]
+
+computer browser <box> options <query> [--tab ID]
+computer browser <box> select <query> <option>... [--tab ID]
+computer browser <box> deselect <query> [<option>...] [--tab ID]
+computer browser <box> upload <query> <file>... [--in-box] [--tab ID]
+
+computer browser <box> wait [QUERY] [--gone] [--or TEXT,TEXT] [--within MS]
+                            [--quiet MS] [--enabled] [--load] [--fn JS]
+                            [--exact] [--tab ID]
+computer browser <box> back [--tab ID]
+computer browser <box> forward [--tab ID]
+computer browser <box> reload [--tab ID]
+
+computer browser <box> eval <expression> [--timeout MS] [--limit N] [--tab ID]
+computer browser <box> screenshot [FILE] [--full] [--format png|jpeg]
+                                  [--quality N] [--tab ID]
+computer browser <box> tabs
+computer browser <box> switch <tab>
+computer browser <box> close <tab>
+```
+
+Opening a page and exporting a CDP endpoint are top-level commands:
+
+```text
+computer open <box> <url> [--target blank|current]
+computer cdp <box> [--ws] [--ttl MINUTES] [--direct]
+```
+
+## Display and window operations
+
+### List and arrange windows
+
+`window list` reports each window's ID, geometry, class, and title. Use the ID for later commands. Prefer the class when waiting for a window because a title often changes with the open document.
+
+```rust
 let screen = computer.primary();
+let windows = screen.windows().await?;
+let window = screen
+    .active_window()
+    .await?
+    .or_else(|| windows.into_iter().next())
+    .ok_or_else(|| computer::Error::denied("no window is open"))?;
 
-let street = NodeQuery { query: "Street".to_string(), ..NodeQuery::default() };
-
-for node in screen.find_nodes(&street, None).await? {
-    println!("{} {:?} at {:?}", node.role, node.name, node.at);
-}
-
-screen.set_node(&street, "12 Bishop Street").await?;
-screen.invoke_node(&NodeQuery { query: "OK".to_string(), ..NodeQuery::default() }, None).await?;
+screen
+    .arrange(
+        &window.id,
+        Arrange::Size {
+            width: 800,
+            height: 600,
+        },
+    )
+    .await?;
+screen
+    .arrange(&window.id, Arrange::At(Point::new(120, 90)))
+    .await?;
 ```
 
-`find_nodes` answers best match first. `nodes()` reads a whole tree, `focus_node` gives one the keyboard, `set_node` assigns a value, and `invoke_node` runs the widget's own action.
-
-A query matches the words *beside* a widget as well as its own name. A GTK entry has no name of its own — "Street" is a separate label next to it — so searching names alone would find every button and no field. Where an application publishes no label relation, and most publish none at all, the pairing is geometric: the field to the right of the label, or the one below it. `Node::labelled` says when a match arrived that way, so you can tell which field you were handed.
-
-`invoke_node` is not a click. No pointer moves, which is why it reaches a widget that is covered or scrolled out of view, and why an application watching the pointer sees nothing of it. Each node carries `at`, so a real click is still one call away when the difference matters:
+The Rust API also exposes focus, window state, and close operations:
 
 ```rust
-let found = screen.find_nodes(&street, Some(1)).await?;
-if let Some(at) = found.first().and_then(|node| node.at) {
-    screen.click(at, Button::Left).await?;
+screen.focus(&window.id).await?;
+screen.arrange(&window.id, Arrange::Maximise).await?;
+screen.arrange(&window.id, Arrange::Minimise).await?;
+screen.arrange(&window.id, Arrange::Restore).await?;
+screen.close_window(&window.id).await?;
+```
+
+CLI:
+
+```bash
+computer window "$BOX" list
+computer window "$BOX" active
+computer window "$BOX" 42 size 800 600
+computer window "$BOX" 42 move 120 90
+computer window "$BOX" 42 focus
+computer window "$BOX" 42 max
+computer window "$BOX" 42 min
+computer window "$BOX" 42 restore
+computer window "$BOX" 42 close
+```
+
+Match a window by class when possible. A title can change with the open document.
+
+Wait for a new window to appear and stop moving:
+
+```rust
+let dialog = screen
+    .wait_for_window("Mousepad", Duration::from_secs(10))
+    .await?;
+```
+
+CLI:
+
+```bash
+computer window "$BOX" wait Mousepad --within 10
+```
+
+The result reports the final geometry. A window manager can clamp or reject the requested size or position.
+
+`window wait --within` uses seconds. `computer wait --within` and `browser wait --within` use milliseconds.
+
+Complete CLI window reference:
+
+```text
+computer window <box> list
+computer window <box> active
+computer window <box> wait <class> [--within SECONDS]
+computer window <box> <id> focus
+computer window <box> <id> close
+computer window <box> <id> move <x> <y>
+computer window <box> <id> size <width> <height>
+computer window <box> <id> max
+computer window <box> <id> min
+computer window <box> <id> restore
+```
+
+`focus` raises a window and then reports the window that actually has keyboard focus. `close` asks the application to close the window. Arrange commands return the final geometry because the window manager can clamp a move, enforce size hints, or refuse a state change.
+
+### Use more than one screen
+
+Screen IDs start at zero. Screen 0 starts with the desktop. Other screens start when they are first requested:
+
+```rust
+let second = computer.screen(ScreenId(1)).await?;
+second.open_url("https://example.org").await?;
+```
+
+The bundled image supports up to eight screens. Each screen has separate browser data, clipboard selections, and view and control servers.
+
+`screen()` leases the screen to the current process. A second caller is refused instead of receiving the same screen.
+
+### Change the wallpaper
+
+```rust
+let bytes = std::fs::read("background.png")?;
+computer.set_wallpaper(&bytes).await?;
+
+let second = computer.screen(ScreenId(1)).await?;
+second.set_wallpaper(&bytes).await?;
+```
+
+PNG and JPEG data are supported. A profile without wallpaper support returns `Unsupported`.
+
+### Record the screen
+
+Add video packages to record MP4 inside the box:
+
+```rust
+let computer = Computer::builder()
+    .packages(Extras::video().packages)
+    .launch()
+    .await?;
+
+computer
+    .record(Duration::from_secs(10), "/tmp/screen.mp4")
+    .await?;
+computer
+    .download("/tmp/screen.mp4", "screen.mp4")
+    .await?;
+```
+
+The duration-based Rust helper uses X11 capture. Use the profile-aware CLI recording commands for X11 or Wayland.
+
+CLI:
+
+```bash
+BOX=$(computer new --video)
+computer record "$BOX" start --fps 20
+computer record "$BOX" status
+computer record "$BOX" stop screen.mp4
+```
+
+Add `Extras::audio()` when the recording also needs sound.
+
+The [recording example](examples/recording.rs) shows how to build an animated GIF from selected screenshots.
+
+## Human control
+
+### Hand over exclusive control
+
+`hand_over()` gives a person exclusive input through a browser:
+
+```rust
+let takeover = computer.hand_over().await?;
+let control_url = takeover.url();
+
+let frame = computer.screenshot().await?;
+assert!(
+    computer
+        .click(Point::new(640, 400), Button::Left)
+        .await
+        .is_err()
+);
+
+takeover.end().await?;
+```
+
+CLI:
+
+```bash
+computer takeover "$BOX"
+computer release "$BOX"
+```
+
+The program can continue to read the screen while the person controls it. Its input operations return an error.
+
+Use `share()` only when the person and the program must send input at the same time:
+
+```rust
+let shared = computer.share().await?;
+```
+
+Shared input can race. Use exclusive handover when both sides do not need simultaneous control.
+
+### Wait for the person to leave
+
+```rust
+let takeover = computer.hand_over().await?;
+
+computer
+    .wait_until_free(Duration::from_secs(600))
+    .await?;
+takeover.end().await?;
+
+let new_frame = computer.screenshot().await?;
+```
+
+Always take a new screenshot after a handover.
+
+### Reclaim a desktop
+
+An attached process can end a takeover that outlived its owner:
+
+```rust
+let computer = Computer::attach("my-box").await?;
+
+if computer.person_driving().await {
+    computer.reclaim().await?;
 }
 ```
 
-The action name belongs to the toolkit, not to us: GTK spells it `click` where Qt spells it `Press`. `invoke_node` runs the first action unless you name one, and every node lists what it offers.
-
-From the command line:
+CLI:
 
 ```bash
-computer new --accessibility
-computer widget <box> find "Street" --role text
-computer widget <box> fill "Street" "12 Bishop Street"
-computer widget <box> press "OK"
+computer release "$BOX"
 ```
+
+The image also refuses raw synthetic input from inside the box while a person has exclusive control.
 
 ## Configure a desktop
 
-Use the builder when you need settings other than the defaults:
+### Create a box with `computer new`
+
+`computer new` converts command flags into a portable `Spec` and `Placement`, starts the box, and prints its ID to standard output. Status text and the viewer URL go to standard error, so command substitution receives only the ID:
+
+```bash
+BOX=$(computer new --url https://example.com)
+computer box "$BOX"
+```
+
+Choose the display and capacity:
+
+```bash
+BOX=$(computer new \
+    --size 1920x1080 \
+    --screens 2 \
+    --wayland \
+    --memory 4g \
+    --cpus 2 \
+    --runtime podman)
+```
+
+Build applications and features into the image:
+
+```bash
+BOX=$(computer new \
+    --app gimp,vscode \
+    --package jq \
+    --package ripgrep \
+    --wide-fonts \
+    --audio \
+    --video \
+    --dock \
+    --accessibility)
+
+WAYLAND_BOX=$(computer new --wayland --x11-apps)
+```
+
+- `--wide-fonts` adds CJK and emoji fonts.
+- `--audio` adds the sound server.
+- `--video` adds recording support.
+- `--dock` adds the desktop launcher.
+- `--x11-apps` adds Xwayland to a Wayland image.
+- `--accessibility` enables native widget operations.
+
+Applications, packages, and features are image inputs. They cannot be added to a running box, and the first box with a new combination must build an image.
+
+Set network and lifetime policy:
+
+```bash
+BOX=$(computer new --no-network --ttl 60 --idle 10)
+```
+
+`--ttl` removes the box after a fixed number of minutes. `--idle` removes it after that many minutes without server activity. `--no-network` blocks outbound network access from the desktop.
+
+Complete command reference:
+
+```text
+computer new [--size WIDTHxHEIGHT] [--screens N] [--wayland] [--url URL]
+             [--app NAME]... [--package PACKAGE]...
+             [--wide-fonts] [--audio] [--video] [--dock]
+             [--x11-apps] [--accessibility]
+             [--no-network] [--memory SIZE] [--cpus N]
+             [--runtime NAME] [--ttl MINUTES] [--idle MINUTES]
+             [--spec FILE|-]
+```
+
+Repeat `--app` and `--package`, or give comma-separated names. `--spec -` reads a create request from standard input. Flags override values from the file. `computer --local new --name NAME` can choose a local runtime name; a server always assigns its own box ID and refuses `--name`.
+
+
+### Builder options
+
+Use the builder to change the defaults:
 
 ```rust
 let computer = Computer::builder()
@@ -369,482 +1182,372 @@ let computer = Computer::builder()
     .await?;
 ```
 
-- `network(false)` blocks outbound network access.
+CLI:
+
+```bash
+BOX=$(computer new --size 1920x1080 --no-network --memory 2g --runtime podman --ttl 60)
+```
+
+`computer new` keeps the desktop after the command exits. `--app gimp` and `--package jq` install into the image, and `--spec box.json` takes a file shaped like the body of `POST /v1/boxes` for what has no flag; a flag goes over the file.
+
+- `network(false)` blocks outbound network access from the desktop.
 - `runtime()` also accepts `nerdctl`.
-- `keep_on_drop(true)` leaves the container running when the handle is dropped.
-- `expires_after(duration)` removes the desktop when the time runs out.
+- `keep_on_drop(true)` leaves the desktop running when the handle is dropped.
+- `expires_after(duration)` removes the desktop after a fixed time.
+- `expires_when_idle(duration)` removes it after a period without activity through that handle. Call `touch()` when work reaches the box by another path.
 
-From the command line the same settings are flags on `new`:
+`Computer::builder().config()?` returns the resolved image, ports, environment, and boot command without starting a desktop.
+
+### Use a portable specification
+
+A `Spec` describes the desktop, installed applications, and access policy. A `Placement` describes where it runs and its resource and lifetime limits:
+
+```json
+{
+  "spec": {
+    "desktop": {
+      "server": "x11",
+      "width": 1280,
+      "height": 800,
+      "features": ["wide_fonts", "accessibility"]
+    },
+    "policy": {
+      "network": true
+    }
+  },
+  "placement": {
+    "runtime": "docker",
+    "memory": "2g",
+    "expires_after_secs": 3600
+  }
+}
+```
 
 ```bash
-computer new --size 1920x1080 --app gimp --package jq --video --no-network --memory 2g --ttl 60
+BOX=$(computer new --spec box.json)
 ```
 
-What has no flag goes in a file shaped like the body of `POST /v1/boxes`, and a flag goes over it:
+The same specification can be placed in a container, microVM, or supported cloud sandbox. Unknown keys are refused instead of ignored. See [examples/box.json](examples/box.json) and [examples/from_spec.rs](examples/from_spec.rs).
+
+### Install and open applications
+
+List the built-in application catalog, install applications into a new image, and open one by name:
 
 ```bash
-computer new --spec box.json --size 1280x720
+computer apps
+BOX=$(computer new --app gimp --app vscode)
+computer app "$BOX" gimp
 ```
 
-### Change the wallpaper
-
-`set_wallpaper` sends image bytes into the box and applies them to one screen:
-
-```rust
-computer.set_wallpaper(&std::fs::read("background.png")?).await?;
-
-let second = computer.screen(ScreenId(1)).await?;
-second.set_wallpaper(&bytes).await?;
-```
-
-The display stack reads the format from the bytes, so PNG and JPEG both work. `Computer::set_wallpaper` changes screen 0. X11 applies it with `hsetroot`, Wayland through the compositor. A profile that declares no wallpaper support returns `Unsupported` rather than accepting the bytes and changing nothing.
-
-### Record the screen
-
-`recording` builds a GIF from screenshots, and needs nothing extra. For real video, add a recorder:
-
-```rust
-let computer = Computer::builder().packages(Extras::video().packages).launch().await?;
-
-computer.record(Duration::from_secs(10), "/tmp/screen.mp4").await?;
-computer.download("/tmp/screen.mp4", "screen.mp4").await?;
-```
-
-The capture runs inside the box for the whole duration, so the call takes at least that long. Sound is included when the box has a sound card, which `Extras::audio()` adds. Each screen has its own sink, so screen 1 records screen 1.
+`app` waits until the application's window has drawn. Applications and packages are image inputs. They cannot be added to a running box.
 
 ### Add fonts and packages
 
-The image includes Latin fonts, which is enough for most Western pages and keeps the image small. Add more when you need them:
+The default image includes Latin fonts. Add wider language support or Debian packages when required:
 
 ```rust
-Computer::builder()
-    .wide_fonts()                    // Chinese, Japanese, Korean, and emoji
-    .packages(["vim", "curl"])       // anything else from Debian
-```
+let desktop_with_wide_fonts = Computer::builder()
+    .wide_fonts()
+    .launch()
+    .await?;
 
-`Extras::audio()` adds a sound card, `Extras::video()` adds a recorder, and `Extras::everything()` adds all three sets.
-
-`Extras::accessibility()` installs AT-SPI, so a native window can be driven by the names of its widgets rather than by its pixels — `Computer::builder().accessibility()` is the same thing. See [Drive a native window by widget name](#drive-a-native-window-by-widget-name).
-
-`Extras::x11_apps()` puts Xwayland in the Wayland image, so an X11 program can run on a compositor. Opt-in, because it is a trade: about seventy megabytes resident, paid by every box that carries it whether or not an X11 program is ever started. Without it that image has no X server at all, and an X11 program fails to open a display rather than failing to draw.
-
-The package list is part of the image tag, so each list builds its own image and no desktop receives a list it was not built with. The first launch with a new list takes as long as installing those packages. `wide_fonts()` adds about 100 MB.
-
-Without those fonts, a page in Chinese, Japanese, or Korean shows empty boxes, and so does emoji. The screenshot still looks like a working page.
-
-By default, the crate removes a desktop when its handle is dropped. This also cleans up the container if the program panics. `shutdown()` performs the same cleanup and returns its result.
-
-### Run on Wayland instead of X11
-
-Two images ship. `X11Profile` is the default — Xvfb, fluxbox, x11vnc and `xdotool`. `WaylandProfile` runs the same box on sway headless, wayvnc, `grim` and a pointer and keyboard of its own:
-
-```rust
-let computer = Computer::builder()
-    .profile(Arc::new(WaylandProfile))
+let desktop_with_packages = Computer::builder()
+    .packages(["vim", "curl"])
     .launch()
     .await?;
 ```
 
-Everything above the image is the same. The ports, the verbs, the screen numbering, the takeover protocol and the whole `Desktop` API are this crate's convention rather than X11's, so the code you write does not change.
+CLI:
 
-Three things differ inside the box:
-
-
-|         | X11                   | Wayland                                                               |
-| ------- | --------------------- | --------------------------------------------------------------------- |
-| Server  | `Xvfb` plus `fluxbox` | `sway`, headless                                                      |
-| Capture | ImageMagick `import`  | `grim`                                                                |
-| Input   | `xdotool`             | `computer-input` — a virtual pointer and keyboard that stay           |
-| Viewer  | `x11vnc -viewonly`    | `wayvnc -d`                                                           |
-| Runs as | root                  | an unprivileged user, because sway will not start as root             |
-
-
-Screens are told apart differently. An X display number is global, so screen `N` is `:N+1`. A Wayland socket is a file, so every screen's compositor is `wayland-1` inside its own `XDG_RUNTIME_DIR`.
-
-Wayland input needs no extra privilege. It does **not** use `ydotool` or `/dev/uinput`, so the box keeps the isolation it was started with.
-
-The pointer is a `zwlr_virtual_pointer_v1` device and the keyboard a `zwp_virtual_keyboard_v1`, and such a device lives only as long as the client that made it. Each screen keeps one `computer-pointer serve` for its whole life and every gesture and every key goes through it, so a button can stay down between two steps — `mouse_down` and `mouse_up` work as they do on X11 — a modifier can be held through a click, and a menu keeps its hover from one command to the next. If it dies, the next gesture starts it again.
-
-The keyboard is a US layout, so `H` reaches a page as `KeyH` with Shift and a shortcut matches on the code it expects. A character the layout does not have — `é`, `日`, `Привет` — is put on the same printable keys in another group, which is where a keyboard of that script has it; Chrome types a character only from a key code it knows. One limit is Chrome's and not the keyboard's: a key event there carries sixteen bits, so an emoji typed as a key is dropped. `fill` on a page inserts it, and an X11 program under Xwayland takes it as a key.
-
-`cursor()` **behaves differently.** No Wayland protocol lets a client read the global pointer position, so the driver reports where it last put the pointer. Once a person has driven the screen that value is stale, and `cursor()` returns `Error::Unsupported` until your next move:
-
-```rust
-computer.move_to((640, 400)).await?;
-assert_eq!(computer.cursor().await?, Point::new(640, 400));
-
-let takeover = computer.hand_over().await?;
-takeover.end().await?;
-
-// A person moved a pointer this driver did not move.
-assert!(computer.cursor().await.is_err());
+```bash
+BOX=$(computer new --wide-fonts --accessibility --video)
 ```
 
-### Use a different image or display server
+`Extras::audio()`, `Extras::video()`, `Extras::accessibility()`, and `Extras::everything()` provide common package sets.
 
-Each box speaks one image contract — a `Profile` — and is driven through one `DesktopFactory`. A profile names the ports its image serves, the commands it installs, the environment it reads, what it claims to support, and **the driver it expects**. So an image and the way it is driven cannot be paired wrongly by omission. Use `.driver()` only to drive an image differently from the way its own profile says:
+Each builder package helper sets the complete extra package list. Use one combined list when you need custom packages and a preset together. The package list is part of the image tag. The first launch with a new list builds a new image.
+
+### Keep browser data
+
+Keep the complete Chromium profile in a named container volume:
 
 ```rust
 let computer = Computer::builder()
-    .profile(Arc::new(X11Profile))
-    .driver(Arc::new(MyCdpDriver))
+    .profiles("agent-work")
     .launch()
     .await?;
 ```
 
-A new display server needs a `Desktop` and a `DesktopFactory`. A new image contract needs a `Profile`; an image that keeps an existing contract can reuse its profile. The screens, the takeover gate, the leases, and the file transfer are written against the traits.
+The profile includes logins, history, extensions, and browser storage. It stays on the host and can be used by only one desktop at a time.
 
-A profile also supplies `screen_env()` — the variables one screen's commands run with. X11 sets `DISPLAY=:N+1` there; Wayland sets `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR`. A `Machine` never learns what a screen is: it moves an environment the profile already built.
-
-`support().display.server` reports the server the driver named.
-
-`Computer::builder().config()` returns the resolved `Config` — the image tag, the ports to publish, the environment, and the boot command — so you can see what a box would be started with before anything starts.
-
-A local directory can supply the Docker build context:
-
-```rust
-Computer::builder().image_dir("crates/computer-core/images/ubuntu")
-```
-
-`examples/custom_image.rs` builds one and drives a box in it, and `examples/images/acme/` is the whole Dockerfile: an image that keeps the X11 contract adds to the base rather than reimplementing it, which is why that file is a dozen lines. `crates/computer-core/images/ubuntu/` is the other way round — a contract built from a bare distribution, which is what a genuinely different base needs.
-
-`crates/computer-core/images/tiny/` is a lightweight desktop image you can take for a run:
-
-```rust
-Computer::builder().image_dir("crates/computer-core/images/tiny")
-```
-
-The directory can be anywhere and must contain a `Dockerfile` that implements the selected profile. Its tag follows the context contents, extra packages and host architecture, so an edit builds a new image instead of reusing stale bytes. Extra packages are passed as the `EXTRA_PACKAGES` build argument.
-
-An image you name yourself is always fetched, never built:
-
-```rust
-Computer::builder().image("someone-else/desktop:1")
-```
-
-Such an image takes no extra packages, because there is no build to install them in. `.image(...)` together with `.packages(...)` is refused rather than ignored.
-
-An image says which contract it implements, and a box driven by another profile is refused before it starts:
-
-```dockerfile
-LABEL computer.profile="computer-desktop"
-```
-
-```
-Denied: computer-local:905f378b… implements the computer-wayland contract and this box is driven by computer-desktop: the commands would go in and the screen would not move
-```
-
-An image that declares nothing is not refused — your own image owes this crate no label. Without one, a mismatch surfaces ninety seconds later as a display that never came up, which points at the display server rather than at the pairing.
-
-Use `Computer::attach_using()` to attach to a box that a different profile started. Neither the profile nor the driver is recorded on the box, so the attaching process must be told which to use.
-
-### Derive a profile from a tested one
-
-An image that keeps most of a shipped contract needs `ProfileBuilder`, not a whole `Profile`. Whatever you do not name stays on the base:
-
-```rust
-let profile = ProfileBuilder::new(X11Profile)
-    .name("my-desktop")
-    .image_dir("images/mine")
-    .screen_commands(CommandScreen::new("my-screen"))
-    .wallpaper_runtime(CommandWallpaperRuntime::new("my-wallpaper"))
-    .build();
-
-let computer = Computer::builder().profile(Arc::new(profile)).launch().await?;
-```
-
-Whatever you leave alone comes from the base contract, so a custom image does not copy the X11 or Wayland one to change two names. `ports()`, `geometry()`, `support()`, `screen_environment()` and `viewer_url()` replace the rest. `geometry()` takes one `GeometrySpec` rather than three methods, because the default size, the environment a launch carries and the size read back off a running box have to agree.
-
-**A profile carries its own image.** `image_dir()` puts the build context on the profile rather than on the builder, so the image and the contract it implements arrive together instead of being two things a caller has to pair correctly. The directory needs a `Dockerfile` whose `computer.profile` label matches the profile's name. `image(ImageSource::Registry("me/desktop:1".into()))` names somebody else's instead, and `Computer::builder().image_dir(...)` still wins over whatever the profile says.
-
-`driver()` names the display server driver, which a base contract otherwise supplies — an image that keeps a contract but speaks Wayland needs its own.
-
-`CommandScreen` keeps the command protocol and changes only the program that answers it. The three runtimes go further: `screen_runtime`, `browser_runtime` and `wallpaper_runtime` replace **how** an operation is performed, so an image with a guest agent can answer without a shell. Each has a `Command*` default, which is what the shipped images use.
-
-### Carry a login between boxes
-
-A box is thrown away, and everything it was logged into goes with it. A session is what a login leaves behind — cookies and local storage — and it can be taken out of one box and put into another:
-
-```rust
-let origins = ["https://example.com".to_string()];
-let session = browser.export_session(&origins, Carry::default()).await?;
-
-// … a new box, later, somewhere else …
-let tabs = browser.import_session(&session).await?;
-```
-
-Named origins only. What comes out belongs to one of them, and what goes back in is checked against the list it came with, so a session for one site can never be put into another.
-
-`Carry` says what to take. Cookies and local storage by default, because that is where a login normally is:
-
-```rust
-Carry::default()                                     // cookies + local storage
-Carry { indexed_db: true, ..Carry::default() }       // and databases
-Carry { local_storage: false, ..Carry::default() }   // cookies alone
-Carry::all()
-```
-
-`indexed_db` is where Firebase keeps a login, so without it those sites come back signed out. It carries only what survives being written as JSON — a value holding a blob is left, and named in `session.incomplete` rather than lost quietly.
-
-`session_storage` belongs to a **tab**, not to a browser. It is read from a tab already open on that origin, and `import_session` hands back the tabs it put it into, because one restored into a tab nobody keeps is one nobody has. A site that uses it has also decided the login should die with the tab, which is why it is asked for rather than assumed.
-
-The profile directory is deliberately not what moves: it is about a third of a gigabyte, tied to the Chromium build that wrote it, and carries a browser's whole history besides.
-
-### Keep the whole browser instead
-
-Where a session is not enough — a database too large to write as JSON, a key a page will not hand over — keep the profile itself:
-
-```rust
-Computer::builder().profiles("toby-work").launch().await?;
-```
-
-A named volume, which Docker keeps when a box is removed, so two boxes given the same name are the same browser. Everything comes with it: logins, history, extensions, and whatever a session cannot carry.
-
-The trade against a session is where it can go. A session is data a caller can put anywhere; a volume never leaves this host. And one box at a time per name, because two browsers sharing a profile directory is how one gets corrupted.
-
-**A session is the account.** A password may sit behind a second factor; a session has already passed one, so whoever holds this is the user.
+Use session export when the data must move between hosts. Use a named profile when all browser state must stay on one host.
 
 ### Attach to a running desktop
 
-Give a desktop a name if you want to use it from another process:
-
 ```rust
 let computer = Computer::attach("my-box").await?;
 ```
 
-The attached desktop keeps its windows, browser profile, and files. Dropping an attached handle does not remove the desktop because that handle did not create it.
-
-## Use more than one screen
-
-Screen IDs start at zero. Screen 0 starts with the desktop. Other screens start only when you request them.
-
-```rust
-let second = computer.screen(ScreenId(1)).await?;
-second.open_url("https://example.org").await?;
-```
-
-`screen()` holds the screen for your process and gives it back when the handle is dropped, so a second caller is refused rather than handed the same screen. Use `claim(&holder, fence)` to hold one under a name of your own, `take(id, &holder, fence)` to take one from a holder that is not coming back, and `screen_unfenced(id)` when nothing else can be holding anything.
-
-The image supports up to eight screens. Screen `N` uses these values:
-
-```text
-X display:     :N+1
-View port:     6080 + 2N    read-only
-Control port:  6081 + 2N    accepts input
-```
-
-The crate does not use display `:0`. On a host with a physical display, `:0` usually belongs to that display.
-
-Each screen has separate view and control servers. Opening a read-only viewer does not give that viewer control.
-
-## See what is on the screen
-
-A window says what it is and where, so a caller does not have to work either
-out of a screenshot:
-
-```rust
-for window in computer.primary().windows().await? {
-    println!("{} {}x{} at {},{}", window.class, window.width, window.height,
-             window.at.x, window.at.y);
-}
-```
-
-```text
-Chromium   1280x800 at 0,0
-XTerm      484x316 at 1,55
-Thunar     640x480 at 1,404
-```
-
-**Match on the class, not the title.** A title moves with the open document — Untitled 1 - Mousepad` becomes `notes.txt - Mousepad` the moment one is saved.
-
-## Move a window, and wait for one
-
-A window can be put where it is wanted, and each call answers with the window as it ended up:
-
-```rust
-let screen = computer.primary();
-
-screen.arrange(&window.id, Arrange::Size { width: 800, height: 600 }).await?;
-screen.arrange(&window.id, Arrange::At(Point::new(120, 90))).await?;
-
-let full = screen.arrange(&window.id, Arrange::Maximise).await?;
-println!("{}x{}", full.width, full.height);
-```
-
-The answer is the truth rather than the request: a window manager clamps a move to the screen, honours a resize only within the size hints the program gave it, and ignores both on a window whose place it owns.
-
-`active_window()` says which window typing would reach. `wait_for_window()` waits for one to appear and stop moving, which is what to do about the dialog a click raised:
-
-```rust
-let dialog = screen.wait_for_window("Mousepad", Duration::from_secs(10)).await?;
-```
-
-It waits for the window to settle where it is, not for it to finish drawing: a dialog with a caret blinking in it never stops drawing. `launch` is the one that waits for paint.
-
-## Capture part of a screen
-
-A screenshot is the whole screen at full size. `capture` narrows it to one window or one rectangle, and shrinks what comes back:
-
-```rust
-let screen = computer.primary();
-
-let region = screen.capture(&Shot::region(Rect::new(Point::new(100, 80), 400, 300))).await?;
-let one    = screen.capture(&Shot::window(&window.id)).await?;
-let small  = screen.capture(&Shot::window(&window.id).scaled(50)).await?;
-```
-
-A window is looked up when the capture is taken, not when it was listed — a window moves, and a picture of where it used to be is a picture of whatever took its place.
-
-`scaled` is a percentage of full size. It is what stops an agent paying for a megabyte on every step: a 1280×800 desktop halves to about two thirds of the bytes with the text still readable, and quarters to a third of them. On X11 the reduction averages pixels rather than interpolating, because blurring flat colours into gradients makes a *larger* PNG than the full-size picture it was meant to save.
+CLI:
 
 ```bash
-computer screenshot <box> out.png --window 42 --scale 50
-computer screenshot <box> out.png --at 100,80 --size 400x300
+computer ls
+computer screenshot "$BOX" screen.png
 ```
 
-## Hold a modifier, and wait for the drawing to stop
+CLI commands attach to the desktop named by their `<box>` argument.
 
-Shift-click extends a selection, ctrl-click adds to one. Pressing the key first does not do it — that press ends with the command that made it, so the click which follows arrives unmodified:
+The attached desktop keeps its windows, browser profile, and files. Dropping an attached handle does not remove a desktop that the handle did not create.
 
-```rust
-screen.click_with(at, Button::Left, &[Held::Shift]).await?;
-screen.drag_with(from, to, Button::Left, &[Held::Ctrl]).await?;
-```
+## Box lifecycle and history
 
-`wait_until_still` is what to do instead of guessing at a sleep — after a menu opens, a dialog draws, or a page paints:
+### List and inspect boxes
 
-```rust
-screen.wait_until_still(Duration::from_millis(400), Duration::from_secs(10)).await?;
-```
-
-The watch runs inside the box, so it costs one round trip however long it waits. A screen with something animating on it never settles and reaches the deadline instead, which is why one is asked for.
+List all boxes known to the selected server:
 
 ```bash
-computer mouse <box> click 640 400 left --held shift,ctrl
-computer wait <box> --settle 400 --within 10000
+computer ls
 ```
 
-Modifiers are held on both. X11 chains the press, the click and the release in one `xdotool` run; on Wayland the pointer that stays holds the keys through the gesture and lets them go after it, also when the gesture is refused.
+Each row contains the box ID, screen size, screen count, and a non-ready state when applicable. Inspect one box in detail:
 
-## Give control to a person
+```bash
+computer box "$BOX"
+```
 
-`hand_over()` gives a person exclusive control through a browser:
+`computer box` reports:
+
+- ID and state: `Ready`, `Paused`, or `Stopped`
+- configured screen count and size
+- the digest of the portable specification
+- creation and expiry times
+- viewer and direct DevTools URLs when available
+
+The box ID is the value accepted by every command that takes `<box>`. Treat viewer and DevTools URLs as credentials when they contain access tokens.
+
+`computer box` uses the server API and is not available with `--local`. Local `computer ls` asks the default Docker runtime what is still running.
+
+### Pause, stop, resume, and remove
+
+```bash
+computer pause "$BOX"
+computer resume "$BOX"
+
+computer stop "$BOX"
+computer resume "$BOX"
+
+computer rm "$BOX"
+```
+
+A paused box keeps its memory and ports but uses no processor. A stopped box keeps its writable filesystem without keeping its memory. Resuming a stopped box starts a fresh desktop on new viewer ports. Removing a box deletes its files.
+
+The Rust API exposes the same lifecycle:
 
 ```rust
-let takeover = computer.hand_over().await?;
-let takeover_url = takeover.url().unwrap_or_default();
-tracing::info!(%takeover_url, "desktop control is ready");
+computer.pause().await?;
+computer.resume().await?;
 
-let frame = computer.screenshot().await?;
-let result = computer.click(at, button).await;
-assert!(result.is_err());
-
-takeover.end().await?;
+computer.stop().await?;
+let computer = computer.start(Duration::from_secs(90)).await?;
 ```
 
-Your program can still read the screen during a handover, but its normal input methods return an error.
+Use `--ttl MINUTES` for a fixed lifetime and `--idle MINUTES` for an inactivity limit. `computerd` also sweeps expired boxes that outlive the process that created them.
 
-Use `share()` when the person and your program must control the desktop at the same time:
+### Run action batches
 
-```rust
-let shared = computer.share().await?;
+A batch holds one screen across several operations, stops at the first refusal by default, and returns one final frame:
+
+```json
+[
+  { "type": "open_url", "url": "https://example.com/order" },
+  {
+    "type": "on_page",
+    "what": { "op": "fill", "query": "Name", "text": "Ada" }
+  },
+  {
+    "type": "on_page",
+    "what": { "op": "click", "query": "Continue" }
+  },
+  {
+    "type": "on_page",
+    "what": { "op": "wait_for", "query": "Details" }
+  }
+]
 ```
 
-Shared input can race. For example, a person's click can arrive between the program's pointer move and click. Use `hand_over()` unless both sides must act at the same time.
-
-### Wait for the person to leave
-
-The control server stays open after the browser tab closes. Use the connection count to know when the person has left:
-
-```rust
-let takeover = computer.hand_over().await?;
-
-computer
-    .wait_until_free(Duration::from_secs(600))
-    .await?;
-takeover.end().await?;
-
-let frame = computer.screenshot().await?;
+```bash
+computer batch "$BOX" actions.json --settle 400
 ```
 
-`viewers()` returns the current `watching` and `driving` connection counts. Always take a new screenshot after a handover.
+Use `--keep-going` only when later steps do not depend on earlier steps. The REST equivalent is `POST /v1/boxes/{id}/screens/{screen}/actions`.
 
-### Reclaim a desktop
+CLI batches, traces, forks, pause, stop, and resume use the server API. The ephemeral server can run a batch, but a long-lived `computerd` is required to retain useful history across commands.
 
-A takeover can stay active if the process that created it exits. An attached process can detect and end that takeover:
+### Trace and fork
 
-```rust
-let computer = Computer::attach("my-box").await?;
+`computerd` records actions, frames, commands, lifecycle changes, file transfers, and custody changes:
 
-if computer.person_driving().await {
-    computer.reclaim().await?;
-}
+```bash
+computer trace "$BOX"
+NEW_BOX=$(computer fork "$BOX")
 ```
 
-The gate that holds your input back lives in your process, and the token that says who is driving lives in the box. That is why an attached process can find a takeover it never started, and why a stale `end()` is refused rather than taking the keyboard from whoever holds it now.
+A fork launches the same specification and replays the trace. It reconstructs the work; it does not copy a running machine. Page changes, timing, and unrecorded file or clipboard bytes can make the result differ.
 
-The image enforces the same rule. While a person has the screen, `xdotool` refuses input from anything in the box, including a raw `exec`, and returns status 3. Reads such as `getdisplaygeometry` still work, because a program that may not act may still watch.
+## Server, REST, and MCP
 
-### Show the screen inside Claude or ChatGPT
+### Run `computerd`
 
-`computerd` serves MCP over Streamable HTTP at `/mcp` beside its REST routes. A host that renders [MCP Apps](https://github.com/modelcontextprotocol/ext-apps), such as Claude, ChatGPT, VS Code or Goose, shows the person the live screen beside the results of `launch_box`, `open_screen` and `hand_over`, with buttons to take the screen over, hand it back, and record it. The page reaches the screen through one WebSocket back to `computerd`, so a box stays on loopback and a browser never needs its ports.
+The daemon listens on `127.0.0.1:8080` by default:
+
+```bash
+computerd
+curl http://127.0.0.1:8080/v1/health
+```
+
+Bind outside loopback only with a server token:
 
 ```bash
 COMPUTER_SERVER_ADDR=0.0.0.0:8080 \
-COMPUTER_SERVER_TOKEN=... \
-COMPUTER_PUBLIC_URL=https://boxes.example.com \
+COMPUTER_SERVER_TOKEN="$(openssl rand -hex 32)" \
 computerd
 ```
 
-Put a proxy that terminates TLS in front, because the hosts serve the page from an HTTPS origin and a plain `ws://` socket is refused as mixed content. `COMPUTER_PUBLIC_URL` is the origin the page connects back to; without it `computerd` reads `X-Forwarded-Proto` and `X-Forwarded-Host`, and failing those the `Host` of the request. The page is a single file built by `crates/computer-mcp/ui/build.sh` and committed, so the crate compiles without node.
+Clients send the token as `Authorization: Bearer ...`. The gate protects REST and MCP. Viewer links use separate per-box credentials.
 
-Each screen tool answers with `structuredContent` the page reads and, under `_meta`, a socket URL carrying a ticket that opens that one screen for fifteen minutes. Hosts keep `_meta` from the model, so a ticket never lands in a transcript.
+The REST API uses shared request and response types from [`computer-api`](crates/computer-api). Box creation, action batches, and forks accept idempotency keys so a transport retry does not repeat a click or create a second box. See the [server guide](crates/computer-server/README.md) for routes and semantics.
 
-## Run in a microVM
+On restart, `computerd` adopts boxes that it left on the configured runtimes. Docker is checked by default. Set `COMPUTER_SERVER_RUNTIMES=docker,podman` to check more container runtimes, and use `COMPUTER_SERVER_SANDBOXES=e2b` when the daemon was built with E2B support.
 
-A container shares the host kernel. A microVM boots its own kernel and gives a stronger isolation boundary, but it starts more slowly.
+### REST quick start
 
-Install microsandbox. No crate feature is needed: the machine drives the `msb` command, and finds it in the installer's directory even when that directory is not on your `PATH`.
+Create a box on a loopback server:
 
-Hand the image over once, then launch:
+```bash
+BASE=http://127.0.0.1:8080
 
-```rust
-use computer::microvm::import_image;
-use computer::sandboxes::microsandbox::msb;
-
-import_image(&SystemDocker::default(), &msb::Msb::found(), &bundle::tag()).await?;
-
-let computer = Computer::builder()
-    .machine(Arc::new(msb::machine()))
-    .image(bundle::tag())
-    .launch()
-    .await?;
-
-let frame = computer.screenshot().await?;
+BOX=$(
+  curl -fsS "$BASE/v1/boxes" \
+    -H 'content-type: application/json' \
+    -H 'idempotency-key: create-demo-1' \
+    -d '{
+      "spec": {
+        "desktop": { "width": 1280, "height": 800 },
+        "policy": { "network": true }
+      },
+      "placement": { "expires_after_secs": 3600 }
+    }' |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])'
+)
 ```
 
-A hypervisor keeps its own image store and cannot read a container runtime's, so `import_image` saves the image and loads it across. An OCI reference the hypervisor can pull works instead, and `export_rootfs` flattens the image into a directory for a hypervisor with no image store at all.
+Drive it with one action batch and one final frame:
 
-The desktop control API is the same for containers and microVMs. The runtime behavior is different:
+```bash
+curl -fsS "$BASE/v1/boxes/$BOX/screens/0/actions" \
+  -H 'content-type: application/json' \
+  -H 'idempotency-key: open-demo-1' \
+  -d '{
+    "actions": [
+      { "type": "open_url", "url": "https://example.com" },
+      { "type": "wait_still", "settle_ms": 400, "within_ms": 10000 }
+    ],
+    "want": ["frame", "cursor"]
+  }'
+```
 
+Inspect and remove it:
 
-| Behavior       | Container                       | microVM                                        |
-| -------------- | ------------------------------- | ---------------------------------------------- |
-| Isolation      | Host-kernel namespaces          | Separate guest kernel                          |
-| Image          | Local runtime image             | Imported image, OCI reference, or a rootfs     |
-| Ports          | Runtime selects free host ports | Crate selects ports before boot                |
-| Starting up    | The image's own command idles   | The crate starts screen 0 and nothing idles    |
-| Memory         | Unlimited unless you set it     | 2 GB unless you set it, because 512 MB is thin |
-| Dropped handle | Removes the desktop by default  | Leaves the machine running by default          |
+```bash
+curl -fsS "$BASE/v1/boxes/$BOX"
+curl -fsS -X DELETE "$BASE/v1/boxes/$BOX" \
+  -H 'x-computer-confirm-delete: true'
+```
 
+Add `Authorization: Bearer <token>` to every request when `COMPUTER_SERVER_TOKEN` is set. API errors have one shape: `code`, `message`, and `retryable`.
 
-A microVM's network settles after the machine boots, so the crate waits for a route before starting the browser. Without that wait, the first page load fails with `ERR_NETWORK_CHANGED`.
+### Persist server state
 
-The included integration lives in `sandboxes::microsandbox`, targets `microsandbox 0.6` and drives it through `msb`. A binding to the library is behind `--features microsandbox` at `sandboxes::microsandbox::vendor` for callers who prefer to link it. Each vendor gets its own directory under `src/sandboxes/`, because each has its own command, its own idea of an image and its own answers. Other hypervisors implement `MicroVmApi`: create, running, remove, exec, read, and write, plus optional whole-file copies and an image check.
+The default in-memory store keeps traces only for the life of `computerd`. Select a durable backend when traces and frames must survive a restart:
 
-## Run in a cloud sandbox
+```bash
+COMPUTER_STORAGE_BACKEND=local \
+COMPUTER_STATE_DIR=/var/lib/computer \
+computerd
+```
 
-A container and a microVM both put the desktop on this host. E2B does not, so a service on a small machine can hand out desktops with no container runtime and no `/dev/kvm` of its own. The boundary is still a kernel the box does not share.
+SQLite, PostgreSQL, and S3 are optional build features:
+
+```bash
+cargo install --path . --locked --features sqlite,postgres,s3
+```
+
+SQL backends use `COMPUTER_STATE_URL`. S3 uses `COMPUTER_S3_ENDPOINT`, `COMPUTER_S3_BUCKET`, credentials from the environment, and optional region and prefix settings.
+
+By default, old frames are retained for two hours and trace entries for seven days. `COMPUTER_KEEP_FRAMES_SECS`, `COMPUTER_KEEP_ENTRIES_SECS`, and `COMPUTER_PRUNE_SECS` change those windows.
+
+### Configure MCP
+
+For an MCP host that launches a local process:
+
+```json
+{
+  "mcpServers": {
+    "computer": {
+      "command": "computer",
+      "args": ["mcp", "--stdio"],
+      "env": {
+        "COMPUTER_SERVER_URL": "http://127.0.0.1:8080"
+      }
+    }
+  }
+}
+```
+
+Add `COMPUTER_SERVER_TOKEN` to the stdio environment when the daemon is gated.
+
+For a remote host:
+
+```text
+URL:           https://boxes.example.com/mcp
+Transport:     Streamable HTTP
+Authorization: Bearer <COMPUTER_SERVER_TOKEN>
+```
+
+Put TLS in front of `computerd` and forward WebSocket upgrades when an MCP Apps host must render the live screen. `COMPUTER_PUBLIC_URL` sets the public origin when a reverse proxy hides it.
+
+An MCP Apps host can render `ui://computer/screen.html` beside `launch_box`, `open_screen`, and `hand_over`. The page receives a short-lived screen ticket under `_meta`; the model does not receive it.
+
+See the [MCP guide](crates/computer-mcp/README.md).
+
+## Runtimes
+
+The desktop operations stay the same across runtimes. Startup, isolation, image storage, networking, and cleanup can differ.
+
+### Containers
+
+Docker is the default. Podman and nerdctl use the same image and desktop API:
+
+```rust
+let computer = Computer::builder()
+    .runtime("podman")
+    .launch()
+    .await?;
+```
+
+A container shares the host kernel. The runtime selects free host ports, and the desktop is removed when its owning handle is dropped unless configured otherwise.
+
+### microVMs
+
+A microVM boots its own kernel and gives a stronger isolation boundary. It starts more slowly and uses a separate image store.
+
+The included integration targets microsandbox 0.6. Import the image into the hypervisor before the first launch. See [examples/microvm.rs](examples/microvm.rs) for the complete flow.
+
+Other hypervisors can implement `MicroVmApi`.
+
+### Cloud sandboxes
+
+The included E2B integration runs the desktop away from the local host. Build with the E2B HTTP client and set its API key:
 
 ```toml
 computer = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
@@ -854,208 +1557,181 @@ computer = { git = "https://github.com/CITGuru/computer", default-features = fal
 export E2B_API_KEY=...
 ```
 
-E2B runs templates, not container images, and builds them itself. Its builder is a Docker subset, so `crates/computer-core/images/desktop/Dockerfile` does not go over unchanged — it rejects `LABEL`, ignores `CMD`, keeps the quotes on an `ARG X=""` default, and needs the image writable by uid 1000. `crates/computer-core/images/context.py` writes a context with those things handled, from a rule set named per vendor:
+E2B uses templates instead of local container images. Its builder accepts only part of Dockerfile syntax, and its process runs as uid 1000. Generate a compatible build context from the bundled X11 image:
 
 ```bash
-python3 crates/computer-core/images/context.py crates/computer-core/images/desktop /tmp/e2b-ctx --for e2b
+python3 crates/computer-core/images/context.py \
+  crates/computer-core/images/desktop \
+  /tmp/e2b-ctx \
+  --for e2b
 
-e2b template create computer-desktop -p /tmp/e2b-ctx -d Dockerfile \
-  -c "/usr/local/bin/computer-desktop" --ready-cmd "true" \
-  --cpu-count 2 --memory-mb 2048
+e2b template create computer-desktop \
+  -p /tmp/e2b-ctx \
+  -d Dockerfile \
+  -c "/usr/local/bin/computer-desktop" \
+  --ready-cmd "true" \
+  --cpu-count 2 \
+  --memory-mb 2048
 ```
 
-Then launch:
+The transform removes instructions that E2B rejects or overrides and makes the desktop home writable by uid 1000. Pass the template ID printed by E2B to the example:
+
+```bash
+cargo run --features e2b --example e2b -- <template-id>
+```
+
+Add `--keep` to leave the sandbox running until its deadline. The takeover example gives the public control viewer to a person:
+
+```bash
+cargo run --features e2b --example e2b_takeover -- <template-id> "search text"
+```
+
+The viewer URL is withheld by default. A machine configured with `public_viewer(true)` is internet-reachable and must use `Auth::Password` or `Auth::Token`; launch is refused without that gate.
+
+Remote cloud profiles do not expose Chrome DevTools. Screen input, screenshots, clipboard operations, human control, and file transfer remain available.
+
+### X11 and Wayland
+
+X11 is the default display profile. Select the Wayland profile explicitly:
 
 ```rust
-use computer::sandboxes::e2b::{self, cloud::Cloud};
-
-let (machine, profile) = e2b::pair(Arc::new(Cloud::from_env()?), Arc::new(X11Profile));
-
 let computer = Computer::builder()
-    .machine(Arc::new(machine))
-    .profile(profile)
-    .image("your-template-id")
-    .launch()
-    .await?;
-
-let frame = computer.screenshot().await?;
-```
-
-Driving is the same code. These are not:
-
-
-| Behavior | Container or microVM              | E2B                                       |
-| -------- | --------------------------------- | ----------------------------------------- |
-| Ports    | Forwarded to a host port          | Published as `6080-<sandbox>.e2b.app`     |
-| DevTools | Reachable on a published port     | Not reachable; the claim is withdrawn     |
-| Viewer   | Loopback unless a gate is set     | Public URL, or none at all — see below    |
-| Lifetime | Until removed                     | A deadline, pushed out while work arrives |
-| Image    | A tag this crate builds           | A template E2B builds                     |
-
-
-**The viewer is the thing to read carefully.** Every other runtime publishes on loopback, and a box that never leaves it needs no gate. E2B publishes a sandbox's ports at `6080-<id>.<domain>` itself, so that host answers whether or not this crate prints the URL.
-
-So `public_viewer` decides only whether you are *handed* the URL. Off by default: the viewer ports are left out of the port map and `viewer_url()` returns `None`. The desktop is still driveable from your program.
-
-```rust
-Computer::builder().machine(Arc::new(machine.public_viewer(true)))
-```
-
-`public_viewer(true)` hands out an address the internet can reach, so it goes through the same gate as `publish_on(Bind::Any)`: set `auth` or the launch is refused. Do not rely on E2B's own proxy for this. Every sandbox is created with `secure: true`, and where the API answers with a `trafficAccessToken` its proxy refuses anything without an `e2b-traffic-access-token` header — which this crate sends and a browser cannot. Where it answers without one, nothing is refused. Measured on a live sandbox, a viewer URL answered `200` with no token.
-
-DevTools does not travel. An endpoint out here would be `wss` on a public host and this crate's DevTools client speaks plain TCP, so `RemoteProfile` drops the bridge port and clears the `cdp` claim. `devtools()` returns `None` and `audit` skips the browser check rather than failing it. Synthetic input, screenshots, the clipboard, the viewer and the takeover are untouched.
-
-`E2bApi` is the seam onto E2B and needs no feature: create, find, kill, keep alive, logs, exec, read and write. `--features e2b` adds the HTTP client that ships. Everything above it is shared with every other cloud vendor, which the next section is about.
-
-## Run in another cloud sandbox
-
-E2B is one vendor. Modal, Daytona and the rest have the same shape: create a sandbox, run a command in it, move a file, kill it, and publish its ports at an address of the vendor's own. `sandboxes::remote` is that shape as a trait, so a new vendor is eight calls and no crate feature:
-
-```rust
-use computer::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
-
-#[async_trait]
-impl RemoteApi for Daytona {
-    fn vendor(&self) -> &str { "daytona" }
-    async fn available(&self) -> Result<()> { … }
-    async fn create(&self, plan: &SandboxPlan) -> Result<Sandbox> { … }
-    async fn find(&self, name: &str) -> Result<Option<Sandbox>> { … }
-    async fn kill(&self, id: &str) -> Result<()> { … }
-    async fn exec(&self, sandbox: &Sandbox, argv: &[String],
-                  env: &BTreeMap<String, String>) -> Result<ExecResult> { … }
-    async fn read(&self, sandbox: &Sandbox, path: &str) -> Result<Vec<u8>> { … }
-    async fn write(&self, sandbox: &Sandbox, path: &str, bytes: &[u8]) -> Result<()> { … }
-}
-
-let (machine, profile) = remote::pair(Arc::new(Daytona::new()?), Arc::new(X11Profile));
-
-let computer = Computer::builder()
-    .machine(Arc::new(machine))
-    .profile(profile)
-    .image("your-snapshot")
+    .profile(Arc::new(WaylandProfile))
     .launch()
     .await?;
 ```
 
-`RemoteMachine` supplies what every vendor does the same way: holding what this process started, pushing a deadline out lazily rather than once per click, joining the name you gave a box to the ID the vendor gave it so a sweep can find it. `RemoteProfile` rewrites the viewer URL and withdraws the DevTools claim. Five more calls — `keep_alive`, `logs`, `carrying`, `reaper`, `ensure_image` — have defaults, and each default is the honest answer for a vendor without the thing.
+CLI:
 
-Ports are the part to get right. These vendors do not forward a port to a host port; each publishes it at an address of its own, so `Sandbox::endpoints` carries a URL per port and a port missing from it has no URL at all. `published_as` formats the `<port>-<id>.<domain>` shape that E2B and Daytona use; Modal hands back a tunnel per port, which goes into the map directly.
+```bash
+BOX=$(computer new --wayland)
+```
+
+The public desktop API is the same for both profiles.
+
+The X11 image uses Xvfb, fluxbox, x11vnc, ImageMagick, and `xdotool`. The Wayland image uses headless sway, wayvnc, `grim`, and one virtual pointer and keyboard per screen that stay for the life of the screen, so a button or a modifier can be held between two steps as on X11.
+
+Wayland cannot read the global pointer after a person moves it. `cursor()` returns `Unsupported` after a handover until the driver moves the pointer again.
+
+## Custom desktops and runtimes
+
+### Use a custom image
+
+Build a local Docker context:
+
+```rust
+let computer = Computer::builder()
+    .image_dir("images/my-desktop")
+    .launch()
+    .await?;
+```
+
+Or pull an existing image:
+
+```rust
+let computer = Computer::builder()
+    .image("registry.example.com/desktop:1")
+    .launch()
+    .await?;
+```
+
+A local context must contain a `Dockerfile` that implements the selected profile. A registry image cannot be combined with extra packages because the crate does not build that image.
+
+An image can declare its contract:
+
+```dockerfile
+LABEL computer.profile="computer-desktop"
+```
+
+The crate refuses a declared profile mismatch before startup.
+
+See [examples/custom_image.rs](examples/custom_image.rs) and [examples/images/acme/](examples/images/acme/) for a small derived image.
+
+### Define a desktop profile
+
+Use `ProfileBuilder` when an image keeps most of a shipped contract:
+
+```rust
+let profile = ProfileBuilder::new(X11Profile)
+    .name("my-desktop")
+    .image_dir("images/mine")
+    .screen_commands(CommandScreen::new("my-screen"))
+    .wallpaper_runtime(CommandWallpaperRuntime::new("my-wallpaper"))
+    .build();
+
+let computer = Computer::builder()
+    .profile(Arc::new(profile))
+    .launch()
+    .await?;
+```
+
+A profile defines the image contract, ports, geometry, environment, capabilities, and display driver. A new display server implements `Desktop` and `DesktopFactory`.
+
+### Add a cloud sandbox vendor
+
+`RemoteApi` is the common interface for E2B, Daytona, Modal, and similar services. An adapter creates, finds, and removes a sandbox; runs commands; and reads and writes files.
+
+`RemoteMachine` supplies shared lifetime, naming, and keep-alive behavior. `RemoteProfile` maps vendor endpoints and removes capabilities that the remote service cannot expose.
+
+Run the local reference adapter before you connect an external API:
 
 ```bash
 cargo run --example custom_sandbox
 ```
 
-That example is a whole vendor in one file, backed by `docker` on this host so every call can be watched working before you write the same one against an API you cannot see. `computer::testing::ScriptedRemote` tests an adapter with no account and no network.
+See [examples/custom_sandbox.rs](examples/custom_sandbox.rs) for a complete adapter and `computer::testing::ScriptedRemote` for tests without an account or network.
 
-Modal is the awkward one worth naming: its sandbox control plane is gRPC behind a Python API, so the calls go to a small Modal web endpoint of your own that creates the sandbox and returns its ID and tunnel URLs. The `RemoteApi` above it is then ordinary HTTP.
+### Audit a desktop
 
-`sandboxes::e2b` is the worked reference: E2B goes through this seam, and everything that is E2B's own — a port that is a subdomain, two tokens where the seam carries one, an image that is a template — is one short file beside its HTTP client.
-
-## Remove desktops that outlived their program
-
-A desktop given a deadline records it on itself as a label, so a sweeper can find one whose program stopped before it could clean up:
+`DesktopSupport` states what a profile provides. `audit` tests those claims against a running desktop:
 
 ```rust
-let removed = computer::sweep_expired(&DockerMachine::default(), SystemTime::now()).await?;
+let audit = computer::audit(&computer).await;
+assert!(audit.ok());
 ```
+
+The audit checks the screen, pointer, DevTools connection, clipboard, viewer, and handover where the profile claims support.
+
+### Clean up expired desktops
+
+```rust
+let removed = computer::sweep_expired(
+    &DockerMachine::default(),
+    SystemTime::now(),
+)
+.await?;
+```
+
+CLI:
 
 ```bash
 computer sweep
 ```
 
-The `computer` command lives in [`crates/computer-cli`](crates/computer-cli).
+`computer sweep` checks the local default Docker runtime, even when a remote server is configured. `computerd` reaps fleet boxes on its own cadence. Use deadlines for services that can stop before normal shutdown.
 
-`expires_when_idle(duration)` is the other half. It removes a desktop that nothing has asked anything of for that long, and every command, screenshot, and file copy through the handle counts as activity. Use `touch()` when work reaches the box some other way.
+## What is inside the box
 
-## Check what a desktop claims
+The default image is based on `debian:bookworm-slim`. It includes:
 
-`DesktopSupport` states what a box provides. `audit` tests each claim against the running box and reports the ones that do not work:
+- Xvfb and fluxbox for the default virtual desktop
+- Chromium with a separate profile for each screen
+- x11vnc, websockify, and noVNC for browser viewing
+- `xdotool` for pointer and keyboard input
+- ImageMagick for PNG capture
+- `xclip` for clipboard and primary selections
+- `socat` for the Chrome DevTools bridge
+- an input guard that blocks synthetic input during human control
 
-```rust
-let audit = computer::audit(&computer).await;
-println!("{audit}");        // 6 met; max_screens not checked (…)
-assert!(audit.ok());
-```
-
-It captures a frame and compares the size, moves the pointer and reads it back, asks DevTools for its version, writes and reads the clipboard, counts viewer connections, and hands the screen over and takes it back. It skips `max_screens`, because starting eight screens costs a processor core and about 2 GB. Both live tests end with an audit.
-
-## Test code that uses the desktop
-
-`computer::testing` supplies test doubles. You can test pointer decisions without a container or image:
-
-```rust
-let host = Arc::new(ScriptedHost::new().saying("X=42\nY=99\n"));
-let screen = X11Desktop::new(host.clone(), ScreenId(0));
-
-screen
-    .click(Point::new(640, 400), Button::Left)
-    .await?;
-assert_eq!(host.last_line(), "xdotool mousemove -- 640 400 click 1");
-```
-
-The normal test suite does not need a container runtime. The live test is ignored by default:
-
-```bash
-cargo test
-cargo test --test live -- --ignored --nocapture          # against a container
-cargo test --test live_microvm -- --ignored --nocapture  # against a microVM
-cargo test --test live_extras -- --ignored --nocapture   # fonts, sound, video
-cargo test --features e2b --test live_e2b -- --ignored --nocapture  # a cloud sandbox
-```
-
-`ScriptedHost` stands in for a screen, `ScriptedCli` for a container runtime, `ScriptedMicroVm` for a hypervisor, and `ScriptedE2b` for a cloud sandbox.
-
-## Examples
-
-```bash
-cargo run --example quickstart
-cargo run --example serve
-cargo run --example attach -- <box> <text>
-cargo run --example tour -- <box>
-cargo run --example recording -- output.gif
-cargo run --example takeover -- <box>
-cargo run --example browser -- <box>
-cargo run --example elements -- <box>
-cargo run --example waiting -- <box>
-cargo run --example research -- <box> "a subject"
-cargo run --example from_spec -- examples/box.json
-cargo run --example demo -- media/demo.gif
-cargo run --example live_desktop
-cargo run --example custom_image
-cargo run --example microvm
-cargo run --example custom_sandbox
-cargo run --features e2b --example e2b -- <template-id>
-cargo run --features e2b --example e2b_takeover -- <template-id>
-```
-
-
-| Example        | Purpose                                              |
-| -------------- | ---------------------------------------------------- |
-| `quickstart`   | Launch, control, and capture a desktop               |
-| `serve`        | Launch a desktop, show its URL, and leave it running |
-| `attach`       | Control an existing named desktop                    |
-| `tour`         | Control two screens                                  |
-| `recording`    | Save the desktop as an animated GIF                  |
-| `takeover`     | Give control to a person and reclaim it              |
-| `browser`      | Drive Chromium over the DevTools protocol            |
-| `elements`     | Find and act on browser elements by name              |
-| `waiting`      | Wait for browser state and use history                |
-| `research`     | Search, open results, and read pages                  |
-| `from_spec`    | Launch from a portable box specification              |
-| `demo`         | Build the animation at the top of this file          |
-| `live_desktop` | Test the image with a real container                 |
-| `custom_image` | Build your own image and drive a box in it           |
-| `microvm`      | Run the desktop with microsandbox                    |
-| `custom_sandbox` | Write a sandbox vendor of your own                 |
-| `e2b`          | Run the desktop in an E2B cloud sandbox              |
-| `e2b_takeover` | Give an E2B desktop to a person                       |
-
+The image tag contains a hash of its source files. A source change creates a new tag instead of reusing stale image contents.
 
 ## Security
 
-The viewer is open by default and published on loopback, which is what a local box has always been. Anyone who can reach a control port can drive the desktop.
+The local viewer is open by default and is published only on loopback. Anyone who can reach a control port can drive the desktop.
 
-Publishing beyond loopback needs a gate. `Auth::Password` prompts in the browser and keeps the credential out of every URL, so it lands in no history and no proxy log — but there is no link to hand anybody. `Auth::Token` puts a ticket in the URL, so one link carries everything, and the credential goes wherever the link goes.
+`computerd` also refuses a non-loopback bind without a server token of at least 16 characters. `/v1/health` remains open for health checks.
+
+Publishing outside loopback requires authentication:
 
 ```rust
 let computer = Computer::builder()
@@ -1064,31 +1740,107 @@ let computer = Computer::builder()
     .advertise("boxes.example.com")
     .launch()
     .await?;
-
-let watch = computer.viewer_url();     // carries its ticket
-let pair = computer.credentials();     // the password, under Auth::Password
 ```
 
-An open viewer beyond loopback is refused at launch rather than published. The two doors carry separate credentials, so a watch link does not become a control link by changing the port.
+`Auth::Password` prompts in the browser and keeps the password out of the URL. `Auth::Token` puts a ticket in the URL so one link carries access.
 
-DevTools is withdrawn rather than published, because CDP has no authentication and cannot be given one. Reach it through the server, which admits a short-lived token it minted (`computer cdp`), or from inside the box.
+Watch and control viewers use separate credentials. Changing the port on a watch URL does not create control access.
 
-`network(false)` blocks network access from the desktop. It does not gate the viewer.
+The box's raw Chrome DevTools port stays on loopback because CDP has no authentication. Use `computer cdp` to mint a short-lived address through the authenticated server. Treat that address as a credential.
 
-A cloud sandbox goes through the same rule: `public_viewer(true)` is reachable from the internet, so it needs a gate like any other publish.
+`network(false)` blocks network access from the desktop. It does not protect the viewer.
 
-A control port exists only while somebody has been handed the screen, and it closes again when the takeover ends. While it is open, the box refuses input from everything else, including a shell inside it.
+A control port exists only during human handover. While it is open, the box rejects other synthetic input.
 
-## Todo
+Browser sessions and persistent profiles contain authenticated account state. Treat them as credentials.
 
-- [x] Chrome Browser Context Support - ability to manage multiple pages as groups
-- [x] Viewer Auth - Password Protect Viewer URL
-- [ ] Filesystem
-- [ ] Full Audio Support
-- [ ] MacOS Desktop Box and Quartz Display Server
-- [x] Computer Rest API & MCP - Manage instances of computer boxes
-- [x] Custom Image Builder - ImageRecipe
-- [x] Accessibility Tree - drive native windows by widget name, not by pixels
+## Examples
+
+Start with these:
+
+- [quickstart](examples/quickstart.rs) launches, controls, and captures a desktop.
+- [browser](examples/browser.rs) controls Chromium through DevTools.
+- [elements](examples/elements.rs) finds and acts on page elements.
+- [capture](examples/capture.rs) captures regions and windows at different sizes.
+- [takeover](examples/takeover.rs) gives control to a person and takes it back.
+- [tour](examples/tour.rs) controls two screens.
+
+The repository also includes:
+
+- [serve](examples/serve.rs) leaves a named desktop running.
+- [attach](examples/attach.rs) connects to a running desktop.
+- [recording](examples/recording.rs) creates an animated GIF.
+- [waiting](examples/waiting.rs) waits for browser state.
+- [research](examples/research.rs) searches and reads web pages.
+- [from_spec](examples/from_spec.rs) launches from a portable specification.
+- [demo](examples/demo.rs) records a multi-step desktop animation.
+- [live_desktop](examples/live_desktop.rs) audits the container image.
+- [custom_image](examples/custom_image.rs) builds and uses another image.
+- [microvm](examples/microvm.rs) runs the desktop with microsandbox.
+- [custom_sandbox](examples/custom_sandbox.rs) implements a sandbox vendor.
+- [e2b](examples/e2b.rs) runs in an E2B sandbox.
+- [e2b_takeover](examples/e2b_takeover.rs) gives an E2B desktop to a person.
+- [client drive](crates/computer-client/examples/drive.rs) exercises the REST client end to end.
+
+Run an example with Cargo:
+
+```bash
+cargo run --example quickstart
+cargo run -p computer-client --example drive
+```
+
+## Workspace crates
+
+- [`computer`](Cargo.toml) is the root package. It re-exports the Rust desktop API and, by default, builds `computer` and `computerd`.
+- [`computer-core`](crates/computer-core) implements boxes, desktops, profiles, display drivers, images, and runtime adapters.
+- [`computer-types`](crates/computer-types) holds portable specifications and shared values.
+- [`computer-api`](crates/computer-api) defines REST wire types.
+- [`computer-client`](crates/computer-client) is the Rust REST client.
+- [`computer-server`](crates/computer-server) implements `computerd`.
+- [`computer-cli`](crates/computer-cli) implements the commands.
+- [`computer-mcp`](crates/computer-mcp) maps MCP tools and the live screen app to REST.
+- [`computer-storage`](crates/computer-storage) provides memory, local, SQLite, PostgreSQL, and S3 storage.
+
+## Development and testing
+
+Run the same static checks as CI:
+
+```bash
+cargo build --workspace
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
+cargo deny check
+```
+
+Also check optional backends and code that is not compiled by the normal workspace commands:
+
+```bash
+cargo clippy -p computer --no-default-features -- -D warnings
+cargo test -p computer-storage --features sqlite,postgres,s3
+cargo test -p computer-server --features sqlite,s3
+cargo clippy -p computer-core --features microsandbox --all-targets -- -D warnings
+python3 scripts/check-page-scripts.py
+crates/computer-mcp/ui/build.sh
+git diff --exit-code -- crates/computer-mcp/ui/screen.html
+for script in crates/computer-core/images/*/*.sh; do bash -n "$script"; done
+```
+
+The normal test suite does not need a container runtime. Live tests are ignored by default:
+
+```bash
+cargo test --test live -- --ignored --nocapture
+cargo test --test live_apps -- --ignored --nocapture
+cargo test --test live_auth -- --ignored --nocapture
+cargo test --test live_microvm -- --ignored --nocapture
+cargo test --test live_extras -- --ignored --nocapture
+cargo test --test live_session -- --ignored --nocapture
+cargo test --test live_wayland -- --ignored --nocapture
+cargo test --features e2b --test live_e2b -- --ignored --nocapture
+```
+
+`computer::testing` provides test doubles for screens, container runtimes, hypervisors, and remote sandboxes.
 
 ## License
 

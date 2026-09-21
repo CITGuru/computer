@@ -13,7 +13,7 @@
 //! ```
 
 use computer::sandboxes::e2b::{self, cloud::Cloud};
-use computer::{Button, Computer, Point, X11Profile};
+use computer::{Auth, Button, Computer, Point, X11Profile};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,6 +38,7 @@ async fn main() -> computer::Result<()> {
         ))
         .profile(profile)
         .image(&template)
+        .auth(Auth::Token)
         .keep_on_drop(keep)
         .launch()
         .await?;

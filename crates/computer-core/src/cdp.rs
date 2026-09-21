@@ -1218,6 +1218,18 @@ fn fillable() -> String {
     FILLABLE.replace("MATCH_FN", MATCH)
 }
 
+fn named() -> String {
+    NAMED
+        .replace("MATCH_FN", MATCH)
+        .replace("SELECTOR_FN", SELECTOR)
+}
+
+fn nearby() -> String {
+    NEARBY
+        .replace("MATCH_FN", MATCH)
+        .replace("SELECTOR_FN", SELECTOR)
+}
+
 fn assign() -> String {
     ASSIGN.replace("MATCH_FN", MATCH)
 }
@@ -1237,6 +1249,46 @@ const BOX: &str = r#"(query) => {
   if (!el) return null;
   if ('checked' in el) return el;
   return el.control || el.querySelector('input[type=checkbox], input[type=radio]') || el;
+}"#;
+
+const NAMED: &str = r#"(query, kind) => {
+  const fits = el =>
+    kind === 'select' ? el.tagName === 'SELECT'
+    : kind === 'file' ? el.tagName === 'INPUT' && el.type === 'file'
+    : el.tagName !== 'LABEL';
+
+  for (const el of (MATCH_FN)(query, false).filter(Boolean)) {
+    if (fits(el)) return null;
+    const control = el.tagName === 'LABEL' ? el.control : null;
+    if (control && fits(control)) return (SELECTOR_FN)(control) || null;
+  }
+  return null;
+}"#;
+
+const NEARBY: &str = r#"(query) => {
+  const el = (MATCH_FN)(query, false).find(Boolean);
+  if (!el) return null;
+
+  const fields = node => Array.from(node.querySelectorAll(
+    'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset])' +
+    ':not([type=image]), textarea, select, [contenteditable=""], [contenteditable="true"]'));
+  const refs = window.__computerRefs || [];
+  const named = field => {
+    const at = refs.indexOf(field);
+    return at >= 0 ? '@e' + (at + 1) : (SELECTOR_FN)(field);
+  };
+
+  let where = 'in';
+  let found = fields(el);
+  if (!found.length && el.parentElement) {
+    where = 'beside';
+    found = fields(el.parentElement);
+  }
+  const count = found.length;
+  const crowd = count > 3;
+  if (crowd) found = [];
+
+  return { tag: el.tagName.toLowerCase(), where, count, crowd, fields: found.map(named).filter(Boolean) };
 }"#;
 
 /// Which of three ways a control takes a value, or the verb that reaches it.
@@ -2520,6 +2572,7 @@ impl Page {
     /// Typed where a person types, assigned where a person does not: a slider
     /// is dragged and a date is picked, and neither takes keystrokes.
     pub async fn fill(&mut self, query: &str, text: &str) -> Result<()> {
+        let query = &self.control_named(query, "any").await?;
         let how = self
             .evaluate(&format!("({fill})({})", json!(query), fill = fillable()))
             .await?;
@@ -2576,13 +2629,49 @@ impl Page {
             Some(verb @ ("select" | "check" | "click" | "upload")) => Err(Error::denied(format!(
                 "{query} does not take typing: use {verb}"
             ))),
-            _ => Err(Error::denied(format!("{query} holds no value"))),
+            _ => Err(Error::denied(self.holds_no_value(query).await)),
+        }
+    }
+
+    async fn holds_no_value(&mut self, query: &str) -> String {
+        let plain = format!("{query} holds no value");
+
+        let Ok(seen) = self
+            .evaluate(&format!("({nearby})({})", json!(query), nearby = nearby()))
+            .await
+        else {
+            return plain;
+        };
+
+        let tag = seen.get("tag").and_then(Value::as_str).unwrap_or_default();
+        let fields: Vec<&str> = seen
+            .get("fields")
+            .and_then(Value::as_array)
+            .map(|fields| fields.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let where_ = seen.get("where").and_then(Value::as_str).unwrap_or("in");
+        let count = seen.get("count").and_then(Value::as_u64).unwrap_or(0);
+        let crowd = seen.get("crowd").and_then(Value::as_bool).unwrap_or(false);
+
+        match fields.as_slice() {
+            [] if tag.is_empty() => plain,
+            [] if crowd => format!(
+                "{plain}: it matched <{tag}>, and {count} fields are {where_} it, too many to \
+                 name; take a snapshot"
+            ),
+            [] => format!("{plain}: it matched <{tag}>, with no field in it or beside it"),
+            [one] => format!("{plain}: it matched <{tag}>, and the field {where_} it is {one}"),
+            several => format!(
+                "{plain}: it matched <{tag}>, and the fields {where_} it are {}",
+                several.join(", ")
+            ),
         }
     }
 
     /// Keyboard focus, without the click that would otherwise carry it: a
     /// click on a menu opens it, and one on a submit sends the form.
     pub async fn focus(&mut self, query: &str) -> Result<Element> {
+        let query = &self.control_named(query, "any").await?;
         let element = self.reach(query).await?;
 
         self.evaluate(&format!(
@@ -2665,6 +2754,7 @@ impl Page {
     }
 
     pub async fn options(&mut self, query: &str) -> Result<Vec<String>> {
+        let query = &self.control_named(query, "select").await?;
         let listed = self
             .evaluate(&format!(
                 "JSON.stringify(Array.from((({MATCH})({}, false).find(e => e.tagName === 'SELECT') || {{ options: [] }}).options).map(o => o.text.trim()))",
@@ -2684,6 +2774,7 @@ impl Page {
         options: &[String],
         drop: bool,
     ) -> Result<Vec<String>> {
+        let query = &self.control_named(query, "select").await?;
         let answered = self
             .evaluate(&format!(
                 "({pick})({}, {}, {drop})",
@@ -2711,6 +2802,7 @@ impl Page {
 
     /// Paths are inside the box.
     pub async fn upload(&mut self, query: &str, paths: &[String]) -> Result<()> {
+        let query = &self.control_named(query, "file").await?;
         let handle = self
             .call(
                 "Runtime.evaluate",
@@ -2736,6 +2828,22 @@ impl Page {
         )
         .await
         .map(|_| ())
+    }
+
+    async fn control_named(&mut self, query: &str, kind: &str) -> Result<String> {
+        let control = self
+            .evaluate(&format!(
+                "({named})({}, {})",
+                json!(query),
+                json!(kind),
+                named = named()
+            ))
+            .await?;
+
+        Ok(control
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| query.to_string()))
     }
 
     async fn ref_state(&mut self, query: &str) -> Result<Option<String>> {
@@ -2829,8 +2937,94 @@ impl Page {
             return Ok(());
         }
         self.call("Input.insertText", json!({ "text": text }))
-            .await
-            .map(|_| ())
+            .await?;
+
+        let last = text
+            .char_indices()
+            .next_back()
+            .and_then(|(_, typed)| Keystroke::of(typed));
+        if let Some(stroke) = last {
+            for event in ["rawKeyDown", "keyUp"] {
+                self.call("Input.dispatchKeyEvent", stroke.event(event))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Keystroke {
+    typed: char,
+    code: String,
+    virtual_key: u32,
+    shifted: bool,
+}
+
+impl Keystroke {
+    const SYMBOLS: [(char, char, &'static str, u32); 21] = [
+        ('1', '!', "Digit1", 49),
+        ('2', '@', "Digit2", 50),
+        ('3', '#', "Digit3", 51),
+        ('4', '$', "Digit4", 52),
+        ('5', '%', "Digit5", 53),
+        ('6', '^', "Digit6", 54),
+        ('7', '&', "Digit7", 55),
+        ('8', '*', "Digit8", 56),
+        ('9', '(', "Digit9", 57),
+        ('0', ')', "Digit0", 48),
+        ('-', '_', "Minus", 189),
+        ('=', '+', "Equal", 187),
+        ('[', '{', "BracketLeft", 219),
+        (']', '}', "BracketRight", 221),
+        ('\\', '|', "Backslash", 220),
+        (';', ':', "Semicolon", 186),
+        ('\'', '"', "Quote", 222),
+        (',', '<', "Comma", 188),
+        ('.', '>', "Period", 190),
+        ('/', '?', "Slash", 191),
+        ('`', '~', "Backquote", 192),
+    ];
+
+    fn of(typed: char) -> Option<Self> {
+        if typed == ' ' {
+            return Some(Self {
+                typed,
+                code: "Space".to_string(),
+                virtual_key: 32,
+                shifted: false,
+            });
+        }
+        if typed.is_ascii_alphabetic() {
+            let upper = typed.to_ascii_uppercase();
+            return Some(Self {
+                typed,
+                code: format!("Key{upper}"),
+                virtual_key: upper as u32,
+                shifted: typed.is_ascii_uppercase(),
+            });
+        }
+
+        Self::SYMBOLS
+            .iter()
+            .find(|(plain, shifted, _, _)| typed == *plain || typed == *shifted)
+            .map(|(_, shifted, code, virtual_key)| Self {
+                typed,
+                code: (*code).to_string(),
+                virtual_key: *virtual_key,
+                shifted: typed == *shifted,
+            })
+    }
+
+    fn event(&self, kind: &str) -> Value {
+        json!({
+            "type": kind,
+            "key": self.typed.to_string(),
+            "code": self.code,
+            "windowsVirtualKeyCode": self.virtual_key,
+            "nativeVirtualKeyCode": self.virtual_key,
+            "modifiers": if self.shifted { 8 } else { 0 },
+        })
     }
 }
 
@@ -4172,6 +4366,131 @@ mod tests {
             DESCRIBE.contains(".replace(/[:*]\\s*$/, '')"),
             "\"Customer name:\" is the label of \"Customer name\""
         );
+    }
+
+    #[test]
+    fn test_the_name_a_snapshot_gives_a_field_reaches_the_field() {
+        let script = named();
+
+        assert!(
+            !script.contains("MATCH_FN") && !script.contains("SELECTOR_FN"),
+            "both helpers are spliced in, or the page throws on a name nothing defines"
+        );
+        assert!(
+            NAMED.contains("el.tagName === 'LABEL' ? el.control : null"),
+            "a form that wraps each field in its label is matched on the label, which holds \
+             no value, takes no file and has no options: `control` is the field it names, \
+             wrapped or pointed at with `for`"
+        );
+        assert!(
+            NAMED.contains("if (fits(el)) return null;"),
+            "a query that reaches a field by itself is left as it was asked"
+        );
+        assert!(
+            NAMED.contains("kind === 'select'") && NAMED.contains("kind === 'file'"),
+            "a dropdown and a file input are looked for past a label that names something else"
+        );
+    }
+
+    #[test]
+    fn test_a_refused_fill_names_the_field_it_could_have_meant() {
+        let script = nearby();
+
+        assert!(
+            !script.contains("MATCH_FN") && !script.contains("SELECTOR_FN"),
+            "both helpers are spliced in, or the refusal is the bare one"
+        );
+        assert!(
+            NEARBY.contains("at >= 0 ? '@e' + (at + 1) : (SELECTOR_FN)(field)"),
+            "the number a snapshot gave is the name the caller already has for the field; \
+             without a snapshot the selector is one that works as a query"
+        );
+        assert!(
+            NEARBY.contains("where = 'beside';") && NEARBY.contains("fields(el.parentElement)"),
+            "\"Company\" in a div beside its field matches the div: the field is named, not \
+             filled, because words and a field that only share a parent are a guess"
+        );
+        assert!(
+            NEARBY.contains("if (crowd) found = [];"),
+            "a match whose parent is the whole form would list the form"
+        );
+    }
+
+    #[test]
+    fn test_a_letter_is_typed_as_the_key_a_keyboard_has_for_it() {
+        let small = Keystroke::of('a').expect("a key");
+        assert_eq!(
+            (small.code.as_str(), small.virtual_key, small.shifted),
+            ("KeyA", 65, false)
+        );
+
+        let capital = Keystroke::of('A').expect("a key");
+        assert_eq!(
+            (capital.code.as_str(), capital.virtual_key, capital.shifted),
+            ("KeyA", 65, true)
+        );
+
+        let colon = Keystroke::of(':').expect("a key");
+        assert_eq!(
+            (colon.code.as_str(), colon.virtual_key, colon.shifted),
+            ("Semicolon", 186, true)
+        );
+
+        let slash = Keystroke::of('/').expect("a key");
+        assert_eq!((slash.code.as_str(), slash.shifted), ("Slash", false));
+        assert_eq!(Keystroke::of(' ').expect("a key").code, "Space");
+
+        for typed in (0x20u8..0x7F).map(char::from) {
+            assert!(
+                Keystroke::of(typed).is_some(),
+                "{typed:?} is on a US keyboard"
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_last_key_is_pressed_again_with_no_text_in_it() {
+        let source = include_str!("cdp.rs");
+        let typing = source
+            .split("pub async fn type_text(&mut self, text: &str)")
+            .nth(1)
+            .and_then(|rest| rest.split("struct Keystroke").next())
+            .expect("type_text is here");
+        let inserted = typing.find("Input.insertText").expect("the text goes in");
+        let pressed = typing
+            .find(r#"["rawKeyDown", "keyUp"]"#)
+            .expect("then one key");
+
+        assert!(
+            inserted < pressed,
+            "inserted text fires no key event, and a date picker that reads its field on \
+             keyup never read this one: it put its own empty date back when the field lost \
+             the focus. One key after the text is in, and it reads all of it"
+        );
+
+        let stroke = Keystroke::of('A').expect("a key");
+        let down = stroke.event("rawKeyDown");
+        assert!(
+            down.get("text").is_none() && stroke.event("keyUp").get("text").is_none(),
+            "text on either would type the letter a second time"
+        );
+        assert_eq!(down["key"], "A");
+        assert_eq!(down["code"], "KeyA");
+        assert_eq!(
+            down["modifiers"], 8,
+            "a capital arrives with shift, as from a keyboard"
+        );
+    }
+
+    #[test]
+    fn test_text_that_ends_on_no_key_is_followed_by_none() {
+        for typed in ['é', '日', '🙂', '\n', '\t'] {
+            assert!(
+                Keystroke::of(typed).is_none(),
+                "{typed:?}: a new line as a key would send a one-line form, a tab would leave \
+                 the field, and the rest are on no key here"
+            );
+        }
     }
 
     #[test]
