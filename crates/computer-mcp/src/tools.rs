@@ -173,6 +173,13 @@ pub fn catalogue() -> Value {
                     "idle_minutes": {
                         "type": "integer",
                         "description": "Remove the box once nothing has used it for this long."
+                    },
+                    "profile": {
+                        "type": "string",
+                        "description": "A name for the browser's profile, such as `work`. The \
+                                        logins, cookies and history in it outlive the box, and \
+                                        the next box given the same name starts with them. One \
+                                        box at a time can hold a profile."
                     }
                 }
             }),
@@ -845,6 +852,72 @@ pub fn catalogue() -> Value {
                     }
                 }),
                 &["chord"]
+            )
+        ),
+        tool(
+            "save_state",
+            "Keep the browser's login under a name, to load into another box with `load_state`: \
+             the cookies, and the storage of each origin. The server holds it until it \
+             restarts; nothing of it comes back to you. With no `origins`, the origins of the \
+             tabs open now. For a login that outlives the server, launch boxes with a \
+             `profile` instead.",
+            with_box(
+                json!({
+                    "name": { "type": "string", "description": "Such as `work`." },
+                    "origins": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Such as `https://mail.example.com`."
+                    },
+                    "session_storage": {
+                        "type": "boolean",
+                        "description": "Also the tab's session storage, which lives only as \
+                                        long as the tab."
+                    },
+                    "indexed_db": {
+                        "type": "boolean",
+                        "description": "Also IndexedDB, where some sites keep their login."
+                    }
+                }),
+                &["name"]
+            )
+        ),
+        tool(
+            "load_state",
+            "Load a login `save_state` kept into this box's browser, and open its origins so \
+             the storage lands. Open the site after it to be logged in.",
+            with_box(json!({ "name": { "type": "string" } }), &["name"])
+        ),
+        tool(
+            "cookies",
+            "Read, set or clear the browser's cookies. `list` names each cookie and where it \
+             is sent, without its value unless `values` is true. `set` takes `cookies` as \
+             name and value pairs for `url`, or `curl`, the text of a browser's \
+             copy-as-cURL. `clear` takes `url` for one site, or `all`.",
+            with_box(
+                json!({
+                    "op": { "type": "string", "enum": ["list", "set", "clear"] },
+                    "url": {
+                        "type": "string",
+                        "description": "The site: list and clear keep to the cookies it is sent."
+                    },
+                    "values": { "type": "boolean", "description": "list: show the values too." },
+                    "cookies": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": { "type": "string" },
+                                "value": { "type": "string" },
+                                "http_only": { "type": "boolean" }
+                            },
+                            "required": ["name", "value"]
+                        }
+                    },
+                    "curl": { "type": "string" },
+                    "all": { "type": "boolean", "description": "clear: every cookie of every site." }
+                }),
+                &["op"]
             )
         ),
         tool(
@@ -2032,6 +2105,40 @@ pub async fn call(
                 false => answered.json,
             }))
         }
+        "save_state" => {
+            let id = text(arguments, "box_id")?;
+            let view = client
+                .save_state(
+                    &id,
+                    &computer_api::SaveState {
+                        origins: strings(arguments, "origins"),
+                        name: Some(text(arguments, "name")?),
+                        session_storage: flag(arguments, "session_storage"),
+                        indexed_db: flag(arguments, "indexed_db"),
+                        no_local_storage: false,
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(said_state(&view, "saved")))
+        }
+        "load_state" => {
+            let id = text(arguments, "box_id")?;
+            let view = client
+                .load_state(
+                    &id,
+                    &computer_api::LoadState {
+                        name: Some(text(arguments, "name")?),
+                        session_json: None,
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(said_state(&view, "loaded")))
+        }
+        "cookies" => cookies(client, arguments).await,
         "console" => {
             let id = text(arguments, "box_id")?;
             let errors = flag(arguments, "errors");
@@ -2255,6 +2362,7 @@ fn asked(arguments: &Value) -> (Spec, Placement) {
         cpus: said("cpus"),
         expires_after_secs: whole("ttl_minutes").map(|minutes| minutes * 60),
         idle_timeout_secs: whole("idle_minutes").map(|minutes| minutes * 60),
+        profile: said("profile"),
         ..Placement::default()
     };
 
@@ -2864,6 +2972,116 @@ fn saw(out: &Out) -> String {
         },
         Out::Apps(names) => names.join(", "),
     }
+}
+
+fn said_state(view: &computer_api::StateView, done: &str) -> String {
+    let mut said = format!(
+        "{done} {} as {}: {} cookies and the storage of {} origin(s), for {}",
+        match done {
+            "saved" => "the login",
+            _ => "the login kept",
+        },
+        view.name.as_deref().unwrap_or("?"),
+        view.cookies,
+        view.stored,
+        view.origins.join(", ")
+    );
+    for gap in &view.incomplete {
+        said.push_str(&format!("\nnot saved: {gap}"));
+    }
+    said
+}
+
+async fn cookies(client: &Client, arguments: &Value) -> Result<Answer, String> {
+    let id = text(arguments, "box_id")?;
+    let url = arguments.get("url").and_then(Value::as_str);
+
+    match text(arguments, "op")?.as_str() {
+        "list" => {
+            let cookies = client.cookies(&id, url).await.map_err(|e| e.to_string())?;
+            Ok(Answer::Text(said_cookies(
+                &cookies,
+                flag(arguments, "values"),
+            )))
+        }
+        "set" => {
+            let (url, cookies) = match arguments.get("curl").and_then(Value::as_str) {
+                Some(command) => {
+                    let (url, cookies) = computer_client::cookies_from_curl(command)?;
+                    (Some(url), cookies)
+                }
+                None => {
+                    let given = arguments
+                        .get("cookies")
+                        .and_then(Value::as_array)
+                        .ok_or("set takes cookies, or curl")?;
+                    let cookies = given
+                        .iter()
+                        .map(|one| {
+                            Ok(computer_api::CookieSet {
+                                name: text(one, "name")?,
+                                value: text(one, "value")?,
+                                http_only: flag(one, "http_only"),
+                                ..computer_api::CookieSet::default()
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    (url.map(str::to_string), cookies)
+                }
+            };
+
+            let set = client
+                .set_cookies(&id, &computer_api::SetCookies { url, cookies })
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(Answer::Text(format!(
+                "set {}",
+                set.iter()
+                    .map(|cookie| format!("{} for {}{}", cookie.name, cookie.domain, cookie.path))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )))
+        }
+        "clear" => {
+            if url.is_none() && !flag(arguments, "all") {
+                return Err("clear takes url for one site, or all: true for every one".to_string());
+            }
+            let cleared = client
+                .clear_cookies(&id, url)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(Answer::Text(format!("cleared {} cookies", cleared.cleared)))
+        }
+        other => Err(format!("no such op: {other}; list, set or clear")),
+    }
+}
+
+fn said_cookies(cookies: &[computer_api::Cookie], values: bool) -> String {
+    if cookies.is_empty() {
+        return "no cookies".to_string();
+    }
+
+    cookies
+        .iter()
+        .map(|cookie| {
+            let mut said = match values {
+                true => format!("{}={}", cookie.name, cookie.value),
+                false => cookie.name.clone(),
+            };
+            said.push_str(&format!("  {}{}", cookie.domain, cookie.path));
+            if cookie.secure {
+                said.push_str("  secure");
+            }
+            if cookie.http_only {
+                said.push_str("  http-only");
+            }
+            if cookie.expires.is_none() {
+                said.push_str("  ends with the browser");
+            }
+            said
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn said_console(view: &computer_api::ConsoleView, errors: bool) -> String {
@@ -3764,6 +3982,7 @@ mod tests {
             "cpus": "2",
             "ttl_minutes": 60,
             "idle_minutes": 10,
+            "profile": "work",
         });
         for name in offered.as_object().expect("properties").keys() {
             assert!(
@@ -3798,6 +4017,7 @@ mod tests {
         assert_eq!(placement.cpus.as_deref(), Some("2"));
         assert_eq!(placement.expires_after_secs, Some(3600));
         assert_eq!(placement.idle_timeout_secs, Some(600));
+        assert_eq!(placement.profile.as_deref(), Some("work"));
     }
 
     #[test]
@@ -3881,6 +4101,52 @@ mod tests {
                 "{name} outlives its call, so it says for how long"
             );
         }
+    }
+
+    #[test]
+    fn test_a_cookie_list_names_the_cookies_and_keeps_the_values_back_unless_asked() {
+        let cookies = [computer_api::Cookie {
+            name: "sid".to_string(),
+            value: "abc123".to_string(),
+            domain: "example.com".to_string(),
+            path: "/".to_string(),
+            expires: None,
+            http_only: true,
+            secure: true,
+            same_site: None,
+        }];
+
+        let quiet = said_cookies(&cookies, false);
+        assert_eq!(
+            quiet,
+            "sid  example.com/  secure  http-only  ends with the browser"
+        );
+        assert!(
+            !quiet.contains("abc123"),
+            "a value is a login, and what a tool answers stays in the conversation"
+        );
+        assert!(said_cookies(&cookies, true).starts_with("sid=abc123  "));
+        assert!(
+            crate::boundaries::PAGE_TEXT.contains(&"cookies"),
+            "a page chooses its cookies' names and values"
+        );
+    }
+
+    #[test]
+    fn test_a_state_is_saved_by_name_so_the_login_never_reaches_the_model() {
+        let listed = catalogue();
+        let save = listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|tool| tool["name"] == "save_state")
+            .expect("offered");
+        assert!(
+            save["inputSchema"]["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("name"))),
+            "without a name the server would hand the session back, cookies and all"
+        );
     }
 
     #[test]

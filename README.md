@@ -850,6 +850,29 @@ let tabs = browser.import_session(&session).await?;
 
 `Carry::default()` includes cookies and local storage. Enable IndexedDB for sites that store login state there. Session data grants account access and must be handled as a credential.
 
+From the CLI, save to a file or leave it with the server under a name:
+
+```bash
+computer state "$BOX" save login.json --origin https://mail.example.com
+computer state "$OTHER" load login.json
+
+computer state "$BOX" save --name work
+computer state "$OTHER" load --name work
+computer state list
+computer state rm work
+```
+
+With no `--origin`, the origins of the tabs open now are saved. The file is written readable by its owner only. A named state stays with the server until it restarts; the MCP tools `save_state` and `load_state` use names only, so the login never passes through the model.
+
+Read, set and clear single cookies:
+
+```bash
+computer cookies "$BOX" --url https://example.com
+computer cookies "$BOX" set theme=dark --url https://example.com
+computer cookies "$BOX" set --curl "$(pbpaste)"      # a browser's "copy as cURL"
+computer cookies "$BOX" clear --url https://example.com
+```
+
 ### CLI command reference
 
 These are all commands under `computer browser`:
@@ -1314,6 +1337,14 @@ let computer = Computer::builder()
 ```
 
 The profile includes logins, history, extensions, and browser storage. It stays on the host and can be used by only one desktop at a time.
+
+From the CLI or MCP, name the profile when the box is made:
+
+```bash
+computer new --profile work
+```
+
+The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B and microsandbox boxes refuse a profile, since they have no Docker volume.
 
 Use session export when the data must move between hosts. Use a named profile when all browser state must stay on one host.
 

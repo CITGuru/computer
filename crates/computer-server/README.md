@@ -93,6 +93,8 @@ curl -s localhost:8080/v1/boxes -H 'content-type: application/json' \
 
 Unknown keys in a spec are refused rather than ignored: a misspelled key that is quietly dropped hands back a box missing the thing it was misspelled for.
 
+`"profile": "work"` in the placement keeps the browser's logins, cookies and history in the volume `computer-profile-work` after the box is gone, and the next box given the name starts with them. A profile that another box holds, running or stopped, is refused with that box's name.
+
 ## Drive it
 
 An agent's step is several actions and one look, so that is the request. The frame the actions produced comes back in the same response.
@@ -242,6 +244,9 @@ The reading itself is `computer::Page::read`, so a library user gets it without 
 | `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
 | `GET /v1/boxes/{id}/page/snapshot?scope=&limit=&delta=&quiet_ms=` | every control on the page in order, numbered; or what changed since the last one |
 | `POST /v1/boxes/{id}/page/element` | click, fill, dropdown, upload, hover, highlight, drag, wait, history or scroll, by query; `new_tab` on a click opens the link in its own tab |
+| `POST /v1/boxes/{id}/state/save`, `…/state/load` | the browser's login, as `session_json` or kept on the server under `name` until it restarts |
+| `GET /v1/states`, `DELETE /v1/states/{name}` | the names the server keeps |
+| `GET`/`POST`/`DELETE` `/v1/boxes/{id}/cookies?url=` | the browser's cookies: list, set, or clear one site's or every one |
 | `POST /v1/boxes/{id}/page/console` | what the page logged since it loaded; `errors` keeps the failures, `clear` empties it |
 | `POST /v1/boxes/{id}/page/pdf` | the page printed to PDF, as base64, or into the box at `path` |
 | `POST /v1/boxes/{id}/page/screenshot` | the page as the browser drew it; `annotate` draws each snapshot number over its control |

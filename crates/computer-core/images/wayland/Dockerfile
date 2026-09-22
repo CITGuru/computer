@@ -61,7 +61,7 @@ RUN if [ -n "$EXTRA_PACKAGES" ]; then \
 
 # Not root: sway refuses to start as root.
 RUN useradd --create-home --shell /bin/bash --uid 1000 computer \
-  && mkdir -p /tmp/computer \
+  && mkdir -p /tmp/computer /home/computer/.browser-profiles \
   && chown -R computer:computer /tmp/computer /home/computer
 
 ENV HOME=/home/computer

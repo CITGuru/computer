@@ -73,6 +73,9 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
                 let minutes: u64 = number(arg, value("a number of minutes")?)?;
                 body.placement.idle_timeout_secs = Some(minutes * 60);
             }
+            "--profile" => {
+                body.placement.profile = Some(value("a profile name, such as work")?.to_string());
+            }
             "--spec" | "--url" | "--name" => {
                 value("a value")?;
             }
@@ -166,6 +169,8 @@ mod tests {
             "60",
             "--idle",
             "10",
+            "--profile",
+            "work",
         ]))
         .expect("all of it");
 
@@ -181,6 +186,7 @@ mod tests {
         assert_eq!(body.placement.runtime.as_deref(), Some("podman"));
         assert_eq!(body.placement.expires_after_secs, Some(3600));
         assert_eq!(body.placement.idle_timeout_secs, Some(600));
+        assert_eq!(body.placement.profile.as_deref(), Some("work"));
     }
 
     #[test]

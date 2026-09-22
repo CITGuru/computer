@@ -173,6 +173,11 @@ impl Machine for RemoteMachine {
             });
         }
 
+        if config.profiles.is_some() {
+            return Err(Error::Unsupported {
+                gaps: vec!["a named browser profile, which needs a Docker volume"],
+            });
+        }
         // A sandbox has no entrypoint of its own.
         if config.boot.is_empty() {
             return Err(Error::Unsupported {

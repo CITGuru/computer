@@ -9,6 +9,27 @@ use std::time::Duration;
 /// The clock starts at creation, and below this a box can expire while starting.
 const MIN_LIFE: u64 = 60;
 
+pub const PROFILE_VOLUME: &str = "computer-profile-";
+
+pub fn profile_volume(name: &str) -> Result<String> {
+    let plain = name
+        .chars()
+        .all(|one| one.is_ascii_alphanumeric() || matches!(one, '-' | '_' | '.'));
+    let leads = name
+        .chars()
+        .next()
+        .is_some_and(|one| one.is_ascii_alphanumeric());
+
+    match (plain && leads && name.len() <= 40, name.is_empty()) {
+        (_, true) => Err(Error::invalid("a profile needs a name, such as work")),
+        (true, false) => Ok(format!("{PROFILE_VOLUME}{name}")),
+        (false, false) => Err(Error::invalid(format!(
+            "{name:?} is not a profile name: a letter or digit first, then letters, digits, \
+             - _ and ., 40 at most"
+        ))),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Resolved {
     pub width: u32,
@@ -101,6 +122,9 @@ impl Builder {
         if let Some(secs) = placement.idle_timeout_secs {
             self = self.expires_when_idle(Duration::from_secs(secs));
         }
+        if let Some(name) = &placement.profile {
+            self = self.profiles(profile_volume(name)?);
+        }
 
         Ok(self)
     }
@@ -181,6 +205,52 @@ fn bind_of(bind: spec::Bind) -> Bind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_profile_is_a_volume_of_its_own_name() {
+        assert_eq!(
+            profile_volume("work").expect("a name"),
+            "computer-profile-work"
+        );
+        assert_eq!(
+            profile_volume("client.a_2-b").expect("a name"),
+            "computer-profile-client.a_2-b"
+        );
+        for wrong in ["", "-work", "two words", "a/b", "../etc", &"x".repeat(41)] {
+            assert!(
+                profile_volume(wrong).is_err(),
+                "{wrong:?} names no volume Docker takes, or one outside the profiles"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_placement_with_a_profile_mounts_it_and_one_without_mounts_none() {
+        let placed = Builder::default()
+            .place(&Placement {
+                profile: Some("work".to_string()),
+                ..Placement::default()
+            })
+            .expect("placed");
+        assert_eq!(
+            placed.config().expect("a config").profiles.as_deref(),
+            Some("computer-profile-work")
+        );
+
+        let plain = Builder::default()
+            .place(&Placement::default())
+            .expect("placed");
+        assert_eq!(plain.config().expect("a config").profiles, None);
+
+        assert!(
+            Builder::default()
+                .place(&Placement {
+                    profile: Some("a b".to_string()),
+                    ..Placement::default()
+                })
+                .is_err()
+        );
+    }
 
     fn parsed(json: &str) -> Spec {
         serde_json::from_str(json).expect("a spec")
