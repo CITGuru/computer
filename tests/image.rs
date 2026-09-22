@@ -765,3 +765,38 @@ fn an_app_the_box_was_built_with_is_offered_by_the_dock() {
         "the entries exist only in an image built with apps"
     );
 }
+
+#[test]
+fn a_view_door_opened_before_the_box_had_its_secret_is_opened_again_behind_the_gate() {
+    let start = SCREEN_SH.split("\nstart() {").nth(1).expect("a start");
+    let start = start.split("\n}\n").next().unwrap_or(start);
+    assert!(
+        start.contains("reopen_view || exit 1\n    exit 0"),
+        "an E2B template is a snapshot taken before any secret existed, so a screen that is \
+         already up keeps the door it opened then unless start looks at it again"
+    );
+
+    let reopen = SCREEN_SH
+        .split("\nreopen_view() {")
+        .nth(1)
+        .expect("the repair is one function");
+    let reopen = reopen.split("\n}\n").next().unwrap_or(reopen);
+    assert!(
+        reopen.contains("build_gate view"),
+        "the door is held against the gate the settings ask for now"
+    );
+    assert!(
+        reopen.contains(r#"*" 0.0.0.0:${view_port} ${gate_args[*]} ") return 0 ;;"#),
+        "a door that already has that gate is left alone, so a box not made from a \
+         snapshot is not touched"
+    );
+    assert!(
+        reopen.contains(r#"pkill -f "$door""#),
+        "websockify forks one process for each viewer, so a viewer already on the open door \
+         keeps it unless every process on that door is stopped"
+    );
+    assert!(
+        reopen.contains("await closed"),
+        "the old door must let go of the port before the gated one can take it"
+    );
+}
