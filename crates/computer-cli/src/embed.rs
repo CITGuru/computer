@@ -6,8 +6,7 @@ static SERVING: OnceLock<Arc<AppState>> = OnceLock::new();
 pub async fn start() -> Result<String, String> {
     let state = Arc::new(AppState::from_env().await?);
 
-    let runtimes = recover::runtimes();
-    recover::adopt(&state, &runtimes, &recover::sandboxes()).await;
+    recover::adopt(&state).await;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await

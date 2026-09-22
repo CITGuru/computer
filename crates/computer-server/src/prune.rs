@@ -134,6 +134,7 @@ mod tests {
 
     fn record(id: &str) -> BoxRecord {
         BoxRecord {
+            runtime: "docker".to_string(),
             id: id.to_string(),
             spec: Spec::default(),
             placement: Placement::default(),

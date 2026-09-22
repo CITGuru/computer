@@ -25,9 +25,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(AppState::from_env().await?.gated(token));
 
-    let runtimes = computer_server::recover::runtimes();
-    let sandboxes = computer_server::recover::sandboxes();
-    let taken = computer_server::recover::adopt(&state, &runtimes, &sandboxes).await;
+    let taken = computer_server::recover::adopt(&state).await;
     if taken > 0 {
         tracing::info!(taken, "took back boxes left running by an earlier server");
     }
@@ -38,7 +36,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .map(std::time::Duration::from_secs)
         .unwrap_or(computer_server::reap::EVERY);
 
-    computer_server::reap::spawn(Arc::clone(&state), runtimes, every);
+    computer_server::reap::spawn(Arc::clone(&state), every);
     computer_server::prune::spawn(Arc::clone(&state), computer_server::prune::every());
 
     let listener = tokio::net::TcpListener::bind(address).await?;
@@ -49,6 +47,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         %address,
         gated = state.token.is_some(),
         mcp = "/mcp",
+        runtimes = %state.runtimes.names(),
         "computerd is listening"
     );
     let app = routes::router(Arc::clone(&state)).merge(computer_server::mcp::router(

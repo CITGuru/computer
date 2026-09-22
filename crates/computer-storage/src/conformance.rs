@@ -4,6 +4,7 @@ use computer_api::{Actor, Placement, Spec, TraceEvent};
 
 fn record(id: &str, width: u32) -> BoxRecord {
     BoxRecord {
+        runtime: "docker".to_string(),
         id: id.to_string(),
         spec: Spec::default(),
         placement: Placement::default(),

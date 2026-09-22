@@ -540,3 +540,62 @@ async fn test_mcp_refuses_what_is_not_json() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], -32700);
 }
+
+#[tokio::test]
+async fn test_a_server_says_which_runtimes_it_has_and_what_they_run() {
+    let (status, body) = send(get("/v1/runtimes")).await;
+
+    assert_eq!(status, StatusCode::OK);
+
+    let runtimes = body["runtimes"].as_array().expect("a list");
+    let docker = runtimes
+        .iter()
+        .find(|runtime| runtime["name"] == "docker")
+        .expect("the engine this server was given");
+
+    assert_eq!(docker["place"], "host");
+    assert_eq!(docker["environment"]["kind"], "container");
+    assert_eq!(docker["state"], "ready");
+    assert_eq!(docker["boxes"], 0);
+    assert_eq!(docker["can"]["reach"], "host_port");
+}
+
+#[tokio::test]
+async fn test_a_runtime_this_server_does_not_have_is_not_found() {
+    let (status, body) = send(get("/v1/runtimes/nowhere")).await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}
+
+#[tokio::test]
+async fn test_a_placement_naming_a_program_no_longer_runs_it() {
+    let (status, body) = send(post(
+        "/v1/boxes",
+        r#"{"placement":{"runtime":"/usr/bin/id"}}"#,
+    ))
+    .await;
+
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a runtime is a name this server offers, not a program it runs: {body}"
+    );
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|why| why.contains("docker")),
+        "and the refusal says what can be asked for instead: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_a_box_says_which_runtime_it_is_on() {
+    let (status, body) = send(post("/v1/boxes", r#"{}"#)).await;
+
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        body["runtime"], "docker",
+        "so a restart knows where to look for it: {body}"
+    );
+}

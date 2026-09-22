@@ -92,6 +92,23 @@ impl Client {
             .await
     }
 
+    pub async fn runtimes(&self) -> Result<Vec<RuntimeView>> {
+        let listed: RuntimeList = self
+            .send(reqwest::Method::GET, "/v1/runtimes", None, &[])
+            .await?;
+        Ok(listed.runtimes)
+    }
+
+    pub async fn runtime(&self, name: &str) -> Result<RuntimeView> {
+        self.send(
+            reqwest::Method::GET,
+            &format!("/v1/runtimes/{name}"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     pub async fn stop(&self, id: &str) -> Result<BoxView> {
         self.send(
             reqwest::Method::POST,

@@ -128,6 +128,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             axum::routing::delete(close_window),
         )
         .route("/v1/catalog", get(catalog))
+        .route("/v1/runtimes", get(list_runtimes))
+        .route("/v1/runtimes/{name}", get(get_runtime))
         .route("/v1/boxes/{id}/pages", get(list_tabs))
         .route("/v1/boxes/{id}/pages/{tab}", delete(close_tab))
         .route("/v1/boxes/{id}/pages/{tab}/focus", post(focus_tab))
@@ -175,25 +177,32 @@ async fn create_box(
 
     let digest = body.spec.digest();
     let id = new_id();
-    let (builder, resolved) = spec::plan(&body.spec, &body.placement, &id)?;
-    let builder = through(builder, &state);
+    let runtime = state.runtimes.resolve(body.placement.runtime.as_deref())?;
+    let (builder, resolved) = spec::plan(&body.spec, &body.placement, &id, &runtime)?;
 
-    tracing::info!(%id, %digest, "launching a box");
+    tracing::info!(%id, %digest, runtime = %runtime.name, "launching a box");
     let computer = builder.launch().await?;
 
     let entry = state
         .registry
         .insert(
             id,
+            runtime.name.clone(),
             body.spec.clone(),
-            resolved.screens,
-            resolved.width,
-            resolved.height,
+            resolved,
             computer,
         )
         .await;
 
-    kept(&state, &entry.id, &body.spec, &body.placement, &resolved).await;
+    kept(
+        &state,
+        &entry.id,
+        &runtime.name,
+        &body.spec,
+        &body.placement,
+        &resolved,
+    )
+    .await;
     state
         .record(
             &entry.id,
@@ -219,6 +228,12 @@ async fn list_boxes(State(state): State<Arc<AppState>>) -> Json<BoxList> {
         boxes.push(viewed(entry, state_of(entry).await));
     }
 
+    for (id, why) in state.all_out_of_reach() {
+        if let Ok(Some(record)) = state.store.get_box(&id).await {
+            boxes.push(unreachable(&record, why));
+        }
+    }
+
     Json(BoxList { boxes })
 }
 
@@ -238,7 +253,15 @@ async fn get_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = match state.registry.get(&id).await {
+        Ok(entry) => entry,
+        Err(missing) => {
+            let why = state.why_out_of_reach(&id).ok_or_else(|| missing.clone())?;
+            let record = state.store.get_box(&id).await?.ok_or(missing)?;
+
+            return Ok(Json(unreachable(&record, why)));
+        }
+    };
     let state = state_of(&entry).await;
 
     Ok(Json(viewed(&entry, state)))
@@ -1858,25 +1881,37 @@ async fn fork(
         }),
     };
     let new_id = new_id();
-    let (builder, resolved) = spec::plan(&spec, &placement, &new_id)?;
-    let builder = through(builder, &state);
+    let asked = match placement.runtime.clone() {
+        named @ Some(_) => named,
+        None => match state.registry.get(&id).await {
+            Ok(source) => Some(source.runtime.clone()),
+            Err(_) => state
+                .store
+                .get_box(&id)
+                .await
+                .ok()
+                .flatten()
+                .map(|record| record.runtime),
+        },
+    };
+    let runtime = state.runtimes.resolve(asked.as_deref())?;
+    let (builder, resolved) = spec::plan(&spec, &placement, &new_id, &runtime)?;
 
-    tracing::info!(from = %id, to = %new_id, "forking a box");
+    tracing::info!(from = %id, to = %new_id, runtime = %runtime.name, "forking a box");
     let computer = builder.launch().await?;
 
     let entry = state
         .registry
         .insert(
             new_id.clone(),
+            runtime.name.clone(),
             (*spec).clone(),
-            resolved.screens,
-            resolved.width,
-            resolved.height,
+            resolved,
             computer,
         )
         .await;
 
-    kept(&state, &new_id, &spec, &placement, &resolved).await;
+    kept(&state, &new_id, &runtime.name, &spec, &placement, &resolved).await;
     state
         .record(
             &new_id,
@@ -3265,13 +3300,6 @@ async fn catalog() -> Json<BTreeMap<String, computer_types::App>> {
     Json(computer::apps::builtin())
 }
 
-fn through(builder: computer::Builder, state: &AppState) -> computer::Builder {
-    match &state.cli {
-        Some(cli) => builder.cli(Arc::clone(cli)),
-        None => builder,
-    }
-}
-
 fn header(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -3335,6 +3363,42 @@ impl Idempotent {
     }
 }
 
+async fn list_runtimes(State(state): State<Arc<AppState>>) -> Json<RuntimeList> {
+    let holding = holding(&state).await;
+
+    Json(RuntimeList {
+        runtimes: state
+            .runtimes
+            .all()
+            .iter()
+            .map(|runtime| runtime.view(*holding.get(&runtime.name).unwrap_or(&0)))
+            .collect(),
+    })
+}
+
+async fn get_runtime(
+    State(state): State<Arc<AppState>>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult<Json<RuntimeView>> {
+    let runtime = state
+        .runtimes
+        .get(&name)
+        .ok_or_else(|| ApiError::not_found(format!("no runtime named {name} here")))?;
+    let holding = holding(&state).await;
+
+    Ok(Json(runtime.view(*holding.get(&name).unwrap_or(&0))))
+}
+
+async fn holding(state: &AppState) -> BTreeMap<String, u32> {
+    let mut counted: BTreeMap<String, u32> = BTreeMap::new();
+
+    for entry in state.registry.list().await {
+        *counted.entry(entry.runtime.clone()).or_default() += 1;
+    }
+
+    counted
+}
+
 fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
     (
         status,
@@ -3354,8 +3418,10 @@ fn viewed(entry: &Entry, state: BoxState) -> BoxView {
 
     BoxView {
         id: entry.id.clone(),
+        runtime: entry.runtime.clone(),
         spec_digest: entry.spec_digest(),
         state,
+        reason: None,
         screens: entry.screens,
         width: entry.width,
         height: entry.height,
@@ -3370,15 +3436,34 @@ fn viewed(entry: &Entry, state: BoxState) -> BoxView {
     }
 }
 
+fn unreachable(record: &BoxRecord, why: String) -> BoxView {
+    BoxView {
+        id: record.id.clone(),
+        runtime: record.runtime.clone(),
+        spec_digest: record.spec.digest(),
+        state: BoxState::Unreachable,
+        reason: Some(why),
+        screens: record.screens,
+        width: record.width,
+        height: record.height,
+        viewer_url: None,
+        devtools_url: None,
+        created_at_ms: record.created_at_ms,
+        expires_at_ms: record.expires_at_ms,
+    }
+}
+
 async fn kept(
     state: &AppState,
     id: &str,
+    runtime: &str,
     spec: &Spec,
     placement: &Placement,
     resolved: &spec::Resolved,
 ) -> BoxRecord {
     let record = BoxRecord {
         id: id.to_string(),
+        runtime: runtime.to_string(),
         spec: spec.clone(),
         placement: placement.clone(),
         width: resolved.width,

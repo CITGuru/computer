@@ -16,6 +16,7 @@ pub trait ContainerCli: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct SystemDocker {
     program: String,
+    before: Vec<String>,
 }
 
 impl Default for SystemDocker {
@@ -28,7 +29,13 @@ impl SystemDocker {
     pub fn new(program: impl Into<String>) -> Self {
         Self {
             program: program.into(),
+            before: Vec::new(),
         }
+    }
+
+    pub fn before(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.before = args.into_iter().map(Into::into).collect();
+        self
     }
 }
 
@@ -36,6 +43,7 @@ impl SystemDocker {
 impl ContainerCli for SystemDocker {
     async fn run(&self, args: &[String]) -> Result<ExecResult> {
         let output = tokio::process::Command::new(&self.program)
+            .args(&self.before)
             .args(args)
             // A timeout drops the future; the process would otherwise run on unread.
             .kill_on_drop(true)
@@ -77,6 +85,7 @@ pub struct Config {
     pub env: BTreeMap<String, String>,
     pub memory: Option<String>,
     pub cpus: Option<String>,
+    pub isolation: Option<String>,
     pub shm_size: Option<String>,
     /// A named volume survives `rm --volumes`, so boxes given the same name share a browser.
     pub profiles: Option<String>,
@@ -103,6 +112,7 @@ impl Default for Config {
             env: BTreeMap::new(),
             memory: None,
             cpus: None,
+            isolation: None,
             shm_size: None,
             profiles: None,
             labels: BTreeMap::new(),
@@ -154,6 +164,10 @@ pub fn run_args(name: &str, config: &Config) -> Vec<String> {
     if let Some(shm) = &config.shm_size {
         args.push(arg("--shm-size"));
         args.push(shm.clone());
+    }
+    if let Some(isolation) = &config.isolation {
+        args.push(arg("--runtime"));
+        args.push(isolation.clone());
     }
 
     if let Some(volume) = &config.profiles {
@@ -238,6 +252,34 @@ mod tests {
             values(&config, "--env").contains(&"SCREEN_WIDTH=1920".to_string()),
             "which variables the image reads was resolved from its profile; \
              this only passes them on"
+        );
+    }
+
+    #[test]
+    fn test_a_box_the_engine_runs_elsewhere_names_that_oci_runtime() {
+        let config = Config {
+            isolation: Some("runsc".to_string()),
+            ..Config::default()
+        };
+        assert!(values(&config, "--runtime").contains(&"runsc".to_string()));
+        assert!(
+            !run_args("box", &Config::default()).contains(&"--runtime".to_string()),
+            "a box that asks for no isolation takes the engine's own default"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_an_engine_flag_goes_before_the_subcommand() {
+        let said = SystemDocker::new("echo")
+            .before(["--context", "gpu-1"])
+            .run(&[arg("version")])
+            .await
+            .expect("echo runs");
+
+        assert_eq!(
+            String::from_utf8_lossy(&said.stdout).trim(),
+            "--context gpu-1 version",
+            "--context is the engine's flag, not the subcommand's"
         );
     }
 

@@ -289,6 +289,11 @@ impl Builder {
         self
     }
 
+    pub fn isolation(mut self, isolation: impl Into<String>) -> Self {
+        self.config.isolation = Some(isolation.into());
+        self
+    }
+
     /// One box per volume at a time: two browsers sharing a profile directory corrupt it.
     /// A cookie set just before removal may be lost: Chromium flushes on its own schedule.
     pub fn profiles(mut self, volume: impl Into<String>) -> Self {

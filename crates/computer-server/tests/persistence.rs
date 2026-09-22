@@ -37,6 +37,7 @@ fn served_from(root: &PathBuf) -> AppState {
 
 fn record() -> BoxRecord {
     BoxRecord {
+        runtime: "docker".to_string(),
         id: "box_1".to_string(),
         spec: Spec::default(),
         placement: Placement::default(),
