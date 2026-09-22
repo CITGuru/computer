@@ -59,12 +59,15 @@ async fn a_real_sandbox_runs_the_same_desktop() {
     }
 
     let gate = the_viewer_refuses_a_wrong_ticket(&computer);
-
     let outcome = exercise(&computer).await;
-    gate.expect("the gate");
+    let removed = computer.shutdown().await;
 
-    computer.shutdown().await.expect("it goes away");
-    outcome.expect("every step");
+    assert!(
+        gate.is_ok() && outcome.is_ok(),
+        "the gate: {gate:?}\nevery step: {outcome:?}\na sandbox left running would keep \
+         whatever the gate failed to guard, so it was removed first"
+    );
+    removed.expect("it goes away");
 }
 
 fn the_viewer_refuses_a_wrong_ticket(computer: &Computer) -> Result<(), String> {

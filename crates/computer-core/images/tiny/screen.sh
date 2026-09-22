@@ -76,6 +76,10 @@ listening() {
   bash -c "echo > /dev/tcp/127.0.0.1/$1" 2>/dev/null
 }
 
+closed() {
+  ! listening "$1"
+}
+
 # websockify holds its x11vnc connection only while a client is attached.
 established() {
   local hex
@@ -88,8 +92,30 @@ viewers() {
   echo "watching=$(established "$view_vnc") driving=$(established "$control_vnc")"
 }
 
+reopen_view() {
+  local door pid running
+  build_gate view "127.0.0.1:${view_vnc}" || return 1
+
+  door="websockify --web=/usr/share/novnc 0.0.0.0:${view_port} "
+  pid=$(pgrep -o -f "$door")
+  if [ -n "$pid" ]; then
+    running=$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null)
+    case "$running" in
+      *" 0.0.0.0:${view_port} ${gate_args[*]} ") return 0 ;;
+    esac
+    pkill -f "$door" || true
+    await closed "${view_port}" || { echo "the view door on ${view_port} would not close" >&2; return 1; }
+  fi
+
+  websockify --web=/usr/share/novnc "0.0.0.0:${view_port}" "${gate_args[@]}" \
+    >"${logs}-novnc.log" 2>&1 &
+  await listening "${view_port}" \
+    || { echo "viewer never came up on ${view_port}" >&2; return 1; }
+}
+
 start() {
   if xdpyinfo -display "$display" >/dev/null 2>&1; then
+    reopen_view || exit 1
     exit 0
   fi
 
