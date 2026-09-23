@@ -1,9 +1,9 @@
 use super::api::{DEFAULT_TTL, NAME_KEY, RemoteApi, Sandbox, SandboxPlan};
 use super::profile::Remote;
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use crate::machine::{Machine, PortMap};
-use crate::runtime::Config;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::Path;

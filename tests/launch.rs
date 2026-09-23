@@ -1,4 +1,4 @@
-use computer::testing::{ScriptedCli, ScriptedDriver, ScriptedProfile};
+use computer::testing::{ScriptedDriver, ScriptedEngine, ScriptedProfile};
 use computer::{Bind, Computer, DisplayServer, Error, ExecResult, HolderId, ScreenId, bundle};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -23,9 +23,9 @@ fn failing(stderr: &str) -> ExecResult {
 }
 
 /// version, image inspect, contract label, run, port — the whole opening sequence.
-fn a_working_runtime(ports: &str) -> Arc<ScriptedCli> {
+fn a_working_runtime(ports: &str) -> Arc<ScriptedEngine> {
     Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .replying(ok())
@@ -36,10 +36,10 @@ fn a_working_runtime(ports: &str) -> Arc<ScriptedCli> {
 
 #[tokio::test]
 async fn a_runtime_that_is_not_answering_is_reported_before_anything_is_created() {
-    let cli = Arc::new(ScriptedCli::new().replying(failing("Cannot connect to the daemon")));
+    let cli = Arc::new(ScriptedEngine::new().replying(failing("Cannot connect to the daemon")));
 
     let error = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .launch()
         .await
         .expect_err("the daemon is down");
@@ -58,7 +58,7 @@ async fn the_image_is_made_sure_of_before_a_container_is_created() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -76,7 +76,7 @@ async fn the_image_is_made_sure_of_before_a_container_is_created() {
 #[tokio::test]
 async fn a_profile_another_box_holds_is_refused_before_a_container_is_made() {
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .replying(ok())
@@ -84,7 +84,7 @@ async fn a_profile_another_box_holds_is_refused_before_a_container_is_made() {
     );
 
     let error = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .profiles("computer-profile-work")
         .wait_for_ready(None)
         .launch()
@@ -119,7 +119,7 @@ async fn a_profile_another_box_holds_is_refused_before_a_container_is_made() {
 #[tokio::test]
 async fn a_profile_nobody_holds_is_mounted() {
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .replying(ok())
@@ -129,7 +129,7 @@ async fn a_profile_nobody_holds_is_mounted() {
     );
 
     Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .profiles("computer-profile-work")
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -150,7 +150,7 @@ async fn a_box_is_asked_to_close_its_browser_before_it_is_removed() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -182,7 +182,7 @@ async fn the_ports_the_runtime_mapped_are_the_ones_the_caller_is_handed() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n9223/tcp -> 0.0.0.0:32769\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -206,7 +206,7 @@ async fn devtools_is_read_from_the_bridge_and_not_from_chromiums_own_port() {
     let cli = a_working_runtime("9222/tcp -> 127.0.0.1:32770\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -221,7 +221,7 @@ async fn a_box_with_nothing_published_offers_no_url_rather_than_a_dead_one() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .publish_ports(false)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -241,7 +241,7 @@ async fn the_size_the_box_was_started_at_is_the_size_it_reports() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .size(1920, 1080)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -256,7 +256,7 @@ async fn the_size_the_box_was_started_at_is_the_size_it_reports() {
 #[tokio::test]
 async fn a_container_that_will_not_start_is_reported_and_not_half_opened() {
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .replying(ok())
@@ -264,7 +264,7 @@ async fn a_container_that_will_not_start_is_reported_and_not_half_opened() {
     );
 
     let error = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .launch()
         .await
         .expect_err("it did not start");
@@ -275,9 +275,9 @@ async fn a_container_that_will_not_start_is_reported_and_not_half_opened() {
 
 #[tokio::test]
 async fn attaching_to_a_box_that_is_not_running_says_it_is_gone() {
-    let cli = Arc::new(ScriptedCli::new().replying(saying("false\n")));
+    let cli = Arc::new(ScriptedEngine::new().replying(saying("false\n")));
 
-    let error = Computer::attach_with(cli as Arc<dyn computer::ContainerCli>, "computer-7")
+    let error = Computer::attach_with(cli as Arc<dyn computer::Engine>, "computer-7")
         .await
         .expect_err("it is not running");
 
@@ -287,7 +287,7 @@ async fn attaching_to_a_box_that_is_not_running_says_it_is_gone() {
 #[tokio::test]
 async fn an_attached_box_reports_the_geometry_it_was_started_with() {
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(saying("true\n"))
             .replying(saying(
                 "PATH=/usr/bin\nCOMPUTER_SCREEN_WIDTH=1600\nCOMPUTER_SCREEN_HEIGHT=900\n",
@@ -295,7 +295,7 @@ async fn an_attached_box_reports_the_geometry_it_was_started_with() {
             .replying(saying("")),
     );
 
-    let computer = Computer::attach_with(cli as Arc<dyn computer::ContainerCli>, "computer-7")
+    let computer = Computer::attach_with(cli as Arc<dyn computer::Engine>, "computer-7")
         .await
         .expect("it is running");
 
@@ -310,7 +310,7 @@ async fn an_attached_box_reports_the_geometry_it_was_started_with() {
 #[tokio::test]
 async fn an_attached_box_is_not_removed_when_the_handle_is_dropped() {
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(saying("true\n"))
             .replying(saying(""))
             .replying(saying("")),
@@ -318,7 +318,7 @@ async fn an_attached_box_is_not_removed_when_the_handle_is_dropped() {
 
     {
         let _computer = Computer::attach_with(
-            Arc::clone(&cli) as Arc<dyn computer::ContainerCli>,
+            Arc::clone(&cli) as Arc<dyn computer::Engine>,
             "somebody-elses-box",
         )
         .await
@@ -336,7 +336,7 @@ async fn an_empty_command_is_refused_rather_than_run() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -355,7 +355,7 @@ async fn shutting_down_removes_the_container_and_its_volumes() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .launch()
         .await
@@ -373,7 +373,7 @@ async fn a_box_given_a_life_records_it_on_itself_and_not_only_in_here() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .expires_after(Duration::from_secs(3600))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -401,7 +401,7 @@ async fn a_box_with_no_life_given_to_it_never_expires() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -416,7 +416,7 @@ async fn a_box_with_no_life_given_to_it_never_expires() {
 async fn a_leased_screen_is_given_back_when_the_handle_is_dropped() {
     let cli = a_working_runtime("");
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -441,7 +441,7 @@ async fn a_leased_screen_is_given_back_when_the_handle_is_dropped() {
 async fn two_holders_cannot_both_have_one_screen() {
     let cli = a_working_runtime("");
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -468,7 +468,7 @@ async fn two_holders_cannot_both_have_one_screen() {
 async fn a_stale_holder_cannot_take_a_screen_back_from_its_replacement() {
     let cli = a_working_runtime("");
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -517,7 +517,7 @@ async fn asking_for_extra_packages_asks_for_a_different_image() {
 #[tokio::test(start_paused = true)]
 async fn a_box_whose_life_ran_out_is_asked_for_again_when_the_first_ask_fails() {
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .replying(ok())
@@ -529,7 +529,7 @@ async fn a_box_whose_life_ran_out_is_asked_for_again_when_the_first_ask_fails() 
     );
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .expires_after(Duration::from_millis(50))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -559,14 +559,14 @@ async fn a_box_whose_life_ran_out_is_asked_for_again_when_the_first_ask_fails() 
 async fn an_image_built_for_another_contract_is_refused_before_it_starts() {
     // version, image inspect, build/pull, then the label inspect this refuses on.
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .saying("computer-wayland\n"),
     );
 
     let error = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .launch()
         .await
@@ -588,7 +588,7 @@ async fn an_image_built_for_another_contract_is_refused_before_it_starts() {
 #[tokio::test]
 async fn an_image_that_declares_nothing_is_not_refused() {
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .saying("")
@@ -597,7 +597,7 @@ async fn an_image_that_declares_nothing_is_not_refused() {
     );
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -611,7 +611,7 @@ async fn a_box_is_driven_through_x11_unless_it_is_told_otherwise() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -630,7 +630,7 @@ async fn a_box_is_driven_through_x11_unless_it_is_told_otherwise() {
 async fn a_swapped_driver_opens_every_screen_and_is_reported_as_the_one_in_use() {
     // version, image inspect, run, port, then `computer-screen start 1`.
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .replying(ok())
@@ -640,7 +640,7 @@ async fn a_swapped_driver_opens_every_screen_and_is_reported_as_the_one_in_use()
     let driver = Arc::new(ScriptedDriver::new());
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .driver(Arc::clone(&driver) as Arc<dyn computer::DesktopFactory>)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -671,7 +671,7 @@ async fn a_swapped_driver_takes_the_input_and_the_takeover_gate_with_it() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .driver(Arc::new(ScriptedDriver::new()) as Arc<dyn computer::DesktopFactory>)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -706,8 +706,8 @@ async fn a_swapped_driver_takes_the_input_and_the_takeover_gate_with_it() {
 #[tokio::test]
 async fn sweeping_removes_the_boxes_whose_deadline_has_passed() {
     let listed = "old-box\t1000000000\nyoung-box\t4000000000\n";
-    let cli = Arc::new(ScriptedCli::new().replying(saying(listed)));
-    let machine = computer::DockerMachine::new(cli.clone() as Arc<dyn computer::ContainerCli>);
+    let cli = Arc::new(ScriptedEngine::new().replying(saying(listed)));
+    let machine = computer::EngineMachine::new(cli.clone() as Arc<dyn computer::Engine>);
 
     let swept = computer::sweep_expired(
         &machine,
@@ -728,8 +728,8 @@ async fn sweeping_removes_the_boxes_whose_deadline_has_passed() {
 
 #[tokio::test]
 async fn a_label_nobody_here_wrote_is_left_alone() {
-    let cli = Arc::new(ScriptedCli::new().replying(saying("odd-box\tsoon\n")));
-    let machine = computer::DockerMachine::new(cli.clone() as Arc<dyn computer::ContainerCli>);
+    let cli = Arc::new(ScriptedEngine::new().replying(saying("odd-box\tsoon\n")));
+    let machine = computer::EngineMachine::new(cli.clone() as Arc<dyn computer::Engine>);
 
     let swept = computer::sweep_expired(&machine, std::time::SystemTime::now())
         .await
@@ -758,7 +758,7 @@ async fn a_runtime_that_cannot_be_asked_what_it_holds_says_so() {
 async fn a_swapped_profile_supplies_the_image_the_ports_and_the_driver() {
     // version, image inspect, run, port, then `scripted-screen start 1`.
     let cli = Arc::new(
-        ScriptedCli::new()
+        ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
             .replying(ok())
@@ -767,7 +767,7 @@ async fn a_swapped_profile_supplies_the_image_the_ports_and_the_driver() {
     );
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .profile(Arc::new(ScriptedProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -816,7 +816,7 @@ async fn a_profiles_viewer_url_is_the_one_a_person_is_handed() {
     let cli = a_working_runtime("7100/tcp -> 127.0.0.1:32768\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .profile(Arc::new(ScriptedProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -836,7 +836,7 @@ async fn a_screens_environment_is_the_profiles_and_not_the_runtimes() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .profile(Arc::new(ScriptedProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -900,7 +900,7 @@ async fn a_wayland_box_is_driven_through_the_compositor_and_says_so() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .profile(Arc::new(computer::WaylandProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -940,7 +940,7 @@ async fn a_wayland_screen_refuses_a_cursor_it_never_measured() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .profile(Arc::new(computer::WaylandProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -977,7 +977,7 @@ async fn a_takeover_token_cannot_be_worked_out_from_the_clock() {
     async fn mint() -> String {
         let cli = a_working_runtime("");
         let computer = Computer::builder()
-            .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+            .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
             .driver(Arc::new(ScriptedDriver::new()) as Arc<dyn computer::DesktopFactory>)
             .wait_for_ready(None)
             .keep_on_drop(true)
@@ -1027,7 +1027,7 @@ async fn an_open_viewer_beyond_loopback_is_refused_before_a_box_exists() {
         let cli = a_working_runtime("");
 
         let error = Computer::builder()
-            .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+            .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
             .publish_on(bind.clone())
             .launch()
             .await
@@ -1049,7 +1049,7 @@ async fn a_gated_viewer_beyond_loopback_is_allowed() {
         let cli = a_working_runtime("");
 
         Computer::builder()
-            .cli(cli as Arc<dyn computer::ContainerCli>)
+            .cli(cli as Arc<dyn computer::Engine>)
             .publish_on(Bind::Any)
             .auth(auth)
             .wait_for_ready(None)
@@ -1065,7 +1065,7 @@ async fn loopback_spelled_out_opens_like_the_default() {
     let cli = a_working_runtime("");
 
     Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .publish_on(Bind::Address("127.0.0.1".parse().unwrap()))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -1079,7 +1079,7 @@ async fn the_url_a_person_is_handed_names_the_advertised_host() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .advertise("boxes.example.com")
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -1099,7 +1099,7 @@ async fn a_token_gate_puts_a_different_ticket_on_each_door() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n6081/tcp -> 127.0.0.1:32769\n");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .auth(computer::Auth::Token)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -1131,7 +1131,7 @@ async fn a_password_gate_puts_nothing_in_the_url() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::ContainerCli>)
+        .cli(cli as Arc<dyn computer::Engine>)
         .auth(computer::Auth::Password)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -1155,7 +1155,7 @@ async fn the_gate_reaches_the_box_as_environment() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .auth(computer::Auth::Token)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -1187,7 +1187,7 @@ async fn an_open_box_carries_no_credential_at_all() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -1227,7 +1227,7 @@ async fn devtools_is_withdrawn_rather_than_published_beyond_loopback() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .publish_on(Bind::Any)
         .auth(computer::Auth::Token)
         .wait_for_ready(None)
@@ -1264,7 +1264,7 @@ async fn devtools_survives_on_loopback() {
     let cli = a_working_runtime("9223/tcp -> 127.0.0.1:32769\n");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)
+        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()

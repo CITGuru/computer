@@ -1,9 +1,10 @@
 use crate::ScreenId;
 use crate::bundle;
+use crate::config::Config;
+use crate::engine::{Engine, parse_ports, run_args};
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use crate::profile::{PROFILE_LABEL, Profile};
-use crate::runtime::{Config, ContainerCli, parse_ports, run_args};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -315,22 +316,22 @@ fn now_nanos() -> u64 {
         .unwrap_or(0)
 }
 
-pub struct DockerMachine {
-    cli: Arc<dyn ContainerCli>,
+pub struct EngineMachine {
+    cli: Arc<dyn Engine>,
 }
 
-impl Default for DockerMachine {
+impl Default for EngineMachine {
     fn default() -> Self {
-        Self::new(Arc::new(crate::runtime::SystemDocker::default()))
+        Self::new(Arc::new(crate::engine::SystemEngine::default()))
     }
 }
 
-impl DockerMachine {
-    pub fn new(cli: Arc<dyn ContainerCli>) -> Self {
+impl EngineMachine {
+    pub fn new(cli: Arc<dyn Engine>) -> Self {
         Self { cli }
     }
 
-    pub fn cli(&self) -> &Arc<dyn ContainerCli> {
+    pub fn cli(&self) -> &Arc<dyn Engine> {
         &self.cli
     }
 
@@ -402,7 +403,7 @@ impl DockerMachine {
 }
 
 #[async_trait]
-impl Machine for DockerMachine {
+impl Machine for EngineMachine {
     fn runtime(&self) -> &str {
         self.cli.program()
     }
@@ -708,15 +709,15 @@ mod tests {
             "a box with no profile has nothing to lose, and is left alone"
         );
     }
-    use crate::testing::ScriptedCli;
+    use crate::testing::ScriptedEngine;
 
-    fn docker(cli: Arc<ScriptedCli>) -> DockerMachine {
-        DockerMachine::new(cli as Arc<dyn ContainerCli>)
+    fn docker(cli: Arc<ScriptedEngine>) -> EngineMachine {
+        EngineMachine::new(cli as Arc<dyn Engine>)
     }
 
     #[tokio::test]
     async fn test_a_command_carries_the_environment_it_was_given() {
-        let cli = Arc::new(ScriptedCli::new());
+        let cli = Arc::new(ScriptedEngine::new());
         let machine = docker(Arc::clone(&cli));
         let env = BTreeMap::from([("DISPLAY".to_string(), ":3".to_string())]);
 
@@ -736,7 +737,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_command_with_no_environment_sets_nothing() {
-        let cli = Arc::new(ScriptedCli::new());
+        let cli = Arc::new(ScriptedEngine::new());
         let machine = docker(Arc::clone(&cli));
 
         machine
@@ -753,7 +754,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_two_reads_of_one_box_do_not_stage_through_one_path() {
-        let cli = Arc::new(ScriptedCli::new());
+        let cli = Arc::new(ScriptedEngine::new());
         let machine = docker(Arc::clone(&cli));
 
         let _ = machine.read_file("box", Path::new("/tmp/one")).await;
@@ -775,7 +776,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_upload_makes_the_directory_write_file_would_have_made() {
-        let cli = Arc::new(ScriptedCli::new());
+        let cli = Arc::new(ScriptedEngine::new());
         let machine = docker(Arc::clone(&cli));
 
         let _ = machine
@@ -790,7 +791,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_dropped_handle_has_a_command_that_needs_no_runtime() {
-        let machine = docker(Arc::new(ScriptedCli::new()));
+        let machine = docker(Arc::new(ScriptedEngine::new()));
         let (program, args) = machine.reaper("box").expect("a reaper");
 
         assert_eq!(program, "docker");

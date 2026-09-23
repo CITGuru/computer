@@ -1,31 +1,29 @@
 use crate::ExecResult;
-use crate::bundle;
+use crate::config::{Config, PROFILES};
 use crate::error::{Error, Result};
-use crate::image;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 #[async_trait]
-pub trait ContainerCli: Send + Sync {
+pub trait Engine: Send + Sync {
     async fn run(&self, args: &[String]) -> Result<ExecResult>;
 
     fn program(&self) -> &str;
 }
 
 #[derive(Debug, Clone)]
-pub struct SystemDocker {
+pub struct SystemEngine {
     program: String,
     before: Vec<String>,
 }
 
-impl Default for SystemDocker {
+impl Default for SystemEngine {
     fn default() -> Self {
         Self::new("docker")
     }
 }
 
-impl SystemDocker {
+impl SystemEngine {
     pub fn new(program: impl Into<String>) -> Self {
         Self {
             program: program.into(),
@@ -40,7 +38,7 @@ impl SystemDocker {
 }
 
 #[async_trait]
-impl ContainerCli for SystemDocker {
+impl Engine for SystemEngine {
     async fn run(&self, args: &[String]) -> Result<ExecResult> {
         let output = tokio::process::Command::new(&self.program)
             .args(&self.before)
@@ -68,59 +66,6 @@ impl ContainerCli for SystemDocker {
 
     fn program(&self) -> &str {
         &self.program
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Config {
-    pub image: String,
-    pub width: u32,
-    pub height: u32,
-    pub network: bool,
-    pub publish: Vec<u16>,
-    pub bind: crate::Bind,
-    pub auth: crate::Auth,
-    pub credentials: Option<crate::Credentials>,
-    pub advertise: Option<String>,
-    pub env: BTreeMap<String, String>,
-    pub memory: Option<String>,
-    pub cpus: Option<String>,
-    pub isolation: Option<String>,
-    pub shm_size: Option<String>,
-    /// A named volume survives `rm --volumes`, so boxes given the same name share a browser.
-    pub profiles: Option<String>,
-    pub labels: BTreeMap<String, String>,
-    pub extras: bundle::Extras,
-    pub bundle: Option<bundle::Bundle>,
-    /// Mutually exclusive with [`Config::bundle`].
-    pub image_dir: Option<PathBuf>,
-    pub boot: Vec<String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            image: bundle::DESKTOP.tag(),
-            width: image::WIDTH,
-            height: image::HEIGHT,
-            network: true,
-            publish: Vec::new(),
-            bind: crate::Bind::Loopback,
-            auth: crate::Auth::Open,
-            credentials: None,
-            advertise: None,
-            env: BTreeMap::new(),
-            memory: None,
-            cpus: None,
-            isolation: None,
-            shm_size: None,
-            profiles: None,
-            labels: BTreeMap::new(),
-            extras: bundle::Extras::none(),
-            bundle: Some(bundle::DESKTOP),
-            image_dir: None,
-            boot: Vec::new(),
-        }
     }
 }
 
@@ -187,8 +132,6 @@ pub fn run_args(name: &str, config: &Config) -> Vec<String> {
     args
 }
 
-pub const PROFILES: &str = "/home/computer/.browser-profiles";
-
 /// A port bound on IPv4 and IPv6 appears twice; the first wins.
 pub fn parse_ports(output: &str) -> BTreeMap<u16, u16> {
     let mut found = BTreeMap::new();
@@ -222,6 +165,7 @@ pub fn parse_ports(output: &str) -> BTreeMap<u16, u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bundle;
 
     fn values(config: &Config, flag: &str) -> Vec<String> {
         run_args("box", config)
@@ -270,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_an_engine_flag_goes_before_the_subcommand() {
-        let said = SystemDocker::new("echo")
+        let said = SystemEngine::new("echo")
             .before(["--context", "gpu-1"])
             .run(&[arg("version")])
             .await

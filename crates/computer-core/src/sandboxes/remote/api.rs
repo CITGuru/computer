@@ -1,6 +1,6 @@
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
-use crate::runtime::Config;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::time::Duration;

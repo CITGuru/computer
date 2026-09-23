@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use computer::testing::ScriptedCli;
+use computer::testing::ScriptedEngine;
 use computer_server::{AppState, routes};
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 fn nowhere() -> Arc<AppState> {
-    Arc::new(AppState::default().through(Some(Arc::new(ScriptedCli::new()))))
+    Arc::new(AppState::default().through(Some(Arc::new(ScriptedEngine::new()))))
 }
 
 async fn send(request: Request<Body>) -> (StatusCode, Value) {
@@ -293,10 +293,9 @@ async fn test_an_ungated_api_on_loopback_still_opens() {
 
 #[tokio::test]
 async fn test_an_accepted_spec_is_built_through_the_runtime_it_was_given() {
-    let cli = Arc::new(ScriptedCli::new());
-    let state = Arc::new(
-        AppState::default().through(Some(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)),
-    );
+    let cli = Arc::new(ScriptedEngine::new());
+    let state =
+        Arc::new(AppState::default().through(Some(Arc::clone(&cli) as Arc<dyn computer::Engine>)));
 
     let response = routes::router(state)
         .oneshot(post("/v1/boxes", r#"{"spec":{"apps":{"vscode":{}}}}"#))
@@ -598,4 +597,73 @@ async fn test_a_box_says_which_runtime_it_is_on() {
         body["runtime"], "docker",
         "so a restart knows where to look for it: {body}"
     );
+}
+
+#[tokio::test]
+async fn test_a_box_that_asks_for_no_deadline_is_given_one() {
+    let (status, body) = send(post("/v1/boxes", r#"{}"#)).await;
+
+    assert_eq!(status, StatusCode::CREATED);
+
+    let at = body["expires_at_ms"]
+        .as_u64()
+        .expect("a box with no deadline used to run until something removed it");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock")
+        .as_millis() as u64;
+
+    assert!(
+        at > now && at - now <= 60 * 60 * 1000,
+        "the runtime's own life is an hour: {at} against {now}"
+    );
+}
+
+#[tokio::test]
+async fn test_a_deadline_longer_than_the_runtime_keeps_a_box_is_refused() {
+    let (status, body) = send(post(
+        "/v1/boxes",
+        r#"{"placement":{"expires_after_secs":86400}}"#,
+    ))
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|why| why.contains("max_lifetime")),
+        "the refusal says what to raise: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_the_deadline_a_box_was_given_is_recorded() {
+    let state = nowhere();
+    let response = routes::router(Arc::clone(&state))
+        .oneshot(post("/v1/boxes", r#"{}"#))
+        .await
+        .expect("the router answered");
+
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("a body")
+        .to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).expect("json");
+    let id = body["id"].as_str().expect("an id");
+
+    let record = state
+        .store
+        .get_box(id)
+        .await
+        .expect("asked")
+        .expect("a record");
+
+    assert_eq!(
+        record.expires_at_ms,
+        body["expires_at_ms"].as_u64(),
+        "a restart reads the record, so a deadline kept only in this process is lost"
+    );
+    assert!(record.expires_at_ms.is_some());
 }

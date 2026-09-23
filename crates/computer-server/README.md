@@ -138,6 +138,14 @@ enabled = false
 
 A table with no `provider` tunes the engine of that name that was found; with one, it offers the same engine again under another name. `memory` and `cpus` are a default for every box on that runtime, and a placement still overrides them. `isolation` is the OCI runtime each box is started on, `--runtime` per box rather than one setting for the whole engine. `context` is a Docker context made with `docker context create`, which keeps its own TLS and SSH settings.
 
+**A box lives an hour**, on every runtime, unless it says otherwise. `lifetime` changes what a box gets when its placement names no `expires_after_secs`, and `max_lifetime` changes the most one may ask for; a placement above the cap is refused with both numbers and told which field to raise. Written as `24h`, `90m`, `3600s`, or a whole number of seconds. A vendor named in `COMPUTER_SERVER_SANDBOXES` takes these two as well, so an account that keeps a box for a day says so rather than being guessed at:
+
+```toml
+[runtimes.e2b]
+max_lifetime = "24h"
+lifetime = "4h"
+```
+
 `GET /v1/runtimes/{name}` says what one can do: whether it pauses, whether it stops, how a port is reached, and whether memory and cpus are set when a box is created or when its image is built. A placement asking for something the runtime cannot do is refused before anything starts.
 
 ## Drive it
@@ -353,7 +361,7 @@ system  gone  the runtime no longer has it
 
 `COMPUTER_SERVER_REAP_SECS` sets the cadence, 30s by default.
 
-`expires_after_secs` and `idle_timeout_secs` under 60s are refused. The clock starts when a box is created rather than when it is ready, so a shorter deadline removes it mid-launch and the caller waits out the full ready timeout to be told the container went missing.
+A box that names no `expires_after_secs` takes its runtime's `lifetime`, one hour by default, so nothing runs until somebody notices it. `expires_after_secs` and `idle_timeout_secs` under 60s are refused. The clock starts when a box is created rather than when it is ready, so a shorter deadline removes it mid-launch and the caller waits out the full ready timeout to be told the container went missing.
 
 ## Surviving a restart
 

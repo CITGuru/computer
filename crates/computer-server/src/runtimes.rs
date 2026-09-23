@@ -2,7 +2,7 @@ use crate::config::ServerConfig;
 use crate::error::{ApiError, ApiResult};
 use crate::spec::profile_for;
 use computer::sandboxes::remote::{self, RemoteApi};
-use computer::{Builder, ContainerCli, DockerMachine, Machine, Profile, SystemDocker};
+use computer::{Builder, Engine, EngineMachine, Machine, Profile, SystemEngine};
 use computer_api::{
     Arch, Capabilities, DisplayServer, Environment, PlaceKind, Placement, PortReach, Resources,
     RuntimeState, RuntimeView, Source, Start,
@@ -18,7 +18,7 @@ pub const OFFERED: &str = "COMPUTER_SERVER_RUNTIMES";
 
 pub const SANDBOXES: &str = "COMPUTER_SERVER_SANDBOXES";
 
-const E2B_LIFETIME_SECS: u64 = 60 * 60;
+pub const LIFETIME_SECS: u64 = 60 * 60;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Tuning {
@@ -30,6 +30,28 @@ pub struct Tuning {
     pub isolation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifetime_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_lifetime_secs: Option<u64>,
+}
+
+impl Tuning {
+    pub fn host_only(&self) -> Option<&'static str> {
+        match self {
+            Self {
+                memory: Some(_), ..
+            } => Some("memory"),
+            Self { cpus: Some(_), .. } => Some("cpus"),
+            Self {
+                isolation: Some(_), ..
+            } => Some("isolation"),
+            Self {
+                context: Some(_), ..
+            } => Some("context"),
+            _ => None,
+        }
+    }
 }
 
 pub enum Place {
@@ -83,9 +105,16 @@ impl Runtime {
         self.pair(DisplayServer::default()).0
     }
 
+    pub fn lifetime(&self) -> u64 {
+        self.tuning.lifetime_secs.unwrap_or(LIFETIME_SECS)
+    }
+
     pub fn drive(&self, builder: Builder, server: DisplayServer) -> Builder {
         let (machine, profile) = self.pair(server);
-        let mut builder = builder.machine(machine).profile(profile);
+        let mut builder = builder
+            .machine(machine)
+            .profile(profile)
+            .expires_after(std::time::Duration::from_secs(self.lifetime()));
 
         if let Some(memory) = &self.tuning.memory {
             builder = builder.memory(memory.clone());
@@ -114,7 +143,8 @@ impl Runtime {
             && asked > most
         {
             return Err(ApiError::bad_request(format!(
-                "{} keeps a box for at most {most}s and this asks for {asked}s",
+                "{} keeps a box for at most {most}s and this asks for {asked}s: \
+                 raise max_lifetime on the runtime to ask for more",
                 self.name
             )));
         }
@@ -133,10 +163,17 @@ impl Runtime {
     }
 
     pub fn fields(&self) -> Value {
-        match &self.place {
-            Place::Host { .. } => serde_json::to_value(&self.tuning).unwrap_or(Value::Null),
-            Place::Remote { fields, .. } => fields.clone(),
+        let mut said = serde_json::to_value(&self.tuning).unwrap_or(Value::Null);
+
+        if let Place::Remote { fields, .. } = &self.place
+            && let (Some(mine), Some(theirs)) = (said.as_object_mut(), fields.as_object())
+        {
+            for (key, value) in theirs {
+                mine.insert(key.clone(), value.clone());
+            }
         }
+
+        said
     }
 
     pub fn view(&self, boxes: u32) -> RuntimeView {
@@ -236,8 +273,8 @@ impl Runtimes {
 }
 
 pub async fn host(name: String, provider: String, source: Source, tuning: Tuning) -> Runtime {
-    let cli: Arc<dyn ContainerCli> = Arc::new(program(&provider, &tuning));
-    let machine: Arc<dyn Machine> = Arc::new(DockerMachine::new(Arc::clone(&cli)));
+    let cli: Arc<dyn Engine> = Arc::new(program(&provider, &tuning));
+    let machine: Arc<dyn Machine> = Arc::new(EngineMachine::new(Arc::clone(&cli)));
 
     let state = match machine.preflight().await {
         Ok(()) => RuntimeState::Ready,
@@ -251,21 +288,31 @@ pub async fn host(name: String, provider: String, source: Source, tuning: Tuning
         _ => (Environment::default(), Vec::new()),
     };
 
+    let mut can = container_can(arch);
+    capped(&mut can, &tuning);
+
     Runtime {
         name,
         provider,
         source,
         environment,
         place: Place::Host { machine },
-        can: container_can(arch),
+        can,
         tuning,
         state,
     }
 }
 
-pub fn remote(name: String, api: Arc<dyn RemoteApi>) -> Runtime {
+fn capped(can: &mut Capabilities, tuning: &Tuning) {
+    if let Some(most) = tuning.max_lifetime_secs {
+        can.max_lifetime_secs = Some(most);
+    }
+}
+
+pub fn remote(name: String, api: Arc<dyn RemoteApi>, tuning: Tuning) -> Runtime {
     let provider = api.vendor().to_string();
-    let (environment, can) = vendor_can(&provider);
+    let (environment, mut can) = vendor_can(&provider);
+    capped(&mut can, &tuning);
 
     Runtime {
         name,
@@ -277,12 +324,12 @@ pub fn remote(name: String, api: Arc<dyn RemoteApi>) -> Runtime {
             fields: Value::Object(Map::new()),
         },
         can,
-        tuning: Tuning::default(),
+        tuning,
         state: RuntimeState::Ready,
     }
 }
 
-fn program(provider: &str, tuning: &Tuning) -> SystemDocker {
+fn program(provider: &str, tuning: &Tuning) -> SystemEngine {
     let mut before = Vec::new();
 
     if let Some(context) = &tuning.context {
@@ -290,14 +337,10 @@ fn program(provider: &str, tuning: &Tuning) -> SystemDocker {
         before.push(context.clone());
     }
 
-    SystemDocker::new(provider).before(before)
+    SystemEngine::new(provider).before(before)
 }
 
-async fn probe(
-    cli: &dyn ContainerCli,
-    provider: &str,
-    tuning: &Tuning,
-) -> (Environment, Vec<Arch>) {
+async fn probe(cli: &dyn Engine, provider: &str, tuning: &Tuning) -> (Environment, Vec<Arch>) {
     let format = match provider {
         "podman" => {
             "{{.Version.Version}}\t{{.Host.OCIRuntime.Name}}\t{{.Store.GraphDriverName}}\t{{.Host.Arch}}"
@@ -376,7 +419,7 @@ fn container_can(arch: Vec<Arch>) -> Capabilities {
         fork: false,
         volumes: true,
         resources: Resources::AtCreate,
-        max_lifetime_secs: None,
+        max_lifetime_secs: Some(LIFETIME_SECS),
         ports: None,
         arch,
     }
@@ -394,7 +437,7 @@ fn vendor_can(provider: &str) -> (Environment, Capabilities) {
                 fork: true,
                 volumes: true,
                 resources: Resources::AtImage,
-                max_lifetime_secs: Some(E2B_LIFETIME_SECS),
+                max_lifetime_secs: Some(LIFETIME_SECS),
                 ports: None,
                 arch: Vec::new(),
             },
@@ -409,7 +452,7 @@ fn vendor_can(provider: &str) -> (Environment, Capabilities) {
                 fork: false,
                 volumes: false,
                 resources: Resources::AtCreate,
-                max_lifetime_secs: None,
+                max_lifetime_secs: Some(LIFETIME_SECS),
                 ports: None,
                 arch: Vec::new(),
             },
@@ -445,11 +488,10 @@ pub async fn discover(
     hosts: &[String],
     sandboxes: &[String],
 ) -> Result<Runtimes, String> {
-    let wanted = wanted(config, hosts)?;
-
+    let plan = plan(config, hosts, sandboxes)?;
     let mut runtimes = Runtimes::default();
 
-    for (name, (provider, tuning, source)) in wanted {
+    for (name, (provider, tuning, source)) in plan.hosts {
         let runtime = host(name, provider, source, tuning).await;
 
         match (&runtime.state, source) {
@@ -461,26 +503,23 @@ pub async fn discover(
                 runtimes.add(runtime);
             }
             _ => {
-                tracing::info!(
-                    runtime = %runtime.name,
-                    provider = %runtime.provider,
-                    environment = ?runtime.environment,
-                    "a runtime to put boxes on"
-                );
+                told_of(&runtime);
                 runtimes.add(runtime);
             }
         }
     }
 
-    for name in sandboxes {
-        if runtimes.get(name).is_some() {
+    for (name, tuning) in plan.remotes {
+        if runtimes.get(&name).is_some() {
             return Err(format!(
                 "{SANDBOXES} names {name} and a host runtime of that name is already here"
             ));
         }
 
-        if let Some(api) = vendor(name) {
-            runtimes.add(remote(name.clone(), api));
+        if let Some(api) = vendor(&name) {
+            let runtime = remote(name, api, tuning);
+            told_of(&runtime);
+            runtimes.add(runtime);
         }
     }
 
@@ -492,15 +531,30 @@ pub async fn discover(
     Ok(runtimes)
 }
 
-type Wanted = BTreeMap<String, (String, Tuning, Source)>;
+fn told_of(runtime: &Runtime) {
+    tracing::info!(
+        runtime = %runtime.name,
+        provider = %runtime.provider,
+        environment = ?runtime.environment,
+        lifetime = runtime.lifetime(),
+        most = ?runtime.can.max_lifetime_secs,
+        "a runtime to put boxes on"
+    );
+}
 
-fn wanted(config: &ServerConfig, hosts: &[String]) -> Result<Wanted, String> {
-    let mut wanted = Wanted::new();
+#[derive(Debug, Default)]
+struct Plan {
+    hosts: BTreeMap<String, (String, Tuning, Source)>,
+    remotes: BTreeMap<String, Tuning>,
+}
+
+fn plan(config: &ServerConfig, hosts: &[String], sandboxes: &[String]) -> Result<Plan, String> {
+    let mut plan = Plan::default();
 
     for provider in hosts {
         match HOSTS.contains(&provider.as_str()) {
             true => {
-                wanted.insert(
+                plan.hosts.insert(
                     provider.clone(),
                     (provider.clone(), Tuning::default(), Source::Found),
                 );
@@ -512,33 +566,51 @@ fn wanted(config: &ServerConfig, hosts: &[String]) -> Result<Wanted, String> {
         }
     }
 
+    for name in sandboxes {
+        plan.remotes.insert(name.clone(), Tuning::default());
+    }
+
     for (name, entry) in &config.runtimes {
         if entry.enabled == Some(false) {
-            wanted.remove(name);
+            plan.hosts.remove(name);
+            plan.remotes.remove(name);
             continue;
         }
 
-        let provider = entry.host(name)?;
-
-        match entry.provider.is_some() {
-            true => {
-                let tuning = entry.tuning(name, &provider)?;
-                wanted.insert(name.clone(), (provider, tuning, Source::File));
-            }
-            false => {
-                let Some(held) = wanted.get_mut(name) else {
-                    return Err(format!(
-                        "runtimes.{name} tunes a runtime this server does not offer; \
-                         name its provider to add one"
-                    ));
-                };
-                held.1 = entry.tuning(name, &held.0)?;
-                held.2 = Source::File;
-            }
+        if entry.provider.is_some() {
+            let provider = entry.host(name)?;
+            let tuning = entry.tuning(name, &provider)?;
+            plan.hosts
+                .insert(name.clone(), (provider, tuning, Source::File));
+            continue;
         }
+
+        if let Some(held) = plan.hosts.get_mut(name) {
+            held.1 = entry.tuning(name, &held.0)?;
+            held.2 = Source::File;
+            continue;
+        }
+
+        if let Some(held) = plan.remotes.get_mut(name) {
+            let tuning = entry.tuning(name, name)?;
+
+            if let Some(field) = tuning.host_only() {
+                return Err(format!(
+                    "runtimes.{name}.{field} is a host engine's field and {name} is a vendor"
+                ));
+            }
+
+            *held = tuning;
+            continue;
+        }
+
+        return Err(format!(
+            "runtimes.{name} tunes a runtime this server does not offer; \
+             name its provider to add one"
+        ));
     }
 
-    Ok(wanted)
+    Ok(plan)
 }
 
 pub fn vendor(name: &str) -> Option<Arc<dyn RemoteApi>> {
@@ -578,8 +650,8 @@ pub fn engine(name: &str, machine: Arc<dyn Machine>) -> Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use computer::DockerMachine;
-    use computer::testing::{ScriptedCli, ScriptedRemote};
+    use computer::EngineMachine;
+    use computer::testing::{ScriptedEngine, ScriptedRemote};
 
     fn file(text: &str) -> ServerConfig {
         ServerConfig::parse(text).expect("a file this server reads")
@@ -592,7 +664,7 @@ mod tests {
     fn docker() -> Runtime {
         engine(
             "docker",
-            Arc::new(DockerMachine::new(Arc::new(ScriptedCli::new()))),
+            Arc::new(EngineMachine::new(Arc::new(ScriptedEngine::new()))),
         )
     }
 
@@ -692,7 +764,7 @@ mod tests {
         let mut runtimes = Runtimes::default();
         runtimes.add(engine(
             "podman",
-            Arc::new(DockerMachine::new(Arc::new(ScriptedCli::new()))),
+            Arc::new(EngineMachine::new(Arc::new(ScriptedEngine::new()))),
         ));
         runtimes.add(docker());
         runtimes.settle();
@@ -725,23 +797,54 @@ mod tests {
     }
 
     #[test]
-    fn test_a_life_longer_than_the_vendor_keeps_a_box_is_refused_before_anything_starts() {
+    fn test_a_box_lives_an_hour_unless_the_runtime_says_otherwise() {
+        assert_eq!(docker().lifetime(), LIFETIME_SECS);
+        assert_eq!(cloud().lifetime(), LIFETIME_SECS);
+
+        let mut longer = docker();
+        longer.tuning.lifetime_secs = Some(8 * 60 * 60);
+
+        assert_eq!(longer.lifetime(), 8 * 60 * 60);
+    }
+
+    #[test]
+    fn test_a_life_longer_than_the_runtime_keeps_a_box_is_refused_before_anything_starts() {
         let placement = Placement {
             expires_after_secs: Some(60 * 60 * 24),
             ..Placement::default()
         };
 
-        let Err(error) = cloud().check(&placement) else {
-            panic!("a box was accepted that the vendor would take away first");
+        for runtime in [docker(), cloud()] {
+            let Err(error) = runtime.check(&placement) else {
+                panic!("{} took a box it would take away first", runtime.name);
+            };
+            assert!(
+                error.body.message.contains(&LIFETIME_SECS.to_string())
+                    && error.body.message.contains("86400"),
+                "the refusal carries both numbers: {}",
+                error.body.message
+            );
+            assert!(
+                error.body.message.contains("max_lifetime"),
+                "and says what to raise: {}",
+                error.body.message
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_runtime_told_to_keep_a_box_longer_takes_the_longer_life() {
+        let placement = Placement {
+            expires_after_secs: Some(60 * 60 * 24),
+            ..Placement::default()
         };
+
+        let mut day = cloud();
+        day.can.max_lifetime_secs = Some(60 * 60 * 24);
+
         assert!(
-            error.body.message.contains(&E2B_LIFETIME_SECS.to_string()),
-            "the refusal carries both numbers: {}",
-            error.body.message
-        );
-        assert!(
-            docker().check(&placement).is_ok(),
-            "an engine keeps it as long as asked"
+            day.check(&placement).is_ok(),
+            "an account that keeps a box for a day is the operator's to state, not ours to guess"
         );
     }
 
@@ -772,10 +875,10 @@ mod tests {
 
     #[test]
     fn test_a_file_table_with_no_provider_tunes_the_engine_that_was_found() {
-        let wanted = wanted(&file("[runtimes.docker]\nmemory = \"4g\"\n"), &hosts())
+        let plan = plan(&file("[runtimes.docker]\nmemory = \"4g\"\n"), &hosts(), &[])
             .expect("a file this server takes");
 
-        let (provider, tuning, source) = wanted.get("docker").expect("docker is still offered");
+        let (provider, tuning, source) = plan.hosts.get("docker").expect("docker is still offered");
         assert_eq!(provider, "docker");
         assert_eq!(tuning.memory.as_deref(), Some("4g"));
         assert_eq!(*source, Source::File);
@@ -783,42 +886,54 @@ mod tests {
 
     #[test]
     fn test_a_file_table_with_a_provider_offers_the_same_engine_twice() {
-        let wanted = wanted(
+        let plan = plan(
             &file("[runtimes.hardened]\nprovider = \"docker\"\nisolation = \"runsc\"\n"),
             &hosts(),
+            &[],
         )
         .expect("a file this server takes");
 
         assert!(
-            wanted.contains_key("docker"),
+            plan.hosts.contains_key("docker"),
             "the plain engine is still here"
         );
-        let (provider, tuning, _) = wanted.get("hardened").expect("and so is the hardened one");
+        let (provider, tuning, _) = plan
+            .hosts
+            .get("hardened")
+            .expect("and so is the hardened one");
         assert_eq!(provider, "docker");
         assert_eq!(tuning.isolation.as_deref(), Some("runsc"));
     }
 
     #[test]
     fn test_an_engine_the_file_turns_off_is_not_offered() {
-        let wanted = wanted(&file("[runtimes.podman]\nenabled = false\n"), &hosts())
+        let plan = plan(&file("[runtimes.podman]\nenabled = false\n"), &hosts(), &[])
             .expect("a file this server takes");
 
-        assert!(!wanted.contains_key("podman"));
-        assert!(wanted.contains_key("docker"));
+        assert!(!plan.hosts.contains_key("podman"));
+        assert!(plan.hosts.contains_key("docker"));
     }
 
     #[test]
     fn test_a_file_that_tunes_nothing_is_an_error_rather_than_a_silent_nothing() {
-        let why = wanted(&file("[runtimes.nowhere]\nmemory = \"4g\"\n"), &hosts())
-            .expect_err("a table naming no provider and tuning nothing");
+        let why = plan(
+            &file("[runtimes.nowhere]\nmemory = \"4g\"\n"),
+            &hosts(),
+            &[],
+        )
+        .expect_err("a table naming no provider and tuning nothing");
 
         assert!(why.contains("nowhere"), "{why}");
     }
 
     #[test]
-    fn test_a_file_names_host_runtimes_only() {
-        let why = wanted(&file("[runtimes.cloud]\nprovider = \"e2b\"\n"), &hosts())
-            .expect_err("a vendor needs a key, which a file in git must not hold");
+    fn test_a_file_adds_host_runtimes_only() {
+        let why = plan(
+            &file("[runtimes.cloud]\nprovider = \"e2b\"\n"),
+            &hosts(),
+            &[],
+        )
+        .expect_err("a vendor needs a key, which a file in git must not hold");
 
         assert!(
             why.contains("docker"),
@@ -828,12 +943,16 @@ mod tests {
 
     #[test]
     fn test_a_field_of_another_engine_is_refused_by_name() {
-        let why = wanted(&file("[runtimes.podman]\ncontext = \"gpu-1\"\n"), &hosts())
-            .expect_err("a docker context means nothing to podman");
+        let why = plan(
+            &file("[runtimes.podman]\ncontext = \"gpu-1\"\n"),
+            &hosts(),
+            &[],
+        )
+        .expect_err("a docker context means nothing to podman");
 
         assert!(why.contains("runtimes.podman.context"), "{why}");
 
-        let why = wanted(&file("[runtimes.docker]\nmemroy = \"4g\"\n"), &hosts())
+        let why = plan(&file("[runtimes.docker]\nmemroy = \"4g\"\n"), &hosts(), &[])
             .expect_err("a misspelled field silently doing nothing is worse");
 
         assert!(why.contains("memroy"), "{why}");
@@ -841,14 +960,15 @@ mod tests {
 
     #[test]
     fn test_only_the_engines_this_server_drives_are_offered() {
-        let wanted = wanted(
+        let plan = plan(
             &ServerConfig::default(),
             &["docker".to_string(), "tart".to_string()],
+            &[],
         )
         .expect("a list with one name this server cannot drive");
 
-        assert_eq!(wanted.len(), 1);
-        assert!(wanted.contains_key("docker"));
+        assert_eq!(plan.hosts.len(), 1);
+        assert!(plan.hosts.contains_key("docker"));
     }
 
     #[test]
@@ -868,8 +988,65 @@ mod tests {
             view.fields.get("cpus").is_none(),
             "a field nothing set is not reported"
         );
+
+        let mut tuned = cloud();
+        tuned.tuning.max_lifetime_secs = Some(24 * 60 * 60);
+
+        assert_eq!(
+            tuned.view(0).fields["max_lifetime_secs"],
+            24 * 60 * 60,
+            "what an operator told us about a vendor is reported back"
+        );
         assert!(view.secrets.is_empty());
         assert_eq!(view.boxes, 2);
         assert_eq!(view.place, PlaceKind::Host);
+    }
+}
+
+#[cfg(test)]
+mod lives {
+    use super::*;
+    use crate::config::ServerConfig;
+
+    fn file(text: &str) -> ServerConfig {
+        ServerConfig::parse(text).expect("a file this server reads")
+    }
+
+    #[test]
+    fn test_the_file_raises_the_cap_on_a_vendor_it_did_not_add() {
+        let plan = plan(
+            &file("[runtimes.e2b]\nmax_lifetime = \"24h\"\nlifetime = \"2h\"\n"),
+            &[],
+            &["e2b".to_string()],
+        )
+        .expect("a file tuning a vendor the environment named");
+
+        let tuning = plan.remotes.get("e2b").expect("e2b is still offered");
+        assert_eq!(tuning.max_lifetime_secs, Some(24 * 60 * 60));
+        assert_eq!(tuning.lifetime_secs, Some(2 * 60 * 60));
+    }
+
+    #[test]
+    fn test_a_vendor_the_file_turns_off_is_not_offered() {
+        let plan = plan(
+            &file("[runtimes.e2b]\nenabled = false\n"),
+            &[],
+            &["e2b".to_string()],
+        )
+        .expect("a file this server takes");
+
+        assert!(plan.remotes.is_empty());
+    }
+
+    #[test]
+    fn test_an_engine_s_field_is_refused_on_a_vendor() {
+        let why = plan(
+            &file("[runtimes.e2b]\nmemory = \"4g\"\n"),
+            &[],
+            &["e2b".to_string()],
+        )
+        .expect_err("a vendor sets memory when its image is built");
+
+        assert!(why.contains("memory"), "{why}");
     }
 }

@@ -17,7 +17,7 @@ pub mod spec;
 pub mod states;
 pub mod viewer;
 
-use computer::{ContainerCli, DockerMachine};
+use computer::{Engine, EngineMachine};
 use computer_api::{Actor, TraceEvent};
 use computer_storage::files::Files;
 use computer_storage::local::LocalDir;
@@ -163,11 +163,11 @@ impl AppState {
         self
     }
 
-    pub fn through(mut self, cli: Option<Arc<dyn ContainerCli>>) -> Self {
+    pub fn through(mut self, cli: Option<Arc<dyn Engine>>) -> Self {
         if let Some(cli) = cli {
             self.runtimes.add(runtimes::engine(
                 "docker",
-                Arc::new(DockerMachine::new(cli)),
+                Arc::new(EngineMachine::new(cli)),
             ));
             self.runtimes.settle();
         }

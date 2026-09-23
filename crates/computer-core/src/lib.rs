@@ -29,6 +29,8 @@ pub mod apps;
 pub mod audit;
 pub mod bundle;
 pub mod cdp;
+pub mod config;
+pub mod engine;
 pub mod image;
 pub mod machine;
 pub mod microvm;
@@ -38,7 +40,6 @@ pub mod motion;
 /// on a plain box.
 pub const MATCHES: usize = 200;
 pub mod profile;
-pub mod runtime;
 pub mod sandboxes;
 pub mod screens;
 pub mod servers;
@@ -60,10 +61,12 @@ pub use error::{Error, Result};
 
 /// Caps a capture's scale, so a mistyped percentage cannot exhaust the box's memory.
 pub const MAGNIFY: u32 = 400;
+pub use config::Config;
+pub use engine::{Engine, SystemEngine};
 pub use exec::ExecResult;
 pub use image::{ScreenAction, ScreenPorts};
 pub use machine::ScreenHost;
-pub use machine::{DockerMachine, Machine, MachineHost, PortMap};
+pub use machine::{EngineMachine, Machine, MachineHost, PortMap};
 pub use microvm::MicroVm;
 pub use profile::{
     AppRuntime, Arrange, BrowserRuntime, CommandBrowserRuntime, CommandScreen,
@@ -75,7 +78,6 @@ pub use profile::{
     X11Environment, X11WallpaperRuntime,
 };
 pub use reach::{Address, Bind, Reach, Scheme};
-pub use runtime::{Config, ContainerCli, SystemDocker};
 pub use screens::{ControlGate, DEFAULT_LEASE, ScreenLease, Screens};
 pub use secret::Secret;
 pub use servers::wayland::{WaylandDesktop, WaylandDriver, WaylandProfile};
@@ -136,7 +138,7 @@ pub struct Builder {
     image_dir: Option<PathBuf>,
     size: Option<(u32, u32)>,
     publish: bool,
-    cli: Option<Arc<dyn ContainerCli>>,
+    cli: Option<Arc<dyn Engine>>,
     program: String,
     name: Option<String>,
     ensure_image: bool,
@@ -234,7 +236,7 @@ impl Builder {
         self
     }
 
-    pub fn cli(mut self, cli: Arc<dyn ContainerCli>) -> Self {
+    pub fn cli(mut self, cli: Arc<dyn Engine>) -> Self {
         self.cli = Some(cli);
         self
     }
@@ -354,7 +356,7 @@ impl Builder {
 
     /// Carries no credential: secrets are minted at launch, so this is safe to log.
     pub fn preview(&self) -> Result<Vec<String>> {
-        Ok(runtime::run_args(
+        Ok(engine::run_args(
             self.name.as_deref().unwrap_or("computer-preview"),
             &self.config()?,
         ))
@@ -409,8 +411,8 @@ impl Builder {
     pub async fn launch(self) -> Result<Computer> {
         let machine: Arc<dyn Machine> = match (&self.machine, &self.cli) {
             (Some(machine), _) => Arc::clone(machine),
-            (None, Some(cli)) => Arc::new(DockerMachine::new(Arc::clone(cli))),
-            (None, None) => Arc::new(DockerMachine::new(Arc::new(SystemDocker::new(
+            (None, Some(cli)) => Arc::new(EngineMachine::new(Arc::clone(cli))),
+            (None, None) => Arc::new(EngineMachine::new(Arc::new(SystemEngine::new(
                 self.program.clone(),
             )))),
         };
@@ -680,7 +682,7 @@ impl Computer {
 
     /// Never removed on drop: this process did not create it.
     pub async fn attach(name: impl Into<String>) -> Result<Self> {
-        Self::attach_to(Arc::new(DockerMachine::default()), name).await
+        Self::attach_to(Arc::new(EngineMachine::default()), name).await
     }
 
     pub async fn attach_to(machine: Arc<dyn Machine>, name: impl Into<String>) -> Result<Self> {
@@ -757,8 +759,8 @@ impl Computer {
         Ok(computer)
     }
 
-    pub async fn attach_with(cli: Arc<dyn ContainerCli>, name: impl Into<String>) -> Result<Self> {
-        Self::attach_to(Arc::new(DockerMachine::new(cli)), name).await
+    pub async fn attach_with(cli: Arc<dyn Engine>, name: impl Into<String>) -> Result<Self> {
+        Self::attach_to(Arc::new(EngineMachine::new(cli)), name).await
     }
 
     fn assemble(
@@ -847,6 +849,10 @@ impl Computer {
 
     pub fn expires_at(&self) -> Option<SystemTime> {
         self.expires_at
+    }
+
+    pub fn expires_when(&mut self, at: Option<SystemTime>) {
+        self.expires_at = at;
     }
 
     pub fn idle_for(&self) -> Duration {
@@ -2427,7 +2433,7 @@ mod tests {
             .profiles("chinasa-work")
             .config()
             .expect("a config");
-        let args = runtime::run_args("box", &config);
+        let args = engine::run_args("box", &config);
 
         let at = args
             .iter()
@@ -2435,7 +2441,7 @@ mod tests {
             .expect("the volume is passed");
         assert_eq!(
             args[at + 1],
-            format!("chinasa-work:{}", runtime::PROFILES),
+            format!("chinasa-work:{}", config::PROFILES),
             "a volume mounted anywhere else is a box that saves nothing"
         );
     }
@@ -2443,7 +2449,7 @@ mod tests {
     #[test]
     fn test_a_box_given_no_volume_mounts_nothing() {
         let config = Computer::builder().config().expect("a config");
-        let args = runtime::run_args("box", &config);
+        let args = engine::run_args("box", &config);
 
         assert!(
             !args.iter().any(|arg| arg == "--volume"),

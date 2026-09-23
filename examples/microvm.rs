@@ -1,16 +1,16 @@
 //! cargo run --example microvm
 
+use computer::SystemEngine;
 use computer::microvm::import_image;
-use computer::runtime::SystemDocker;
 use computer::sandboxes::microsandbox::msb;
-use computer::{Button, Computer, ContainerCli, Point, bundle};
+use computer::{Button, Computer, Engine, Point, bundle};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> computer::Result<()> {
     let hypervisor = msb::Msb::found();
-    let docker: Arc<dyn ContainerCli> = Arc::new(SystemDocker::default());
+    let docker: Arc<dyn Engine> = Arc::new(SystemEngine::default());
     let tag = bundle::DESKTOP.tag();
 
     // Once per image: about a gigabyte moves through the disk.

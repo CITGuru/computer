@@ -5,6 +5,7 @@ use computer_api::{Actor, Button, Placement, RuntimeState, Spec, TraceEvent};
 use computer_storage::BoxRecord;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 pub const BOX_LABEL: &str = "computer.server.box";
 
@@ -78,7 +79,15 @@ pub async fn from_records(state: &AppState) -> usize {
             continue;
         }
 
-        match take(state, &runtime, &record.id, &BoxLabel::of(&record), true).await {
+        match take(
+            state,
+            &runtime,
+            &record.id,
+            &BoxLabel::of(&record),
+            Some(&record),
+        )
+        .await
+        {
             Ok(()) => taken += 1,
             Err(why) => tracing::debug!(
                 box_ = %record.id,
@@ -122,7 +131,7 @@ pub async fn from_labels(state: &AppState) -> usize {
                 continue;
             };
 
-            match take(state, &runtime, &name, &label, false).await {
+            match take(state, &runtime, &name, &label, None).await {
                 Ok(()) => taken += 1,
                 Err(why) => tracing::warn!(
                     box_ = %name,
@@ -143,7 +152,7 @@ async fn take(
     runtime: &Runtime,
     name: &str,
     label: &BoxLabel,
-    recorded: bool,
+    recorded: Option<&BoxRecord>,
 ) -> Result<(), String> {
     let (machine, profile) = runtime.pair(label.spec.desktop.server);
 
@@ -167,7 +176,12 @@ async fn take(
         let _ = machine.pause(name).await;
     }
 
-    let computer = taken.map_err(|error| error.to_string())?;
+    let mut computer = taken.map_err(|error| error.to_string())?;
+    computer.expires_when(
+        recorded
+            .and_then(|record| record.expires_at_ms)
+            .map(|at| UNIX_EPOCH + Duration::from_millis(at)),
+    );
 
     if running && !frozen {
         for button in [Button::Left, Button::Middle, Button::Right] {
@@ -191,7 +205,7 @@ async fn take(
         )
         .await;
 
-    if !recorded {
+    if recorded.is_none() {
         let record = BoxRecord {
             id: entry.id.clone(),
             runtime: runtime.name.clone(),
@@ -201,7 +215,7 @@ async fn take(
             height: label.height,
             screens: label.screens,
             created_at_ms: crate::routes::ms_of(entry.created_at),
-            expires_at_ms: None,
+            expires_at_ms: entry.computer.expires_at().map(crate::routes::ms_of),
         };
         if let Err(why) = state.store.put_box(&record).await {
             tracing::warn!(box_ = %entry.id, %why, "an adopted box was not recorded");
@@ -256,7 +270,11 @@ mod tests {
 
     fn holding(api: Arc<ScriptedRemote>) -> AppState {
         let mut runtimes = Runtimes::default();
-        runtimes.add(runtimes::remote("cloud".to_string(), api));
+        runtimes.add(runtimes::remote(
+            "cloud".to_string(),
+            api,
+            runtimes::Tuning::default(),
+        ));
         runtimes.settle();
 
         AppState::default().with(runtimes)
@@ -344,6 +362,38 @@ mod tests {
                 .map(|held| held.created_at_ms),
             Some(1_700_000_000_000),
             "and the record it came from is left as it was"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_box_comes_back_with_the_deadline_it_had() {
+        let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
+        let state = holding(api);
+        let ends = crate::routes::ms_of(std::time::SystemTime::now()) + 30 * 60 * 1000;
+
+        state
+            .store
+            .put_box(&BoxRecord {
+                id: "desk-1".to_string(),
+                runtime: "cloud".to_string(),
+                spec: Spec::default(),
+                placement: Placement::default(),
+                width: 1280,
+                height: 800,
+                screens: 1,
+                created_at_ms: 1_700_000_000_000,
+                expires_at_ms: Some(ends),
+            })
+            .await
+            .expect("recorded");
+
+        assert_eq!(adopt(&state).await, 1);
+
+        let entry = state.registry.get("desk-1").await.expect("it came back");
+        assert_eq!(
+            entry.computer.expires_at().map(crate::routes::ms_of),
+            Some(ends),
+            "a box that outlives the server still ends when it was going to"
         );
     }
 

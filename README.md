@@ -1483,7 +1483,7 @@ Clients send the token as `Authorization: Bearer ...`. The gate protects REST an
 
 The REST API uses shared request and response types from [`computer-api`](crates/computer-api). Box creation, action batches, and forks accept idempotency keys so a transport retry does not repeat a click or create a second box. See the [server guide](crates/computer-server/README.md) for routes and semantics.
 
-`computerd` offers one runtime per host engine it finds — docker, podman and nerdctl — and `GET /v1/runtimes` says what each one runs a box in and what it can do. A placement names one; a box that names none lands on the default. `COMPUTER_SERVER_CONFIG` points at a file that tunes them, offers an engine twice, or turns one off, and `COMPUTER_SERVER_SANDBOXES=e2b` adds a remote vendor when the daemon was built with E2B support.
+By default every box the server creates lives an hour unless you change it from the confiuration. `computerd` offers one runtime per host engine it finds — docker, podman and nerdctl — and `GET /v1/runtimes` says what each one runs a box in and what it can do. A placement names one; a box that names none lands on the default. `COMPUTER_SERVER_CONFIG` points at a file that tunes them, offers an engine twice, or turns one off, and `COMPUTER_SERVER_SANDBOXES=e2b` adds a remote vendor when the daemon was built with E2B support.
 
 On restart, `computerd` takes back every box it recorded, through the runtime its record names, and then scans each runtime for boxes left labelled by an earlier server.
 
@@ -1764,7 +1764,7 @@ The audit checks the screen, pointer, DevTools connection, clipboard, viewer, an
 
 ```rust
 let removed = computer::sweep_expired(
-    &DockerMachine::default(),
+    &EngineMachine::default(),
     SystemTime::now(),
 )
 .await?;

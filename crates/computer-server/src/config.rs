@@ -52,6 +52,8 @@ impl RuntimeEntry {
                 "memory" => tuning.memory = Some(text(&at, value)?),
                 "cpus" => tuning.cpus = Some(number(&at, value)?),
                 "isolation" => tuning.isolation = Some(text(&at, value)?),
+                "lifetime" => tuning.lifetime_secs = Some(seconds(&at, value)?),
+                "max_lifetime" => tuning.max_lifetime_secs = Some(seconds(&at, value)?),
                 "context" if provider == "docker" => tuning.context = Some(text(&at, value)?),
                 "context" => {
                     return Err(format!(
@@ -61,7 +63,7 @@ impl RuntimeEntry {
                 _ => {
                     return Err(format!(
                         "{at} is not a field a {provider} runtime takes: provider, enabled, \
-                         memory, cpus, isolation{}",
+                         memory, cpus, isolation, lifetime, max_lifetime{}",
                         match provider {
                             "docker" => ", context",
                             _ => "",
@@ -69,6 +71,15 @@ impl RuntimeEntry {
                     ));
                 }
             }
+        }
+
+        if let (Some(life), Some(most)) = (tuning.lifetime_secs, tuning.max_lifetime_secs)
+            && life > most
+        {
+            return Err(format!(
+                "runtimes.{name}.lifetime is {life}s and its max_lifetime is {most}s, \
+                 so every box here would be refused"
+            ));
         }
 
         Ok(tuning)
@@ -93,6 +104,36 @@ fn text(at: &str, value: &toml::Value) -> Result<String, String> {
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| format!("{at} is {value} and it is written as text"))
+}
+
+fn seconds(at: &str, value: &toml::Value) -> Result<u64, String> {
+    let said = match value {
+        toml::Value::Integer(whole) if *whole > 0 => return Ok(*whole as u64),
+        toml::Value::String(said) => said.trim().to_string(),
+        _ => {
+            return Err(format!(
+                "{at} is {value} and it is written as 24h, 90m, 3600s, or a whole \
+                 number of seconds"
+            ));
+        }
+    };
+
+    let (count, scale) = match said.chars().last() {
+        Some('h') => (said.trim_end_matches('h'), 60 * 60),
+        Some('m') => (said.trim_end_matches('m'), 60),
+        Some('s') => (said.trim_end_matches('s'), 1),
+        _ => (said.as_str(), 1),
+    };
+
+    count
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|count| *count > 0)
+        .map(|count| count * scale)
+        .ok_or_else(|| {
+            format!("{at} is {said:?} and it is written as 24h, 90m, 3600s, or a whole number of seconds")
+        })
 }
 
 fn number(at: &str, value: &toml::Value) -> Result<String, String> {
@@ -175,5 +216,59 @@ mod tests {
 
         assert!(config.default.is_none());
         assert!(config.runtimes.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod lives {
+    use super::*;
+
+    fn tuning(text: &str) -> Result<crate::runtimes::Tuning, String> {
+        let config = ServerConfig::parse(&format!("[runtimes.docker]\n{text}\n")).expect("read");
+
+        config.runtimes["docker"].tuning("docker", "docker")
+    }
+
+    #[test]
+    fn test_a_life_is_written_the_way_people_write_one() {
+        assert_eq!(
+            tuning("max_lifetime = \"24h\"")
+                .expect("hours")
+                .max_lifetime_secs,
+            Some(24 * 60 * 60)
+        );
+        assert_eq!(
+            tuning("lifetime = \"90m\"").expect("minutes").lifetime_secs,
+            Some(90 * 60)
+        );
+        assert_eq!(
+            tuning("lifetime = \"3600s\"")
+                .expect("seconds")
+                .lifetime_secs,
+            Some(3600)
+        );
+        assert_eq!(
+            tuning("lifetime = 3600").expect("a number").lifetime_secs,
+            Some(3600)
+        );
+    }
+
+    #[test]
+    fn test_a_life_nothing_can_read_is_refused() {
+        for written in [
+            "lifetime = \"soon\"",
+            "lifetime = \"0h\"",
+            "lifetime = true",
+        ] {
+            assert!(tuning(written).is_err(), "{written}");
+        }
+    }
+
+    #[test]
+    fn test_a_default_life_longer_than_the_cap_is_refused_at_the_start() {
+        let why = tuning("lifetime = \"2h\"\nmax_lifetime = \"1h\"")
+            .expect_err("every box here would be refused");
+
+        assert!(why.contains("lifetime"), "{why}");
     }
 }
