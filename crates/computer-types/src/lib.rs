@@ -161,6 +161,74 @@ pub struct Placement {
     pub profile: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "info", rename_all = "snake_case")]
+pub enum Environment {
+    Container(serde_json::Value),
+    MicroVm(serde_json::Value),
+    Vm(serde_json::Value),
+    Unknown(serde_json::Value),
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self::Unknown(serde_json::Value::Object(serde_json::Map::new()))
+    }
+}
+
+impl Environment {
+    pub fn info(&self) -> &serde_json::Value {
+        match self {
+            Self::Container(info) | Self::MicroVm(info) | Self::Vm(info) | Self::Unknown(info) => {
+                info
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Capabilities {
+    pub start: Start,
+    pub reach: PortReach,
+    pub pause: bool,
+    pub stop: bool,
+    pub fork: bool,
+    pub volumes: bool,
+    pub resources: Resources,
+    pub max_lifetime_secs: Option<u64>,
+    pub ports: Option<u32>,
+    pub arch: Vec<Arch>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Start {
+    Entrypoint,
+    Snapshot,
+    AfterEveryStart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortReach {
+    HostPort,
+    VendorUrl,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Resources {
+    AtCreate,
+    AtImage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Arch {
+    Amd64,
+    Arm64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

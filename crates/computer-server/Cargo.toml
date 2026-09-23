@@ -34,6 +34,7 @@ getrandom = "0.3"
 # The same version axum's `ws` feature carries, so one message type crosses the proxy.
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+toml = "1.1.6"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

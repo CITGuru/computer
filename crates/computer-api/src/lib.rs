@@ -1,7 +1,8 @@
 use computer_types::Motion;
 pub use computer_types::{
-    App, Arrange, Auth, Bind, Button, Desktop, DisplayServer, Feature, Held, Node, NodeQuery,
-    Placement, Point, Policy, Rect, Selection, Spec, Window,
+    App, Arch, Arrange, Auth, Bind, Button, Capabilities, Desktop, DisplayServer, Environment,
+    Feature, Held, Node, NodeQuery, Placement, Point, Policy, PortReach, Rect, Resources,
+    Selection, Spec, Start, Window,
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +18,12 @@ pub struct CreateBox {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxView {
     pub id: String,
+    #[serde(default = "on_docker")]
+    pub runtime: String,
     pub spec_digest: String,
     pub state: BoxState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
     pub screens: u32,
     pub width: u32,
     pub height: u32,
@@ -36,6 +41,7 @@ pub enum BoxState {
     Paused,
     /// Starting it again gives a fresh desktop on new ports.
     Stopped,
+    Unreachable,
     Gone,
 }
 
@@ -50,6 +56,52 @@ pub const SERVICE: &str = "computer-server";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxList {
     pub boxes: Vec<BoxView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeView {
+    pub name: String,
+    pub provider: String,
+    pub source: Source,
+    pub place: PlaceKind,
+    pub environment: Environment,
+    pub state: RuntimeState,
+    pub fields: serde_json::Value,
+    pub secrets: Vec<String>,
+    pub can: Capabilities,
+    pub boxes: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeList {
+    pub runtimes: Vec<RuntimeView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    Found,
+    Environment,
+    File,
+    Store,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceKind {
+    Host,
+    Remote,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeState {
+    Ready,
+    Unavailable { why: String },
+}
+
+fn on_docker() -> String {
+    "docker".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

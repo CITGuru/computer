@@ -1,7 +1,7 @@
 use super::api::{E2bApi, Sandbox, SandboxPlan};
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
-use crate::runtime::Config;
 use crate::sandboxes::remote::{self, RemoteApi};
 use async_trait::async_trait;
 use std::collections::BTreeMap;

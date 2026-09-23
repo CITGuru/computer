@@ -1,4 +1,5 @@
 use crate::error::{ApiError, ApiResult};
+use computer::spec::Resolved;
 use computer::{Computer, ScreenId};
 use computer_types::Spec;
 use std::collections::BTreeMap;
@@ -8,6 +9,7 @@ use tokio::sync::{Mutex, RwLock};
 
 pub struct Entry {
     pub id: String,
+    pub runtime: String,
     pub spec: Spec,
     pub created_at: SystemTime,
     pub screens: u32,
@@ -93,19 +95,19 @@ impl Registry {
     pub async fn insert(
         &self,
         id: String,
+        runtime: String,
         spec: Spec,
-        screens: u32,
-        width: u32,
-        height: u32,
+        size: Resolved,
         computer: Computer,
     ) -> Arc<Entry> {
         let entry = Arc::new(Entry {
             id: id.clone(),
+            runtime,
             spec,
             created_at: SystemTime::now(),
-            screens,
-            width,
-            height,
+            screens: size.screens,
+            width: size.width,
+            height: size.height,
             computer,
             locks: Mutex::new(BTreeMap::new()),
         });
@@ -136,6 +138,7 @@ impl Registry {
 
         let entry = Arc::new(Entry {
             id: was.id.clone(),
+            runtime: was.runtime.clone(),
             spec: was.spec.clone(),
             created_at: was.created_at,
             screens: was.screens,

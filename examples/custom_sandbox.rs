@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use computer::sandboxes::remote::{self, NAME_KEY, RemoteApi, Sandbox, SandboxPlan};
 use computer::{
-    Auth, Computer, ContainerCli, DockerMachine, Error, ExecResult, Machine, Result, SystemDocker,
+    Auth, Computer, Engine, EngineMachine, Error, ExecResult, Machine, Result, SystemEngine,
     X11Profile,
 };
 use std::collections::BTreeMap;
@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 struct Fleet {
-    docker: Arc<SystemDocker>,
+    docker: Arc<SystemEngine>,
 }
 
 impl Fleet {
     fn new() -> Self {
         Self {
-            docker: Arc::new(SystemDocker::default()),
+            docker: Arc::new(SystemEngine::default()),
         }
     }
 
@@ -42,7 +42,7 @@ impl Fleet {
     async fn endpoints(&self, id: &str) -> Result<BTreeMap<u16, String>> {
         let printed = self.control(&["port", id]).await?;
 
-        Ok(computer::runtime::parse_ports(&printed)
+        Ok(computer::engine::parse_ports(&printed)
             .into_iter()
             .map(|(inside, outside)| (inside, format!("http://127.0.0.1:{outside}")))
             .collect())
@@ -212,7 +212,7 @@ impl RemoteApi for Fleet {
 
     /// Leave this out where the vendor needs a template built first.
     async fn ensure_image(&self, config: &computer::Config) -> Result<()> {
-        DockerMachine::new(Arc::clone(&self.docker) as Arc<dyn ContainerCli>)
+        EngineMachine::new(Arc::clone(&self.docker) as Arc<dyn Engine>)
             .ensure_image(config)
             .await
     }

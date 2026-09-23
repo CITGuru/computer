@@ -1,37 +1,39 @@
 use crate::AppState;
-use computer::{DockerMachine, Machine, SystemDocker};
 use computer_api::{Actor, TraceEvent};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 pub const EVERY: Duration = Duration::from_secs(30);
 
-pub fn spawn(state: Arc<AppState>, runtimes: Vec<String>, every: Duration) {
+pub fn spawn(state: Arc<AppState>, every: Duration) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(every).await;
-            once(&state, &runtimes).await;
+            once(&state).await;
         }
     });
 }
 
-pub async fn once(state: &AppState, runtimes: &[String]) -> usize {
+pub async fn once(state: &AppState) -> usize {
     let mut gone = 0;
 
-    for runtime in runtimes {
-        let machine: Arc<dyn Machine> = Arc::new(DockerMachine::new(Arc::new(SystemDocker::new(
-            runtime.clone(),
-        ))));
+    for runtime in state.runtimes.all() {
+        if !runtime.ready() {
+            continue;
+        }
+
+        let machine = runtime.scanning();
+        let name = &runtime.name;
 
         match computer::sweep_expired(machine.as_ref(), SystemTime::now()).await {
             Ok(swept) => {
-                for name in swept {
-                    tracing::info!(box_ = %name, %runtime, "a box outlived its deadline");
-                    forget(state, &name, "its deadline passed").await;
+                for box_ in swept {
+                    tracing::info!(box_ = %box_, runtime = %name, "a box outlived its deadline");
+                    forget(state, &box_, "its deadline passed").await;
                     gone += 1;
                 }
             }
-            Err(error) => tracing::debug!(%runtime, %error, "nothing to sweep here"),
+            Err(error) => tracing::debug!(runtime = %name, %error, "nothing to sweep here"),
         }
     }
 

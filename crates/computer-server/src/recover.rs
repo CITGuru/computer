@@ -1,11 +1,11 @@
 use crate::AppState;
-use crate::spec;
-use computer::sandboxes::remote::{self, RemoteApi};
-use computer::{Computer, DockerMachine, Machine, Profile, SystemDocker};
-use computer_api::{Actor, Button, DisplayServer, Placement, Spec, TraceEvent};
+use crate::runtimes::Runtime;
+use computer::Computer;
+use computer_api::{Actor, Button, Placement, RuntimeState, Spec, TraceEvent};
 use computer_storage::BoxRecord;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
 
 pub const BOX_LABEL: &str = "computer.server.box";
 
@@ -27,124 +27,116 @@ impl BoxLabel {
     pub fn decode(value: &str) -> Option<Self> {
         serde_json::from_str(value).ok()
     }
-}
 
-pub fn runtimes() -> Vec<String> {
-    listed(std::env::var("COMPUTER_SERVER_RUNTIMES").ok().as_deref())
-}
-
-pub fn sandboxes() -> Vec<String> {
-    named(std::env::var("COMPUTER_SERVER_SANDBOXES").ok().as_deref())
-}
-
-fn named(listed: Option<&str>) -> Vec<String> {
-    listed
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|place| !place.is_empty())
-        .map(str::to_string)
-        .collect()
-}
-
-fn listed(given: Option<&str>) -> Vec<String> {
-    let found = named(given);
-
-    if found.is_empty() {
-        return vec!["docker".to_string()];
-    }
-    found
-}
-
-pub enum Place {
-    Runtime(String),
-    Vendor(Arc<dyn RemoteApi>),
-}
-
-impl Place {
-    fn name(&self) -> String {
-        match self {
-            Self::Runtime(runtime) => runtime.clone(),
-            Self::Vendor(api) => api.vendor().to_string(),
-        }
-    }
-
-    fn asking(&self) -> Arc<dyn Machine> {
-        self.driving(DisplayServer::default()).0
-    }
-
-    fn driving(&self, server: DisplayServer) -> (Arc<dyn Machine>, Arc<dyn Profile>) {
-        let image = spec::profile_for(server);
-
-        match self {
-            Self::Runtime(runtime) => (
-                Arc::new(DockerMachine::new(Arc::new(SystemDocker::new(
-                    runtime.clone(),
-                )))),
-                image,
-            ),
-            Self::Vendor(api) => {
-                let (machine, profile) = remote::pair(Arc::clone(api), image);
-                (Arc::new(machine), profile)
-            }
+    pub fn of(record: &BoxRecord) -> Self {
+        Self {
+            digest: record.spec.digest(),
+            spec: record.spec.clone(),
+            placement: record.placement.clone(),
+            width: record.width,
+            height: record.height,
+            screens: record.screens,
         }
     }
 }
 
-fn vendor(name: &str) -> Option<Arc<dyn RemoteApi>> {
-    #[cfg(feature = "e2b")]
-    if name == "e2b" {
-        use computer::sandboxes::e2b::{E2bVendor, cloud::Cloud};
-
-        return match Cloud::from_env() {
-            Ok(cloud) => Some(Arc::new(E2bVendor::new(Arc::new(cloud)))),
-            Err(error) => {
-                tracing::warn!(vendor = %name, %error, "this vendor was named and cannot be reached");
-                None
-            }
-        };
-    }
-
-    tracing::warn!(
-        vendor = %name,
-        "this vendor was named and is not built into this server"
-    );
-    None
+pub async fn adopt(state: &AppState) -> usize {
+    from_records(state).await + from_labels(state).await
 }
 
-pub async fn adopt(state: &AppState, runtimes: &[String], sandboxes: &[String]) -> usize {
-    let mut places: Vec<Place> = runtimes.iter().cloned().map(Place::Runtime).collect();
-    places.extend(
-        sandboxes
-            .iter()
-            .filter_map(|name| vendor(name))
-            .map(Place::Vendor),
-    );
+pub async fn from_records(state: &AppState) -> usize {
+    let records = match state.store.list_boxes().await {
+        Ok(records) => records,
+        Err(why) => {
+            tracing::warn!(%why, "the boxes this server recorded could not be read");
+            return 0;
+        }
+    };
 
-    adopt_from(state, &places).await
-}
-
-pub async fn adopt_from(state: &AppState, places: &[Place]) -> usize {
     let mut taken = 0;
 
-    for place in places {
-        let where_ = place.name();
+    for record in records {
+        if state.registry.get(&record.id).await.is_ok() {
+            continue;
+        }
 
-        let found = match place.asking().labelled(BOX_LABEL).await {
+        let runtime = match state.runtimes.get(&record.runtime) {
+            Some(runtime) => runtime,
+            None => {
+                state.out_of_reach(
+                    &record.id,
+                    format!("its runtime {} is not on this server", record.runtime),
+                );
+                continue;
+            }
+        };
+
+        if let RuntimeState::Unavailable { why } = &runtime.state {
+            state.out_of_reach(
+                &record.id,
+                format!("its runtime {} is not answering: {why}", record.runtime),
+            );
+            continue;
+        }
+
+        match take(
+            state,
+            &runtime,
+            &record.id,
+            &BoxLabel::of(&record),
+            Some(&record),
+        )
+        .await
+        {
+            Ok(()) => taken += 1,
+            Err(why) => tracing::debug!(
+                box_ = %record.id,
+                runtime = %record.runtime,
+                %why,
+                "a recorded box is no longer there"
+            ),
+        }
+    }
+
+    taken
+}
+
+pub async fn from_labels(state: &AppState) -> usize {
+    let mut taken = 0;
+
+    for runtime in state.runtimes.all() {
+        if !runtime.ready() {
+            continue;
+        }
+
+        let found = match runtime.scanning().labelled(BOX_LABEL).await {
             Ok(found) => found,
             Err(error) => {
-                tracing::debug!(place = %where_, %error, "no boxes to take back from here");
+                tracing::debug!(runtime = %runtime.name, %error, "no boxes to take back from here");
                 continue;
             }
         };
 
         for (name, value) in found {
-            match adopt_one(state, place, &where_, &name, &value).await {
-                Ok(()) => taken += 1,
-                Err(error) => tracing::warn!(
+            if state.registry.get(&name).await.is_ok() {
+                continue;
+            }
+
+            let Some(label) = BoxLabel::decode(&value) else {
+                tracing::warn!(
                     box_ = %name,
-                    place = %where_,
-                    %error,
+                    runtime = %runtime.name,
+                    "a box is here under a label this server did not write"
+                );
+                continue;
+            };
+
+            match take(state, &runtime, &name, &label, None).await {
+                Ok(()) => taken += 1,
+                Err(why) => tracing::warn!(
+                    box_ = %name,
+                    runtime = %runtime.name,
+                    %why,
                     "a box is here that this server could not take back; it will \
                      keep what it holds until something else removes it"
                 ),
@@ -155,18 +147,14 @@ pub async fn adopt_from(state: &AppState, places: &[Place]) -> usize {
     taken
 }
 
-async fn adopt_one(
+async fn take(
     state: &AppState,
-    place: &Place,
-    where_: &str,
+    runtime: &Runtime,
     name: &str,
-    value: &str,
+    label: &BoxLabel,
+    recorded: Option<&BoxRecord>,
 ) -> Result<(), String> {
-    let Some(label) = BoxLabel::decode(value) else {
-        return Err("its label is not one this server wrote".to_string());
-    };
-
-    let (machine, profile) = place.driving(label.spec.desktop.server);
+    let (machine, profile) = runtime.pair(label.spec.desktop.server);
 
     // A paused box reports no ports, so it is woken long enough to read them.
     let frozen = machine.paused(name).await.unwrap_or(false);
@@ -188,7 +176,12 @@ async fn adopt_one(
         let _ = machine.pause(name).await;
     }
 
-    let computer = taken.map_err(|error| error.to_string())?;
+    let mut computer = taken.map_err(|error| error.to_string())?;
+    computer.expires_when(
+        recorded
+            .and_then(|record| record.expires_at_ms)
+            .map(|at| UNIX_EPOCH + Duration::from_millis(at)),
+    );
 
     if running && !frozen {
         for button in [Button::Left, Button::Middle, Button::Right] {
@@ -201,59 +194,67 @@ async fn adopt_one(
         .registry
         .insert(
             name.to_string(),
+            runtime.name.clone(),
             label.spec.clone(),
-            label.screens,
-            label.width,
-            label.height,
+            computer::spec::Resolved {
+                width: label.width,
+                height: label.height,
+                screens: label.screens,
+            },
             computer,
         )
         .await;
 
-    let record = BoxRecord {
-        id: entry.id.clone(),
-        spec: label.spec.clone(),
-        placement: label.placement.clone(),
-        width: label.width,
-        height: label.height,
-        screens: label.screens,
-        created_at_ms: crate::routes::ms_of(entry.created_at),
-        expires_at_ms: None,
-    };
-    if let Err(why) = state.store.put_box(&record).await {
-        tracing::warn!(box_ = %entry.id, %why, "an adopted box was not recorded");
+    if recorded.is_none() {
+        let record = BoxRecord {
+            id: entry.id.clone(),
+            runtime: runtime.name.clone(),
+            spec: label.spec.clone(),
+            placement: label.placement.clone(),
+            width: label.width,
+            height: label.height,
+            screens: label.screens,
+            created_at_ms: crate::routes::ms_of(entry.created_at),
+            expires_at_ms: entry.computer.expires_at().map(crate::routes::ms_of),
+        };
+        if let Err(why) = state.store.put_box(&record).await {
+            tracing::warn!(box_ = %entry.id, %why, "an adopted box was not recorded");
+        }
+
+        state
+            .record(
+                &entry.id,
+                Actor::System,
+                TraceEvent::BoxCreated {
+                    spec_digest: label.digest.clone(),
+                    spec: Box::new(label.spec.clone()),
+                    placement: Box::new(label.placement.clone()),
+                    width: label.width,
+                    height: label.height,
+                    screens: label.screens,
+                },
+            )
+            .await;
     }
 
     state
         .record(
             &entry.id,
             Actor::System,
-            TraceEvent::BoxCreated {
-                spec_digest: label.digest,
-                spec: Box::new(label.spec),
-                placement: Box::new(label.placement),
-                width: label.width,
-                height: label.height,
-                screens: label.screens,
-            },
-        )
-        .await;
-    state
-        .record(
-            &entry.id,
-            Actor::System,
             TraceEvent::Adopted {
-                runtime: where_.to_string(),
+                runtime: runtime.name.clone(),
             },
         )
         .await;
 
-    tracing::info!(box_ = %entry.id, place = %where_, "took a box back");
+    tracing::info!(box_ = %entry.id, runtime = %runtime.name, "took a box back");
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtimes::{self, Runtimes};
     use computer::testing::ScriptedRemote;
 
     fn label() -> BoxLabel {
@@ -265,6 +266,18 @@ mod tests {
             height: 800,
             screens: 1,
         }
+    }
+
+    fn holding(api: Arc<ScriptedRemote>) -> AppState {
+        let mut runtimes = Runtimes::default();
+        runtimes.add(runtimes::remote(
+            "cloud".to_string(),
+            api,
+            runtimes::Tuning::default(),
+        ));
+        runtimes.settle();
+
+        AppState::default().with(runtimes)
     }
 
     #[test]
@@ -285,8 +298,8 @@ mod tests {
         let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
         api.metadata("sbx-9", BOX_LABEL, label().encode().expect("a label"));
 
-        let state = AppState::default();
-        let taken = adopt_from(&state, &[Place::Vendor(api)]).await;
+        let state = holding(api);
+        let taken = adopt(&state).await;
 
         assert_eq!(taken, 1, "a box in somebody else's cloud comes back too");
         assert!(
@@ -299,9 +312,9 @@ mod tests {
                 .get_box("desk-1")
                 .await
                 .expect("asked")
-                .map(|held| held.width),
-            Some(1280),
-            "and its record is written from the label"
+                .map(|held| held.runtime),
+            Some("cloud".to_string()),
+            "and its record says where it was found, so a restart goes there first"
         );
     }
 
@@ -309,41 +322,114 @@ mod tests {
     async fn test_a_vendor_holding_nothing_this_server_wrote_takes_nothing() {
         let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
 
-        let state = AppState::default();
+        let state = holding(api);
 
         assert_eq!(
-            adopt_from(&state, &[Place::Vendor(api)]).await,
+            adopt(&state).await,
             0,
             "a sandbox with no label of ours is somebody else's box"
         );
     }
 
-    #[test]
-    fn test_no_vendor_is_asked_unless_one_is_named() {
-        assert!(named(None).is_empty());
-        assert!(named(Some(" , ")).is_empty());
+    #[tokio::test]
+    async fn test_a_recorded_box_is_taken_back_through_the_runtime_it_names() {
+        let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
+        let state = holding(api);
+
+        state
+            .store
+            .put_box(&BoxRecord {
+                id: "desk-1".to_string(),
+                runtime: "cloud".to_string(),
+                spec: Spec::default(),
+                placement: Placement::default(),
+                width: 1280,
+                height: 800,
+                screens: 1,
+                created_at_ms: 1_700_000_000_000,
+                expires_at_ms: None,
+            })
+            .await
+            .expect("recorded");
+
+        assert_eq!(adopt(&state).await, 1, "the record alone brings it back");
         assert_eq!(
-            named(Some("e2b, daytona ,")),
-            vec!["e2b".to_string(), "daytona".to_string()]
+            state
+                .store
+                .get_box("desk-1")
+                .await
+                .expect("asked")
+                .map(|held| held.created_at_ms),
+            Some(1_700_000_000_000),
+            "and the record it came from is left as it was"
         );
     }
 
-    #[test]
-    fn test_a_vendor_this_server_cannot_serve_is_skipped() {
-        assert!(vendor("nowhere").is_none());
-    }
+    #[tokio::test]
+    async fn test_a_box_comes_back_with_the_deadline_it_had() {
+        let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
+        let state = holding(api);
+        let ends = crate::routes::ms_of(std::time::SystemTime::now()) + 30 * 60 * 1000;
 
-    #[test]
-    fn test_docker_is_looked_in_when_nothing_says_otherwise() {
-        assert_eq!(listed(None), vec!["docker".to_string()]);
-        assert_eq!(listed(Some("  ")), vec!["docker".to_string()]);
-    }
+        state
+            .store
+            .put_box(&BoxRecord {
+                id: "desk-1".to_string(),
+                runtime: "cloud".to_string(),
+                spec: Spec::default(),
+                placement: Placement::default(),
+                width: 1280,
+                height: 800,
+                screens: 1,
+                created_at_ms: 1_700_000_000_000,
+                expires_at_ms: Some(ends),
+            })
+            .await
+            .expect("recorded");
 
-    #[test]
-    fn test_the_runtimes_to_look_in_can_be_named() {
+        assert_eq!(adopt(&state).await, 1);
+
+        let entry = state.registry.get("desk-1").await.expect("it came back");
         assert_eq!(
-            listed(Some("podman, nerdctl ,")),
-            vec!["podman".to_string(), "nerdctl".to_string()]
+            entry.computer.expires_at().map(crate::routes::ms_of),
+            Some(ends),
+            "a box that outlives the server still ends when it was going to"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_box_whose_runtime_is_gone_is_out_of_reach_rather_than_forgotten() {
+        let state = AppState::default();
+
+        state
+            .store
+            .put_box(&BoxRecord {
+                id: "desk-1".to_string(),
+                runtime: "cloud".to_string(),
+                spec: Spec::default(),
+                placement: Placement::default(),
+                width: 1280,
+                height: 800,
+                screens: 1,
+                created_at_ms: 1_700_000_000_000,
+                expires_at_ms: None,
+            })
+            .await
+            .expect("recorded");
+
+        assert_eq!(adopt(&state).await, 0);
+        assert!(
+            state.why_out_of_reach("desk-1").is_some(),
+            "a box on a runtime this server no longer has is reported, not dropped"
+        );
+        assert!(
+            state
+                .store
+                .get_box("desk-1")
+                .await
+                .expect("asked")
+                .is_some(),
+            "and its record stays, so it comes back when the runtime does"
         );
     }
 }

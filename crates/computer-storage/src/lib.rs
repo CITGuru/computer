@@ -26,6 +26,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoxRecord {
     pub id: String,
+    #[serde(default = "on_docker")]
+    pub runtime: String,
     pub spec: Spec,
     pub placement: Placement,
     pub width: u32,
@@ -126,6 +128,10 @@ impl<B: Blobs + ?Sized> Blobs for &B {
     async fn delete_prefix(&self, prefix: &str) -> Result<()> {
         (**self).delete_prefix(prefix).await
     }
+}
+
+fn on_docker() -> String {
+    "docker".to_string()
 }
 
 pub(crate) fn now_ms() -> u64 {

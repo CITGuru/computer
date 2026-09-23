@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod cdp;
+pub mod config;
 pub mod error;
 pub mod extract;
 pub mod idempotency;
@@ -11,11 +12,12 @@ pub mod reap;
 pub mod recover;
 pub mod registry;
 pub mod routes;
+pub mod runtimes;
 pub mod spec;
 pub mod states;
 pub mod viewer;
 
-use computer::ContainerCli;
+use computer::{Engine, EngineMachine};
 use computer_api::{Actor, TraceEvent};
 use computer_storage::files::Files;
 use computer_storage::local::LocalDir;
@@ -23,7 +25,8 @@ use computer_storage::memory::Memory;
 use computer_storage::{Frames, Store};
 use idempotency::Replies;
 use registry::Registry;
-use std::collections::HashMap;
+use runtimes::Runtimes;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 pub struct AppState {
@@ -33,7 +36,8 @@ pub struct AppState {
     pub store: Arc<dyn Store>,
     pub frames: Arc<dyn Frames>,
     seen: Mutex<HashMap<(String, u32), String>>,
-    pub cli: Option<Arc<dyn ContainerCli>>,
+    out_of_reach: Mutex<BTreeMap<String, String>>,
+    pub runtimes: Runtimes,
     pub tickets: viewer::Tickets,
     pub cdp_tokens: viewer::Tickets,
     pub presses: presses::Presses,
@@ -62,7 +66,8 @@ impl AppState {
             store,
             frames,
             seen: Mutex::new(HashMap::new()),
-            cli: None,
+            out_of_reach: Mutex::new(BTreeMap::new()),
+            runtimes: Runtimes::default(),
             tickets: viewer::Tickets::default(),
             cdp_tokens: viewer::Tickets::default(),
             presses: presses::Presses::default(),
@@ -72,6 +77,16 @@ impl AppState {
     }
 
     pub async fn from_env() -> Result<Self, String> {
+        let state = Self::stored().await?;
+
+        let config = config::ServerConfig::from_env()?;
+        let found =
+            runtimes::discover(&config, &runtimes::offered(), &runtimes::sandboxes()).await?;
+
+        Ok(state.with(found))
+    }
+
+    async fn stored() -> Result<Self, String> {
         let named = std::env::var("COMPUTER_STORAGE_BACKEND").unwrap_or_default();
 
         match named.trim() {
@@ -143,8 +158,20 @@ impl AppState {
         self
     }
 
-    pub fn through(mut self, cli: Option<Arc<dyn ContainerCli>>) -> Self {
-        self.cli = cli;
+    pub fn with(mut self, runtimes: Runtimes) -> Self {
+        self.runtimes = runtimes;
+        self
+    }
+
+    pub fn through(mut self, cli: Option<Arc<dyn Engine>>) -> Self {
+        if let Some(cli) = cli {
+            self.runtimes.add(runtimes::engine(
+                "docker",
+                Arc::new(EngineMachine::new(cli)),
+            ));
+            self.runtimes.settle();
+        }
+
         self
     }
 
@@ -195,6 +222,29 @@ impl AppState {
             .await
             .map(|entries| !entries.is_empty())
             .unwrap_or_default()
+    }
+
+    pub fn out_of_reach(&self, id: &str, why: String) {
+        if let Ok(mut held) = self.out_of_reach.lock() {
+            held.insert(id.to_string(), why);
+        }
+    }
+
+    pub fn why_out_of_reach(&self, id: &str) -> Option<String> {
+        self.out_of_reach.lock().ok()?.get(id).cloned()
+    }
+
+    pub fn all_out_of_reach(&self) -> BTreeMap<String, String> {
+        self.out_of_reach
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn within_reach(&self, id: &str) {
+        if let Ok(mut held) = self.out_of_reach.lock() {
+            held.remove(id);
+        }
     }
 
     pub fn forget_screens(&self, id: &str) {

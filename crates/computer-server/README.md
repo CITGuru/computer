@@ -17,8 +17,9 @@ Core server settings:
 - `COMPUTER_SERVER_ADDR` — listen address; default `127.0.0.1:8080`
 - `COMPUTER_SERVER_TOKEN` — bearer token; required outside loopback
 - `COMPUTER_PUBLIC_URL` — public origin used by MCP Apps behind a reverse proxy
-- `COMPUTER_SERVER_RUNTIMES` — comma-separated container runtimes to recover and reap; default `docker`
-- `COMPUTER_SERVER_SANDBOXES` — comma-separated remote vendors to recover, such as `e2b`
+- `COMPUTER_SERVER_CONFIG` — path to the runtimes file; read at start, a change needs a restart
+- `COMPUTER_SERVER_RUNTIMES` — comma-separated host engines to offer; default `docker,podman,nerdctl`, and only the ones that answer are offered
+- `COMPUTER_SERVER_SANDBOXES` — comma-separated remote vendors, such as `e2b`
 - `COMPUTER_SERVER_REAP_SECS` — expired-box sweep interval; default 30 seconds
 
 The default store is in memory. Select durable trace and frame storage with:
@@ -93,7 +94,59 @@ curl -s localhost:8080/v1/boxes -H 'content-type: application/json' \
 
 Unknown keys in a spec are refused rather than ignored: a misspelled key that is quietly dropped hands back a box missing the thing it was misspelled for.
 
+`"runtime": "docker"` in the placement names one of the runtimes below. A name this server does not have is refused with the names it has, and the box lands on the default when the placement names none.
+
 `"profile": "work"` in the placement keeps the browser's logins, cookies and history in the volume `computer-profile-work` after the box is gone, and the next box given the name starts with them. A profile that another box holds, running or stopped, is refused with that box's name.
+
+## Where a box runs
+
+A runtime is described twice: by its **place**, host or remote, and by the **environment** it runs a box in — a container, a microVM or a VM, with whatever its provider knows about it.
+
+```bash
+curl -s localhost:8080/v1/runtimes | jq '.runtimes[] | {name, place, environment}'
+```
+
+```json
+{
+  "name": "docker",
+  "place": "host",
+  "environment": { "kind": "container", "info": { "engine": "docker 27.3.1", "default_runtime": "runc", "storage": "overlay2" } }
+}
+```
+
+Host engines are found at start: docker, podman and nerdctl, each offered under the name of its engine when it answers. Tuning an engine stays with the engine — `DOCKER_HOST` and `docker context` point Docker at another host, `default-runtime` in `daemon.json` puts its containers on gVisor or Kata.
+
+What an engine cannot say goes in the file at `COMPUTER_SERVER_CONFIG`, and only there, because every field names a program, a host or an engine of this server's:
+
+```toml
+default = "hardened"
+
+[runtimes.docker]
+memory = "4g"
+
+[runtimes.hardened]
+provider = "docker"
+isolation = "runsc"
+
+[runtimes.gpu-host]
+provider = "docker"
+context = "gpu-1"
+
+[runtimes.podman]
+enabled = false
+```
+
+A table with no `provider` tunes the engine of that name that was found; with one, it offers the same engine again under another name. `memory` and `cpus` are a default for every box on that runtime, and a placement still overrides them. `isolation` is the OCI runtime each box is started on, `--runtime` per box rather than one setting for the whole engine. `context` is a Docker context made with `docker context create`, which keeps its own TLS and SSH settings.
+
+**A box lives an hour**, on every runtime, unless it says otherwise. `lifetime` changes what a box gets when its placement names no `expires_after_secs`, and `max_lifetime` changes the most one may ask for; a placement above the cap is refused with both numbers and told which field to raise. Written as `24h`, `90m`, `3600s`, or a whole number of seconds. A vendor named in `COMPUTER_SERVER_SANDBOXES` takes these two as well, so an account that keeps a box for a day says so rather than being guessed at:
+
+```toml
+[runtimes.e2b]
+max_lifetime = "24h"
+lifetime = "4h"
+```
+
+`GET /v1/runtimes/{name}` says what one can do: whether it pauses, whether it stops, how a port is reached, and whether memory and cpus are set when a box is created or when its image is built. A placement asking for something the runtime cannot do is refused before anything starts.
 
 ## Drive it
 
@@ -240,6 +293,7 @@ The reading itself is `computer::Page::read`, so a library user gets it without 
 | `POST /v1/boxes/{id}/cdp?ttl_secs=` | an address another library drives the browser by, with a short-lived token in its path |
 | `/v1/cdp/{token}/json/…`, `/v1/cdp/{token}/devtools/…` | the browser's DevTools through this server; the token admits, no bearer |
 | `GET /v1/catalog` | the app names a launch can ask for |
+| `GET /v1/runtimes`, `GET /v1/runtimes/{name}` | where boxes can be put, what each runs them in, and what each can do |
 | `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
 | `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
 | `GET /v1/boxes/{id}/page/snapshot?scope=&limit=&delta=&quiet_ms=` | every control on the page in order, numbered; or what changed since the last one |
@@ -307,7 +361,7 @@ system  gone  the runtime no longer has it
 
 `COMPUTER_SERVER_REAP_SECS` sets the cadence, 30s by default.
 
-`expires_after_secs` and `idle_timeout_secs` under 60s are refused. The clock starts when a box is created rather than when it is ready, so a shorter deadline removes it mid-launch and the caller waits out the full ready timeout to be told the container went missing.
+A box that names no `expires_after_secs` takes its runtime's `lifetime`, one hour by default, so nothing runs until somebody notices it. `expires_after_secs` and `idle_timeout_secs` under 60s are refused. The clock starts when a box is created rather than when it is ready, so a shorter deadline removes it mid-launch and the caller waits out the full ready timeout to be told the container went missing.
 
 ## Surviving a restart
 
@@ -318,9 +372,9 @@ INFO took a box back box_=box_9cf78792… runtime=docker
 INFO took back boxes left running by an earlier server taken=1
 ```
 
-Each box carries its own spec in a `computer.server.box` label, written where the runtime keeps it rather than where this process does. So what comes back is a box this server can drive *and* fork, rather than a name it has to guess about.
+Each box record names the runtime it was created on, so a restart goes there first. A box whose runtime is no longer configured is listed as `unreachable` with the reason, and its record is kept: it comes back when the runtime does.
 
-Set `COMPUTER_SERVER_RUNTIMES=docker,podman` to look in more than one. A box placed on a runtime nobody asks about stays lost.
+Then every runtime is scanned for the `computer.server.box` label, which carries the box's own spec where the runtime keeps it rather than where this process does. So a box the store lost still comes back as one this server can drive *and* fork, rather than a name it has to guess about.
 
 With the default memory store, **the trace does not come back.** An adopted box starts a new trace that says `adopted`, and a fork can replay only what happened since. A durable storage backend keeps earlier entries and frames across the restart.
 
