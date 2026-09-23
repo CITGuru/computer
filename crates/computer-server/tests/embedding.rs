@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn test_a_daemon_can_be_given_its_runtimes_in_code() {
-    let mut runtimes = Runtimes::default();
+    let runtimes = Runtimes::default();
 
     runtimes.add(runtimes::engine(
         "docker",

@@ -1,5 +1,5 @@
 use crate::now_ms;
-use crate::{Blobs, BoxRecord, Frames, Store};
+use crate::{Blobs, BoxRecord, Frames, RuntimeRecord, Sealed, Store};
 use computer_api::{Actor, Placement, Spec, TraceEvent};
 
 fn record(id: &str, width: u32) -> BoxRecord {
@@ -16,8 +16,75 @@ fn record(id: &str, width: u32) -> BoxRecord {
     }
 }
 
+fn runtime(name: &str, key: &str) -> RuntimeRecord {
+    RuntimeRecord {
+        name: name.to_string(),
+        provider: "e2b".to_string(),
+        fields: serde_json::json!({ "region": "eu" }),
+        secrets: std::collections::BTreeMap::from([("api_key".to_string(), Sealed::of(key))]),
+        created_at_ms: 1_700_000_000_000,
+        updated_at_ms: 1_700_000_000_000,
+    }
+}
+
 fn wrote() -> TraceEvent {
     TraceEvent::BoxDeleted
+}
+
+pub async fn runtimes(store: &dyn Store) {
+    assert!(
+        store
+            .get_runtime("never_stored")
+            .await
+            .expect("asked")
+            .is_none(),
+        "a runtime nobody added is not an error"
+    );
+
+    store
+        .put_runtime(&runtime("cloud", "sealed-1"))
+        .await
+        .expect("kept");
+    store
+        .put_runtime(&runtime("eu", "sealed-2"))
+        .await
+        .expect("kept");
+
+    let held = store
+        .get_runtime("cloud")
+        .await
+        .expect("asked")
+        .expect("a runtime");
+    assert_eq!(held.provider, "e2b");
+    assert_eq!(held.fields["region"], "eu");
+    assert_eq!(
+        held.secrets["api_key"].as_str(),
+        "sealed-1",
+        "what the server sealed comes back as it went down"
+    );
+
+    store
+        .put_runtime(&runtime("cloud", "sealed-3"))
+        .await
+        .expect("kept again");
+    assert_eq!(
+        store
+            .get_runtime("cloud")
+            .await
+            .expect("asked")
+            .expect("a runtime")
+            .secrets["api_key"]
+            .as_str(),
+        "sealed-3",
+        "a new key replaces the old one rather than sitting beside it"
+    );
+
+    let listed = store.list_runtimes().await.expect("listed");
+    assert_eq!(listed.len(), 2);
+
+    store.forget_runtime("cloud").await.expect("forgotten");
+    assert!(store.get_runtime("cloud").await.expect("asked").is_none());
+    assert_eq!(store.list_runtimes().await.expect("listed").len(), 1);
 }
 
 pub async fn store(store: &dyn Store) {

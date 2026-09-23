@@ -191,6 +191,7 @@ mod tests {
     async fn test_a_store_on_a_directory_behaves_like_a_store() {
         let scratch = Scratch::new();
         conformance::store(&Files::over(LocalDir::at(&scratch.0))).await;
+        conformance::runtimes(&Files::over(LocalDir::at(&scratch.0))).await;
     }
 
     #[tokio::test]

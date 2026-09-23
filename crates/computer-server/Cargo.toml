@@ -35,8 +35,11 @@ getrandom = "0.3"
 tokio-tungstenite = "0.29"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 toml = "1.1.6"
+ring = "0.17"
+async-trait = "0.1.92"
 
 [dev-dependencies]
+computer-storage = { path = "../computer-storage", version = "0.1.0" }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 

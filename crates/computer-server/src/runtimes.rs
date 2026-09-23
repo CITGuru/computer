@@ -10,7 +10,7 @@ use computer_api::{
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub const HOSTS: [&str; 3] = ["docker", "podman", "nerdctl"];
 
@@ -76,6 +76,7 @@ impl Place {
 pub struct Runtime {
     pub name: String,
     pub provider: String,
+    pub secrets: Vec<String>,
     pub source: Source,
     pub environment: Environment,
     pub place: Place,
@@ -185,7 +186,7 @@ impl Runtime {
             environment: self.environment.clone(),
             state: self.state.clone(),
             fields: self.fields(),
-            secrets: Vec::new(),
+            secrets: self.secrets.clone(),
             can: self.can.clone(),
             boxes,
         }
@@ -194,67 +195,95 @@ impl Runtime {
 
 #[derive(Default)]
 pub struct Runtimes {
+    held: RwLock<Held>,
+}
+
+#[derive(Default)]
+struct Held {
     all: BTreeMap<String, Arc<Runtime>>,
     default: Option<String>,
 }
 
 impl Runtimes {
-    pub fn add(&mut self, runtime: Runtime) {
-        self.all.insert(runtime.name.clone(), Arc::new(runtime));
+    fn read(&self) -> RwLockReadGuard<'_, Held> {
+        self.held.read().unwrap_or_else(|held| held.into_inner())
     }
 
-    pub fn prefer(&mut self, name: &str) -> Result<(), String> {
-        if !self.all.contains_key(name) {
+    fn write(&self) -> RwLockWriteGuard<'_, Held> {
+        self.held.write().unwrap_or_else(|held| held.into_inner())
+    }
+
+    pub fn add(&self, runtime: Runtime) {
+        self.write()
+            .all
+            .insert(runtime.name.clone(), Arc::new(runtime));
+    }
+
+    pub fn prefer(&self, name: &str) -> Result<(), String> {
+        let mut held = self.write();
+
+        if !held.all.contains_key(name) {
+            let names = names(&held);
             return Err(format!(
-                "the default runtime is {name} and this server has {}",
-                self.names()
+                "the default runtime is {name} and this server has {names}"
             ));
         }
 
-        self.default = Some(name.to_string());
+        held.default = Some(name.to_string());
         Ok(())
     }
 
-    pub fn settle(&mut self) {
-        if self.default.is_some() {
+    pub fn settle(&self) {
+        let mut held = self.write();
+
+        if held.default.is_some() {
             return;
         }
 
-        self.default = self
+        held.default = held
             .all
             .values()
             .find(|runtime| runtime.name == "docker" && runtime.ready())
-            .or_else(|| self.all.values().find(|runtime| runtime.ready()))
+            .or_else(|| held.all.values().find(|runtime| runtime.ready()))
             .map(|runtime| runtime.name.clone());
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<Runtime>> {
-        self.all.get(name).cloned()
+        self.read().all.get(name).cloned()
     }
 
     pub fn all(&self) -> Vec<Arc<Runtime>> {
-        self.all.values().cloned().collect()
+        self.read().all.values().cloned().collect()
     }
 
-    pub fn default_name(&self) -> Option<&str> {
-        self.default.as_deref()
+    pub fn forget(&self, name: &str) -> Option<Arc<Runtime>> {
+        let mut held = self.write();
+
+        if held.default.as_deref() == Some(name) {
+            held.default = None;
+        }
+
+        held.all.remove(name)
+    }
+
+    pub fn default_name(&self) -> Option<String> {
+        self.read().default.clone()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.all.is_empty()
+        self.read().all.is_empty()
     }
 
     pub fn names(&self) -> String {
-        match self.all.is_empty() {
-            true => "none".to_string(),
-            false => self.all.keys().cloned().collect::<Vec<_>>().join(", "),
-        }
+        names(&self.read())
     }
 
     pub fn resolve(&self, asked: Option<&str>) -> ApiResult<Arc<Runtime>> {
+        let held = self.read();
+
         let name = match asked {
-            Some(name) => name,
-            None => self.default.as_deref().ok_or_else(|| {
+            Some(name) => name.to_string(),
+            None => held.default.clone().ok_or_else(|| {
                 ApiError::new(
                     axum::http::StatusCode::SERVICE_UNAVAILABLE,
                     computer_api::ErrorCode::Unavailable,
@@ -263,12 +292,19 @@ impl Runtimes {
             })?,
         };
 
-        self.get(name).ok_or_else(|| {
+        held.all.get(&name).cloned().ok_or_else(|| {
             ApiError::bad_request(format!(
                 "no runtime named {name} here: this server has {}",
-                self.names()
+                names(&held)
             ))
         })
+    }
+}
+
+fn names(held: &Held) -> String {
+    match held.all.is_empty() {
+        true => "none".to_string(),
+        false => held.all.keys().cloned().collect::<Vec<_>>().join(", "),
     }
 }
 
@@ -294,6 +330,7 @@ pub async fn host(name: String, provider: String, source: Source, tuning: Tuning
     Runtime {
         name,
         provider,
+        secrets: Vec::new(),
         source,
         environment,
         place: Place::Host { machine },
@@ -317,6 +354,7 @@ pub fn remote(name: String, api: Arc<dyn RemoteApi>, tuning: Tuning) -> Runtime 
     Runtime {
         name,
         provider,
+        secrets: Vec::new(),
         source: Source::Environment,
         environment,
         place: Place::Remote {
@@ -487,9 +525,10 @@ pub async fn discover(
     config: &ServerConfig,
     hosts: &[String],
     sandboxes: &[String],
+    vendors: &dyn Vendors,
 ) -> Result<Runtimes, String> {
     let plan = plan(config, hosts, sandboxes)?;
-    let mut runtimes = Runtimes::default();
+    let runtimes = Runtimes::default();
 
     for (name, (provider, tuning, source)) in plan.hosts {
         let runtime = host(name, provider, source, tuning).await;
@@ -516,7 +555,7 @@ pub async fn discover(
             ));
         }
 
-        if let Some(api) = vendor(&name) {
+        if let Some(api) = vendors.in_environment(&name) {
             let runtime = remote(name, api, tuning);
             told_of(&runtime);
             runtimes.add(runtime);
@@ -613,31 +652,302 @@ fn plan(config: &ServerConfig, hosts: &[String], sandboxes: &[String]) -> Result
     Ok(plan)
 }
 
-pub fn vendor(name: &str) -> Option<Arc<dyn RemoteApi>> {
-    #[cfg(feature = "e2b")]
-    if name == "e2b" {
-        use computer::sandboxes::e2b::{E2bVendor, cloud::Cloud};
+pub const KEY_FIELD: &str = "api_key";
 
-        return match Cloud::from_env() {
-            Ok(cloud) => Some(Arc::new(E2bVendor::new(Arc::new(cloud)))),
-            Err(error) => {
-                tracing::warn!(vendor = %name, %error, "this vendor was named and cannot be reached");
-                None
-            }
-        };
+pub fn nameable(name: &str) -> Result<(), String> {
+    let plain = name
+        .chars()
+        .all(|one| one.is_ascii_alphanumeric() || matches!(one, '-' | '_' | '.'));
+    let leads = name
+        .chars()
+        .next()
+        .is_some_and(|one| one.is_ascii_alphanumeric());
+
+    match (name.is_empty(), plain && leads && name.len() <= 40) {
+        (true, _) => Err("a runtime needs a name, such as cloud".to_string()),
+        (false, true) => Ok(()),
+        (false, false) => Err(format!(
+            "{name:?} is not a runtime name: a letter or digit first, then letters, \
+             digits, - _ and ., 40 at most"
+        )),
+    }
+}
+
+pub fn public(fields: &Value) -> Result<(), String> {
+    let Some(endpoint) = fields.get("endpoint").and_then(Value::as_str) else {
+        return Ok(());
+    };
+
+    let rest = endpoint
+        .strip_prefix("https://")
+        .ok_or_else(|| format!("{endpoint} is not https, and a key would go over it"))?;
+
+    let host = rest
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if host.is_empty() {
+        return Err(format!("{endpoint} names no host"));
     }
 
-    tracing::warn!(
-        vendor = %name,
-        "this vendor was named and is not built into this server"
-    );
-    None
+    let private = host == "localhost"
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| match address {
+                std::net::IpAddr::V4(four) => {
+                    four.is_loopback() || four.is_private() || four.is_link_local()
+                }
+                std::net::IpAddr::V6(six) => six.is_loopback() || six.is_unique_local(),
+            });
+
+    match private {
+        true => Err(format!(
+            "{endpoint} is not reachable from outside this network, and a runtime added \
+             over the API must be: name it in the configuration file instead"
+        )),
+        false => Ok(()),
+    }
+}
+
+pub trait Vendors: Send + Sync {
+    fn build(
+        &self,
+        provider: &str,
+        fields: &Value,
+        key: Option<&computer::Secret>,
+    ) -> Result<Arc<dyn RemoteApi>, String>;
+
+    fn in_environment(&self, provider: &str) -> Option<Arc<dyn RemoteApi>>;
+}
+
+pub struct Builtin;
+
+impl Vendors for Builtin {
+    fn build(
+        &self,
+        provider: &str,
+        fields: &Value,
+        key: Option<&computer::Secret>,
+    ) -> Result<Arc<dyn RemoteApi>, String> {
+        #[cfg(feature = "e2b")]
+        if provider == "e2b" {
+            use computer::sandboxes::e2b::{E2bVendor, cloud::Cloud};
+
+            let key = key.ok_or_else(|| "e2b takes an api_key".to_string())?;
+            let cloud = match fields.get("endpoint").and_then(Value::as_str) {
+                Some(endpoint) => Cloud::at(key.expose(), endpoint.trim_start_matches("https://")),
+                None => Cloud::new(key.expose()),
+            }
+            .map_err(|error| error.to_string())?;
+
+            return Ok(Arc::new(E2bVendor::new(Arc::new(cloud))));
+        }
+
+        let _ = (fields, key);
+        Err(format!(
+            "{provider} is not a vendor this server was built with"
+        ))
+    }
+
+    fn in_environment(&self, provider: &str) -> Option<Arc<dyn RemoteApi>> {
+        #[cfg(feature = "e2b")]
+        if provider == "e2b" {
+            use computer::sandboxes::e2b::{E2bVendor, cloud::Cloud};
+
+            return match Cloud::from_env() {
+                Ok(cloud) => Some(Arc::new(E2bVendor::new(Arc::new(cloud)))),
+                Err(error) => {
+                    tracing::warn!(vendor = %provider, %error, "this vendor cannot be reached");
+                    None
+                }
+            };
+        }
+
+        tracing::warn!(
+            vendor = %provider,
+            "this vendor was named and is not built into this server"
+        );
+        None
+    }
+}
+
+pub async fn from_store(
+    runtimes: &Runtimes,
+    store: &dyn computer_storage::Store,
+    keeper: &crate::secrets::Keeper,
+    vendors: &dyn Vendors,
+) -> usize {
+    let records = match store.list_runtimes().await {
+        Ok(records) => records,
+        Err(why) => {
+            tracing::warn!(%why, "the runtimes this server stored could not be read");
+            return 0;
+        }
+    };
+
+    let mut added = 0;
+
+    for record in records {
+        if runtimes.get(&record.name).is_some() {
+            tracing::warn!(
+                runtime = %record.name,
+                "a runtime of this name is configured here, so the stored one is not offered"
+            );
+            continue;
+        }
+
+        match stored(&record, keeper, vendors) {
+            Ok(runtime) => {
+                told_of(&runtime);
+                runtimes.add(runtime);
+                added += 1;
+            }
+            Err(why) => {
+                tracing::warn!(runtime = %record.name, %why, "a stored runtime is not usable");
+                runtimes.add(unavailable(&record, why));
+            }
+        }
+    }
+
+    added
+}
+
+pub fn stored(
+    record: &computer_storage::RuntimeRecord,
+    keeper: &crate::secrets::Keeper,
+    vendors: &dyn Vendors,
+) -> Result<Runtime, String> {
+    let key = match record.secrets.get(KEY_FIELD) {
+        Some(sealed) => Some(keeper.open(
+            &crate::secrets::Whose::new(&record.name, &record.provider, KEY_FIELD),
+            sealed,
+        )?),
+        None => None,
+    };
+
+    let api = vendors.build(&record.provider, &record.fields, key.as_ref())?;
+    let (environment, mut can) = vendor_can(&record.provider);
+    let tuning = lives(&record.fields);
+    capped(&mut can, &tuning);
+
+    Ok(Runtime {
+        name: record.name.clone(),
+        provider: record.provider.clone(),
+        secrets: record.secrets.keys().cloned().collect(),
+        source: Source::Store,
+        environment,
+        place: Place::Remote {
+            api,
+            fields: record.fields.clone(),
+        },
+        can,
+        tuning,
+        state: RuntimeState::Ready,
+    })
+}
+
+fn lives(fields: &Value) -> Tuning {
+    Tuning {
+        lifetime_secs: fields.get("lifetime_secs").and_then(Value::as_u64),
+        max_lifetime_secs: fields.get("max_lifetime_secs").and_then(Value::as_u64),
+        ..Tuning::default()
+    }
+}
+
+fn unavailable(record: &computer_storage::RuntimeRecord, why: String) -> Runtime {
+    let (environment, can) = vendor_can(&record.provider);
+
+    Runtime {
+        name: record.name.clone(),
+        provider: record.provider.clone(),
+        secrets: record.secrets.keys().cloned().collect(),
+        source: Source::Store,
+        environment,
+        place: Place::Remote {
+            api: Arc::new(Absent(record.provider.clone())),
+            fields: record.fields.clone(),
+        },
+        can,
+        tuning: lives(&record.fields),
+        state: RuntimeState::Unavailable { why },
+    }
+}
+
+struct Absent(String);
+
+#[async_trait::async_trait]
+impl RemoteApi for Absent {
+    fn vendor(&self) -> &str {
+        &self.0
+    }
+
+    async fn available(&self) -> computer::Result<()> {
+        Err(computer::Error::Unavailable {
+            runtime: self.0.clone(),
+            detail: "this runtime is not usable on this server".to_string(),
+        })
+    }
+
+    async fn create(
+        &self,
+        _plan: &computer::sandboxes::remote::SandboxPlan,
+    ) -> computer::Result<computer::sandboxes::remote::Sandbox> {
+        self.available().await?;
+        unreachable!()
+    }
+
+    async fn find(
+        &self,
+        _name: &str,
+    ) -> computer::Result<Option<computer::sandboxes::remote::Sandbox>> {
+        Ok(None)
+    }
+
+    async fn kill(&self, _id: &str) -> computer::Result<()> {
+        self.available().await
+    }
+
+    async fn exec(
+        &self,
+        _sandbox: &computer::sandboxes::remote::Sandbox,
+        _argv: &[String],
+        _env: &BTreeMap<String, String>,
+    ) -> computer::Result<computer::ExecResult> {
+        self.available().await?;
+        unreachable!()
+    }
+
+    async fn read(
+        &self,
+        _sandbox: &computer::sandboxes::remote::Sandbox,
+        _path: &str,
+    ) -> computer::Result<Vec<u8>> {
+        self.available().await?;
+        unreachable!()
+    }
+
+    async fn write(
+        &self,
+        _sandbox: &computer::sandboxes::remote::Sandbox,
+        _path: &str,
+        _bytes: &[u8],
+    ) -> computer::Result<()> {
+        self.available().await
+    }
 }
 
 pub fn engine(name: &str, machine: Arc<dyn Machine>) -> Runtime {
     Runtime {
         name: name.to_string(),
         provider: name.to_string(),
+        secrets: Vec::new(),
         source: Source::Found,
         environment: Environment::Container(Value::Object(Map::new())),
         place: Place::Host { machine },
@@ -674,6 +984,7 @@ mod tests {
         Runtime {
             name: "cloud".to_string(),
             provider: "e2b".to_string(),
+            secrets: Vec::new(),
             source: Source::Environment,
             environment,
             place: Place::Remote {
@@ -743,7 +1054,7 @@ mod tests {
 
     #[test]
     fn test_a_runtime_nothing_offers_is_refused_with_what_is_here() {
-        let mut runtimes = Runtimes::default();
+        let runtimes = Runtimes::default();
         runtimes.add(docker());
         runtimes.settle();
 
@@ -761,7 +1072,7 @@ mod tests {
 
     #[test]
     fn test_a_box_that_names_no_runtime_lands_on_the_default() {
-        let mut runtimes = Runtimes::default();
+        let runtimes = Runtimes::default();
         runtimes.add(engine(
             "podman",
             Arc::new(EngineMachine::new(Arc::new(ScriptedEngine::new()))),
@@ -790,7 +1101,7 @@ mod tests {
 
     #[test]
     fn test_a_default_the_file_names_and_this_server_does_not_have_is_an_error() {
-        let mut runtimes = Runtimes::default();
+        let runtimes = Runtimes::default();
         runtimes.add(docker());
 
         assert!(runtimes.prefer("cloud").is_err());

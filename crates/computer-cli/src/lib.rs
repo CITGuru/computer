@@ -34,6 +34,17 @@ computer — a desktop in a box
                               next box given the name starts with them; one
                               box at a time may hold it
   ls                          boxes that are running
+  runtime ls                  where boxes can be put, and what each can do
+  runtime add NAME --provider VENDOR [--field name=value]…
+      [--api-key | --api-key-env VAR]
+                              add a vendor this server can put boxes on. the
+                              key comes in on stdin with --api-key, or from a
+                              variable the CLI reads with --api-key-env; it
+                              never goes on the command line, where ps and the
+                              shell's history keep it
+  runtime set NAME [--field name=value]… [--api-key | --api-key-env VAR]
+                              change a vendor's fields, or give it a new key
+  runtime rm NAME             remove one, unless a box is still on it
   box <box>                   everything the server knows about one
   cdp <box> [--ws] [--ttl MINUTES] [--direct]
                               an address another library drives the box's
@@ -423,6 +434,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "rm" => remote::remove(client, args).await,
         "fork" => remote::fork(client, args).await,
         "trace" => remote::trace(client, args).await,
+        "runtime" => remote::runtimes(client, args).await,
         "sweep" => local::sweep().await.map_err(|error| error.to_string()),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     }

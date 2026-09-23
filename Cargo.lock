@@ -1113,6 +1113,7 @@ dependencies = [
 name = "computer-server"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "computer-api",
@@ -1124,6 +1125,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "http-body-util",
+ "ring",
  "serde",
  "serde_json",
  "sha2 0.10.9",
