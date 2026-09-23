@@ -194,15 +194,7 @@ async fn create_box(
         )
         .await;
 
-    kept(
-        &state,
-        &entry.id,
-        &runtime.name,
-        &body.spec,
-        &body.placement,
-        &resolved,
-    )
-    .await;
+    kept(&state, &entry, &body.placement).await;
     state
         .record(
             &entry.id,
@@ -1911,7 +1903,7 @@ async fn fork(
         )
         .await;
 
-    kept(&state, &new_id, &runtime.name, &spec, &placement, &resolved).await;
+    kept(&state, &entry, &placement).await;
     state
         .record(
             &new_id,
@@ -3453,28 +3445,21 @@ fn unreachable(record: &BoxRecord, why: String) -> BoxView {
     }
 }
 
-async fn kept(
-    state: &AppState,
-    id: &str,
-    runtime: &str,
-    spec: &Spec,
-    placement: &Placement,
-    resolved: &spec::Resolved,
-) -> BoxRecord {
+async fn kept(state: &AppState, entry: &Entry, placement: &Placement) -> BoxRecord {
     let record = BoxRecord {
-        id: id.to_string(),
-        runtime: runtime.to_string(),
-        spec: spec.clone(),
+        id: entry.id.clone(),
+        runtime: entry.runtime.clone(),
+        spec: entry.spec.clone(),
         placement: placement.clone(),
-        width: resolved.width,
-        height: resolved.height,
-        screens: resolved.screens,
-        created_at_ms: millis(SystemTime::now()),
-        expires_at_ms: None,
+        width: entry.width,
+        height: entry.height,
+        screens: entry.screens,
+        created_at_ms: millis(entry.created_at),
+        expires_at_ms: entry.computer.expires_at().map(millis),
     };
 
     if let Err(why) = state.store.put_box(&record).await {
-        tracing::warn!(box_ = %id, %why, "a box was not recorded");
+        tracing::warn!(box_ = %entry.id, %why, "a box was not recorded");
     }
 
     record

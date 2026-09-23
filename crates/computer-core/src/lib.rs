@@ -849,6 +849,10 @@ impl Computer {
         self.expires_at
     }
 
+    pub fn expires_when(&mut self, at: Option<SystemTime>) {
+        self.expires_at = at;
+    }
+
     pub fn idle_for(&self) -> Duration {
         self.host.idle_for()
     }

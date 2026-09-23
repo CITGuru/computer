@@ -599,3 +599,72 @@ async fn test_a_box_says_which_runtime_it_is_on() {
         "so a restart knows where to look for it: {body}"
     );
 }
+
+#[tokio::test]
+async fn test_a_box_that_asks_for_no_deadline_is_given_one() {
+    let (status, body) = send(post("/v1/boxes", r#"{}"#)).await;
+
+    assert_eq!(status, StatusCode::CREATED);
+
+    let at = body["expires_at_ms"]
+        .as_u64()
+        .expect("a box with no deadline used to run until something removed it");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("a clock")
+        .as_millis() as u64;
+
+    assert!(
+        at > now && at - now <= 60 * 60 * 1000,
+        "the runtime's own life is an hour: {at} against {now}"
+    );
+}
+
+#[tokio::test]
+async fn test_a_deadline_longer_than_the_runtime_keeps_a_box_is_refused() {
+    let (status, body) = send(post(
+        "/v1/boxes",
+        r#"{"placement":{"expires_after_secs":86400}}"#,
+    ))
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|why| why.contains("max_lifetime")),
+        "the refusal says what to raise: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_the_deadline_a_box_was_given_is_recorded() {
+    let state = nowhere();
+    let response = routes::router(Arc::clone(&state))
+        .oneshot(post("/v1/boxes", r#"{}"#))
+        .await
+        .expect("the router answered");
+
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("a body")
+        .to_bytes();
+    let body: Value = serde_json::from_slice(&bytes).expect("json");
+    let id = body["id"].as_str().expect("an id");
+
+    let record = state
+        .store
+        .get_box(id)
+        .await
+        .expect("asked")
+        .expect("a record");
+
+    assert_eq!(
+        record.expires_at_ms,
+        body["expires_at_ms"].as_u64(),
+        "a restart reads the record, so a deadline kept only in this process is lost"
+    );
+    assert!(record.expires_at_ms.is_some());
+}
