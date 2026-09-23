@@ -1,5 +1,5 @@
+use crate::engine::Engine;
 use crate::error::{Error, Result};
-use crate::runtime::ContainerCli;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -148,7 +148,7 @@ impl Bundle {
         Ok(dir)
     }
 
-    pub async fn build(&self, cli: &dyn ContainerCli, tag: &str, extras: &Extras) -> Result<()> {
+    pub async fn build(&self, cli: &dyn Engine, tag: &str, extras: &Extras) -> Result<()> {
         let dir = self.materialize().await?;
         tracing::info!(image = %tag, from = %dir.display(), "building the image");
         let mut args = vec!["build".to_string(), "--tag".to_string(), tag.to_string()];
@@ -266,7 +266,7 @@ pub(crate) fn directory_image(directory: &Path, extras: &Extras) -> Result<(Path
 }
 
 async fn build_directory(
-    cli: &dyn ContainerCli,
+    cli: &dyn Engine,
     tag: &str,
     extras: &Extras,
     directory: &Path,
@@ -427,12 +427,12 @@ async fn write(path: &Path, body: &str) -> Result<()> {
         .map_err(|error| Error::transport(format!("{}: {error}", path.display()), false))
 }
 
-pub async fn present(cli: &dyn ContainerCli, tag: &str) -> Result<bool> {
+pub async fn present(cli: &dyn Engine, tag: &str) -> Result<bool> {
     let args = vec!["image".to_string(), "inspect".to_string(), tag.to_string()];
     Ok(cli.run(&args).await?.code == 0)
 }
 
-pub async fn pull(cli: &dyn ContainerCli, tag: &str) -> Result<()> {
+pub async fn pull(cli: &dyn Engine, tag: &str) -> Result<()> {
     let args = vec!["pull".to_string(), tag.to_string()];
 
     tracing::info!(image = %tag, "fetching the image");
@@ -446,12 +446,12 @@ pub async fn pull(cli: &dyn ContainerCli, tag: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn ensure(cli: &dyn ContainerCli, tag: &str) -> Result<()> {
+pub async fn ensure(cli: &dyn Engine, tag: &str) -> Result<()> {
     ensure_with(cli, tag, &Extras::none(), Some(&DESKTOP)).await
 }
 
 pub async fn ensure_with(
-    cli: &dyn ContainerCli,
+    cli: &dyn Engine,
     tag: &str,
     extras: &Extras,
     bundle: Option<&Bundle>,
@@ -460,7 +460,7 @@ pub async fn ensure_with(
 }
 
 pub(crate) async fn ensure_source(
-    cli: &dyn ContainerCli,
+    cli: &dyn Engine,
     tag: &str,
     extras: &Extras,
     bundle: Option<&Bundle>,
@@ -646,7 +646,7 @@ mod tests {
         let directory = local_image();
         let (directory, tag) =
             directory_image(&directory, &Extras::wide_fonts()).expect("a local image");
-        let cli = crate::testing::ScriptedCli::new()
+        let cli = crate::testing::ScriptedEngine::new()
             .failing(1, "not present")
             .replying(crate::ExecResult::default());
 

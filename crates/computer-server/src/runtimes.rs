@@ -2,7 +2,7 @@ use crate::config::ServerConfig;
 use crate::error::{ApiError, ApiResult};
 use crate::spec::profile_for;
 use computer::sandboxes::remote::{self, RemoteApi};
-use computer::{Builder, ContainerCli, DockerMachine, Machine, Profile, SystemDocker};
+use computer::{Builder, Engine, EngineMachine, Machine, Profile, SystemEngine};
 use computer_api::{
     Arch, Capabilities, DisplayServer, Environment, PlaceKind, Placement, PortReach, Resources,
     RuntimeState, RuntimeView, Source, Start,
@@ -273,8 +273,8 @@ impl Runtimes {
 }
 
 pub async fn host(name: String, provider: String, source: Source, tuning: Tuning) -> Runtime {
-    let cli: Arc<dyn ContainerCli> = Arc::new(program(&provider, &tuning));
-    let machine: Arc<dyn Machine> = Arc::new(DockerMachine::new(Arc::clone(&cli)));
+    let cli: Arc<dyn Engine> = Arc::new(program(&provider, &tuning));
+    let machine: Arc<dyn Machine> = Arc::new(EngineMachine::new(Arc::clone(&cli)));
 
     let state = match machine.preflight().await {
         Ok(()) => RuntimeState::Ready,
@@ -329,7 +329,7 @@ pub fn remote(name: String, api: Arc<dyn RemoteApi>, tuning: Tuning) -> Runtime 
     }
 }
 
-fn program(provider: &str, tuning: &Tuning) -> SystemDocker {
+fn program(provider: &str, tuning: &Tuning) -> SystemEngine {
     let mut before = Vec::new();
 
     if let Some(context) = &tuning.context {
@@ -337,14 +337,10 @@ fn program(provider: &str, tuning: &Tuning) -> SystemDocker {
         before.push(context.clone());
     }
 
-    SystemDocker::new(provider).before(before)
+    SystemEngine::new(provider).before(before)
 }
 
-async fn probe(
-    cli: &dyn ContainerCli,
-    provider: &str,
-    tuning: &Tuning,
-) -> (Environment, Vec<Arch>) {
+async fn probe(cli: &dyn Engine, provider: &str, tuning: &Tuning) -> (Environment, Vec<Arch>) {
     let format = match provider {
         "podman" => {
             "{{.Version.Version}}\t{{.Host.OCIRuntime.Name}}\t{{.Store.GraphDriverName}}\t{{.Host.Arch}}"
@@ -654,8 +650,8 @@ pub fn engine(name: &str, machine: Arc<dyn Machine>) -> Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use computer::DockerMachine;
-    use computer::testing::{ScriptedCli, ScriptedRemote};
+    use computer::EngineMachine;
+    use computer::testing::{ScriptedEngine, ScriptedRemote};
 
     fn file(text: &str) -> ServerConfig {
         ServerConfig::parse(text).expect("a file this server reads")
@@ -668,7 +664,7 @@ mod tests {
     fn docker() -> Runtime {
         engine(
             "docker",
-            Arc::new(DockerMachine::new(Arc::new(ScriptedCli::new()))),
+            Arc::new(EngineMachine::new(Arc::new(ScriptedEngine::new()))),
         )
     }
 
@@ -768,7 +764,7 @@ mod tests {
         let mut runtimes = Runtimes::default();
         runtimes.add(engine(
             "podman",
-            Arc::new(DockerMachine::new(Arc::new(ScriptedCli::new()))),
+            Arc::new(EngineMachine::new(Arc::new(ScriptedEngine::new()))),
         ));
         runtimes.add(docker());
         runtimes.settle();

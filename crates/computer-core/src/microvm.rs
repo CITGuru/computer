@@ -1,7 +1,8 @@
+use crate::config::Config;
+use crate::engine::Engine;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use crate::machine::{Machine, PortMap};
-use crate::runtime::{Config, ContainerCli};
 use async_trait::async_trait;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -359,7 +360,7 @@ impl Machine for MicroVm {
 }
 
 pub async fn export_rootfs(
-    cli: &dyn ContainerCli,
+    cli: &dyn Engine,
     image: &str,
     into: impl AsRef<Path>,
 ) -> Result<PathBuf> {
@@ -426,11 +427,7 @@ pub async fn export_rootfs(
     Ok(into)
 }
 
-pub async fn import_image(
-    cli: &dyn ContainerCli,
-    loader: &dyn ImageLoader,
-    image: &str,
-) -> Result<()> {
+pub async fn import_image(cli: &dyn Engine, loader: &dyn ImageLoader, image: &str) -> Result<()> {
     let archive = std::env::temp_dir().join(format!(
         "computer-import-{}.tar",
         image.replace([':', '/'], "-")

@@ -1764,7 +1764,7 @@ The audit checks the screen, pointer, DevTools connection, clipboard, viewer, an
 
 ```rust
 let removed = computer::sweep_expired(
-    &DockerMachine::default(),
+    &EngineMachine::default(),
     SystemTime::now(),
 )
 .await?;

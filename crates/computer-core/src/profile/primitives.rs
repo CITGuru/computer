@@ -1844,7 +1844,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::testing::{ScriptedCli, ScriptedProfile};
+    use crate::testing::{ScriptedEngine, ScriptedProfile};
 
     const SETTLE: Duration = Duration::from_millis(600);
 
@@ -1984,10 +1984,9 @@ mod tests {
         }
     }
 
-    fn host(cli: Arc<ScriptedCli>) -> MachineHost {
-        let machine: Arc<dyn crate::Machine> = Arc::new(crate::DockerMachine::new(
-            cli as Arc<dyn crate::ContainerCli>,
-        ));
+    fn host(cli: Arc<ScriptedEngine>) -> MachineHost {
+        let machine: Arc<dyn crate::Machine> =
+            Arc::new(crate::EngineMachine::new(cli as Arc<dyn crate::Engine>));
         MachineHost::new(machine, Arc::new(ScriptedProfile), "box")
     }
 
@@ -2014,7 +2013,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_the_command_runtime_uses_the_profiles_protocol() {
-        let cli = Arc::new(ScriptedCli::new().saying("watching=2 driving=1"));
+        let cli = Arc::new(ScriptedEngine::new().saying("watching=2 driving=1"));
         let host = host(Arc::clone(&cli));
 
         let viewers = CommandScreenRuntime
@@ -2035,7 +2034,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_the_browser_runtime_uses_the_profiles_protocol() {
-        let cli = Arc::new(ScriptedCli::new());
+        let cli = Arc::new(ScriptedEngine::new());
         let host = host(Arc::clone(&cli));
 
         CommandBrowserRuntime
@@ -2056,7 +2055,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_a_command_wallpaper_runtime_supports_custom_images() {
-        let cli = Arc::new(ScriptedCli::new());
+        let cli = Arc::new(ScriptedEngine::new());
         let host = host(Arc::clone(&cli));
 
         CommandWallpaperRuntime::new("custom-wallpaper")
@@ -2080,7 +2079,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_the_command_runtime_preserves_a_stale_release() {
-        let cli = Arc::new(ScriptedCli::new().replying(ExecResult {
+        let cli = Arc::new(ScriptedEngine::new().replying(ExecResult {
             code: 3,
             ..ExecResult::default()
         }));
@@ -2096,9 +2095,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_every_desktop_method_reaches_the_driver_through_a_screen() {
-        let cli = Arc::new(ScriptedCli::new());
+        let cli = Arc::new(ScriptedEngine::new());
         let computer = crate::Computer::builder()
-            .cli(cli as Arc<dyn crate::ContainerCli>)
+            .cli(cli as Arc<dyn crate::Engine>)
             .wait_for_ready(None)
             .keep_on_drop(true)
             .launch()
@@ -2164,9 +2163,9 @@ mod tests {
                 calls: Arc::clone(&calls),
             })
             .build();
-        let cli = Arc::new(ScriptedCli::new());
+        let cli = Arc::new(ScriptedEngine::new());
         let computer = crate::Computer::builder()
-            .cli(cli as Arc<dyn crate::ContainerCli>)
+            .cli(cli as Arc<dyn crate::Engine>)
             .profile(Arc::new(profile))
             .wait_for_ready(None)
             .keep_on_drop(true)

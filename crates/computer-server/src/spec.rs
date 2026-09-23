@@ -42,14 +42,14 @@ pub fn plan(
 mod tests {
     use super::*;
     use axum::http::StatusCode;
-    use computer::DockerMachine;
-    use computer::testing::ScriptedCli;
+    use computer::EngineMachine;
+    use computer::testing::ScriptedEngine;
     use std::sync::Arc;
 
     fn on_docker() -> Runtime {
         crate::runtimes::engine(
             "docker",
-            Arc::new(DockerMachine::new(Arc::new(ScriptedCli::new()))),
+            Arc::new(EngineMachine::new(Arc::new(ScriptedEngine::new()))),
         )
     }
 

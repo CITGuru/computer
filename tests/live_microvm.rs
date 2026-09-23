@@ -1,9 +1,9 @@
 //! On a hypervisor, with microsandbox installed: `cargo test --test live_microvm -- --ignored`.
 
+use computer::SystemEngine;
 use computer::microvm::{MicroVmApi, import_image};
-use computer::runtime::SystemDocker;
 use computer::sandboxes::microsandbox::msb;
-use computer::{Button, Computer, ContainerCli, Delta, Point, ScreenId, bundle};
+use computer::{Button, Computer, Delta, Engine, Point, ScreenId, bundle};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ async fn a_real_microvm_runs_the_same_desktop() {
     }
 
     let tag = bundle::DESKTOP.tag();
-    let docker: Arc<dyn ContainerCli> = Arc::new(SystemDocker::default());
+    let docker: Arc<dyn Engine> = Arc::new(SystemEngine::default());
 
     if !hypervisor.has_image(&tag).await.expect("an image list") {
         println!("  handing {tag} to the hypervisor …");

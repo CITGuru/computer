@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use computer::testing::ScriptedCli;
+use computer::testing::ScriptedEngine;
 use computer_server::{AppState, routes};
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 fn nowhere() -> Arc<AppState> {
-    Arc::new(AppState::default().through(Some(Arc::new(ScriptedCli::new()))))
+    Arc::new(AppState::default().through(Some(Arc::new(ScriptedEngine::new()))))
 }
 
 async fn send(request: Request<Body>) -> (StatusCode, Value) {
@@ -293,10 +293,9 @@ async fn test_an_ungated_api_on_loopback_still_opens() {
 
 #[tokio::test]
 async fn test_an_accepted_spec_is_built_through_the_runtime_it_was_given() {
-    let cli = Arc::new(ScriptedCli::new());
-    let state = Arc::new(
-        AppState::default().through(Some(Arc::clone(&cli) as Arc<dyn computer::ContainerCli>)),
-    );
+    let cli = Arc::new(ScriptedEngine::new());
+    let state =
+        Arc::new(AppState::default().through(Some(Arc::clone(&cli) as Arc<dyn computer::Engine>)));
 
     let response = routes::router(state)
         .oneshot(post("/v1/boxes", r#"{"spec":{"apps":{"vscode":{}}}}"#))

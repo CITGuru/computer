@@ -1,9 +1,9 @@
+use crate::engine::Engine;
 use crate::error::{Error, Result};
 use crate::machine::MachineHost;
 use crate::machine::ScreenHost;
 use crate::microvm::{MicroVmApi, Plan};
 use crate::profile::{CommandScreen, ImageSource, PortLayout, Profile, ScreenCommands};
-use crate::runtime::ContainerCli;
 use crate::sandboxes::e2b::{self, E2bApi, Sandbox, SandboxPlan};
 use crate::sandboxes::remote::{
     self, RemoteApi, Sandbox as RemoteSandbox, SandboxPlan as RemotePlan,
@@ -405,18 +405,18 @@ impl Profile for ScriptedProfile {
     }
 }
 
-pub struct ScriptedCli {
+pub struct ScriptedEngine {
     inner: ScriptedHost,
     program: String,
 }
 
-impl Default for ScriptedCli {
+impl Default for ScriptedEngine {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ScriptedCli {
+impl ScriptedEngine {
     pub fn new() -> Self {
         Self {
             inner: ScriptedHost::new(),
@@ -453,7 +453,7 @@ impl ScriptedCli {
 }
 
 #[async_trait]
-impl ContainerCli for ScriptedCli {
+impl Engine for ScriptedEngine {
     async fn run(&self, args: &[String]) -> Result<ExecResult> {
         Ok(self.inner.record(ScreenId(0), args))
     }

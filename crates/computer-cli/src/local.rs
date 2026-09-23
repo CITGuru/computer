@@ -332,7 +332,7 @@ pub async fn exec(args: &[String]) -> computer::Result<()> {
 }
 
 pub async fn sweep() -> computer::Result<()> {
-    let machine = computer::DockerMachine::default();
+    let machine = computer::EngineMachine::default();
     let swept = computer::sweep_expired(&machine, std::time::SystemTime::now()).await?;
 
     for name in &swept {
