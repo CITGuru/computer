@@ -174,6 +174,18 @@ impl RemoteApi for E2bVendor {
         })
     }
 
+    async fn pause(&self, id: &str) -> Result<()> {
+        self.api.pause(id).await
+    }
+
+    async fn resume(&self, id: &str, ttl: Duration) -> Result<()> {
+        self.api.resume(id, ttl).await
+    }
+
+    async fn paused(&self, id: &str) -> Result<bool> {
+        self.api.paused(id).await
+    }
+
     fn reaper(&self, id: &str) -> Option<(String, Vec<String>)> {
         self.api.reaper(id)
     }

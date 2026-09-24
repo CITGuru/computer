@@ -18,7 +18,7 @@ Core server settings:
 - `COMPUTER_SERVER_TOKEN` — bearer token; required outside loopback
 - `COMPUTER_PUBLIC_URL` — public origin used by MCP Apps behind a reverse proxy
 - `COMPUTER_SERVER_CONFIG` — path to the runtimes file; read at start, a change needs a restart
-- `COMPUTER_SERVER_RUNTIMES` — comma-separated host engines to offer; default `docker,podman,nerdctl`, and only the ones that answer are offered
+- `COMPUTER_SERVER_RUNTIMES` — comma-separated host runtimes to offer; default `docker,podman,nerdctl,smolvm`, and only the ones that answer are offered
 - `COMPUTER_SERVER_SANDBOXES` — comma-separated remote vendors, such as `e2b`
 - `COMPUTER_SERVER_SECRET_KEY` — 32 bytes, base64 or hex, that seal the keys this server stores
 - `COMPUTER_SERVER_SECRET_FILE` — a file holding that key instead; the server makes one at first start, readable by its owner only
@@ -116,7 +116,7 @@ curl -s localhost:8080/v1/runtimes | jq '.runtimes[] | {name, place, environment
 }
 ```
 
-Host engines are found at start: docker, podman and nerdctl, each offered under the name of its engine when it answers. Tuning an engine stays with the engine — `DOCKER_HOST` and `docker context` point Docker at another host, `default-runtime` in `daemon.json` puts its containers on gVisor or Kata.
+Host runtimes are found at start, each offered under the name of the program that runs it when it answers: docker, podman and nerdctl put a box in a container, and **smolvm** puts one in a microVM on libkrun — Hypervisor.framework on macOS, KVM on Linux. A box there gets a kernel of its own rather than a namespace, and its ports are forwarded to loopback exactly as an engine publishes them. Tuning an engine stays with the engine — `DOCKER_HOST` and `docker context` point Docker at another host, `default-runtime` in `daemon.json` puts its containers on gVisor or Kata.
 
 What an engine cannot say goes in the file at `COMPUTER_SERVER_CONFIG`, and only there, because every field names a program, a host or an engine of this server's:
 
@@ -124,6 +124,10 @@ What an engine cannot say goes in the file at `COMPUTER_SERVER_CONFIG`, and only
 default = "hardened"
 
 [runtimes.docker]
+memory = "4g"
+
+[runtimes.smolvm]
+program = "/opt/smolvm/bin/smolvm"
 memory = "4g"
 
 [runtimes.hardened]
@@ -170,6 +174,12 @@ What the server does with it:
 - **Removing one is refused while a box record names it.**
 
 A stored runtime whose key this server cannot open — a lost or changed server key — is listed with `state: unavailable` and the reason, rather than disappearing.
+
+A microVM runtime takes `program`, for a hypervisor installed away from the path, and the same `memory`, `cpus`, `lifetime` and `max_lifetime` as an engine. It stops and starts a box, and a start picks new host ports as an engine's does. It refuses a named browser profile, which needs a volume.
+
+It does not pause one, though the hypervisor can: a checkpoint cannot capture the image archive the box was built from, since the image built here is handed over as a `docker save` file rather than pulled from a registry. `GET /v1/runtimes/smolvm` reports what is true today.
+
+The same three calls — `pause`, `resume` and `stop` — now work the same way on every kind of runtime that can do them. A vendor box pauses where the vendor pauses it: E2B keeps the memory and gives it back, and a vendor that cannot says so rather than pretending.
 
 `GET /v1/runtimes/{name}` says what one can do: whether it pauses, whether it stops, how a port is reached, and whether memory and cpus are set when a box is created or when its image is built. A placement asking for something the runtime cannot do is refused before anything starts.
 

@@ -12,7 +12,9 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-pub const HOSTS: [&str; 3] = ["docker", "podman", "nerdctl"];
+pub const HOSTS: [&str; 4] = ["docker", "podman", "nerdctl", "smolvm"];
+
+pub const MICROVMS: [&str; 1] = ["smolvm"];
 
 pub const OFFERED: &str = "COMPUTER_SERVER_RUNTIMES";
 
@@ -30,6 +32,8 @@ pub struct Tuning {
     pub isolation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifetime_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -331,6 +335,10 @@ fn names(held: &Held) -> String {
 }
 
 pub async fn host(name: String, provider: String, source: Source, tuning: Tuning) -> Runtime {
+    if MICROVMS.contains(&provider.as_str()) {
+        return hypervisor(name, provider, source, tuning).await;
+    }
+
     let cli: Arc<dyn Engine> = Arc::new(program(&provider, &tuning));
     let machine: Arc<dyn Machine> = Arc::new(EngineMachine::new(Arc::clone(&cli)));
 
@@ -388,6 +396,60 @@ pub fn remote(name: String, api: Arc<dyn RemoteApi>, tuning: Tuning) -> Runtime 
         can,
         tuning,
         state: RuntimeState::Ready,
+    }
+}
+
+async fn hypervisor(name: String, provider: String, source: Source, tuning: Tuning) -> Runtime {
+    let api = Arc::new(match &tuning.program {
+        Some(at) => computer::sandboxes::smolvm::SmolVm::new(at.clone()),
+        None => computer::sandboxes::smolvm::SmolVm::found(),
+    });
+    let said = api.program().to_string();
+    let machine: Arc<dyn Machine> = Arc::new(computer::MicroVm::new(api).named(provider.clone()));
+
+    let state = match machine.preflight().await {
+        Ok(()) => RuntimeState::Ready,
+        Err(error) => RuntimeState::Unavailable {
+            why: error.to_string(),
+        },
+    };
+
+    let mut info = Map::new();
+    info.insert("engine".to_string(), Value::String(provider.clone()));
+    info.insert("program".to_string(), Value::String(said));
+    info.insert(
+        "hypervisor".to_string(),
+        Value::String("libkrun".to_string()),
+    );
+
+    let mut can = hypervisor_can();
+    capped(&mut can, &tuning);
+
+    Runtime {
+        name,
+        provider,
+        secrets: Vec::new(),
+        source,
+        environment: Environment::MicroVm(Value::Object(info)),
+        place: Place::Host { machine },
+        can,
+        tuning,
+        state,
+    }
+}
+
+fn hypervisor_can() -> Capabilities {
+    Capabilities {
+        start: Start::Entrypoint,
+        reach: PortReach::HostPort,
+        pause: false,
+        stop: true,
+        fork: false,
+        volumes: false,
+        resources: Resources::AtCreate,
+        max_lifetime_secs: None,
+        ports: None,
+        arch: Vec::new(),
     }
 }
 

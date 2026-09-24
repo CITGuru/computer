@@ -95,6 +95,11 @@ pub fn create_args(plan: &Plan) -> Vec<String> {
         args.push(format!("127.0.0.1:{host}:{guest}"));
     }
 
+    for (key, value) in &plan.labels {
+        args.push("--label".to_string());
+        args.push(format!("{key}={value}"));
+    }
+
     args.push("--label".to_string());
     args.push("computer-rs=1".to_string());
 
@@ -317,6 +322,7 @@ mod tests {
             network: false,
             env: BTreeMap::from([("COMPUTER_SCREEN_WIDTH".to_string(), "1280".to_string())]),
             ports: vec![(40000, 6080)],
+            labels: BTreeMap::new(),
             replace: true,
         };
         let args = create_args(&plan);

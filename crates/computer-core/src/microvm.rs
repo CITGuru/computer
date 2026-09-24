@@ -19,6 +19,7 @@ pub struct Plan {
     pub env: BTreeMap<String, String>,
     /// Chosen here: a hypervisor forwards the pairs it is given and picks none.
     pub ports: Vec<(u16, u16)>,
+    pub labels: BTreeMap<String, String>,
     pub replace: bool,
 }
 
@@ -60,6 +61,42 @@ pub trait MicroVmApi: Send + Sync {
             .map_err(|error| Error::denied(format!("{}: {error}", to.display())))
     }
 
+    async fn labelled(&self, _key: &str) -> Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
+    async fn ports(&self, _name: &str) -> Result<Vec<(u16, u16)>> {
+        Ok(Vec::new())
+    }
+
+    async fn pause(&self, _name: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn resume(&self, _name: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn paused(&self, _name: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    async fn halt(&self, _name: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["stopping a box without removing it"],
+        })
+    }
+
+    async fn wake(&self, _name: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["stopping a box without removing it"],
+        })
+    }
+
     async fn logs(&self, _name: &str) -> Result<String> {
         Ok(String::new())
     }
@@ -96,6 +133,7 @@ pub fn plan_for(name: &str, config: &Config, ports: Vec<(u16, u16)>) -> Plan {
         network: config.network,
         env: config.env.clone(),
         ports,
+        labels: config.labels.clone(),
         replace: true,
     }
 }
@@ -291,12 +329,58 @@ impl Machine for MicroVm {
         self.api.running(name).await
     }
 
+    async fn labelled(&self, label: &str) -> Result<Vec<(String, String)>> {
+        self.api.labelled(label).await
+    }
+
     async fn ports(&self, name: &str) -> PortMap {
-        self.published
+        let remembered = self
+            .published
             .lock()
             .ok()
             .and_then(|published| published.get(name).cloned())
+            .unwrap_or_default();
+
+        if !remembered.is_empty() {
+            return remembered;
+        }
+
+        let asked: PortMap = self
+            .api
+            .ports(name)
+            .await
             .unwrap_or_default()
+            .into_iter()
+            .map(|(host, guest)| (guest, host))
+            .collect();
+
+        if let (false, Ok(mut published)) = (asked.is_empty(), self.published.lock()) {
+            published.insert(name.to_string(), asked.clone());
+        }
+
+        asked
+    }
+
+    async fn pause(&self, name: &str) -> Result<()> {
+        self.api.pause(name).await
+    }
+
+    async fn resume(&self, name: &str) -> Result<()> {
+        self.api.resume(name).await
+    }
+
+    async fn paused(&self, name: &str) -> Result<bool> {
+        self.api.paused(name).await
+    }
+
+    async fn halt(&self, name: &str) -> Result<()> {
+        self.api.halt(name).await
+    }
+
+    async fn wake(&self, name: &str) -> Result<PortMap> {
+        self.api.wake(name).await?;
+
+        Ok(self.ports(name).await)
     }
 
     async fn env(&self, name: &str) -> BTreeMap<String, String> {

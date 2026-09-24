@@ -284,6 +284,39 @@ impl E2bApi for Cloud {
         }
     }
 
+    async fn pause(&self, id: &str) -> Result<()> {
+        let response = self
+            .send(self.control(Method::POST, &format!("/sandboxes/{id}/pause")))
+            .await?;
+
+        match response.status() {
+            status if status.is_success() => Ok(()),
+            status => Err(from_status(status, "")),
+        }
+    }
+
+    async fn resume(&self, id: &str, ttl: Duration) -> Result<()> {
+        let request = self
+            .control(Method::POST, &format!("/sandboxes/{id}/connect"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(format!(r#"{{"timeout":{}}}"#, ttl.as_secs()));
+
+        let response = self.send(request).await?;
+
+        match response.status() {
+            status if status.is_success() => Ok(()),
+            status => Err(from_status(status, "")),
+        }
+    }
+
+    async fn paused(&self, id: &str) -> Result<bool> {
+        let listing = self
+            .json(self.control(Method::GET, "/v2/sandboxes"))
+            .await?;
+
+        Ok(wire::state_of(&listing, id).as_deref() == Some("paused"))
+    }
+
     async fn keep_alive(&self, id: &str, ttl: Duration) -> Result<()> {
         let request = self
             .control(Method::POST, &format!("/sandboxes/{id}/timeout"))

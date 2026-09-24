@@ -121,6 +121,22 @@ pub trait RemoteApi: Send + Sync {
         Ok(())
     }
 
+    async fn pause(&self, _id: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn resume(&self, _id: &str, _ttl: Duration) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn paused(&self, _id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     async fn logs(&self, _id: &str) -> Result<String> {
         Ok(String::new())
     }

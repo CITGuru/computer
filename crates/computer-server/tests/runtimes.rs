@@ -494,3 +494,58 @@ async fn test_a_box_on_a_vendor_is_gated_because_its_screen_is_on_the_internet()
         "and a box on this host, reachable on loopback only, is left as it was asked for"
     );
 }
+
+#[tokio::test]
+async fn test_a_hypervisor_is_offered_as_a_micro_vm_runtime() {
+    let config = computer_server::config::ServerConfig::parse(
+        "[runtimes.smolvm]\nprogram = \"/opt/smolvm/bin/smolvm\"\nmemory = \"4g\"\n",
+    )
+    .expect("a file this server reads");
+
+    let tuning = config.runtimes["smolvm"]
+        .tuning("smolvm", "smolvm")
+        .expect("fields a hypervisor takes");
+
+    assert_eq!(tuning.program.as_deref(), Some("/opt/smolvm/bin/smolvm"));
+    assert_eq!(tuning.memory.as_deref(), Some("4g"));
+
+    let runtime = runtimes::host(
+        "smolvm".to_string(),
+        "smolvm".to_string(),
+        computer_api::Source::Found,
+        tuning,
+    )
+    .await;
+
+    assert!(
+        matches!(runtime.environment, computer_api::Environment::MicroVm(_)),
+        "a box here gets a kernel of its own, not a namespace"
+    );
+    assert_eq!(runtime.can.reach, computer_api::PortReach::HostPort);
+    assert!(
+        runtime.can.stop,
+        "a microVM stops a box without losing its disk"
+    );
+    assert!(
+        !runtime.can.pause,
+        "a checkpoint cannot capture the image archive this box was built from"
+    );
+    assert!(
+        !runtime.can.fork,
+        "a child would fight its parent for the host ports"
+    );
+}
+
+#[tokio::test]
+async fn test_a_hypervisor_field_is_refused_on_an_engine() {
+    let config = computer_server::config::ServerConfig::parse(
+        "[runtimes.docker]\nprogram = \"/opt/smolvm/bin/smolvm\"\n",
+    )
+    .expect("a file this server reads");
+
+    let why = config.runtimes["docker"]
+        .tuning("docker", "docker")
+        .expect_err("docker is found on the path, not named here");
+
+    assert!(why.contains("runtimes.docker.program"), "{why}");
+}
