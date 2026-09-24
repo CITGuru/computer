@@ -857,6 +857,14 @@ e2b template create computer-desktop -p /tmp/e2b-ctx -d Dockerfile \
   --cpu-count 2 --memory-mb 2048
 ```
 
+A template with apps in it takes their values on the command line, since E2B has no `--build-arg`: the script writes them into files the build reads.
+
+```bash
+python3 crates/computer-core/images/context.py crates/computer-core/images/desktop /tmp/e2b-ctx --for e2b \
+  --packages "gimp mousepad" \
+  --apps "$(printf 'text-editor\tMousepad\tmousepad')"
+```
+
 Then launch:
 
 ```rust

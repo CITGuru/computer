@@ -170,6 +170,23 @@ pub enum Environment {
     Unknown(serde_json::Value),
 }
 
+impl Default for Capabilities {
+    fn default() -> Self {
+        Self {
+            start: Start::Entrypoint,
+            reach: PortReach::VendorUrl,
+            pause: false,
+            stop: false,
+            fork: false,
+            volumes: false,
+            resources: Resources::AtCreate,
+            max_lifetime_secs: None,
+            ports: None,
+            arch: Vec::new(),
+        }
+    }
+}
+
 impl Default for Environment {
     fn default() -> Self {
         Self::Unknown(serde_json::Value::Object(serde_json::Map::new()))
@@ -200,24 +217,27 @@ pub struct Capabilities {
     pub arch: Vec<Arch>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Start {
+    #[default]
     Entrypoint,
     Snapshot,
     AfterEveryStart,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PortReach {
+    #[default]
     HostPort,
     VendorUrl,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Resources {
+    #[default]
     AtCreate,
     AtImage,
 }

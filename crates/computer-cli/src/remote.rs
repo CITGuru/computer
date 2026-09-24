@@ -1449,6 +1449,7 @@ fn summarise(event: &computer_api::TraceEvent) -> String {
         E::Frame { screen } => format!("screen {screen}  the screen changed"),
         E::Executed { argv, code, .. } => format!("ran {} → {code}", argv.join(" ")),
         E::AppLaunched { screen, app, .. } => format!("screen {screen}  opened {app}"),
+        E::AppsInstalled { apps } => format!("installed {}", apps.join(", ")),
         E::FileWritten { path, bytes } => format!("wrote {bytes} bytes to {path}"),
         E::FileRead { path, bytes } => format!("read {bytes} bytes from {path}"),
         E::BoxPaused => "frozen".to_string(),

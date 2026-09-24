@@ -118,6 +118,128 @@ fn unknown(name: &str) -> Error {
     ))
 }
 
+pub async fn install(
+    computer: &crate::Computer,
+    names: &[String],
+    spec: &Spec,
+    within: std::time::Duration,
+) -> Result<Vec<String>> {
+    if names.is_empty() {
+        return Err(Error::invalid("name an app to install, such as gimp"));
+    }
+
+    let mut wanted = BTreeMap::new();
+    for name in names {
+        wanted.insert(name.clone(), resolve(spec, name)?);
+    }
+
+    let result = computer
+        .exec_within(["sh", "-c", &script(&wanted)], within)
+        .await?;
+
+    if !result.ok() {
+        return Err(Error::Failed {
+            code: result.code,
+            stderr: format!(
+                "installing {}: {}",
+                names.join(", "),
+                result
+                    .stderr_utf8()
+                    .trim()
+                    .lines()
+                    .last()
+                    .unwrap_or_default()
+            ),
+        });
+    }
+
+    Ok(wanted.into_keys().collect())
+}
+
+fn script(wanted: &BTreeMap<String, App>) -> String {
+    let mut lines = vec![
+        "set -e".to_string(),
+        "export DEBIAN_FRONTEND=noninteractive".to_string(),
+    ];
+
+    let sourced: Vec<(&String, &Source)> = wanted
+        .iter()
+        .filter_map(|(name, app)| app.source.as_ref().map(|source| (name, source)))
+        .collect();
+
+    if !sourced.is_empty() {
+        lines.push("apt-get update".to_string());
+        lines.push(
+            "apt-get install -y --no-install-recommends ca-certificates curl gnupg".to_string(),
+        );
+
+        for (name, source) in sourced {
+            lines.push(format!(
+                "curl -fsSL {} | gpg --dearmor -o /usr/share/keyrings/{}.gpg",
+                quoted(&source.key_url),
+                plain(name)
+            ));
+            lines.push(format!(
+                "echo \"deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/{}.gpg] {}\" > /etc/apt/sources.list.d/{}.list",
+                plain(name),
+                source.list.replace('"', ""),
+                plain(name)
+            ));
+        }
+    }
+
+    let packages: Vec<String> = wanted
+        .values()
+        .flat_map(|app| app.packages.iter().map(|package| quoted(package)))
+        .collect();
+
+    lines.push("apt-get update".to_string());
+    lines.push(format!(
+        "apt-get install -y --no-install-recommends {}",
+        packages.join(" ")
+    ));
+    lines.push("rm -rf /var/lib/apt/lists/*".to_string());
+
+    for (name, app) in wanted {
+        let (Some(WindowMatch::Class(class)), false) = (app.window.clone(), app.command.is_empty())
+        else {
+            continue;
+        };
+
+        let command = app.command.join(" ");
+        let icon = app
+            .command
+            .first()
+            .and_then(|program| program.rsplit('/').next())
+            .unwrap_or_default();
+
+        lines.push("mkdir -p /usr/share/applications".to_string());
+        lines.push(format!(
+            "printf '%s\\n' '[Desktop Entry]' 'Type=Application' 'Name={}' \
+             'Exec=computer-launch {} {}' 'Icon={}' 'Terminal=false' \
+             > /usr/share/applications/computer-app-{}.desktop",
+            plain(name),
+            plain(&class),
+            plain(&command),
+            plain(icon),
+            plain(name)
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn plain(value: &str) -> String {
+    value
+        .chars()
+        .filter(|one| one.is_ascii_alphanumeric() || " ._-/:+".contains(*one))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +335,90 @@ mod tests {
             assert!(!app.command.is_empty(), "{name} cannot be started");
             assert!(app.window.is_some(), "{name} cannot be found on screen");
         }
+    }
+}
+
+#[cfg(test)]
+mod installing {
+    use super::*;
+
+    fn wanted(names: &[&str]) -> BTreeMap<String, App> {
+        names
+            .iter()
+            .map(|name| {
+                (
+                    name.to_string(),
+                    builtin().get(*name).cloned().expect("a catalog app"),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_an_app_from_debian_is_one_install() {
+        let said = script(&wanted(&["gimp"]));
+
+        assert!(said.contains("apt-get install -y --no-install-recommends 'gimp'"));
+        assert!(
+            !said.contains("keyrings"),
+            "nothing in Debian needs an archive of its own: {said}"
+        );
+        assert!(
+            said.contains("computer-app-gimp.desktop"),
+            "and the dock gets a launcher, or open_app has nothing to open: {said}"
+        );
+    }
+
+    #[test]
+    fn test_an_app_outside_debian_brings_its_archive() {
+        let said = script(&wanted(&["vscode"]));
+
+        assert!(said.contains("/usr/share/keyrings/vscode.gpg"));
+        assert!(said.contains("/etc/apt/sources.list.d/vscode.list"));
+        assert!(
+            said.find("apt-get update").unwrap_or_default()
+                < said
+                    .find("apt-get install -y --no-install-recommends 'code'")
+                    .unwrap_or_default(),
+            "the archive is added before the package is asked for: {said}"
+        );
+    }
+
+    #[test]
+    fn test_two_apps_are_installed_in_one_pass() {
+        let said = script(&wanted(&["gimp", "xterm"]));
+
+        assert_eq!(
+            said.matches("apt-get install -y --no-install-recommends '")
+                .count(),
+            1,
+            "one apt run, not one for each: {said}"
+        );
+    }
+
+    #[test]
+    fn test_a_name_that_would_leave_the_shell_is_stripped() {
+        let mut nasty = BTreeMap::new();
+        nasty.insert(
+            "evil; rm -rf /".to_string(),
+            App {
+                packages: vec!["a'; rm -rf /; echo '".to_string()],
+                command: vec!["x".to_string()],
+                window: Some(WindowMatch::Class("c`whoami`".to_string())),
+                ..App::default()
+            },
+        );
+
+        let said = script(&nasty);
+
+        assert!(
+            said.contains("--no-install-recommends 'a'"),
+            "a package name stays one quoted word, whatever is in it: {said}"
+        );
+        assert!(
+            !said.contains('`'),
+            "and nothing the shell would run reaches the launcher: {said}"
+        );
+        assert!(!said.contains("evil; rm"), "nor the file name: {said}");
     }
 }

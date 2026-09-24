@@ -79,6 +79,17 @@ pub struct RuntimeList {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct InstallApps {
+    pub apps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstalledApps {
+    pub installed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NewRuntime {
     pub name: String,
     pub provider: String,
@@ -1377,6 +1388,9 @@ pub enum TraceEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         args: Vec<String>,
         window: String,
+    },
+    AppsInstalled {
+        apps: Vec<String>,
     },
     FileWritten {
         path: String,

@@ -805,6 +805,7 @@ impl E2bApi for ScriptedE2b {
 }
 
 pub struct ScriptedRemote {
+    can: Option<computer_types::Capabilities>,
     inner: ScriptedHost,
     plans: Mutex<Vec<RemotePlan>>,
     known: Mutex<BTreeMap<String, RemoteSandbox>>,
@@ -827,6 +828,7 @@ impl Default for ScriptedRemote {
 impl ScriptedRemote {
     pub fn new() -> Self {
         Self {
+            can: None,
             inner: ScriptedHost::new(),
             plans: Mutex::new(Vec::new()),
             known: Mutex::new(BTreeMap::new()),
@@ -858,6 +860,11 @@ impl ScriptedRemote {
 
     pub fn unlistable(mut self) -> Self {
         self.listable = false;
+        self
+    }
+
+    pub fn keeping(mut self, can: computer_types::Capabilities) -> Self {
+        self.can = Some(can);
         self
     }
 
@@ -930,6 +937,17 @@ impl ScriptedRemote {
 impl RemoteApi for ScriptedRemote {
     fn vendor(&self) -> &str {
         "scripted"
+    }
+
+    fn can(&self) -> computer_types::Capabilities {
+        match &self.can {
+            Some(can) => can.clone(),
+            None => computer_types::Capabilities {
+                pause: true,
+                stop: true,
+                ..computer_types::Capabilities::default()
+            },
+        }
     }
 
     async fn available(&self) -> Result<()> {

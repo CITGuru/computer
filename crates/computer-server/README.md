@@ -273,7 +273,14 @@ curl -s localhost:8080/v1/boxes/$BOX/screens/0/actions \
 
 **The call returns once the app has drawn**, and answers with the window it drew. That is the whole point of it. A window exists well before the program behind it has painted — GIMP maps a splash screen carrying its own class about half a second before the real one, and VS Code maps its window and paints a second later — so a launch that returned on the window appearing would hand back a screen the next click lands wrong on.
 
-The app has to be in the box already: `GET /v1/catalog` names what this server knows, and `spec.apps` is what installs one when the box is created.
+`GET /v1/catalog` names what this server knows, and `spec.apps` is what installs one when the box is created. A box that is already running takes one too:
+
+```bash
+curl -s localhost:8080/v1/boxes/$BOX/apps -H 'content-type: application/json' \
+  -d '{"apps": ["gimp"]}'
+```
+
+It adds the app's own apt archive when it needs one, installs it, and writes the launcher, so `open_app` finds it afterwards. It costs the install every time, needs the box to have network, and is gone from a fork, which builds from the spec.
 
 ## Read the page
 
@@ -335,6 +342,7 @@ The reading itself is `computer::Page::read`, so a library user gets it without 
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |
+| `POST /v1/boxes/{id}/apps` | install an app from the catalog into a box that is already running |
 | `GET`/`PUT` `/v1/boxes/{id}/files` | base64 in, base64 out |
 
 Every error is the same shape — `code`, `message`, `retryable` — including a body that is not JSON at all, because that is the first error most clients ever see.

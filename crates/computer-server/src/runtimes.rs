@@ -97,7 +97,7 @@ impl Runtime {
             Place::Host { machine } => (Arc::clone(machine), image),
             Place::Remote { api, .. } => {
                 let (machine, profile) = remote::pair(Arc::clone(api), image);
-                (Arc::new(machine), profile)
+                (Arc::new(machine.public_viewer(true)), profile)
             }
         }
     }
@@ -110,12 +110,20 @@ impl Runtime {
         self.tuning.lifetime_secs.unwrap_or(LIFETIME_SECS)
     }
 
-    pub fn drive(&self, builder: Builder, server: DisplayServer) -> Builder {
-        let (machine, profile) = self.pair(server);
+    pub fn drive(&self, builder: Builder, spec: &computer_api::Spec) -> Builder {
+        let (machine, profile) = self.pair(spec.desktop.server);
         let mut builder = builder
             .machine(machine)
             .profile(profile)
             .expires_after(std::time::Duration::from_secs(self.lifetime()));
+
+        if self.can.reach == PortReach::VendorUrl && spec.policy.auth == computer_api::Auth::None {
+            builder = builder.auth(computer::Auth::Token);
+        }
+
+        if let Some(image) = self.image_for(&spec.digest()) {
+            builder = builder.image(image);
+        }
 
         if let Some(memory) = &self.tuning.memory {
             builder = builder.memory(memory.clone());
@@ -128,6 +136,20 @@ impl Runtime {
         }
 
         builder
+    }
+
+    pub fn image_for(&self, digest: &str) -> Option<String> {
+        let Place::Remote { fields, .. } = &self.place else {
+            return None;
+        };
+
+        let said = |at: &Value| at.as_str().map(str::to_string);
+
+        fields
+            .get("images")
+            .and_then(|images| images.get(digest))
+            .and_then(said)
+            .or_else(|| fields.get("image").and_then(said))
     }
 
     pub fn check(&self, placement: &Placement) -> ApiResult<()> {
@@ -341,14 +363,16 @@ pub async fn host(name: String, provider: String, source: Source, tuning: Tuning
 }
 
 fn capped(can: &mut Capabilities, tuning: &Tuning) {
-    if let Some(most) = tuning.max_lifetime_secs {
-        can.max_lifetime_secs = Some(most);
-    }
+    can.max_lifetime_secs = tuning
+        .max_lifetime_secs
+        .or(can.max_lifetime_secs)
+        .or(Some(LIFETIME_SECS));
 }
 
 pub fn remote(name: String, api: Arc<dyn RemoteApi>, tuning: Tuning) -> Runtime {
     let provider = api.vendor().to_string();
-    let (environment, mut can) = vendor_can(&provider);
+    let environment = api.environment();
+    let mut can = api.can();
     capped(&mut can, &tuning);
 
     Runtime {
@@ -457,44 +481,9 @@ fn container_can(arch: Vec<Arch>) -> Capabilities {
         fork: false,
         volumes: true,
         resources: Resources::AtCreate,
-        max_lifetime_secs: Some(LIFETIME_SECS),
+        max_lifetime_secs: None,
         ports: None,
         arch,
-    }
-}
-
-fn vendor_can(provider: &str) -> (Environment, Capabilities) {
-    match provider {
-        "e2b" => (
-            Environment::MicroVm(serde_json::json!({ "hypervisor": "firecracker" })),
-            Capabilities {
-                start: Start::Snapshot,
-                reach: PortReach::VendorUrl,
-                pause: true,
-                stop: false,
-                fork: true,
-                volumes: true,
-                resources: Resources::AtImage,
-                max_lifetime_secs: Some(LIFETIME_SECS),
-                ports: None,
-                arch: Vec::new(),
-            },
-        ),
-        _ => (
-            Environment::default(),
-            Capabilities {
-                start: Start::Entrypoint,
-                reach: PortReach::VendorUrl,
-                pause: false,
-                stop: false,
-                fork: false,
-                volumes: false,
-                resources: Resources::AtCreate,
-                max_lifetime_secs: Some(LIFETIME_SECS),
-                ports: None,
-                arch: Vec::new(),
-            },
-        ),
     }
 }
 
@@ -833,7 +822,8 @@ pub fn stored(
     };
 
     let api = vendors.build(&record.provider, &record.fields, key.as_ref())?;
-    let (environment, mut can) = vendor_can(&record.provider);
+    let environment = api.environment();
+    let mut can = api.can();
     let tuning = lives(&record.fields);
     capped(&mut can, &tuning);
 
@@ -862,7 +852,9 @@ fn lives(fields: &Value) -> Tuning {
 }
 
 fn unavailable(record: &computer_storage::RuntimeRecord, why: String) -> Runtime {
-    let (environment, can) = vendor_can(&record.provider);
+    let absent = Absent(record.provider.clone());
+    let environment = absent.environment();
+    let can = absent.can();
 
     Runtime {
         name: record.name.clone(),
@@ -871,7 +863,7 @@ fn unavailable(record: &computer_storage::RuntimeRecord, why: String) -> Runtime
         source: Source::Store,
         environment,
         place: Place::Remote {
-            api: Arc::new(Absent(record.provider.clone())),
+            api: Arc::new(absent),
             fields: record.fields.clone(),
         },
         can,
@@ -944,6 +936,9 @@ impl RemoteApi for Absent {
 }
 
 pub fn engine(name: &str, machine: Arc<dyn Machine>) -> Runtime {
+    let mut can = container_can(Vec::new());
+    capped(&mut can, &Tuning::default());
+
     Runtime {
         name: name.to_string(),
         provider: name.to_string(),
@@ -951,7 +946,7 @@ pub fn engine(name: &str, machine: Arc<dyn Machine>) -> Runtime {
         source: Source::Found,
         environment: Environment::Container(Value::Object(Map::new())),
         place: Place::Host { machine },
-        can: container_can(Vec::new()),
+        can,
         tuning: Tuning::default(),
         state: RuntimeState::Ready,
     }
@@ -979,7 +974,13 @@ mod tests {
     }
 
     fn cloud() -> Runtime {
-        let (environment, can) = vendor_can("e2b");
+        let api = Arc::new(ScriptedRemote::new().keeping(Capabilities {
+            resources: Resources::AtImage,
+            max_lifetime_secs: Some(LIFETIME_SECS),
+            ..Absent("scripted".to_string()).can()
+        }));
+        let environment = api.environment();
+        let can = api.can();
 
         Runtime {
             name: "cloud".to_string(),
@@ -988,7 +989,7 @@ mod tests {
             source: Source::Environment,
             environment,
             place: Place::Remote {
-                api: Arc::new(ScriptedRemote::new()),
+                api,
                 fields: Value::Object(Map::new()),
             },
             can,
@@ -1105,6 +1106,44 @@ mod tests {
         runtimes.add(docker());
 
         assert!(runtimes.prefer("cloud").is_err());
+    }
+
+    #[test]
+    fn test_a_cap_comes_from_the_file_then_the_vendor_then_this_server() {
+        let vendor = Capabilities {
+            max_lifetime_secs: Some(12 * 60 * 60),
+            ..Capabilities::default()
+        };
+
+        let mut said = vendor.clone();
+        capped(&mut said, &Tuning::default());
+        assert_eq!(
+            said.max_lifetime_secs,
+            Some(12 * 60 * 60),
+            "a vendor that states its own limit keeps it"
+        );
+
+        let mut told = vendor.clone();
+        capped(
+            &mut told,
+            &Tuning {
+                max_lifetime_secs: Some(24 * 60 * 60),
+                ..Tuning::default()
+            },
+        );
+        assert_eq!(
+            told.max_lifetime_secs,
+            Some(24 * 60 * 60),
+            "and the operator overrides the vendor"
+        );
+
+        let mut quiet = Capabilities::default();
+        capped(&mut quiet, &Tuning::default());
+        assert_eq!(
+            quiet.max_lifetime_secs,
+            Some(LIFETIME_SECS),
+            "a runtime that says nothing takes this server's hour"
+        );
     }
 
     #[test]

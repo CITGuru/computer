@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use async_trait::async_trait;
+use computer_types::{Capabilities, Environment};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -131,6 +132,14 @@ pub trait RemoteApi: Send + Sync {
     /// A sweep over a vendor that lists nothing reports every box as gone.
     fn sweepable(&self) -> bool {
         false
+    }
+
+    fn environment(&self) -> Environment {
+        Environment::default()
+    }
+
+    fn can(&self) -> Capabilities {
+        Capabilities::default()
     }
 
     /// A vendor that pulls an OCI reference overrides this with `Ok(())`.

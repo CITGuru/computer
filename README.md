@@ -1625,7 +1625,7 @@ computer = { git = "https://github.com/CITGuru/computer", default-features = fal
 export E2B_API_KEY=...
 ```
 
-E2B uses templates instead of local container images. Its builder accepts only part of Dockerfile syntax, and its process runs as uid 1000. Generate a compatible build context from the bundled X11 image:
+E2B uses templates instead of local container images. Its builder accepts only part of Dockerfile syntax, takes no build arguments, and its process runs as uid 1000. Generate a compatible build context from the bundled X11 image:
 
 ```bash
 python3 crates/computer-core/images/context.py \

@@ -390,3 +390,107 @@ async fn test_a_stored_runtime_the_server_key_cannot_open_is_listed_as_unavailab
         "a runtime whose key will not open is named, not silently missing"
     );
 }
+
+#[tokio::test]
+async fn test_a_vendor_box_is_built_from_the_image_that_vendor_holds() {
+    let state = server();
+    let digest = computer_types::Spec::default().digest();
+
+    let (status, _) = send(
+        &state,
+        json(
+            "POST",
+            "/v1/runtimes",
+            json!({
+                "name": "cloud",
+                "provider": "scripted",
+                "fields": { "images": { digest.clone(): "tmpl-abc" } },
+                "secrets": { "api_key": "vendor_key_0123456789" }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let runtime = state.runtimes.get("cloud").expect("the vendor");
+    assert_eq!(
+        runtime.image_for(&digest).as_deref(),
+        Some("tmpl-abc"),
+        "a spec the vendor has an image for is launched from it"
+    );
+    assert!(
+        runtime.image_for("another digest").is_none(),
+        "and one it does not is refused by the vendor, which says how to build it"
+    );
+}
+
+#[tokio::test]
+async fn test_one_image_can_serve_every_spec() {
+    let state = server();
+
+    send(
+        &state,
+        json(
+            "POST",
+            "/v1/runtimes",
+            json!({
+                "name": "cloud",
+                "provider": "scripted",
+                "fields": { "image": "tmpl-one" },
+                "secrets": { "api_key": "vendor_key_0123456789" }
+            }),
+        ),
+    )
+    .await;
+
+    let runtime = state.runtimes.get("cloud").expect("the vendor");
+    assert_eq!(runtime.image_for("whatever").as_deref(), Some("tmpl-one"));
+}
+
+#[tokio::test]
+async fn test_a_box_on_a_vendor_is_gated_because_its_screen_is_on_the_internet() {
+    let state = server();
+    send(
+        &state,
+        json(
+            "POST",
+            "/v1/runtimes",
+            json!({
+                "name": "cloud",
+                "provider": "scripted",
+                "fields": { "image": "tmpl-one" },
+                "secrets": { "api_key": "vendor_key_0123456789" }
+            }),
+        ),
+    )
+    .await;
+
+    let runtime = state.runtimes.get("cloud").expect("the vendor");
+    let built = runtime
+        .drive(
+            computer::Builder::default(),
+            &computer_types::Spec::default(),
+        )
+        .config()
+        .expect("a config");
+
+    assert!(
+        built.auth.is_gated(),
+        "a spec that asks for no gate still gets one where the screen has a public URL"
+    );
+    assert_eq!(built.image, "tmpl-one");
+
+    let engine = state.runtimes.get("docker").expect("the engine");
+    let here = engine
+        .drive(
+            computer::Builder::default(),
+            &computer_types::Spec::default(),
+        )
+        .config()
+        .expect("a config");
+
+    assert!(
+        !here.auth.is_gated(),
+        "and a box on this host, reachable on loopback only, is left as it was asked for"
+    );
+}

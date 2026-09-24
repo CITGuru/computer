@@ -77,6 +77,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/resume", post(resume_box))
         .route("/v1/boxes/{id}/stop", post(stop_box))
         .route("/v1/boxes/{id}/exec", post(exec))
+        .route("/v1/boxes/{id}/apps", post(install_apps))
         .route("/v1/boxes/{id}/trace", get(read_trace))
         .route("/v1/boxes/{id}/trace/frames/{hash}", get(trace_frame))
         .route("/v1/boxes/{id}/files", get(read_file).put(write_file))
@@ -3385,6 +3386,30 @@ async fn get_runtime(
     let holding = holding(&state).await;
 
     Ok(Json(runtime.view(*holding.get(&name).unwrap_or(&0))))
+}
+
+async fn install_apps(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<InstallApps>,
+) -> ApiResult<Json<InstalledApps>> {
+    let entry = state.registry.get(&id).await?;
+
+    tracing::info!(box_ = %id, apps = ?body.apps, "installing into a running box");
+    let installed =
+        computer::apps::install(&entry.computer, &body.apps, &entry.spec, MAX_EXEC).await?;
+
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::AppsInstalled {
+                apps: installed.clone(),
+            },
+        )
+        .await;
+
+    Ok(Json(InstalledApps { installed }))
 }
 
 async fn add_runtime(

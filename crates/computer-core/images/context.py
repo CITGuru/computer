@@ -21,23 +21,32 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Rules:
     drop: tuple = ()
-    drop_arg: tuple = ()
+    argless: tuple = ()
     run_as: int | None = None
     because: dict = field(default_factory=dict)
+
+
+ARGS = {
+    "--packages": ("EXTRA_PACKAGES", "packages"),
+    "--sources": ("EXTRA_SOURCES", "sources"),
+    "--apps": ("EXTRA_APPS", "apps"),
+}
 
 
 RULES = {
     "e2b": Rules(
         drop=("LABEL", "CMD", "USER"),
-        drop_arg=("EXTRA_PACKAGES",),
+        argless=("EXTRA_PACKAGES", "EXTRA_SOURCES", "EXTRA_APPS"),
         run_as=1000,
         because={
             "LABEL": 'rejected: "Unsupported instruction: LABEL"',
             "CMD": "ignored; the start command comes from --cmd, which is required",
             "USER": "overridden: E2B appends its own, so the image's would only "
             "stop the lines after it from running as root",
-            "EXTRA_PACKAGES": 'an ARG default keeps its quotes, so apt is asked for a '
-            'package named "" four minutes into the build',
+            "EXTRA_PACKAGES, EXTRA_SOURCES, EXTRA_APPS": "no --build-arg, and an ARG "
+            'default keeps its quotes, so apt is asked for a package named "" four '
+            "minutes into the build. --packages, --sources and --apps write the values "
+            "into files the build reads; without them the lines that use them go",
             "run_as": "E2B appends `USER user` (uid 1000), which cannot write a HOME "
             "that WORKDIR created for root, so chromium never makes its profile",
         },
@@ -53,7 +62,8 @@ def home_of(dockerfile: str) -> str:
     return "/root"
 
 
-def rewrite(dockerfile: str, rules: Rules) -> str:
+def rewrite(dockerfile: str, rules: Rules, carried: dict | None = None) -> str:
+    carried = carried or {}
     kept, dropping = [], False
 
     for line in dockerfile.splitlines(keepends=True):
@@ -64,14 +74,17 @@ def rewrite(dockerfile: str, rules: Rules) -> str:
             continue
 
         instruction = stripped.split(" ", 1)[0].upper()
-        drops_arg = any(name in stripped for name in rules.drop_arg)
+        argless = any(name in stripped for name in rules.argless)
 
         if instruction in rules.drop:
             dropping = stripped.endswith("\\")
             continue
-        if instruction == "ARG" and drops_arg:
+        if instruction == "ARG" and argless:
             continue
-        if instruction == "RUN" and drops_arg:
+        if instruction == "RUN" and argless:
+            if any(name in stripped and carried.get(name) for name in rules.argless):
+                kept.append(line)
+                continue
             dropping = stripped.endswith("\\")
             continue
 
@@ -84,7 +97,41 @@ def rewrite(dockerfile: str, rules: Rules) -> str:
             f"RUN mkdir -p {home} && chown -R {rules.run_as}:{rules.run_as} {home}\n"
         )
 
-    return "".join(kept)
+    return carrying("".join(kept), carried)
+
+
+def carrying(dockerfile: str, carried: dict) -> str:
+    if not carried:
+        return dockerfile
+
+    for name in carried:
+        at = kept_at(name)
+        dockerfile = dockerfile.replace(f'[ -n "${name}" ]', f'[ -s {at} ]')
+        dockerfile = dockerfile.replace(f'"${name}"', f'"$(cat {at})"')
+        dockerfile = dockerfile.replace(f"${name}", f"$(cat {at})")
+
+    lines = dockerfile.splitlines(keepends=True)
+    for at, line in enumerate(lines):
+        if "/usr/local/share/computer-" in line:
+            lines.insert(at, "COPY computer-* /usr/local/share/\n")
+            break
+
+    return "".join(lines)
+
+
+def kept_at(name: str) -> str:
+    return f"/usr/local/share/computer-{name.removeprefix('EXTRA_').lower()}"
+
+
+def values(argv: list[str]) -> dict:
+    carried = {}
+
+    for flag, (name, _) in ARGS.items():
+        if flag in argv:
+            given = argv[argv.index(flag) + 1]
+            if given.strip():
+                carried[name] = given
+    return carried
 
 
 def main(argv: list[str]) -> int:
@@ -114,10 +161,16 @@ def main(argv: list[str]) -> int:
         if entry.is_file():
             shutil.copy2(entry, target / entry.name)
 
-    dockerfile = target / "Dockerfile"
-    dockerfile.write_text(rewrite(dockerfile.read_text(), rules))
+    carried = values(argv)
+    for name, given in carried.items():
+        at = target / f"computer-{name.removeprefix('EXTRA_').lower()}"
+        at.write_text(given if given.endswith("\n") else given + "\n")
 
-    print(f"context: {target}  ({vendor}: {', '.join(rules.because)})")
+    dockerfile = target / "Dockerfile"
+    dockerfile.write_text(rewrite(dockerfile.read_text(), rules, carried))
+
+    said = ", ".join(sorted(carried)) or "nothing to carry in"
+    print(f"context: {target}  ({vendor}: {', '.join(rules.because)}; {said})")
     return 0
 
 
