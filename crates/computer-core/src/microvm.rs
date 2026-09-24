@@ -19,6 +19,7 @@ pub struct Plan {
     pub env: BTreeMap<String, String>,
     /// Chosen here: a hypervisor forwards the pairs it is given and picks none.
     pub ports: Vec<(u16, u16)>,
+    pub labels: BTreeMap<String, String>,
     pub replace: bool,
 }
 
@@ -60,6 +61,10 @@ pub trait MicroVmApi: Send + Sync {
             .map_err(|error| Error::denied(format!("{}: {error}", to.display())))
     }
 
+    async fn labelled(&self, _key: &str) -> Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
     async fn logs(&self, _name: &str) -> Result<String> {
         Ok(String::new())
     }
@@ -96,6 +101,7 @@ pub fn plan_for(name: &str, config: &Config, ports: Vec<(u16, u16)>) -> Plan {
         network: config.network,
         env: config.env.clone(),
         ports,
+        labels: config.labels.clone(),
         replace: true,
     }
 }
@@ -289,6 +295,10 @@ impl Machine for MicroVm {
 
     async fn running(&self, name: &str) -> Result<bool> {
         self.api.running(name).await
+    }
+
+    async fn labelled(&self, label: &str) -> Result<Vec<(String, String)>> {
+        self.api.labelled(label).await
     }
 
     async fn ports(&self, name: &str) -> PortMap {
