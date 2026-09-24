@@ -93,6 +93,18 @@ impl Default for SandboxPlan {
     }
 }
 
+pub(crate) fn build_it_yourself(vendor: &str, image: &str, bundle: &str) -> Error {
+    Error::Unavailable {
+        provider: vendor.to_string(),
+        detail: format!(
+            "{image} is a container image and {vendor} runs its own. Write the \
+             {bundle} build context out with Bundle::materialize, build it \
+             there with /usr/local/bin/computer-desktop as the start command, \
+             and pass what {vendor} calls the result to Builder::image"
+        ),
+    }
+}
+
 #[async_trait]
 pub trait RemoteApi: Send + Sync {
     fn vendor(&self) -> &str;
@@ -158,25 +170,18 @@ pub trait RemoteApi: Send + Sync {
         Capabilities::default()
     }
 
-    /// A vendor that pulls an OCI reference overrides this with `Ok(())`.
-    async fn ensure_image(&self, config: &Config) -> Result<()> {
+    async fn forget_image(&self, _reference: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["removing an image"],
+        })
+    }
+
+    async fn ensure_image(&self, config: &Config) -> Result<Option<String>> {
         let Some(bundle) = config.bundle.as_ref().filter(|b| b.owns(&config.image)) else {
-            return Ok(());
+            return Ok(None);
         };
 
-        Err(Error::Unavailable {
-            runtime: self.vendor().to_string(),
-            detail: format!(
-                "{} is a container image and {} runs its own. Write the {} \
-                 build context out with Bundle::materialize, build it there \
-                 with /usr/local/bin/computer-desktop as the start command, \
-                 and pass what {} calls the result to Builder::image",
-                config.image,
-                self.vendor(),
-                bundle.name,
-                self.vendor()
-            ),
-        })
+        Err(build_it_yourself(self.vendor(), &config.image, bundle.name))
     }
 
     /// `Drop` cannot await. `None` leaves a dropped sandbox running until its

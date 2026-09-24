@@ -51,7 +51,7 @@ impl Msb {
             .await
             .map_err(|error| match error.kind() {
                 std::io::ErrorKind::NotFound => Error::Unavailable {
-                    runtime: "microsandbox".to_string(),
+                    provider: "microsandbox".to_string(),
                     detail: format!("{} is not on PATH", self.program),
                 },
                 _ => Error::transport(error.to_string(), false),
@@ -130,7 +130,7 @@ impl MicroVmApi for Msb {
         let version = self.run(&Self::argv(&["--version"])).await?;
         if version.code != 0 {
             return Err(Error::Unavailable {
-                runtime: "microsandbox".to_string(),
+                provider: "microsandbox".to_string(),
                 detail: version.stderr_utf8().trim().to_string(),
             });
         }
@@ -150,7 +150,7 @@ impl MicroVmApi for Msb {
         let created = self.run(&create_args(plan)).await?;
         if created.code != 0 {
             return Err(Error::Unavailable {
-                runtime: "microsandbox".to_string(),
+                provider: "microsandbox".to_string(),
                 detail: created.stderr_utf8().trim().to_string(),
             });
         }
@@ -294,7 +294,7 @@ impl ImageLoader for Msb {
 
         if loaded.code != 0 {
             return Err(Error::Unavailable {
-                runtime: "microsandbox".to_string(),
+                provider: "microsandbox".to_string(),
                 detail: loaded.stderr_utf8().trim().to_string(),
             });
         }

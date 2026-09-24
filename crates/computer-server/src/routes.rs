@@ -2,10 +2,10 @@ use crate::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::idempotency::{self, Lookup, Replies};
+use crate::images;
 use crate::presses::Pressed;
 use crate::registry::{AsDesktop, Entry};
 use crate::runtimes::{self, Place};
-use crate::spec;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -18,7 +18,7 @@ use computer::motion::path;
 use computer::{Delta, Desktop as EngineDesktop};
 use computer_api::*;
 use computer_storage::BoxRecord;
-use computer_types::{Search, Spec};
+use computer_types::{DisplayServer, Search, Spec};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -131,6 +131,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/catalog", get(catalog))
         .route("/v1/runtimes", get(list_runtimes).post(add_runtime))
+        .route("/v1/runtimes/{name}/image", post(prepare_image))
+        .route("/v1/runtimes/{name}/images", get(list_runtime_images))
+        .route(
+            "/v1/runtimes/{name}/images/{digest}",
+            axum::routing::delete(forget_image),
+        )
+        .route("/v1/images", get(list_images))
         .route(
             "/v1/runtimes/{name}",
             get(get_runtime)
@@ -185,10 +192,10 @@ async fn create_box(
     let digest = body.spec.digest();
     let id = new_id();
     let runtime = state.runtimes.resolve(body.placement.runtime.as_deref())?;
-    let (builder, resolved) = spec::plan(&body.spec, &body.placement, &id, &runtime)?;
 
     tracing::info!(%id, %digest, runtime = %runtime.name, "launching a box");
-    let computer = builder.launch().await?;
+    let (computer, resolved) =
+        images::started(&state, &body.spec, &body.placement, &id, &runtime).await?;
 
     let entry = state
         .registry
@@ -1894,10 +1901,9 @@ async fn fork(
         },
     };
     let runtime = state.runtimes.resolve(asked.as_deref())?;
-    let (builder, resolved) = spec::plan(&spec, &placement, &new_id, &runtime)?;
-
     tracing::info!(from = %id, to = %new_id, runtime = %runtime.name, "forking a box");
-    let computer = builder.launch().await?;
+    let (computer, resolved) =
+        images::started(&state, &spec, &placement, &new_id, &runtime).await?;
 
     let entry = state
         .registry
@@ -3410,6 +3416,115 @@ async fn install_apps(
         .await;
 
     Ok(Json(InstalledApps { installed }))
+}
+
+async fn prepare_image(
+    State(state): State<Arc<AppState>>,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(body): ApiJson<PrepareImage>,
+) -> ApiResult<Json<PreparedImage>> {
+    let runtime = state
+        .runtimes
+        .get(&name)
+        .ok_or_else(|| ApiError::not_found(format!("no runtime named {name} here")))?;
+
+    let config = runtime
+        .drive(computer::Builder::from_spec(&body.spec)?, &body.spec)
+        .config()?;
+    let (machine, _) = runtime.pair(body.spec.desktop.server);
+
+    tracing::info!(runtime = %name, image = %config.image, "preparing an image");
+    machine.ensure_image(&config).await?;
+
+    let reference = images::used(&machine, &config);
+    images::keep(&state, &name, &body.spec.digest(), &reference).await;
+
+    Ok(Json(PreparedImage {
+        runtime: name,
+        image: reference,
+    }))
+}
+
+async fn list_images(State(state): State<Arc<AppState>>) -> ApiResult<Json<ImageList>> {
+    Ok(Json(ImageList {
+        images: manifest(&state, None).await?,
+    }))
+}
+
+async fn list_runtime_images(
+    State(state): State<Arc<AppState>>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult<Json<ImageList>> {
+    state
+        .runtimes
+        .get(&name)
+        .ok_or_else(|| ApiError::not_found(format!("no runtime named {name} here")))?;
+
+    Ok(Json(ImageList {
+        images: manifest(&state, Some(&name)).await?,
+    }))
+}
+
+async fn manifest(state: &AppState, runtime: Option<&str>) -> ApiResult<Vec<ImageView>> {
+    let mut images = Vec::new();
+
+    for record in state.store.list_images().await? {
+        if runtime.is_some_and(|name| name != record.runtime) {
+            continue;
+        }
+
+        images.push(ImageView {
+            runtime: record.runtime,
+            spec_digest: record.spec_digest,
+            reference: record.reference,
+            built_at_ms: record.built_at_ms,
+            bytes: record.bytes,
+        });
+    }
+
+    Ok(images)
+}
+
+async fn forget_image(
+    State(state): State<Arc<AppState>>,
+    ApiPath((name, digest)): ApiPath<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let runtime = state
+        .runtimes
+        .get(&name)
+        .ok_or_else(|| ApiError::not_found(format!("no runtime named {name} here")))?;
+
+    let record = state
+        .store
+        .get_image(&name, &digest)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("{name} has no image for {digest}")))?;
+
+    for entry in state.registry.list().await.iter() {
+        if entry.runtime == name && entry.spec_digest() == digest {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                ErrorCode::Denied,
+                format!("the box {} runs on this image; remove it first", entry.id),
+            ));
+        }
+    }
+
+    let (machine, _) = runtime.pair(DisplayServer::default());
+    match machine.forget_image(&record.reference).await {
+        Ok(()) => {}
+        Err(computer::Error::Unsupported { .. }) => {
+            tracing::info!(
+                runtime = %name,
+                reference = %record.reference,
+                "this runtime keeps its own images; only the record goes"
+            );
+        }
+        Err(why) => return Err(why.into()),
+    }
+
+    images::forget(&state, &name, &digest).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn add_runtime(

@@ -1,4 +1,4 @@
-use crate::{BoxRecord, Error, Frames, Result, RuntimeRecord, Store, now_ms};
+use crate::{BoxRecord, Error, Frames, ImageRecord, Result, RuntimeRecord, Store, now_ms};
 use async_trait::async_trait;
 use computer_api::{Actor, TraceEntry, TraceEvent};
 use sqlx::any::AnyPoolOptions;
@@ -81,6 +81,14 @@ impl Sql {
                  created_at_ms BIGINT NOT NULL,
                  updated_at_ms BIGINT NOT NULL,
                  record TEXT NOT NULL
+             )"
+            .to_string(),
+            "CREATE TABLE IF NOT EXISTS images (
+                 runtime TEXT NOT NULL,
+                 spec_digest TEXT NOT NULL,
+                 built_at_ms BIGINT NOT NULL,
+                 record TEXT NOT NULL,
+                 PRIMARY KEY (runtime, spec_digest)
              )"
             .to_string(),
             "CREATE TABLE IF NOT EXISTS sequences (
@@ -255,6 +263,71 @@ impl Store for Sql {
             .execute(&self.pool)
             .await
             .map_err(|error| failed("a runtime would not go away", error))?;
+
+        Ok(())
+    }
+
+    async fn put_image(&self, record: &ImageRecord) -> Result<()> {
+        let body = serde_json::to_string(record)
+            .map_err(|error| Error::Internal(format!("a record would not serialise: {error}")))?;
+
+        sqlx::query(self.q(
+            "INSERT INTO images (runtime, spec_digest, built_at_ms, record)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (runtime, spec_digest) DO UPDATE SET
+                 built_at_ms = excluded.built_at_ms,
+                 record = excluded.record",
+        ))
+        .bind(&record.runtime)
+        .bind(&record.spec_digest)
+        .bind(record.built_at_ms as i64)
+        .bind(body)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| failed("an image would not go down", error))?;
+
+        Ok(())
+    }
+
+    async fn get_image(&self, runtime: &str, spec_digest: &str) -> Result<Option<ImageRecord>> {
+        let held: Option<String> = sqlx::query_scalar(
+            self.q("SELECT record FROM images WHERE runtime = ? AND spec_digest = ?"),
+        )
+        .bind(runtime)
+        .bind(spec_digest)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| failed("an image would not be read", error))?;
+
+        held.map(|body| {
+            serde_json::from_str(&body)
+                .map_err(|error| Error::Corrupt(format!("an image does not parse: {error}")))
+        })
+        .transpose()
+    }
+
+    async fn list_images(&self) -> Result<Vec<ImageRecord>> {
+        let rows: Vec<String> =
+            sqlx::query_scalar(self.q("SELECT record FROM images ORDER BY runtime, spec_digest"))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|error| failed("the images would not be read", error))?;
+
+        rows.into_iter()
+            .map(|body| {
+                serde_json::from_str(&body)
+                    .map_err(|error| Error::Corrupt(format!("an image does not parse: {error}")))
+            })
+            .collect()
+    }
+
+    async fn forget_image(&self, runtime: &str, spec_digest: &str) -> Result<()> {
+        sqlx::query(self.q("DELETE FROM images WHERE runtime = ? AND spec_digest = ?"))
+            .bind(runtime)
+            .bind(spec_digest)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| failed("an image would not go away", error))?;
 
         Ok(())
     }
@@ -521,6 +594,7 @@ mod tests {
 
         conformance::store(&store).await;
         conformance::runtimes(&store).await;
+        conformance::images(&store).await;
     }
 
     #[tokio::test]
@@ -639,6 +713,7 @@ mod tests {
 
         conformance::store(&store).await;
         conformance::runtimes(&store).await;
+        conformance::images(&store).await;
         conformance::frames(&store).await;
     }
 }

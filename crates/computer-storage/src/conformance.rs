@@ -1,5 +1,5 @@
 use crate::now_ms;
-use crate::{Blobs, BoxRecord, Frames, RuntimeRecord, Sealed, Store};
+use crate::{Blobs, BoxRecord, Frames, ImageRecord, RuntimeRecord, Sealed, Store};
 use computer_api::{Actor, Placement, Spec, TraceEvent};
 
 fn record(id: &str, width: u32) -> BoxRecord {
@@ -29,6 +29,78 @@ fn runtime(name: &str, key: &str) -> RuntimeRecord {
 
 fn wrote() -> TraceEvent {
     TraceEvent::BoxDeleted
+}
+
+pub async fn images(store: &dyn Store) {
+    let made = |runtime: &str, digest: &str, reference: &str| ImageRecord {
+        runtime: runtime.to_string(),
+        spec_digest: digest.to_string(),
+        reference: reference.to_string(),
+        built_at_ms: 1_700_000_000_000,
+        bytes: Some(400 * 1024 * 1024),
+    };
+
+    assert!(
+        store
+            .get_image("smolvm", "never-built")
+            .await
+            .expect("asked")
+            .is_none(),
+        "an image nobody built is not an error"
+    );
+
+    store
+        .put_image(&made("smolvm", "abc", "/images/abc.tar"))
+        .await
+        .expect("kept");
+    store
+        .put_image(&made("cloud", "abc", "tmpl-1"))
+        .await
+        .expect("kept");
+
+    let held = store
+        .get_image("smolvm", "abc")
+        .await
+        .expect("asked")
+        .expect("a record");
+    assert_eq!(
+        held.reference, "/images/abc.tar",
+        "one spec has a different image on every runtime, so the runtime is part of the key"
+    );
+    assert_eq!(
+        store
+            .get_image("cloud", "abc")
+            .await
+            .expect("asked")
+            .map(|held| held.reference),
+        Some("tmpl-1".to_string())
+    );
+
+    store
+        .put_image(&made("cloud", "abc", "tmpl-2"))
+        .await
+        .expect("built again");
+    assert_eq!(
+        store
+            .get_image("cloud", "abc")
+            .await
+            .expect("asked")
+            .map(|held| held.reference),
+        Some("tmpl-2".to_string()),
+        "a rebuild replaces what was there rather than sitting beside it"
+    );
+
+    assert_eq!(store.list_images().await.expect("listed").len(), 2);
+
+    store.forget_image("cloud", "abc").await.expect("forgotten");
+    assert!(
+        store
+            .get_image("cloud", "abc")
+            .await
+            .expect("asked")
+            .is_none()
+    );
+    assert_eq!(store.list_images().await.expect("listed").len(), 1);
 }
 
 pub async fn runtimes(store: &dyn Store) {

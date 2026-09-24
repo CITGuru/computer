@@ -1,4 +1,5 @@
-use super::api::{E2bApi, Sandbox, SandboxPlan};
+use super::api::{self, E2bApi, Sandbox, SandboxPlan};
+use super::template;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
@@ -13,6 +14,46 @@ pub struct E2bVendor {
     api: Arc<dyn E2bApi>,
     /// [`remote::Sandbox`] carries one token; E2B needs two and a domain.
     known: Mutex<BTreeMap<String, Sandbox>>,
+}
+
+pub const TEMPLATE_CPUS: u32 = 2;
+
+pub const TEMPLATE_MEMORY_MIB: u64 = 2048;
+
+pub const BUILD_WAIT: Duration = Duration::from_secs(20 * 60);
+
+impl E2bVendor {
+    async fn wait_for(&self, built: &api::Built, name: &str) -> Result<()> {
+        let deadline = std::time::Instant::now() + BUILD_WAIT;
+
+        loop {
+            let answer = self.api.build_status(built).await?;
+            let status = super::wire::status_of(&answer);
+
+            match status.as_str() {
+                "ready" | "uploaded" => {
+                    tracing::info!(template = %name, "the template is built");
+                    return Ok(());
+                }
+                "error" => {
+                    return Err(Error::Failed {
+                        code: 1,
+                        stderr: format!("{name}: {}", super::wire::why_of(&answer)),
+                    });
+                }
+                _ => {}
+            }
+
+            if std::time::Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    after: BUILD_WAIT,
+                    detail: format!("{name} was still {status}"),
+                });
+            }
+
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+    }
 }
 
 impl E2bVendor {
@@ -157,33 +198,53 @@ impl RemoteApi for E2bVendor {
         self.api.write(&self.described(sandbox)?, path, bytes).await
     }
 
-    async fn ensure_image(&self, config: &Config) -> Result<()> {
-        let Some(bundle) = config.bundle.as_ref().filter(|b| b.owns(&config.image)) else {
-            return Ok(());
+    async fn forget_image(&self, reference: &str) -> Result<()> {
+        self.api.delete_template(reference).await
+    }
+
+    async fn ensure_image(&self, config: &Config) -> Result<Option<String>> {
+        let Some(bundle) = config
+            .bundle
+            .as_ref()
+            .filter(|held| held.owns(&config.image))
+        else {
+            return Ok(None);
         };
 
-        Err(Error::Unavailable {
-            runtime: "e2b".to_string(),
-            detail: format!(
-                "{} is a container image; E2B runs templates. Write the build \
-                 context out with Bundle::materialize and build it there:\n  \
-                 e2b template build -n {} -c \"/usr/local/bin/computer-desktop\"\n\
-                 then pass the template ID to Builder::image",
-                config.image, bundle.name
-            ),
-        })
-    }
+        let name = template::named(&config.image);
+        if let Some(held) = self.api.find_template(&name).await? {
+            return Ok(Some(held));
+        }
 
-    async fn pause(&self, id: &str) -> Result<()> {
-        self.api.pause(id).await
-    }
+        let Some(plan) = template::plan(bundle, &config.extras) else {
+            return Err(Error::Unavailable {
+                provider: "e2b".to_string(),
+                detail: format!("{} carries no Dockerfile to build from", bundle.name),
+            });
+        };
 
-    async fn resume(&self, id: &str, ttl: Duration) -> Result<()> {
-        self.api.resume(id, ttl).await
-    }
+        let cpus = config
+            .cpus
+            .as_deref()
+            .and_then(|cpus| cpus.parse().ok())
+            .unwrap_or(TEMPLATE_CPUS);
+        let memory = config
+            .memory
+            .as_deref()
+            .and_then(crate::microvm::mebibytes)
+            .unwrap_or(TEMPLATE_MEMORY_MIB);
 
-    async fn paused(&self, id: &str) -> Result<bool> {
-        self.api.paused(id).await
+        tracing::info!(template = %name, steps = plan.steps.len(), "building a template");
+        let built = self.api.create_template(&name, cpus, memory as u32).await?;
+
+        for carried in &plan.carries {
+            self.api.carry_files(&built.template, carried).await?;
+        }
+
+        self.api.start_build(&built, &plan).await?;
+        self.wait_for(&built, &name).await?;
+
+        Ok(Some(built.template))
     }
 
     fn reaper(&self, id: &str) -> Option<(String, Vec<String>)> {
@@ -211,30 +272,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_a_bundled_image_is_refused_with_the_way_across() {
-        let error = vendor(Arc::new(ScriptedE2b::new()))
+    async fn test_a_bundled_image_is_built_into_a_template() {
+        let api = Arc::new(ScriptedE2b::new());
+
+        let started_from = vendor(Arc::clone(&api))
             .ensure_image(&Config {
                 image: bundle::DESKTOP.tag(),
                 ..Config::default()
             })
             .await
-            .expect_err("a container image is not a template");
+            .expect("a container image becomes a template here");
 
-        assert!(error.to_string().contains("e2b template build"));
-        assert!(error.needs_another_place());
+        assert!(
+            started_from.is_some_and(|template| template.starts_with("tmpl-")),
+            "the box starts from the template, not from the container image"
+        );
+        assert_eq!(api.built().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_a_built_template_is_gone_once_forgotten() {
+        let api = Arc::new(ScriptedE2b::new());
+        let vendor = vendor(Arc::clone(&api));
+        let config = Config {
+            image: bundle::DESKTOP.tag(),
+            ..Config::default()
+        };
+
+        let built = vendor
+            .ensure_image(&config)
+            .await
+            .expect("built")
+            .expect("a template");
+        vendor.forget_image(&built).await.expect("removed");
+
+        assert_eq!(
+            vendor.ensure_image(&config).await.expect("built again"),
+            Some("tmpl-1".to_string()),
+            "the next box builds the template again rather than starting from \
+             one that is gone"
+        );
     }
 
     #[tokio::test]
     async fn test_a_template_somebody_else_built_is_left_alone() {
-        assert!(
-            vendor(Arc::new(ScriptedE2b::new()))
-                .ensure_image(&Config {
-                    image: "tmpl-abc".to_string(),
-                    ..Config::default()
-                })
-                .await
-                .is_ok()
+        let api = Arc::new(ScriptedE2b::new());
+
+        let started_from = vendor(Arc::clone(&api))
+            .ensure_image(&Config {
+                image: "tmpl-abc".to_string(),
+                ..Config::default()
+            })
+            .await
+            .expect("a template of somebody else's is used as it is");
+
+        assert_eq!(
+            started_from, None,
+            "nothing here changes what to start from"
         );
+        assert!(api.built().is_empty(), "and nothing is built");
     }
 
     #[tokio::test]

@@ -43,7 +43,7 @@ async fn main() -> computer::Result<()> {
         .launch()
         .await?;
 
-    println!("  runtime  {}", computer.runtime());
+    println!("  runtime  {}", computer.provider());
     match computer.viewer_url() {
         Some(url) => println!("  watch it {url}"),
         None => println!("  no viewer: this sandbox is secure"),

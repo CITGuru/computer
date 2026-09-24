@@ -1625,7 +1625,9 @@ computer = { git = "https://github.com/CITGuru/computer", default-features = fal
 export E2B_API_KEY=...
 ```
 
-E2B uses templates instead of local container images. Its builder accepts only part of Dockerfile syntax, takes no build arguments, and its process runs as uid 1000. Generate a compatible build context from the bundled X11 image:
+E2B uses templates instead of local container images, and this crate builds one when it needs one: the first launch translates the bundled image into E2B's build steps, uploads the files it copies, waits for the build, and starts the box on it. A template it already has is used as it is, and one template is built per spec, so a box asking for GIMP gets its own.
+
+To build one by hand instead — for a template you want to keep, or to see what the builder is given — write the context out and use their CLI:
 
 ```bash
 python3 crates/computer-core/images/context.py \

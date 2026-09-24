@@ -2,7 +2,7 @@
 //! One writer per box: the next sequence is read once and then held.
 
 use crate::error::poisoned;
-use crate::{Blobs, BoxRecord, Error, Frames, Result, RuntimeRecord, Store, now_ms};
+use crate::{Blobs, BoxRecord, Error, Frames, ImageRecord, Result, RuntimeRecord, Store, now_ms};
 use async_trait::async_trait;
 use computer_api::{Actor, TraceEntry, TraceEvent};
 use std::collections::HashMap;
@@ -215,6 +215,53 @@ impl<B: Blobs + 'static> Store for Files<B> {
 
     async fn forget_runtime(&self, name: &str) -> Result<()> {
         self.blobs.delete_prefix(&runtime(name)?).await
+    }
+
+    async fn put_image(&self, record: &ImageRecord) -> Result<()> {
+        let body = serde_json::to_vec(record)
+            .map_err(|error| Error::Internal(format!("a record would not serialise: {error}")))?;
+
+        self.blobs
+            .put(&image(&record.runtime, &record.spec_digest)?, &body)
+            .await
+    }
+
+    async fn get_image(&self, runtime: &str, spec_digest: &str) -> Result<Option<ImageRecord>> {
+        let Some(body) = self.blobs.get(&image(runtime, spec_digest)?).await? else {
+            return Ok(None);
+        };
+
+        serde_json::from_slice(&body).map(Some).map_err(|error| {
+            Error::Corrupt(format!(
+                "the image {runtime}/{spec_digest} does not parse: {error}"
+            ))
+        })
+    }
+
+    async fn list_images(&self) -> Result<Vec<ImageRecord>> {
+        let mut records = Vec::new();
+
+        for key in self.blobs.list("images/", None).await? {
+            if !key.ends_with(".json") {
+                continue;
+            }
+
+            let Some(body) = self.blobs.get(&key).await? else {
+                continue;
+            };
+
+            records.push(serde_json::from_slice(&body).map_err(|error| {
+                Error::Corrupt(format!("the image at {key} does not parse: {error}"))
+            })?);
+        }
+
+        Ok(records)
+    }
+
+    async fn forget_image(&self, runtime: &str, spec_digest: &str) -> Result<()> {
+        self.blobs
+            .delete_prefix(&image(runtime, spec_digest)?)
+            .await
     }
 
     async fn append(
@@ -461,6 +508,10 @@ fn lines(entries: &[TraceEntry]) -> Result<Vec<u8>> {
 
 fn main(id: &str) -> Result<String> {
     Ok(format!("boxes/{}/main.json", part(id)?))
+}
+
+fn image(runtime: &str, digest: &str) -> Result<String> {
+    Ok(format!("images/{}/{}.json", part(runtime)?, part(digest)?))
 }
 
 fn runtime(name: &str) -> Result<String> {

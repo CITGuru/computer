@@ -2446,6 +2446,80 @@ fn key(args: &[String]) -> Result<std::collections::BTreeMap<String, String>, St
     Ok(held)
 }
 
+pub async fn image(client: &Client, args: &[String]) -> Done {
+    let what = args.first().map(String::as_str).unwrap_or("ls");
+    let rest = args.get(1..).unwrap_or_default();
+
+    match what {
+        "build" => build_image(client, rest).await,
+        "ls" => {
+            let named = bare(rest, &VALUED);
+            let runtime = named.first().map(String::as_str);
+
+            for held in client
+                .images(runtime)
+                .await
+                .map_err(|e| e.to_string())?
+                .iter()
+            {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    held.runtime,
+                    held.reference,
+                    held.spec_digest,
+                    stamped(held.built_at_ms)
+                );
+            }
+            Ok(())
+        }
+        "rm" => {
+            let runtime = positional(rest, 0, "a runtime").map_err(|e| e.to_string())?;
+            let tag = positional(rest, 1, "an image").map_err(|e| e.to_string())?;
+
+            let held = client
+                .images(Some(runtime))
+                .await
+                .map_err(|e| e.to_string())?;
+            let found = held
+                .iter()
+                .find(|held| held.reference == tag || held.spec_digest == tag)
+                .ok_or_else(|| format!("{runtime} has no image {tag}"))?;
+
+            client
+                .forget_image(runtime, &found.spec_digest)
+                .await
+                .map_err(|e| e.to_string())?;
+            eprintln!("{} is gone from {runtime}", found.reference);
+            Ok(())
+        }
+        other => Err(format!(
+            "image takes build, ls or rm, and not {other}\n\n{USAGE}"
+        )),
+    }
+}
+
+async fn build_image(client: &Client, args: &[String]) -> Done {
+    let rest = bare(args, &VALUED);
+    let runtime = positional(&rest, 0, "a runtime")
+        .map_err(|e| e.to_string())?
+        .to_string();
+
+    let mut flags = args.to_vec();
+    if let Some(at) = flags.iter().position(|arg| *arg == runtime) {
+        flags.remove(at);
+    }
+    let asked = crate::spec::asked(&flags)?;
+
+    eprintln!("preparing the image {runtime} needs (the first one takes minutes) …");
+    let ready = client
+        .prepare_image(&runtime, &asked.spec)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!("{}\t{}", ready.runtime, ready.image);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

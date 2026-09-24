@@ -36,7 +36,7 @@ async fn main() -> computer::Result<()> {
         .launch()
         .await?;
 
-    println!("  {} on {}", computer.name(), computer.runtime());
+    println!("  {} on {}", computer.name(), computer.provider());
 
     computer.open_url("https://www.google.com").await?;
     tokio::time::sleep(Duration::from_secs(6)).await;

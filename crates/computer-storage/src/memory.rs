@@ -1,5 +1,5 @@
 use crate::error::poisoned;
-use crate::{Blobs, BoxRecord, Frames, Result, RuntimeRecord, Store, now_ms};
+use crate::{Blobs, BoxRecord, Frames, ImageRecord, Result, RuntimeRecord, Store, now_ms};
 use async_trait::async_trait;
 use computer_api::{Actor, TraceEntry, TraceEvent};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -14,6 +14,7 @@ const MAX_TRACES: usize = 256;
 pub struct Memory {
     boxes: Mutex<BTreeMap<String, BoxRecord>>,
     runtimes: Mutex<BTreeMap<String, RuntimeRecord>>,
+    images: Mutex<BTreeMap<(String, String), ImageRecord>>,
     traces: Mutex<HashMap<String, Arc<Trace>>>,
     order: Mutex<VecDeque<String>>,
     frames: Mutex<HashMap<String, Held>>,
@@ -118,6 +119,43 @@ impl Store for Memory {
 
     async fn forget_runtime(&self, name: &str) -> Result<()> {
         self.runtimes.lock().map_err(poisoned)?.remove(name);
+
+        Ok(())
+    }
+
+    async fn put_image(&self, record: &ImageRecord) -> Result<()> {
+        self.images.lock().map_err(poisoned)?.insert(
+            (record.runtime.clone(), record.spec_digest.clone()),
+            record.clone(),
+        );
+
+        Ok(())
+    }
+
+    async fn get_image(&self, runtime: &str, spec_digest: &str) -> Result<Option<ImageRecord>> {
+        Ok(self
+            .images
+            .lock()
+            .map_err(poisoned)?
+            .get(&(runtime.to_string(), spec_digest.to_string()))
+            .cloned())
+    }
+
+    async fn list_images(&self) -> Result<Vec<ImageRecord>> {
+        Ok(self
+            .images
+            .lock()
+            .map_err(poisoned)?
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    async fn forget_image(&self, runtime: &str, spec_digest: &str) -> Result<()> {
+        self.images
+            .lock()
+            .map_err(poisoned)?
+            .remove(&(runtime.to_string(), spec_digest.to_string()));
 
         Ok(())
     }
@@ -298,6 +336,7 @@ mod tests {
     async fn test_memory_behaves_like_a_store() {
         conformance::store(&Memory::default()).await;
         conformance::runtimes(&Memory::default()).await;
+        conformance::images(&Memory::default()).await;
     }
 
     #[tokio::test]

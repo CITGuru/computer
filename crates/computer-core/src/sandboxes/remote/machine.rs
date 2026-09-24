@@ -22,6 +22,7 @@ pub struct RemoteMachine {
     api: Arc<dyn RemoteApi>,
     remote: Arc<Remote>,
     held: Mutex<BTreeMap<String, Held>>,
+    images: Mutex<BTreeMap<String, String>>,
     ttl: Duration,
     public_viewer: bool,
 }
@@ -32,6 +33,7 @@ impl RemoteMachine {
             api,
             remote,
             held: Mutex::new(BTreeMap::new()),
+            images: Mutex::new(BTreeMap::new()),
             ttl: DEFAULT_TTL,
             public_viewer: false,
         }
@@ -58,9 +60,16 @@ impl RemoteMachine {
         let mut metadata = config.labels.clone();
         metadata.insert(NAME_KEY.to_string(), name.to_string());
 
+        let image = self
+            .images
+            .lock()
+            .ok()
+            .and_then(|held| held.get(&config.image).cloned())
+            .unwrap_or_else(|| config.image.clone());
+
         SandboxPlan {
             name: name.to_string(),
-            image: config.image.clone(),
+            image,
             publish: config.publish.clone(),
             env: config.env.clone(),
             metadata,
@@ -147,7 +156,7 @@ impl RemoteMachine {
 
 #[async_trait]
 impl Machine for RemoteMachine {
-    fn runtime(&self) -> &str {
+    fn provider(&self) -> &str {
         self.api.vendor()
     }
 
@@ -163,7 +172,25 @@ impl Machine for RemoteMachine {
     }
 
     async fn ensure_image(&self, config: &Config) -> Result<()> {
-        self.api.ensure_image(config).await
+        let Some(image) = self.api.ensure_image(config).await? else {
+            return Ok(());
+        };
+
+        if let Ok(mut held) = self.images.lock() {
+            held.insert(config.image.clone(), image);
+        }
+
+        Ok(())
+    }
+
+    async fn forget_image(&self, reference: &str) -> Result<()> {
+        self.api.forget_image(reference).await?;
+
+        if let Ok(mut held) = self.images.lock() {
+            held.retain(|_, held| held != reference);
+        }
+
+        Ok(())
     }
 
     async fn start(&self, name: &str, config: &Config) -> Result<PortMap> {
@@ -267,6 +294,13 @@ impl Machine for RemoteMachine {
         self.api
             .write(&sandbox, &path.display().to_string(), bytes)
             .await
+    }
+
+    fn image_used(&self, config: &Config) -> Option<String> {
+        self.images
+            .lock()
+            .ok()
+            .and_then(|held| held.get(&config.image).cloned())
     }
 
     async fn pause(&self, name: &str) -> Result<()> {

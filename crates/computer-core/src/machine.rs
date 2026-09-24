@@ -16,7 +16,7 @@ pub type PortMap = BTreeMap<u16, u16>;
 
 #[async_trait]
 pub trait Machine: Send + Sync {
-    fn runtime(&self) -> &str;
+    fn provider(&self) -> &str;
 
     async fn preflight(&self) -> Result<()>;
 
@@ -102,6 +102,16 @@ pub trait Machine: Send + Sync {
 
     async fn labelled(&self, _label: &str) -> Result<Vec<(String, String)>> {
         Ok(Vec::new())
+    }
+
+    fn image_used(&self, _config: &Config) -> Option<String> {
+        None
+    }
+
+    async fn forget_image(&self, _reference: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["removing an image"],
+        })
     }
 
     fn reach(&self, config: &Config) -> crate::Reach {
@@ -404,7 +414,7 @@ impl EngineMachine {
 
 #[async_trait]
 impl Machine for EngineMachine {
-    fn runtime(&self) -> &str {
+    fn provider(&self) -> &str {
         self.cli.program()
     }
 
@@ -412,7 +422,7 @@ impl Machine for EngineMachine {
         let alive = self.cli.run(&[arg("version")]).await?;
         if alive.code != 0 {
             return Err(Error::Unavailable {
-                runtime: self.runtime().to_string(),
+                provider: self.provider().to_string(),
                 detail: alive.stderr_utf8().trim().to_string(),
             });
         }
@@ -475,7 +485,7 @@ impl Machine for EngineMachine {
         let started = self.cli.run(&run_args(name, config)).await?;
         if started.code != 0 {
             return Err(Error::Unavailable {
-                runtime: self.runtime().to_string(),
+                provider: self.provider().to_string(),
                 detail: started.stderr_utf8().trim().to_string(),
             });
         }
@@ -636,6 +646,21 @@ impl Machine for EngineMachine {
     async fn logs(&self, name: &str) -> Result<String> {
         let result = self.cli.run(&[arg("logs"), arg(name)]).await?;
         Ok(format!("{}{}", result.stdout_utf8(), result.stderr_utf8()))
+    }
+
+    async fn forget_image(&self, reference: &str) -> Result<()> {
+        let result = self
+            .cli
+            .run(&[arg("image"), arg("rm"), arg("--force"), arg(reference)])
+            .await?;
+
+        if result.code != 0 {
+            return Err(Error::transport(
+                result.stderr_utf8().trim().to_string(),
+                false,
+            ));
+        }
+        Ok(())
     }
 
     async fn remove(&self, name: &str) -> Result<()> {

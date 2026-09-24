@@ -1,4 +1,7 @@
-use super::api::{DEFAULT_DOMAIN, DEFAULT_USER, E2bApi, NAME_KEY, Sandbox, SandboxPlan, api_url};
+use super::api::{
+    Built, DEFAULT_DOMAIN, DEFAULT_USER, E2bApi, NAME_KEY, Sandbox, SandboxPlan, api_url,
+};
+use super::template::{self, Carried, Plan as TemplatePlan};
 use super::wire;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
@@ -59,7 +62,7 @@ impl Cloud {
 
     pub fn from_env() -> Result<Self> {
         let key = std::env::var(API_KEY_ENV).map_err(|_| Error::Unavailable {
-            runtime: "e2b".to_string(),
+            provider: "e2b".to_string(),
             detail: format!("{API_KEY_ENV} is not set"),
         })?;
 
@@ -219,7 +222,7 @@ impl E2bApi for Cloud {
 
         if !status.is_success() {
             return Err(Error::Unavailable {
-                runtime: "e2b".to_string(),
+                provider: "e2b".to_string(),
                 detail: status.to_string(),
             });
         }
@@ -230,7 +233,7 @@ impl E2bApi for Cloud {
             .await?;
         match listed.status() {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(Error::Unavailable {
-                runtime: "e2b".to_string(),
+                provider: "e2b".to_string(),
                 detail: format!("{API_KEY_ENV} was refused"),
             }),
             _ => Ok(()),
@@ -315,6 +318,113 @@ impl E2bApi for Cloud {
             .await?;
 
         Ok(wire::state_of(&listing, id).as_deref() == Some("paused"))
+    }
+
+    async fn find_template(&self, name: &str) -> Result<Option<String>> {
+        let listing = self
+            .json(self.control(Method::GET, "/v2/templates"))
+            .await?;
+
+        Ok(wire::template_of(&listing, name))
+    }
+
+    async fn delete_template(&self, template: &str) -> Result<()> {
+        let response = self
+            .send(self.control(Method::DELETE, &format!("/templates/{template}")))
+            .await?;
+
+        match response.status() {
+            status if status.is_success() => Ok(()),
+            StatusCode::NOT_FOUND => Ok(()),
+            status => Err(from_status(status, "")),
+        }
+    }
+
+    async fn create_template(&self, name: &str, cpus: u32, memory_mb: u32) -> Result<Built> {
+        let body = serde_json::json!({
+            "name": name,
+            "cpuCount": cpus,
+            "memoryMB": memory_mb,
+        });
+
+        let answer = self
+            .json(
+                self.control(Method::POST, "/v3/templates")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(body.to_string()),
+            )
+            .await?;
+
+        let said = |key: &str| {
+            answer
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| Error::transport(format!("a template with no {key}"), false))
+        };
+
+        Ok(Built {
+            template: said("templateID")?,
+            build: said("buildID")?,
+        })
+    }
+
+    async fn carry_files(&self, template: &str, carried: &Carried) -> Result<()> {
+        let answer = self
+            .json(self.control(
+                Method::GET,
+                &format!("/templates/{template}/files/{}", carried.hash),
+            ))
+            .await?;
+
+        if answer.get("present").and_then(Value::as_bool) == Some(true) {
+            return Ok(());
+        }
+
+        let Some(url) = answer.get("url").and_then(Value::as_str) else {
+            return Err(Error::transport("no link to upload the files to", false));
+        };
+
+        let mut request = self.http.put(url).body(wire::tarred(carried)?);
+        if let Some(headers) = answer.get("headers").and_then(Value::as_object) {
+            for (key, value) in headers {
+                if let Some(value) = value.as_str() {
+                    request = request.header(key, value);
+                }
+            }
+        }
+
+        self.body(self.send(request).await?).await.map(|_| ())
+    }
+
+    async fn start_build(&self, built: &Built, plan: &TemplatePlan) -> Result<()> {
+        let body = serde_json::json!({
+            "fromImage": plan.from_image,
+            "steps": plan.steps,
+            "startCmd": template::START_COMMAND,
+            "readyCmd": template::READY_COMMAND,
+        });
+
+        let request = self
+            .control(
+                Method::POST,
+                &format!("/v2/templates/{}/builds/{}", built.template, built.build),
+            )
+            .header(CONTENT_TYPE, "application/json")
+            .body(body.to_string());
+
+        self.body(self.send(request).await?).await.map(|_| ())
+    }
+
+    async fn build_status(&self, built: &Built) -> Result<Value> {
+        self.json(self.control(
+            Method::GET,
+            &format!(
+                "/templates/{}/builds/{}/status",
+                built.template, built.build
+            ),
+        ))
+        .await
     }
 
     async fn keep_alive(&self, id: &str, ttl: Duration) -> Result<()> {

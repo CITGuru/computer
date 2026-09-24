@@ -187,7 +187,7 @@ async fn a_whole_box_runs_on_a_hypervisor_the_same_way_it_runs_in_a_container() 
         .await
         .expect("a box");
 
-    assert_eq!(computer.runtime(), "microsandbox");
+    assert_eq!(computer.provider(), "microsandbox");
     assert!(computer.viewer_url().is_some(), "the viewer is forwarded");
     assert!(computer.devtools().is_some());
 
