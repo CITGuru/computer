@@ -599,6 +599,9 @@ impl MicroVmApi for ScriptedMicroVm {
 
 pub struct ScriptedE2b {
     inner: ScriptedHost,
+    templates: Mutex<BTreeMap<String, String>>,
+    built: Mutex<Vec<String>>,
+    carried: Mutex<Vec<String>>,
     plans: Mutex<Vec<SandboxPlan>>,
     known: Mutex<BTreeMap<String, Sandbox>>,
     metadata: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
@@ -616,8 +619,32 @@ impl Default for ScriptedE2b {
 }
 
 impl ScriptedE2b {
+    pub fn holding_template(self, name: impl Into<String>, id: impl Into<String>) -> Self {
+        if let Ok(mut held) = self.templates.lock() {
+            held.insert(name.into(), id.into());
+        }
+        self
+    }
+
+    pub fn built(&self) -> Vec<String> {
+        self.built
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn carried(&self) -> Vec<String> {
+        self.carried
+            .lock()
+            .map(|held| held.clone())
+            .unwrap_or_default()
+    }
+
     pub fn new() -> Self {
         Self {
+            templates: Mutex::new(BTreeMap::new()),
+            built: Mutex::new(Vec::new()),
+            carried: Mutex::new(Vec::new()),
             inner: ScriptedHost::new(),
             plans: Mutex::new(Vec::new()),
             known: Mutex::new(BTreeMap::new()),
@@ -705,6 +732,61 @@ impl ScriptedE2b {
 impl E2bApi for ScriptedE2b {
     async fn available(&self) -> Result<()> {
         Ok(())
+    }
+
+    async fn find_template(&self, name: &str) -> Result<Option<String>> {
+        Ok(self
+            .templates
+            .lock()
+            .ok()
+            .and_then(|held| held.get(name).cloned()))
+    }
+
+    async fn create_template(
+        &self,
+        name: &str,
+        _cpus: u32,
+        _memory_mb: u32,
+    ) -> Result<crate::sandboxes::e2b::api::Built> {
+        let id = format!("tmpl-{}", self.next.fetch_add(1, Ordering::Relaxed));
+
+        if let Ok(mut held) = self.templates.lock() {
+            held.insert(name.to_string(), id.clone());
+        }
+
+        Ok(crate::sandboxes::e2b::api::Built {
+            template: id,
+            build: "build-1".to_string(),
+        })
+    }
+
+    async fn carry_files(
+        &self,
+        _template: &str,
+        carried: &crate::sandboxes::e2b::template::Carried,
+    ) -> Result<()> {
+        if let Ok(mut held) = self.carried.lock() {
+            held.push(carried.name.clone());
+        }
+        Ok(())
+    }
+
+    async fn start_build(
+        &self,
+        built: &crate::sandboxes::e2b::api::Built,
+        _plan: &crate::sandboxes::e2b::template::Plan,
+    ) -> Result<()> {
+        if let Ok(mut held) = self.built.lock() {
+            held.push(built.template.clone());
+        }
+        Ok(())
+    }
+
+    async fn build_status(
+        &self,
+        _built: &crate::sandboxes::e2b::api::Built,
+    ) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({ "status": "ready" }))
     }
 
     async fn create(&self, plan: &SandboxPlan) -> Result<Sandbox> {

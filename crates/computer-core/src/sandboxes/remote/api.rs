@@ -158,10 +158,9 @@ pub trait RemoteApi: Send + Sync {
         Capabilities::default()
     }
 
-    /// A vendor that pulls an OCI reference overrides this with `Ok(())`.
-    async fn ensure_image(&self, config: &Config) -> Result<()> {
+    async fn ensure_image(&self, config: &Config) -> Result<Option<String>> {
         let Some(bundle) = config.bundle.as_ref().filter(|b| b.owns(&config.image)) else {
-            return Ok(());
+            return Ok(None);
         };
 
         Err(Error::Unavailable {
