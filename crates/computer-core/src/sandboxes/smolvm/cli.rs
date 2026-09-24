@@ -82,6 +82,34 @@ impl SmolVm {
         parts.iter().map(|part| (*part).to_string()).collect()
     }
 
+    async fn verbose(&self) -> Result<String> {
+        let listed = self
+            .run(&Self::argv(&["machine", "ls", "--verbose"]))
+            .await?;
+
+        match listed.code {
+            0 => Ok(listed.stdout_utf8()),
+            _ => Err(Error::Unavailable {
+                runtime: RUNTIME.to_string(),
+                detail: listed.stderr_utf8().trim().to_string(),
+            }),
+        }
+    }
+
+    async fn lifecycle(&self, what: &str, name: &str) -> Result<()> {
+        let done = self
+            .run(&Self::argv(&["machine", what, "--name", name]))
+            .await?;
+
+        match done.code {
+            0 => Ok(()),
+            _ => Err(Error::Failed {
+                code: done.code,
+                stderr: done.stderr_utf8().trim().to_string(),
+            }),
+        }
+    }
+
     async fn listed(&self) -> Result<String> {
         let listed = self.run(&Self::argv(&["machine", "ls", "--json"])).await?;
 
@@ -150,6 +178,44 @@ pub fn parse_running(listing: &str, name: &str) -> bool {
     machines(listing)
         .iter()
         .any(|machine| named(machine) == Some(name) && state(machine) == Some("running"))
+}
+
+pub fn parse_state(listing: &str, name: &str) -> Option<String> {
+    machines(listing)
+        .iter()
+        .find(|machine| named(machine) == Some(name))
+        .and_then(|machine| state(machine).map(str::to_string))
+}
+
+pub fn parse_ports(listing: &str, name: &str) -> Vec<(u16, u16)> {
+    let mut ports = Vec::new();
+    let mut theirs = false;
+
+    for line in listing.lines() {
+        let indented = line.starts_with(' ');
+
+        if !indented {
+            theirs = line.split_whitespace().next() == Some(name);
+            continue;
+        }
+
+        if !theirs {
+            continue;
+        }
+
+        let Some(pair) = line.trim().strip_prefix("Port:") else {
+            continue;
+        };
+        let Some((host, guest)) = pair.split_once("->") else {
+            continue;
+        };
+
+        if let (Ok(host), Ok(guest)) = (host.trim().parse(), guest.trim().parse()) {
+            ports.push((host, guest));
+        }
+    }
+
+    ports
 }
 
 pub fn parse_labelled(listing: &str, key: &str) -> Vec<(String, String)> {
@@ -334,6 +400,30 @@ impl MicroVmApi for SmolVm {
     async fn labelled(&self, key: &str) -> Result<Vec<(String, String)>> {
         Ok(parse_labelled(&self.listed().await?, key))
     }
+
+    async fn ports(&self, name: &str) -> Result<Vec<(u16, u16)>> {
+        Ok(parse_ports(&self.verbose().await?, name))
+    }
+
+    async fn pause(&self, name: &str) -> Result<()> {
+        self.lifecycle("pause", name).await
+    }
+
+    async fn resume(&self, name: &str) -> Result<()> {
+        self.lifecycle("resume", name).await
+    }
+
+    async fn paused(&self, name: &str) -> Result<bool> {
+        Ok(parse_state(&self.listed().await?, name).as_deref() == Some("paused"))
+    }
+
+    async fn halt(&self, name: &str) -> Result<()> {
+        self.lifecycle("stop", name).await
+    }
+
+    async fn wake(&self, name: &str) -> Result<()> {
+        self.lifecycle("start", name).await
+    }
 }
 
 #[async_trait]
@@ -463,6 +553,49 @@ mod tests {
             parse_labelled(listing, "computer.server.box"),
             vec![("desk".to_string(), "{\"width\":1280}".to_string())],
             "a machine somebody else made is not ours to take"
+        );
+    }
+
+    #[test]
+    fn test_the_ports_a_machine_holds_are_read_back() {
+        let listing = "\
+NAME  STATE         CPUS     MEMORY  MOUNTS   PORTS
+--------------------------------------------------
+desk running          2   2048 MiB       0       2
+  PID: 42079
+  Port: 51234 -> 6080
+  Port: 51235 -> 9222
+  Created: 2026-09-24T14:41:22Z
+other running         2   1024 MiB       0       1
+  PID: 42080
+  Port: 40000 -> 80
+";
+
+        assert_eq!(
+            parse_ports(listing, "desk"),
+            vec![(51234, 6080), (51235, 9222)]
+        );
+        assert_eq!(
+            parse_ports(listing, "other"),
+            vec![(40000, 80)],
+            "a machine's detail belongs to the machine it sits under"
+        );
+        assert!(parse_ports(listing, "never-made").is_empty());
+    }
+
+    #[test]
+    fn test_a_paused_machine_says_so() {
+        let listing = r#"[
+            {"name": "desk", "state": "paused", "labels": {}},
+            {"name": "other", "state": "running", "labels": {}}
+        ]"#;
+
+        assert_eq!(parse_state(listing, "desk").as_deref(), Some("paused"));
+        assert_eq!(parse_state(listing, "other").as_deref(), Some("running"));
+        assert_eq!(parse_state(listing, "never-made"), None);
+        assert!(
+            !parse_running(listing, "desk"),
+            "a paused box is not running, or the reaper would think it went away"
         );
     }
 

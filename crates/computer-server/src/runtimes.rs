@@ -443,7 +443,7 @@ fn hypervisor_can() -> Capabilities {
         start: Start::Entrypoint,
         reach: PortReach::HostPort,
         pause: false,
-        stop: false,
+        stop: true,
         fork: false,
         volumes: false,
         resources: Resources::AtCreate,

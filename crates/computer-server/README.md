@@ -175,7 +175,11 @@ What the server does with it:
 
 A stored runtime whose key this server cannot open — a lost or changed server key — is listed with `state: unavailable` and the reason, rather than disappearing.
 
-A microVM runtime takes `program`, for a hypervisor installed away from the path, and the same `memory`, `cpus`, `lifetime` and `max_lifetime` as an engine. It cannot pause or stop a box, and it refuses a named browser profile, which needs a volume; `GET /v1/runtimes/smolvm` says so.
+A microVM runtime takes `program`, for a hypervisor installed away from the path, and the same `memory`, `cpus`, `lifetime` and `max_lifetime` as an engine. It stops and starts a box, and a start picks new host ports as an engine's does. It refuses a named browser profile, which needs a volume.
+
+It does not pause one, though the hypervisor can: a checkpoint cannot capture the image archive the box was built from, since the image built here is handed over as a `docker save` file rather than pulled from a registry. `GET /v1/runtimes/smolvm` reports what is true today.
+
+The same three calls — `pause`, `resume` and `stop` — now work the same way on every kind of runtime that can do them. A vendor box pauses where the vendor pauses it: E2B keeps the memory and gives it back, and a vendor that cannot says so rather than pretending.
 
 `GET /v1/runtimes/{name}` says what one can do: whether it pauses, whether it stops, how a port is reached, and whether memory and cpus are set when a box is created or when its image is built. A placement asking for something the runtime cannot do is refused before anything starts.
 

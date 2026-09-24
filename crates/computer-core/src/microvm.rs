@@ -65,6 +65,38 @@ pub trait MicroVmApi: Send + Sync {
         Ok(Vec::new())
     }
 
+    async fn ports(&self, _name: &str) -> Result<Vec<(u16, u16)>> {
+        Ok(Vec::new())
+    }
+
+    async fn pause(&self, _name: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn resume(&self, _name: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn paused(&self, _name: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    async fn halt(&self, _name: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["stopping a box without removing it"],
+        })
+    }
+
+    async fn wake(&self, _name: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["stopping a box without removing it"],
+        })
+    }
+
     async fn logs(&self, _name: &str) -> Result<String> {
         Ok(String::new())
     }
@@ -302,11 +334,53 @@ impl Machine for MicroVm {
     }
 
     async fn ports(&self, name: &str) -> PortMap {
-        self.published
+        let remembered = self
+            .published
             .lock()
             .ok()
             .and_then(|published| published.get(name).cloned())
+            .unwrap_or_default();
+
+        if !remembered.is_empty() {
+            return remembered;
+        }
+
+        let asked: PortMap = self
+            .api
+            .ports(name)
+            .await
             .unwrap_or_default()
+            .into_iter()
+            .map(|(host, guest)| (guest, host))
+            .collect();
+
+        if let (false, Ok(mut published)) = (asked.is_empty(), self.published.lock()) {
+            published.insert(name.to_string(), asked.clone());
+        }
+
+        asked
+    }
+
+    async fn pause(&self, name: &str) -> Result<()> {
+        self.api.pause(name).await
+    }
+
+    async fn resume(&self, name: &str) -> Result<()> {
+        self.api.resume(name).await
+    }
+
+    async fn paused(&self, name: &str) -> Result<bool> {
+        self.api.paused(name).await
+    }
+
+    async fn halt(&self, name: &str) -> Result<()> {
+        self.api.halt(name).await
+    }
+
+    async fn wake(&self, name: &str) -> Result<PortMap> {
+        self.api.wake(name).await?;
+
+        Ok(self.ports(name).await)
     }
 
     async fn env(&self, name: &str) -> BTreeMap<String, String> {

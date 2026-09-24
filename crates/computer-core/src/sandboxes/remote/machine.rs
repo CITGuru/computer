@@ -269,6 +269,26 @@ impl Machine for RemoteMachine {
             .await
     }
 
+    async fn pause(&self, name: &str) -> Result<()> {
+        let sandbox = self.sandbox(name).await?;
+
+        self.api.pause(&sandbox.id).await
+    }
+
+    async fn resume(&self, name: &str) -> Result<()> {
+        let sandbox = self.sandbox(name).await?;
+
+        self.api.resume(&sandbox.id, DEFAULT_TTL).await
+    }
+
+    async fn paused(&self, name: &str) -> Result<bool> {
+        let Some(held) = self.recall(name) else {
+            return Ok(false);
+        };
+
+        self.api.paused(&held.sandbox.id).await
+    }
+
     async fn logs(&self, name: &str) -> Result<String> {
         let sandbox = self.sandbox(name).await?;
         self.api.logs(&sandbox.id).await
@@ -585,5 +605,32 @@ mod tests {
             "the runtimes on this host make it, so this one has to"
         );
         assert_eq!(api.written("/tmp/deep/one.txt"), Some(b"x".to_vec()));
+    }
+}
+
+#[cfg(test)]
+mod lifecycle {
+    use super::*;
+    use crate::testing::ScriptedRemote;
+
+    #[tokio::test]
+    async fn test_a_vendor_that_cannot_pause_says_so_rather_than_pretending() {
+        let machine = RemoteMachine::new(
+            Arc::new(ScriptedRemote::new().holding("desk", "sbx-1")),
+            Arc::new(Remote::new()),
+        );
+
+        let Err(error) = Machine::pause(&machine, "desk").await else {
+            panic!("a box was reported frozen by a vendor that cannot freeze one");
+        };
+        assert!(
+            matches!(error, Error::Unsupported { .. }),
+            "the refusal names the gap: {error}"
+        );
+
+        assert!(
+            !Machine::paused(&machine, "desk").await.expect("asked"),
+            "and a box nothing froze is not paused"
+        );
     }
 }

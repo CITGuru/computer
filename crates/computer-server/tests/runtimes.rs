@@ -522,7 +522,18 @@ async fn test_a_hypervisor_is_offered_as_a_micro_vm_runtime() {
         "a box here gets a kernel of its own, not a namespace"
     );
     assert_eq!(runtime.can.reach, computer_api::PortReach::HostPort);
-    assert!(!runtime.can.pause, "nothing here freezes a box yet");
+    assert!(
+        runtime.can.stop,
+        "a microVM stops a box without losing its disk"
+    );
+    assert!(
+        !runtime.can.pause,
+        "a checkpoint cannot capture the image archive this box was built from"
+    );
+    assert!(
+        !runtime.can.fork,
+        "a child would fight its parent for the host ports"
+    );
 }
 
 #[tokio::test]

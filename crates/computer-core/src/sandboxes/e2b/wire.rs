@@ -62,6 +62,14 @@ pub fn carrying(listing: &Value, key: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+pub fn state_of(listing: &Value, id: &str) -> Option<String> {
+    listing
+        .as_array()?
+        .iter()
+        .find(|sandbox| sandbox.get("sandboxID").and_then(Value::as_str) == Some(id))
+        .and_then(|sandbox| sandbox.get("state")?.as_str().map(str::to_string))
+}
+
 pub fn metadata_query(key: &str, value: &str) -> String {
     format!("{}%3D{}", escape(key), escape(value))
 }

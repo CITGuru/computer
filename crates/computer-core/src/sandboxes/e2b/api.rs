@@ -96,6 +96,22 @@ pub trait E2bApi: Send + Sync {
 
     async fn keep_alive(&self, id: &str, ttl: Duration) -> Result<()>;
 
+    async fn pause(&self, _id: &str) -> Result<()> {
+        Err(crate::Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn resume(&self, _id: &str, _ttl: Duration) -> Result<()> {
+        Err(crate::Error::Unsupported {
+            gaps: vec!["pausing a box"],
+        })
+    }
+
+    async fn paused(&self, _id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     async fn logs(&self, id: &str) -> Result<String>;
 
     async fn carrying(&self, key: &str) -> Result<Vec<(String, String)>>;
