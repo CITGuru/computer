@@ -45,11 +45,14 @@ computer — a desktop in a box
   runtime set NAME [--field name=value]… [--api-key | --api-key-env VAR]
                               change a vendor's fields, or give it a new key
   runtime rm NAME             remove one, unless a box is still on it
-  image NAME [--app NAME]… [--package PKG]… [--spec FILE]
+  image build NAME [--app NAME]… [--package PKG]… [--spec FILE]
                               build the image that runtime needs and hand it
                               over, before a box waits for it. An engine builds
                               it here; a hypervisor takes a copy; a vendor that
                               builds its own says what to run
+  image ls [NAME]             what this server built, and what each image was
+                              built from
+  image rm NAME IMAGE         remove one, unless a box is still on it
   box <box>                   everything the server knows about one
   cdp <box> [--ws] [--ttl MINUTES] [--direct]
                               an address another library drives the box's

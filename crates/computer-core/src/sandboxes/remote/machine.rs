@@ -183,6 +183,16 @@ impl Machine for RemoteMachine {
         Ok(())
     }
 
+    async fn forget_image(&self, reference: &str) -> Result<()> {
+        self.api.forget_image(reference).await?;
+
+        if let Ok(mut held) = self.images.lock() {
+            held.retain(|_, held| held != reference);
+        }
+
+        Ok(())
+    }
+
     async fn start(&self, name: &str, config: &Config) -> Result<PortMap> {
         if !config.extras.is_empty() {
             return Err(Error::Unsupported {
@@ -284,6 +294,13 @@ impl Machine for RemoteMachine {
         self.api
             .write(&sandbox, &path.display().to_string(), bytes)
             .await
+    }
+
+    fn image_used(&self, config: &Config) -> Option<String> {
+        self.images
+            .lock()
+            .ok()
+            .and_then(|held| held.get(&config.image).cloned())
     }
 
     async fn pause(&self, name: &str) -> Result<()> {

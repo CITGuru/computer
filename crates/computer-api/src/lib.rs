@@ -91,6 +91,21 @@ pub struct PreparedImage {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImageView {
+    pub runtime: String,
+    pub spec_digest: String,
+    pub reference: String,
+    pub built_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ImageList {
+    pub images: Vec<ImageView>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallApps {
     pub apps: Vec<String>,

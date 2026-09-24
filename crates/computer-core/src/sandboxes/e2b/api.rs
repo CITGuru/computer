@@ -122,6 +122,12 @@ pub trait E2bApi: Send + Sync {
         Ok(None)
     }
 
+    async fn delete_template(&self, _template: &str) -> Result<()> {
+        Err(crate::Error::Unsupported {
+            gaps: vec!["removing a template"],
+        })
+    }
+
     async fn create_template(&self, _name: &str, _cpus: u32, _memory_mb: u32) -> Result<Built> {
         Err(crate::Error::Unsupported {
             gaps: vec!["building a template"],

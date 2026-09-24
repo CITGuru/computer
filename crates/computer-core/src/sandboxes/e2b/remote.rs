@@ -198,6 +198,10 @@ impl RemoteApi for E2bVendor {
         self.api.write(&self.described(sandbox)?, path, bytes).await
     }
 
+    async fn forget_image(&self, reference: &str) -> Result<()> {
+        self.api.delete_template(reference).await
+    }
+
     async fn ensure_image(&self, config: &Config) -> Result<Option<String>> {
         let Some(bundle) = config
             .bundle
@@ -284,6 +288,30 @@ mod tests {
             "the box starts from the template, not from the container image"
         );
         assert_eq!(api.built().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_a_built_template_is_gone_once_forgotten() {
+        let api = Arc::new(ScriptedE2b::new());
+        let vendor = vendor(Arc::clone(&api));
+        let config = Config {
+            image: bundle::DESKTOP.tag(),
+            ..Config::default()
+        };
+
+        let built = vendor
+            .ensure_image(&config)
+            .await
+            .expect("built")
+            .expect("a template");
+        vendor.forget_image(&built).await.expect("removed");
+
+        assert_eq!(
+            vendor.ensure_image(&config).await.expect("built again"),
+            Some("tmpl-1".to_string()),
+            "the next box builds the template again rather than starting from \
+             one that is gone"
+        );
     }
 
     #[tokio::test]

@@ -70,6 +70,16 @@ pub struct RuntimeRecord {
     pub updated_at_ms: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageRecord {
+    pub runtime: String,
+    pub spec_digest: String,
+    pub reference: String,
+    pub built_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+}
+
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn put_box(&self, record: &BoxRecord) -> Result<()>;
@@ -88,6 +98,14 @@ pub trait Store: Send + Sync {
     async fn list_runtimes(&self) -> Result<Vec<RuntimeRecord>>;
 
     async fn forget_runtime(&self, name: &str) -> Result<()>;
+
+    async fn put_image(&self, record: &ImageRecord) -> Result<()>;
+
+    async fn get_image(&self, runtime: &str, spec_digest: &str) -> Result<Option<ImageRecord>>;
+
+    async fn list_images(&self) -> Result<Vec<ImageRecord>>;
+
+    async fn forget_image(&self, runtime: &str, spec_digest: &str) -> Result<()>;
 
     async fn append(
         &self,

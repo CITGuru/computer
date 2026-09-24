@@ -328,6 +328,18 @@ impl E2bApi for Cloud {
         Ok(wire::template_of(&listing, name))
     }
 
+    async fn delete_template(&self, template: &str) -> Result<()> {
+        let response = self
+            .send(self.control(Method::DELETE, &format!("/templates/{template}")))
+            .await?;
+
+        match response.status() {
+            status if status.is_success() => Ok(()),
+            StatusCode::NOT_FOUND => Ok(()),
+            status => Err(from_status(status, "")),
+        }
+    }
+
     async fn create_template(&self, name: &str, cpus: u32, memory_mb: u32) -> Result<Built> {
         let body = serde_json::json!({
             "name": name,

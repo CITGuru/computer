@@ -104,6 +104,16 @@ pub trait Machine: Send + Sync {
         Ok(Vec::new())
     }
 
+    fn image_used(&self, _config: &Config) -> Option<String> {
+        None
+    }
+
+    async fn forget_image(&self, _reference: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["removing an image"],
+        })
+    }
+
     fn reach(&self, config: &Config) -> crate::Reach {
         config.bind.reach()
     }
@@ -636,6 +646,21 @@ impl Machine for EngineMachine {
     async fn logs(&self, name: &str) -> Result<String> {
         let result = self.cli.run(&[arg("logs"), arg(name)]).await?;
         Ok(format!("{}{}", result.stdout_utf8(), result.stderr_utf8()))
+    }
+
+    async fn forget_image(&self, reference: &str) -> Result<()> {
+        let result = self
+            .cli
+            .run(&[arg("image"), arg("rm"), arg("--force"), arg(reference)])
+            .await?;
+
+        if result.code != 0 {
+            return Err(Error::transport(
+                result.stderr_utf8().trim().to_string(),
+                false,
+            ));
+        }
+        Ok(())
     }
 
     async fn remove(&self, name: &str) -> Result<()> {

@@ -104,6 +104,26 @@ impl Client {
         .await
     }
 
+    pub async fn images(&self, runtime: Option<&str>) -> Result<Vec<ImageView>> {
+        let path = match runtime {
+            Some(name) => format!("/v1/runtimes/{name}/images"),
+            None => "/v1/images".to_string(),
+        };
+
+        let listed: ImageList = self.send(reqwest::Method::GET, &path, None, &[]).await?;
+        Ok(listed.images)
+    }
+
+    pub async fn forget_image(&self, runtime: &str, digest: &str) -> Result<()> {
+        self.nothing(
+            reqwest::Method::DELETE,
+            &format!("/v1/runtimes/{runtime}/images/{digest}"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     pub async fn runtimes(&self) -> Result<Vec<RuntimeView>> {
         let listed: RuntimeList = self
             .send(reqwest::Method::GET, "/v1/runtimes", None, &[])
