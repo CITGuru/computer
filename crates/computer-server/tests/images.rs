@@ -174,6 +174,32 @@ async fn test_a_recorded_image_the_vendor_lost_is_built_again() {
 }
 
 #[tokio::test]
+async fn test_a_box_on_a_recorded_image_does_not_move_its_build_time() {
+    let vendor = Arc::new(ScriptedRemote::new().building());
+    let state = with_cloud(vendor).await;
+
+    state
+        .store
+        .put_image(&ImageRecord {
+            runtime: "cloud".to_string(),
+            spec_digest: Spec::default().digest(),
+            reference: "tmpl-0".to_string(),
+            built_at_ms: 1_700_000_000_000,
+            bytes: None,
+        })
+        .await
+        .expect("recorded");
+
+    send(&state, json("POST", "/v1/boxes", on_cloud())).await;
+
+    let (_, listed) = send(&state, get("/v1/runtimes/cloud/images")).await;
+    assert_eq!(
+        listed["images"][0]["built_at_ms"], 1_700_000_000_000u64,
+        "the record says when the image was built, not when a box last used it"
+    );
+}
+
+#[tokio::test]
 async fn test_an_image_a_box_runs_on_stays_until_the_box_goes() {
     let vendor = Arc::new(ScriptedRemote::new().building());
     let state = with_cloud(Arc::clone(&vendor)).await;

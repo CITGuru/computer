@@ -83,6 +83,12 @@ pub fn used(machine: &Arc<dyn Machine>, config: &Config) -> String {
 }
 
 pub async fn keep(state: &AppState, runtime: &str, digest: &str, reference: &str) {
+    if let Ok(Some(held)) = state.store.get_image(runtime, digest).await
+        && held.reference == reference
+    {
+        return;
+    }
+
     let record = ImageRecord {
         runtime: runtime.to_string(),
         spec_digest: digest.to_string(),
