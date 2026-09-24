@@ -32,7 +32,7 @@ impl Fleet {
         match result.ok() {
             true => Ok(result.stdout_utf8().trim().to_string()),
             false => Err(Error::Unavailable {
-                runtime: "fleet".to_string(),
+                provider: "fleet".to_string(),
                 detail: result.stderr_utf8().trim().to_string(),
             }),
         }
@@ -240,7 +240,7 @@ async fn main() -> Result<()> {
         .launch()
         .await?;
 
-    println!("  runtime  {}", computer.runtime());
+    println!("  runtime  {}", computer.provider());
     if let (Some(url), Some(credentials)) = (computer.viewer_url(), computer.credentials()) {
         println!("  watch it {url}");
         println!("  password {}", credentials.view.expose());

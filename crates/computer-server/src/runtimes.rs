@@ -12,9 +12,9 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-pub const HOSTS: [&str; 4] = ["docker", "podman", "nerdctl", "smolvm"];
+pub const HOSTS: [&str; 5] = ["docker", "podman", "nerdctl", "smolvm", "microsandbox"];
 
-pub const MICROVMS: [&str; 1] = ["smolvm"];
+pub const MICROVMS: [&str; 2] = ["smolvm", "microsandbox"];
 
 pub const OFFERED: &str = "COMPUTER_SERVER_RUNTIMES";
 
@@ -34,6 +34,8 @@ pub struct Tuning {
     pub context: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub program: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub builds_with: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifetime_secs: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -400,12 +402,47 @@ pub fn remote(name: String, api: Arc<dyn RemoteApi>, tuning: Tuning) -> Runtime 
 }
 
 async fn hypervisor(name: String, provider: String, source: Source, tuning: Tuning) -> Runtime {
-    let api = Arc::new(match &tuning.program {
-        Some(at) => computer::sandboxes::smolvm::SmolVm::new(at.clone()),
-        None => computer::sandboxes::smolvm::SmolVm::found(),
-    });
-    let said = api.program().to_string();
-    let machine: Arc<dyn Machine> = Arc::new(computer::MicroVm::new(api).named(provider.clone()));
+    let (api, loader, said): (
+        Arc<dyn computer::microvm::MicroVmApi>,
+        Arc<dyn computer::microvm::ImageLoader>,
+        String,
+    ) = match provider.as_str() {
+        "microsandbox" => {
+            use computer::sandboxes::microsandbox::msb::Msb;
+
+            let msb = Arc::new(match &tuning.program {
+                Some(at) => Msb::new(at.clone()),
+                None => Msb::found(),
+            });
+            let said = msb.program().to_string();
+
+            (Arc::clone(&msb) as _, msb as _, said)
+        }
+        _ => {
+            use computer::sandboxes::smolvm::SmolVm;
+
+            let smolvm = Arc::new(match &tuning.program {
+                Some(at) => SmolVm::new(at.clone()),
+                None => SmolVm::found(),
+            });
+            let said = smolvm.program().to_string();
+
+            (Arc::clone(&smolvm) as _, smolvm as _, said)
+        }
+    };
+    let mut can = api.can();
+
+    let builder: Arc<dyn Engine> = Arc::new(SystemEngine::new(
+        tuning
+            .builds_with
+            .clone()
+            .unwrap_or_else(|| "docker".to_string()),
+    ));
+    let machine: Arc<dyn Machine> = Arc::new(
+        computer::MicroVm::new(api)
+            .named(provider.clone())
+            .building_with(builder, loader),
+    );
 
     let state = match machine.preflight().await {
         Ok(()) => RuntimeState::Ready,
@@ -418,11 +455,19 @@ async fn hypervisor(name: String, provider: String, source: Source, tuning: Tuni
     info.insert("engine".to_string(), Value::String(provider.clone()));
     info.insert("program".to_string(), Value::String(said));
     info.insert(
+        "builds_with".to_string(),
+        Value::String(
+            tuning
+                .builds_with
+                .clone()
+                .unwrap_or_else(|| "docker".to_string()),
+        ),
+    );
+    info.insert(
         "hypervisor".to_string(),
         Value::String("libkrun".to_string()),
     );
 
-    let mut can = hypervisor_can();
     capped(&mut can, &tuning);
 
     Runtime {
@@ -435,21 +480,6 @@ async fn hypervisor(name: String, provider: String, source: Source, tuning: Tuni
         can,
         tuning,
         state,
-    }
-}
-
-fn hypervisor_can() -> Capabilities {
-    Capabilities {
-        start: Start::Entrypoint,
-        reach: PortReach::HostPort,
-        pause: false,
-        stop: true,
-        fork: false,
-        volumes: false,
-        resources: Resources::AtCreate,
-        max_lifetime_secs: None,
-        ports: None,
-        arch: Vec::new(),
     }
 }
 
@@ -944,7 +974,7 @@ impl RemoteApi for Absent {
 
     async fn available(&self) -> computer::Result<()> {
         Err(computer::Error::Unavailable {
-            runtime: self.0.clone(),
+            provider: self.0.clone(),
             detail: "this runtime is not usable on this server".to_string(),
         })
     }

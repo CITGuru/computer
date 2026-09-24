@@ -175,11 +175,20 @@ What the server does with it:
 
 A stored runtime whose key this server cannot open — a lost or changed server key — is listed with `state: unavailable` and the reason, rather than disappearing.
 
-A microVM runtime takes `program`, for a hypervisor installed away from the path, and the same `memory`, `cpus`, `lifetime` and `max_lifetime` as an engine. It stops and starts a box, and a start picks new host ports as an engine's does. It refuses a named browser profile, which needs a volume.
+A microVM runtime takes `program`, for a hypervisor installed away from the path, `build_with` for the engine that builds its images, and the same `memory`, `cpus`, `lifetime` and `max_lifetime` as an engine. It stops and starts a box, and a start picks new host ports as an engine's does. It refuses a named browser profile, which needs a volume.
 
 It does not pause one, though the hypervisor can: a checkpoint cannot capture the image archive the box was built from, since the image built here is handed over as a `docker save` file rather than pulled from a registry. `GET /v1/runtimes/smolvm` reports what is true today.
 
 The same three calls — `pause`, `resume` and `stop` — now work the same way on every kind of runtime that can do them. A vendor box pauses where the vendor pauses it: E2B keeps the memory and gives it back, and a vendor that cannot says so rather than pretending.
+
+**The image a runtime needs is its own business.** An engine builds it here from the bundle. A hypervisor cannot read an engine's store, so the server builds it with `build_with` — docker unless the file says otherwise — and hands the `docker save` archive over once; later boxes start from it. A vendor that builds its own says what to run instead.
+
+```bash
+computer image smolvm --app vscode      # build it and hand it over, before a box waits
+curl -s localhost:8080/v1/runtimes/smolvm/image -d '{"spec":{}}' -H 'content-type: application/json'
+```
+
+Each set of apps is a different image, so preparing one for the spec a box will ask for is what keeps the first launch short.
 
 `GET /v1/runtimes/{name}` says what one can do: whether it pauses, whether it stops, how a port is reached, and whether memory and cpus are set when a box is created or when its image is built. A placement asking for something the runtime cannot do is refused before anything starts.
 
@@ -336,6 +345,7 @@ The reading itself is `computer::Page::read`, so a library user gets it without 
 | `/v1/cdp/{token}/json/…`, `/v1/cdp/{token}/devtools/…` | the browser's DevTools through this server; the token admits, no bearer |
 | `GET /v1/catalog` | the app names a launch can ask for |
 | `GET /v1/runtimes`, `GET /v1/runtimes/{name}` | where boxes can be put, what each runs them in, and what each can do |
+| `POST /v1/runtimes/{name}/image` | build the image that runtime needs, before a box waits for it |
 | `POST /v1/runtimes` | add a vendor: name, provider, fields, secrets. Sealed before it is stored, and checked with the provider before it is kept |
 | `PATCH /v1/runtimes/{name}` | change its fields, or give it a new key |
 | `DELETE /v1/runtimes/{name}` | refused while a box record names it |

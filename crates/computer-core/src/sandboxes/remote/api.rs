@@ -165,7 +165,7 @@ pub trait RemoteApi: Send + Sync {
         };
 
         Err(Error::Unavailable {
-            runtime: self.vendor().to_string(),
+            provider: self.vendor().to_string(),
             detail: format!(
                 "{} is a container image and {} runs its own. Write the {} \
                  build context out with Bundle::materialize, build it there \

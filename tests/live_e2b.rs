@@ -53,7 +53,7 @@ async fn a_real_sandbox_runs_the_same_desktop() {
         .await
         .expect("a sandbox");
 
-    println!("  {} on {}", computer.name(), computer.runtime());
+    println!("  {} on {}", computer.name(), computer.provider());
     if computer.viewer_url().is_some() {
         println!("  viewer available");
     }
@@ -125,7 +125,7 @@ fn the_viewer_refuses_a_wrong_ticket(computer: &Computer) -> Result<(), String> 
 }
 
 async fn exercise(computer: &Computer) -> computer::Result<()> {
-    assert_eq!(computer.runtime(), "e2b");
+    assert_eq!(computer.provider(), "e2b");
     assert!(
         computer.probe().await.ready(),
         "launch waited for the screen and the browser"

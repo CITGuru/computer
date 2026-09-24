@@ -92,6 +92,18 @@ impl Client {
             .await
     }
 
+    pub async fn prepare_image(&self, runtime: &str, spec: &Spec) -> Result<PreparedImage> {
+        let body = serde_json::json!({ "spec": spec });
+
+        self.send(
+            reqwest::Method::POST,
+            &format!("/v1/runtimes/{runtime}/image"),
+            Some(body),
+            &[],
+        )
+        .await
+    }
+
     pub async fn runtimes(&self) -> Result<Vec<RuntimeView>> {
         let listed: RuntimeList = self
             .send(reqwest::Method::GET, "/v1/runtimes", None, &[])

@@ -38,7 +38,7 @@ async fn a_real_microvm_runs_the_same_desktop() {
         .await
         .expect("a microVM");
 
-    println!("  {} on {}", computer.name(), computer.runtime());
+    println!("  {} on {}", computer.name(), computer.provider());
     let outcome = exercise(&computer).await;
 
     computer.shutdown().await.expect("it goes away");
@@ -46,7 +46,7 @@ async fn a_real_microvm_runs_the_same_desktop() {
 }
 
 async fn exercise(computer: &Computer) -> computer::Result<()> {
-    assert_eq!(computer.runtime(), "microsandbox");
+    assert_eq!(computer.provider(), "microsandbox");
     assert!(
         computer.probe().await.ready(),
         "launch waited for the screen and the browser"

@@ -5,8 +5,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("{runtime} is unavailable: {detail}")]
-    Unavailable { runtime: String, detail: String },
+    #[error("{provider} is unavailable: {detail}")]
+    Unavailable { provider: String, detail: String },
 
     #[error("unsupported by this box: {}", gaps.join(", "))]
     Unsupported { gaps: Vec<&'static str> },

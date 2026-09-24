@@ -131,6 +131,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/catalog", get(catalog))
         .route("/v1/runtimes", get(list_runtimes).post(add_runtime))
+        .route("/v1/runtimes/{name}/image", post(prepare_image))
         .route(
             "/v1/runtimes/{name}",
             get(get_runtime)
@@ -3410,6 +3411,30 @@ async fn install_apps(
         .await;
 
     Ok(Json(InstalledApps { installed }))
+}
+
+async fn prepare_image(
+    State(state): State<Arc<AppState>>,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(body): ApiJson<PrepareImage>,
+) -> ApiResult<Json<PreparedImage>> {
+    let runtime = state
+        .runtimes
+        .get(&name)
+        .ok_or_else(|| ApiError::not_found(format!("no runtime named {name} here")))?;
+
+    let config = runtime
+        .drive(computer::Builder::from_spec(&body.spec)?, &body.spec)
+        .config()?;
+    let (machine, _) = runtime.pair(body.spec.desktop.server);
+
+    tracing::info!(runtime = %name, image = %config.image, "preparing an image");
+    machine.ensure_image(&config).await?;
+
+    Ok(Json(PreparedImage {
+        runtime: name,
+        image: config.image,
+    }))
 }
 
 async fn add_runtime(

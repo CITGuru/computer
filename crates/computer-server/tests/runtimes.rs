@@ -549,3 +549,30 @@ async fn test_a_hypervisor_field_is_refused_on_an_engine() {
 
     assert!(why.contains("runtimes.docker.program"), "{why}");
 }
+
+#[tokio::test]
+async fn test_an_image_is_prepared_before_a_box_waits_for_it() {
+    let state = server();
+
+    let (status, body) = send(
+        &state,
+        json("POST", "/v1/runtimes/docker/image", json!({ "spec": {} })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["runtime"], "docker");
+    assert!(
+        body["image"]
+            .as_str()
+            .is_some_and(|image| image.starts_with("computer-desktop:")),
+        "the answer names what was built: {body}"
+    );
+
+    let (status, _) = send(
+        &state,
+        json("POST", "/v1/runtimes/nowhere/image", json!({ "spec": {} })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

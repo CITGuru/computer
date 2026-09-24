@@ -59,7 +59,7 @@ impl Cloud {
 
     pub fn from_env() -> Result<Self> {
         let key = std::env::var(API_KEY_ENV).map_err(|_| Error::Unavailable {
-            runtime: "e2b".to_string(),
+            provider: "e2b".to_string(),
             detail: format!("{API_KEY_ENV} is not set"),
         })?;
 
@@ -219,7 +219,7 @@ impl E2bApi for Cloud {
 
         if !status.is_success() {
             return Err(Error::Unavailable {
-                runtime: "e2b".to_string(),
+                provider: "e2b".to_string(),
                 detail: status.to_string(),
             });
         }
@@ -230,7 +230,7 @@ impl E2bApi for Cloud {
             .await?;
         match listed.status() {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(Error::Unavailable {
-                runtime: "e2b".to_string(),
+                provider: "e2b".to_string(),
                 detail: format!("{API_KEY_ENV} was refused"),
             }),
             _ => Ok(()),

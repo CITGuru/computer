@@ -172,7 +172,7 @@ impl Bundle {
         let result = cli.run(&args).await?;
         if result.code != 0 {
             return Err(Error::Unavailable {
-                runtime: cli.program().to_string(),
+                provider: cli.program().to_string(),
                 detail: format!("could not build {tag}: {}", result.stderr_utf8().trim()),
             });
         }
@@ -291,7 +291,7 @@ async fn build_directory(
     let result = cli.run(&args).await?;
     if result.code != 0 {
         return Err(Error::Unavailable {
-            runtime: cli.program().to_string(),
+            provider: cli.program().to_string(),
             detail: format!("could not build {tag}: {}", result.stderr_utf8().trim()),
         });
     }
@@ -439,7 +439,7 @@ pub async fn pull(cli: &dyn Engine, tag: &str) -> Result<()> {
     let result = cli.run(&args).await?;
     if result.code != 0 {
         return Err(Error::Unavailable {
-            runtime: cli.program().to_string(),
+            provider: cli.program().to_string(),
             detail: format!("could not pull {tag}: {}", result.stderr_utf8().trim()),
         });
     }

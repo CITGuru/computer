@@ -1,3 +1,4 @@
+use crate::bundle;
 use crate::config::Config;
 use crate::engine::Engine;
 use crate::error::{Error, Result};
@@ -100,6 +101,14 @@ pub trait MicroVmApi: Send + Sync {
     async fn logs(&self, _name: &str) -> Result<String> {
         Ok(String::new())
     }
+
+    fn can(&self) -> computer_types::Capabilities {
+        computer_types::Capabilities {
+            start: computer_types::Start::Entrypoint,
+            reach: computer_types::PortReach::HostPort,
+            ..computer_types::Capabilities::default()
+        }
+    }
 }
 
 /// Bound and released, so another process can take it before the hypervisor does.
@@ -168,6 +177,7 @@ pub struct MicroVm {
     published: Mutex<BTreeMap<String, PortMap>>,
     started_with: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
     reaper: Option<(String, Vec<String>)>,
+    builds_with: Option<(Arc<dyn Engine>, Arc<dyn ImageLoader>)>,
 }
 
 impl MicroVm {
@@ -186,7 +196,13 @@ impl MicroVm {
             published: Mutex::new(BTreeMap::new()),
             started_with: Mutex::new(BTreeMap::new()),
             reaper: None,
+            builds_with: None,
         }
+    }
+
+    pub fn building_with(mut self, engine: Arc<dyn Engine>, loader: Arc<dyn ImageLoader>) -> Self {
+        self.builds_with = Some((engine, loader));
+        self
     }
 
     pub fn named(mut self, runtime: impl Into<String>) -> Self {
@@ -252,7 +268,7 @@ impl MicroVm {
 
 #[async_trait]
 impl Machine for MicroVm {
-    fn runtime(&self) -> &str {
+    fn provider(&self) -> &str {
         &self.runtime
     }
 
@@ -268,24 +284,37 @@ impl Machine for MicroVm {
             return match tokio::fs::metadata(path).await {
                 Ok(_) => Ok(()),
                 Err(error) => Err(Error::Unavailable {
-                    runtime: self.runtime.clone(),
+                    provider: self.runtime.clone(),
                     detail: format!("{image}: {error}"),
                 }),
             };
         }
 
-        // A hypervisor cannot read a container runtime's images; refuse before booting.
         if (config.bundle.is_some() || config.image_dir.is_some())
             && !self.api.has_image(image).await?
         {
-            return Err(Error::Unavailable {
-                runtime: self.runtime.clone(),
-                detail: format!(
-                    "{image} is built in the container runtime's store; \
-                     hand it over once with computer::microvm::import_image, or \
-                     flatten it with export_rootfs and pass the directory"
-                ),
-            });
+            let Some((engine, loader)) = &self.builds_with else {
+                return Err(Error::Unavailable {
+                    provider: self.runtime.clone(),
+                    detail: format!(
+                        "{image} is built in the container runtime's store; \
+                         hand it over once with computer::microvm::import_image, or \
+                         flatten it with export_rootfs and pass the directory"
+                    ),
+                });
+            };
+
+            tracing::info!(image, hypervisor = %self.runtime, "building the image and handing it over");
+            bundle::ensure_source(
+                engine.as_ref(),
+                image,
+                &config.extras,
+                config.bundle.as_ref(),
+                config.image_dir.as_deref(),
+            )
+            .await?;
+
+            import_image(engine.as_ref(), loader.as_ref(), image).await?;
         }
 
         Ok(())
@@ -466,7 +495,7 @@ pub async fn export_rootfs(
         .await?;
     if created.code != 0 {
         return Err(Error::Unavailable {
-            runtime: cli.program().to_string(),
+            provider: cli.program().to_string(),
             detail: created.stderr_utf8().trim().to_string(),
         });
     }
@@ -528,7 +557,7 @@ pub async fn import_image(cli: &dyn Engine, loader: &dyn ImageLoader, image: &st
 
     if saved.code != 0 {
         return Err(Error::Unavailable {
-            runtime: cli.program().to_string(),
+            provider: cli.program().to_string(),
             detail: saved.stderr_utf8().trim().to_string(),
         });
     }

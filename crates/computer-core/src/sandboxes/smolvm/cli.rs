@@ -64,7 +64,7 @@ impl SmolVm {
             .await
             .map_err(|error| match error.kind() {
                 std::io::ErrorKind::NotFound => Error::Unavailable {
-                    runtime: RUNTIME.to_string(),
+                    provider: RUNTIME.to_string(),
                     detail: format!("{} is not on PATH", self.program),
                 },
                 _ => Error::transport(error.to_string(), false),
@@ -90,7 +90,7 @@ impl SmolVm {
         match listed.code {
             0 => Ok(listed.stdout_utf8()),
             _ => Err(Error::Unavailable {
-                runtime: RUNTIME.to_string(),
+                provider: RUNTIME.to_string(),
                 detail: listed.stderr_utf8().trim().to_string(),
             }),
         }
@@ -116,7 +116,7 @@ impl SmolVm {
         match listed.code {
             0 => Ok(listed.stdout_utf8()),
             _ => Err(Error::Unavailable {
-                runtime: RUNTIME.to_string(),
+                provider: RUNTIME.to_string(),
                 detail: listed.stderr_utf8().trim().to_string(),
             }),
         }
@@ -250,7 +250,7 @@ impl MicroVmApi for SmolVm {
         match version.code {
             0 => Ok(()),
             _ => Err(Error::Unavailable {
-                runtime: RUNTIME.to_string(),
+                provider: RUNTIME.to_string(),
                 detail: version.stderr_utf8().trim().to_string(),
             }),
         }
@@ -274,7 +274,7 @@ impl MicroVmApi for SmolVm {
         let created = self.run(&create_args(plan, &image)).await?;
         if created.code != 0 {
             return Err(Error::Unavailable {
-                runtime: RUNTIME.to_string(),
+                provider: RUNTIME.to_string(),
                 detail: created.stderr_utf8().trim().to_string(),
             });
         }
@@ -285,7 +285,7 @@ impl MicroVmApi for SmolVm {
         if started.code != 0 {
             let _ = self.remove(&plan.name).await;
             return Err(Error::Unavailable {
-                runtime: RUNTIME.to_string(),
+                provider: RUNTIME.to_string(),
                 detail: started.stderr_utf8().trim().to_string(),
             });
         }
@@ -423,6 +423,15 @@ impl MicroVmApi for SmolVm {
 
     async fn wake(&self, name: &str) -> Result<()> {
         self.lifecycle("start", name).await
+    }
+
+    fn can(&self) -> computer_types::Capabilities {
+        computer_types::Capabilities {
+            start: computer_types::Start::Entrypoint,
+            reach: computer_types::PortReach::HostPort,
+            stop: true,
+            ..computer_types::Capabilities::default()
+        }
     }
 }
 

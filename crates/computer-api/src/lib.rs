@@ -79,6 +79,19 @@ pub struct RuntimeList {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PrepareImage {
+    #[serde(default)]
+    pub spec: Spec,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PreparedImage {
+    pub runtime: String,
+    pub image: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstallApps {
     pub apps: Vec<String>,
 }

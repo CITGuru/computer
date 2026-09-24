@@ -50,7 +50,7 @@ impl Engine for SystemEngine {
             .await
             .map_err(|error| match error.kind() {
                 std::io::ErrorKind::NotFound => Error::Unavailable {
-                    runtime: self.program.clone(),
+                    provider: self.program.clone(),
                     detail: format!("{} is not on PATH", self.program),
                 },
                 _ => Error::transport(error.to_string(), false),

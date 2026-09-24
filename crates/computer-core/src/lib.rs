@@ -490,7 +490,7 @@ impl Builder {
             box_ = %name,
             image = %config.image,
             profile = %self.profile.name(),
-            runtime = %machine.runtime(),
+            runtime = %machine.provider(),
             "box opened"
         );
 
@@ -800,8 +800,8 @@ impl Computer {
         }
     }
 
-    pub fn runtime(&self) -> &str {
-        self.machine.runtime()
+    pub fn provider(&self) -> &str {
+        self.machine.provider()
     }
 
     pub async fn pause(&self) -> Result<()> {

@@ -36,7 +36,7 @@ async fn a_sandbox_runs_the_same_desktop() {
     let api = Arc::new(ScriptedE2b::new());
     let computer = launched(Arc::clone(&api), true).await;
 
-    assert_eq!(computer.runtime(), "e2b");
+    assert_eq!(computer.provider(), "e2b");
 
     computer
         .click(Point::new(640, 400), Button::Left)

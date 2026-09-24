@@ -128,6 +128,12 @@ pub fn catalogue() -> Value {
                                         panel, an installer. A running box cannot be given \
                                         it afterwards."
                     },
+                    "runtime": {
+                        "type": "string",
+                        "description": "Where to put the box, by a name from `list_runtimes`, \
+                                        such as docker or a vendor's. Left out, the server uses \
+                                        its default."
+                    },
                     "apps": {
                         "type": "array",
                         "items": { "type": "string" },
@@ -756,6 +762,13 @@ pub fn catalogue() -> Value {
         tool(
             "list_apps",
             "The application names this server can open. Read them rather than guessing one.",
+            json!({ "type": "object", "properties": {} })
+        ),
+        tool(
+            "list_runtimes",
+            "Where this server can put a box: a container engine on this host, a microVM, or a \
+             vendor's cloud. Each says what it runs a box in and what it can do with one, such \
+             as pausing it. `launch_box` takes one of these names.",
             json!({ "type": "object", "properties": {} })
         ),
         tool(
@@ -2025,6 +2038,14 @@ pub async fn call(
                 false => names.join(", "),
             }))
         }
+        "list_runtimes" => {
+            let held = client.runtimes().await.map_err(|e| e.to_string())?;
+
+            Ok(Answer::Text(match held.is_empty() {
+                true => "this server has nowhere to put a box".to_string(),
+                false => held.iter().map(told_of).collect::<Vec<_>>().join("\n"),
+            }))
+        }
         "click" => act(client, arguments, action_of(name, arguments)?, 600).await,
         "type_text" => act(client, arguments, action_of(name, arguments)?, 400).await,
         "press_key" => act(client, arguments, action_of(name, arguments)?, 400).await,
@@ -2358,12 +2379,12 @@ fn asked(arguments: &Value) -> (Spec, Placement) {
         .unwrap_or(true);
 
     let placement = Placement {
+        runtime: said("runtime"),
         memory: said("memory"),
         cpus: said("cpus"),
         expires_after_secs: whole("ttl_minutes").map(|minutes| minutes * 60),
         idle_timeout_secs: whole("idle_minutes").map(|minutes| minutes * 60),
         profile: said("profile"),
-        ..Placement::default()
     };
 
     (spec, placement)
@@ -3652,6 +3673,54 @@ fn action_of(tool: &str, arguments: &Value) -> Result<Action, String> {
     })
 }
 
+fn told_of(runtime: &computer_api::RuntimeView) -> String {
+    let can = &runtime.can;
+    let mut does = Vec::new();
+    if can.pause {
+        does.push("pauses");
+    }
+    if can.stop {
+        does.push("stops");
+    }
+    if can.fork {
+        does.push("forks");
+    }
+
+    let state = match &runtime.state {
+        computer_api::RuntimeState::Ready => String::new(),
+        computer_api::RuntimeState::Unavailable { why } => format!("  unavailable: {why}"),
+    };
+
+    format!(
+        "{}  {} {}  {} box(es)  {}{}",
+        runtime.name,
+        place_of(runtime.place),
+        environment_of(&runtime.environment),
+        runtime.boxes,
+        match does.is_empty() {
+            true => "removes a box and nothing else".to_string(),
+            false => does.join(", "),
+        },
+        state
+    )
+}
+
+fn place_of(place: computer_api::PlaceKind) -> &'static str {
+    match place {
+        computer_api::PlaceKind::Host => "on this host,",
+        computer_api::PlaceKind::Remote => "in a vendor's cloud,",
+    }
+}
+
+fn environment_of(environment: &computer_api::Environment) -> &'static str {
+    match environment {
+        computer_api::Environment::Container(_) => "container",
+        computer_api::Environment::MicroVm(_) => "microVM",
+        computer_api::Environment::Vm(_) => "VM",
+        computer_api::Environment::Unknown(_) => "unknown",
+    }
+}
+
 fn search_of(arguments: &Value) -> Result<Search, String> {
     Ok(Search {
         pattern: text(arguments, "pattern")?,
@@ -3980,6 +4049,7 @@ mod tests {
             "network": false,
             "memory": "4g",
             "cpus": "2",
+            "runtime": "smolvm",
             "ttl_minutes": 60,
             "idle_minutes": 10,
             "profile": "work",
@@ -4015,6 +4085,11 @@ mod tests {
         assert!(!spec.policy.network);
         assert_eq!(placement.memory.as_deref(), Some("4g"));
         assert_eq!(placement.cpus.as_deref(), Some("2"));
+        assert_eq!(
+            placement.runtime.as_deref(),
+            Some("smolvm"),
+            "an agent that reads list_runtimes can put a box on one of them"
+        );
         assert_eq!(placement.expires_after_secs, Some(3600));
         assert_eq!(placement.idle_timeout_secs, Some(600));
         assert_eq!(placement.profile.as_deref(), Some("work"));
@@ -4849,7 +4924,7 @@ mod tests {
     #[test]
     fn test_a_tool_that_needs_a_box_says_so() {
         let listed = catalogue();
-        let serverwide = ["launch_box", "list_boxes", "list_apps"];
+        let serverwide = ["launch_box", "list_boxes", "list_apps", "list_runtimes"];
 
         for one in listed.as_array().expect("a list") {
             if serverwide.iter().any(|name| one["name"] == *name) {

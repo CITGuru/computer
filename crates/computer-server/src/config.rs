@@ -58,6 +58,14 @@ impl RuntimeEntry {
                 "program" if crate::runtimes::MICROVMS.contains(&provider) => {
                     tuning.program = Some(text(&at, value)?)
                 }
+                "build_with" if crate::runtimes::MICROVMS.contains(&provider) => {
+                    tuning.builds_with = Some(text(&at, value)?)
+                }
+                "build_with" => {
+                    return Err(format!(
+                        "{at} is a hypervisor's field and runtimes.{name} is a {provider} runtime"
+                    ));
+                }
                 "program" => {
                     return Err(format!(
                         "{at} is a hypervisor's field and runtimes.{name} is a {provider} runtime"
@@ -74,7 +82,8 @@ impl RuntimeEntry {
                          memory, cpus, isolation, lifetime, max_lifetime{}",
                         match provider {
                             "docker" => ", context",
-                            other if crate::runtimes::MICROVMS.contains(&other) => ", program",
+                            other if crate::runtimes::MICROVMS.contains(&other) =>
+                                ", program, build_with",
                             _ => "",
                         }
                     ));

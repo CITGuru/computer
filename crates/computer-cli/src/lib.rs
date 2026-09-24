@@ -45,6 +45,11 @@ computer — a desktop in a box
   runtime set NAME [--field name=value]… [--api-key | --api-key-env VAR]
                               change a vendor's fields, or give it a new key
   runtime rm NAME             remove one, unless a box is still on it
+  image NAME [--app NAME]… [--package PKG]… [--spec FILE]
+                              build the image that runtime needs and hand it
+                              over, before a box waits for it. An engine builds
+                              it here; a hypervisor takes a copy; a vendor that
+                              builds its own says what to run
   box <box>                   everything the server knows about one
   cdp <box> [--ws] [--ttl MINUTES] [--direct]
                               an address another library drives the box's
@@ -435,6 +440,7 @@ async fn there(client: &Client, command: &str, args: &[String]) -> Result<(), St
         "fork" => remote::fork(client, args).await,
         "trace" => remote::trace(client, args).await,
         "runtime" => remote::runtimes(client, args).await,
+        "image" => remote::image(client, args).await,
         "sweep" => local::sweep().await.map_err(|error| error.to_string()),
         other => Err(format!("unknown command: {other}\n\n{USAGE}")),
     }

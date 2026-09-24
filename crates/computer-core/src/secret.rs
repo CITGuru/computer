@@ -12,7 +12,7 @@ impl Secret {
     pub fn generate() -> Result<Self> {
         let mut bytes = [0u8; BYTES];
         getrandom::fill(&mut bytes).map_err(|error| Error::Unavailable {
-            runtime: "the system random source".to_string(),
+            provider: "the system random source".to_string(),
             detail: error.to_string(),
         })?;
 

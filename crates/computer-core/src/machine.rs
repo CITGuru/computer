@@ -16,7 +16,7 @@ pub type PortMap = BTreeMap<u16, u16>;
 
 #[async_trait]
 pub trait Machine: Send + Sync {
-    fn runtime(&self) -> &str;
+    fn provider(&self) -> &str;
 
     async fn preflight(&self) -> Result<()>;
 
@@ -404,7 +404,7 @@ impl EngineMachine {
 
 #[async_trait]
 impl Machine for EngineMachine {
-    fn runtime(&self) -> &str {
+    fn provider(&self) -> &str {
         self.cli.program()
     }
 
@@ -412,7 +412,7 @@ impl Machine for EngineMachine {
         let alive = self.cli.run(&[arg("version")]).await?;
         if alive.code != 0 {
             return Err(Error::Unavailable {
-                runtime: self.runtime().to_string(),
+                provider: self.provider().to_string(),
                 detail: alive.stderr_utf8().trim().to_string(),
             });
         }
@@ -475,7 +475,7 @@ impl Machine for EngineMachine {
         let started = self.cli.run(&run_args(name, config)).await?;
         if started.code != 0 {
             return Err(Error::Unavailable {
-                runtime: self.runtime().to_string(),
+                provider: self.provider().to_string(),
                 detail: started.stderr_utf8().trim().to_string(),
             });
         }

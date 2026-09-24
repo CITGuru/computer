@@ -2446,6 +2446,28 @@ fn key(args: &[String]) -> Result<std::collections::BTreeMap<String, String>, St
     Ok(held)
 }
 
+pub async fn image(client: &Client, args: &[String]) -> Done {
+    let rest = bare(args, &VALUED);
+    let runtime = positional(&rest, 0, "a runtime")
+        .map_err(|e| e.to_string())?
+        .to_string();
+
+    let mut flags = args.to_vec();
+    if let Some(at) = flags.iter().position(|arg| *arg == runtime) {
+        flags.remove(at);
+    }
+    let asked = crate::spec::asked(&flags)?;
+
+    eprintln!("preparing the image {runtime} needs (the first one takes minutes) …");
+    let ready = client
+        .prepare_image(&runtime, &asked.spec)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    println!("{}\t{}", ready.runtime, ready.image);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -147,7 +147,7 @@ impl RemoteMachine {
 
 #[async_trait]
 impl Machine for RemoteMachine {
-    fn runtime(&self) -> &str {
+    fn provider(&self) -> &str {
         self.api.vendor()
     }
 

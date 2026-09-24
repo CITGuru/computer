@@ -29,7 +29,7 @@ async fn main() -> computer::Result<()> {
         .launch()
         .await?;
 
-    println!("  runtime  {}", computer.runtime());
+    println!("  runtime  {}", computer.provider());
     if let Some(url) = computer.viewer_url() {
         println!("  watch it {url}");
     }

@@ -163,7 +163,7 @@ impl RemoteApi for E2bVendor {
         };
 
         Err(Error::Unavailable {
-            runtime: "e2b".to_string(),
+            provider: "e2b".to_string(),
             detail: format!(
                 "{} is a container image; E2B runs templates. Write the build \
                  context out with Bundle::materialize and build it there:\n  \
