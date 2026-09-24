@@ -13,6 +13,7 @@ pub const FLUXBOX_INIT: &str = include_str!("../images/desktop/fluxbox.init");
 pub const FLUXBOX_MENU: &str = include_str!("../images/desktop/fluxbox.menu");
 pub const FLUXBOX_APPS: &str = include_str!("../images/desktop/fluxbox.apps");
 pub const EMBED_HTML: &str = include_str!("../images/desktop/embed.html");
+pub const PASTE_JS: &str = include_str!("../images/desktop/paste.js");
 pub const FLUXBOX_STYLE: &str = include_str!("../images/desktop/fluxbox.style");
 pub const WALLPAPER_SH: &str = include_str!("../images/desktop/wallpaper.sh");
 pub const LAUNCH_SH: &str = include_str!("../images/desktop/launch.sh");
@@ -58,6 +59,7 @@ pub static DESKTOP: Bundle = Bundle {
         ("fluxbox.menu", FLUXBOX_MENU),
         ("fluxbox.apps", FLUXBOX_APPS),
         ("embed.html", EMBED_HTML),
+        ("paste.js", PASTE_JS),
         ("fluxbox.style", FLUXBOX_STYLE),
         ("wallpaper.sh", WALLPAPER_SH),
         ("launch.sh", LAUNCH_SH),
@@ -78,6 +80,7 @@ pub static WAYLAND: Bundle = Bundle {
         ("browser.sh", WAYLAND_BROWSER_SH),
         ("input.sh", WAYLAND_INPUT_SH),
         ("sway.config", SWAY_CONFIG),
+        ("paste.js", PASTE_JS),
         ("pointer.c", POINTER_C),
         ("wlr-virtual-pointer-unstable-v1.xml", VIRTUAL_POINTER_XML),
         ("virtual-keyboard-unstable-v1.xml", VIRTUAL_KEYBOARD_XML),

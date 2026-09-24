@@ -81,6 +81,9 @@ COPY start.sh     /usr/local/bin/computer-desktop
 COPY screen.sh    /usr/local/bin/computer-screen
 COPY browser.sh   /usr/local/bin/computer-browser
 COPY embed.html /usr/share/novnc/embed.html
+COPY paste.js /usr/share/novnc/app/paste.js
+RUN sed -i 's|</head>|<script type="module">import UI from "./app/ui.js"; import paste from "./app/paste.js"; paste(() => UI.rfb);</script>\n</head>|' /usr/share/novnc/vnc.html \
+  && grep -q app/paste.js /usr/share/novnc/vnc.html
 COPY fluxbox.apps /etc/computer/fluxbox/apps
 COPY fluxbox.menu /etc/computer/fluxbox/menu
 COPY fluxbox.init /etc/computer/fluxbox/init

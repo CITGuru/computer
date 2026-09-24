@@ -91,6 +91,9 @@ COPY fluxbox.menu   /etc/computer/fluxbox/menu
 COPY fluxbox.init   /etc/computer/fluxbox/init
 COPY fluxbox.style  /etc/computer/fluxbox/style
 COPY embed.html     /usr/share/novnc/embed.html
+COPY paste.js /usr/share/novnc/app/paste.js
+RUN sed -i 's|</head>|<script type="module">import UI from "./app/ui.js"; import paste from "./app/paste.js"; paste(() => UI.rfb);</script>\n</head>|' /usr/share/novnc/vnc.html \
+  && grep -q app/paste.js /usr/share/novnc/vnc.html
 COPY wallpaper.sh   /usr/local/bin/computer-wallpaper
 COPY launch.sh      /usr/local/bin/computer-launch
 COPY tint2rc        /etc/computer/tint2rc
