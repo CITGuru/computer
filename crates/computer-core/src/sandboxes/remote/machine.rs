@@ -22,6 +22,7 @@ pub struct RemoteMachine {
     api: Arc<dyn RemoteApi>,
     remote: Arc<Remote>,
     held: Mutex<BTreeMap<String, Held>>,
+    images: Mutex<BTreeMap<String, String>>,
     ttl: Duration,
     public_viewer: bool,
 }
@@ -32,6 +33,7 @@ impl RemoteMachine {
             api,
             remote,
             held: Mutex::new(BTreeMap::new()),
+            images: Mutex::new(BTreeMap::new()),
             ttl: DEFAULT_TTL,
             public_viewer: false,
         }
@@ -58,9 +60,16 @@ impl RemoteMachine {
         let mut metadata = config.labels.clone();
         metadata.insert(NAME_KEY.to_string(), name.to_string());
 
+        let image = self
+            .images
+            .lock()
+            .ok()
+            .and_then(|held| held.get(&config.image).cloned())
+            .unwrap_or_else(|| config.image.clone());
+
         SandboxPlan {
             name: name.to_string(),
-            image: config.image.clone(),
+            image,
             publish: config.publish.clone(),
             env: config.env.clone(),
             metadata,
@@ -163,7 +172,15 @@ impl Machine for RemoteMachine {
     }
 
     async fn ensure_image(&self, config: &Config) -> Result<()> {
-        self.api.ensure_image(config).await
+        let Some(image) = self.api.ensure_image(config).await? else {
+            return Ok(());
+        };
+
+        if let Ok(mut held) = self.images.lock() {
+            held.insert(config.image.clone(), image);
+        }
+
+        Ok(())
     }
 
     async fn start(&self, name: &str, config: &Config) -> Result<PortMap> {

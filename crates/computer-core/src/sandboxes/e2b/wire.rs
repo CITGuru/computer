@@ -62,6 +62,110 @@ pub fn carrying(listing: &Value, key: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+pub fn template_of(listing: &Value, name: &str) -> Option<String> {
+    let named = |template: &Value| {
+        let names = template.get("names").and_then(Value::as_array);
+        let carried = names
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .any(|held| held == name || held.split(':').next() == Some(name));
+
+        let aliased = template
+            .get("aliases")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .any(|held| held == name);
+
+        carried || aliased
+    };
+
+    listing
+        .as_array()?
+        .iter()
+        .find(|template| named(template))
+        .and_then(|template| template.get("templateID")?.as_str().map(str::to_string))
+}
+
+pub fn status_of(answer: &Value) -> String {
+    answer
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+pub fn why_of(answer: &Value) -> String {
+    let Some(reason) = answer.get("reason") else {
+        return answer.to_string();
+    };
+
+    let said = reason
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let step = reason
+        .get("step")
+        .map(|step| format!(" at {step}"))
+        .unwrap_or_default();
+
+    let logged: Vec<String> = reason
+        .get("logEntries")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .rev()
+                .take(5)
+                .filter_map(|entry| {
+                    entry
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    match logged.is_empty() {
+        true => format!("{said}{step}"),
+        false => format!("{said}{step}: {}", logged.join(" | ")),
+    }
+}
+
+#[cfg(feature = "e2b")]
+pub fn tarred(carried: &super::template::Carried) -> crate::Result<Vec<u8>> {
+    use std::io::Write;
+
+    let mut header = tar::Header::new_gnu();
+    header.set_size(carried.body.len() as u64);
+    header.set_mode(0o755);
+    header.set_cksum();
+
+    let mut archive = tar::Builder::new(Vec::new());
+    archive
+        .append_data(&mut header, &carried.name, carried.body.as_bytes())
+        .and_then(|()| archive.finish())
+        .map_err(|error| {
+            crate::Error::transport(format!("a file would not pack: {error}"), false)
+        })?;
+
+    let packed = archive
+        .into_inner()
+        .map_err(|error| crate::Error::transport(error.to_string(), false))?;
+
+    let mut zipped = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    zipped
+        .write_all(&packed)
+        .map_err(|error| crate::Error::transport(error.to_string(), false))?;
+
+    zipped
+        .finish()
+        .map_err(|error| crate::Error::transport(error.to_string(), false))
+}
+
 pub fn state_of(listing: &Value, id: &str) -> Option<String> {
     listing
         .as_array()?

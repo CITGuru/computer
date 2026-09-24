@@ -211,10 +211,12 @@ impl RemoteApi for Fleet {
     }
 
     /// Leave this out where the vendor needs a template built first.
-    async fn ensure_image(&self, config: &computer::Config) -> Result<()> {
+    async fn ensure_image(&self, config: &computer::Config) -> Result<Option<String>> {
         EngineMachine::new(Arc::clone(&self.docker) as Arc<dyn Engine>)
             .ensure_image(config)
-            .await
+            .await?;
+
+        Ok(None)
     }
 }
 

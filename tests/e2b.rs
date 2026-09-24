@@ -191,16 +191,46 @@ async fn a_secure_sandbox_is_asked_for_whatever_the_viewer_setting_is() {
 }
 
 #[tokio::test]
-async fn a_container_image_is_refused_with_the_way_across() {
-    let (machine, profile) = e2b::pair(Arc::new(ScriptedE2b::new()), Arc::new(X11Profile));
+async fn a_container_image_becomes_a_template_nobody_had_to_build() {
+    let api = Arc::new(ScriptedE2b::new());
+    let (machine, profile) = e2b::pair(Arc::clone(&api) as Arc<dyn E2bApi>, Arc::new(X11Profile));
+    let config = bundled(profile);
 
-    let error = machine
-        .ensure_image(&bundled(profile))
+    machine
+        .ensure_image(&config)
         .await
-        .expect_err("E2B runs templates, not container images");
+        .expect("E2B runs templates, so one is built from the image this crate holds");
 
-    assert!(error.needs_another_place());
-    assert!(error.to_string().contains("e2b template build"));
+    assert_eq!(api.built().len(), 1, "one build, for one image");
+    assert!(
+        api.carried().contains(&"start.sh".to_string()),
+        "the files the image copies went over first: {:?}",
+        api.carried()
+    );
+
+    machine.start("desk", &config).await.expect("a sandbox");
+    let plan = api.plans().pop().expect("a plan");
+    assert!(
+        plan.template.starts_with("tmpl-"),
+        "the box starts from the template that was built, not from a container image: {}",
+        plan.template
+    );
+}
+
+#[tokio::test]
+async fn a_template_that_is_already_there_is_not_built_again() {
+    let api = Arc::new(ScriptedE2b::new().holding_template("computer-desktop-abc", "tmpl-held"));
+    let (machine, profile) = e2b::pair(Arc::clone(&api) as Arc<dyn E2bApi>, Arc::new(X11Profile));
+
+    let mut config = bundled(profile);
+    config.image = "computer-desktop:abc".to_string();
+
+    machine.ensure_image(&config).await.expect("it is there");
+
+    assert!(
+        api.built().is_empty(),
+        "a template this vendor already holds is used as it is"
+    );
 }
 
 #[tokio::test]

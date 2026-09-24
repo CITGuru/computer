@@ -21,6 +21,7 @@
 
 pub mod api;
 pub mod remote;
+pub mod template;
 pub mod wire;
 
 #[cfg(feature = "e2b")]

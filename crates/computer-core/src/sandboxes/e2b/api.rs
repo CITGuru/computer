@@ -21,6 +21,12 @@ pub const DEFAULT_USER: &str = "user";
 /// E2B's own default of 15 seconds is shorter than one image pull.
 pub use crate::sandboxes::remote::DEFAULT_TTL;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Built {
+    pub template: String,
+    pub build: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Sandbox {
     pub id: String,
@@ -110,6 +116,38 @@ pub trait E2bApi: Send + Sync {
 
     async fn paused(&self, _id: &str) -> Result<bool> {
         Ok(false)
+    }
+
+    async fn find_template(&self, _name: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    async fn create_template(&self, _name: &str, _cpus: u32, _memory_mb: u32) -> Result<Built> {
+        Err(crate::Error::Unsupported {
+            gaps: vec!["building a template"],
+        })
+    }
+
+    async fn carry_files(
+        &self,
+        _template: &str,
+        _carried: &super::template::Carried,
+    ) -> Result<()> {
+        Err(crate::Error::Unsupported {
+            gaps: vec!["building a template"],
+        })
+    }
+
+    async fn start_build(&self, _built: &Built, _plan: &super::template::Plan) -> Result<()> {
+        Err(crate::Error::Unsupported {
+            gaps: vec!["building a template"],
+        })
+    }
+
+    async fn build_status(&self, _built: &Built) -> Result<serde_json::Value> {
+        Err(crate::Error::Unsupported {
+            gaps: vec!["building a template"],
+        })
     }
 
     async fn logs(&self, id: &str) -> Result<String>;
