@@ -20,6 +20,8 @@ Core server settings:
 - `COMPUTER_SERVER_CONFIG` — path to the runtimes file; read at start, a change needs a restart
 - `COMPUTER_SERVER_RUNTIMES` — comma-separated host engines to offer; default `docker,podman,nerdctl`, and only the ones that answer are offered
 - `COMPUTER_SERVER_SANDBOXES` — comma-separated remote vendors, such as `e2b`
+- `COMPUTER_SERVER_SECRET_KEY` — 32 bytes, base64 or hex, that seal the keys this server stores
+- `COMPUTER_SERVER_SECRET_FILE` — a file holding that key instead; the server makes one at first start, readable by its owner only
 - `COMPUTER_SERVER_REAP_SECS` — expired-box sweep interval; default 30 seconds
 
 The default store is in memory. Select durable trace and frame storage with:
@@ -146,6 +148,29 @@ max_lifetime = "24h"
 lifetime = "4h"
 ```
 
+A vendor can also be added while the server runs, and is then kept in the store:
+
+```bash
+printf '%s' "$E2B_API_KEY" | computer runtime add cloud --provider e2b --api-key
+computer runtime ls
+computer runtime set cloud --field max_lifetime_secs=86400
+computer runtime rm cloud
+```
+
+The key never goes on the command line, where `ps` and the shell's history keep it: it arrives on stdin, or the CLI reads a variable named with `--api-key-env` and sends the value.
+
+What the server does with it:
+
+- **It is sealed before it is stored.** ChaCha20-Poly1305 under the server key, with the runtime's name and provider bound in, so a row copied into another runtime's place does not open. A copy of the database is not a copy of the account. With no server key set, storing a secret is refused rather than written in the clear.
+- **It is written, never read back.** No route returns a key; `GET /v1/runtimes` lists the names only, such as `["api_key"]`.
+- **Only vendors.** The API cannot name a host engine, a program or a socket, so it cannot make this server run something.
+- **An endpoint added this way must be reachable from outside.** `https`, and not loopback, a private address or a `.internal` name. The file may name anything, because an operator wrote it.
+- **One namespace.** A name the file, the environment or a host engine already has is refused, and those runtimes are changed where they are written rather than over the API.
+- **A new key takes the running boxes with it.** `PATCH` rebuilds the runtime and attaches its boxes again, so rotating a key does not strand them.
+- **Removing one is refused while a box record names it.**
+
+A stored runtime whose key this server cannot open — a lost or changed server key — is listed with `state: unavailable` and the reason, rather than disappearing.
+
 `GET /v1/runtimes/{name}` says what one can do: whether it pauses, whether it stops, how a port is reached, and whether memory and cpus are set when a box is created or when its image is built. A placement asking for something the runtime cannot do is refused before anything starts.
 
 ## Drive it
@@ -248,7 +273,14 @@ curl -s localhost:8080/v1/boxes/$BOX/screens/0/actions \
 
 **The call returns once the app has drawn**, and answers with the window it drew. That is the whole point of it. A window exists well before the program behind it has painted — GIMP maps a splash screen carrying its own class about half a second before the real one, and VS Code maps its window and paints a second later — so a launch that returned on the window appearing would hand back a screen the next click lands wrong on.
 
-The app has to be in the box already: `GET /v1/catalog` names what this server knows, and `spec.apps` is what installs one when the box is created.
+`GET /v1/catalog` names what this server knows, and `spec.apps` is what installs one when the box is created. A box that is already running takes one too:
+
+```bash
+curl -s localhost:8080/v1/boxes/$BOX/apps -H 'content-type: application/json' \
+  -d '{"apps": ["gimp"]}'
+```
+
+It adds the app's own apt archive when it needs one, installs it, and writes the launcher, so `open_app` finds it afterwards. It costs the install every time, needs the box to have network, and is gone from a fork, which builds from the spec.
 
 ## Read the page
 
@@ -294,6 +326,9 @@ The reading itself is `computer::Page::read`, so a library user gets it without 
 | `/v1/cdp/{token}/json/…`, `/v1/cdp/{token}/devtools/…` | the browser's DevTools through this server; the token admits, no bearer |
 | `GET /v1/catalog` | the app names a launch can ask for |
 | `GET /v1/runtimes`, `GET /v1/runtimes/{name}` | where boxes can be put, what each runs them in, and what each can do |
+| `POST /v1/runtimes` | add a vendor: name, provider, fields, secrets. Sealed before it is stored, and checked with the provider before it is kept |
+| `PATCH /v1/runtimes/{name}` | change its fields, or give it a new key |
+| `DELETE /v1/runtimes/{name}` | refused while a box record names it |
 | `GET /v1/boxes/{id}/page?limit=` | the page on screen, as text and links |
 | `GET /v1/boxes/{id}/page/find?q=&scroll=` | what matches, best first |
 | `GET /v1/boxes/{id}/page/snapshot?scope=&limit=&delta=&quiet_ms=` | every control on the page in order, numbered; or what changed since the last one |
@@ -307,6 +342,7 @@ The reading itself is `computer::Page::read`, so a library user gets it without 
 | `GET /v1/boxes/{id}/screens/{n}/windows` | what is on the screen |
 | `POST …/windows/{w}/focus`, `DELETE …/windows/{w}` | raise one, close one |
 | `POST /v1/boxes/{id}/exec` | one command, one answer |
+| `POST /v1/boxes/{id}/apps` | install an app from the catalog into a box that is already running |
 | `GET`/`PUT` `/v1/boxes/{id}/files` | base64 in, base64 out |
 
 Every error is the same shape — `code`, `message`, `retryable` — including a body that is not JSON at all, because that is the first error most clients ever see.

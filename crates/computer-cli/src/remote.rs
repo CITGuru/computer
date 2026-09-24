@@ -1449,6 +1449,7 @@ fn summarise(event: &computer_api::TraceEvent) -> String {
         E::Frame { screen } => format!("screen {screen}  the screen changed"),
         E::Executed { argv, code, .. } => format!("ran {} → {code}", argv.join(" ")),
         E::AppLaunched { screen, app, .. } => format!("screen {screen}  opened {app}"),
+        E::AppsInstalled { apps } => format!("installed {}", apps.join(", ")),
         E::FileWritten { path, bytes } => format!("wrote {bytes} bytes to {path}"),
         E::FileRead { path, bytes } => format!("read {bytes} bytes from {path}"),
         E::BoxPaused => "frozen".to_string(),
@@ -2321,6 +2322,128 @@ fn shown_element(element: &computer_api::Element) -> String {
             None => String::new(),
         }
     )
+}
+
+pub async fn runtimes(client: &Client, args: &[String]) -> Done {
+    let what = args.first().map(String::as_str).unwrap_or("ls");
+    let rest = args.get(1..).unwrap_or_default();
+
+    match what {
+        "ls" => {
+            for held in client.runtimes().await.map_err(|e| e.to_string())? {
+                let state = match &held.state {
+                    computer_api::RuntimeState::Ready => String::new(),
+                    computer_api::RuntimeState::Unavailable { why } => format!("\t{why}"),
+                };
+
+                println!(
+                    "{}\t{}\t{:?}\t{:?}\t{} box(es){state}",
+                    held.name, held.provider, held.place, held.source, held.boxes
+                );
+            }
+            Ok(())
+        }
+        "add" => {
+            let name = positional(rest, 0, "a name for the runtime").map_err(|e| e.to_string())?;
+            let provider = flag(rest, "--provider")
+                .ok_or_else(|| "runtime add takes --provider, such as e2b".to_string())?;
+
+            let asked = computer_api::NewRuntime {
+                name: name.to_string(),
+                provider: provider.to_string(),
+                fields: fields(rest)?,
+                secrets: key(rest)?,
+            };
+
+            let held = client
+                .add_runtime(&asked)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("{}\t{}", held.name, held.provider);
+            Ok(())
+        }
+        "set" => {
+            let name = positional(rest, 0, "a runtime").map_err(|e| e.to_string())?;
+            let given = fields(rest)?;
+
+            let asked = computer_api::ChangeRuntime {
+                fields: (!given.is_null()).then_some(given),
+                secrets: key(rest)?,
+            };
+
+            let held = client
+                .change_runtime(name, &asked)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("{}\t{}", held.name, held.provider);
+            Ok(())
+        }
+        "rm" => {
+            let name = positional(rest, 0, "a runtime").map_err(|e| e.to_string())?;
+
+            client
+                .forget_runtime(name)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("{name}");
+            Ok(())
+        }
+        other => Err(format!("runtime takes ls, add, set or rm, not {other}")),
+    }
+}
+
+fn fields(args: &[String]) -> Result<serde_json::Value, String> {
+    let mut held = serde_json::Map::new();
+
+    for (at, arg) in args.iter().enumerate() {
+        if arg != "--field" {
+            continue;
+        }
+
+        let given = args
+            .get(at + 1)
+            .ok_or_else(|| "--field takes name=value".to_string())?;
+        let (name, value) = given
+            .split_once('=')
+            .ok_or_else(|| format!("--field takes name=value, not {given}"))?;
+
+        held.insert(name.to_string(), whole(value));
+    }
+
+    match held.is_empty() {
+        true => Ok(serde_json::Value::Null),
+        false => Ok(serde_json::Value::Object(held)),
+    }
+}
+
+fn whole(value: &str) -> serde_json::Value {
+    match value.parse::<u64>() {
+        Ok(number) => serde_json::Value::from(number),
+        Err(_) => serde_json::Value::from(value),
+    }
+}
+
+fn key(args: &[String]) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut held = std::collections::BTreeMap::new();
+
+    if let Some(name) = flag(args, "--api-key-env") {
+        let value = std::env::var(name).map_err(|_| format!("{name} is not set"))?;
+        held.insert("api_key".to_string(), value);
+    }
+
+    if present(args, "--api-key") {
+        let mut typed = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut typed)
+            .map_err(|error| format!("the key would not read from stdin: {error}"))?;
+
+        let typed = typed.trim();
+        if typed.is_empty() {
+            return Err("nothing came in on stdin for the key".to_string());
+        }
+        held.insert("api_key".to_string(), typed.to_string());
+    }
+
+    Ok(held)
 }
 
 #[cfg(test)]

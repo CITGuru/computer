@@ -4,6 +4,7 @@ use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::idempotency::{self, Lookup, Replies};
 use crate::presses::Pressed;
 use crate::registry::{AsDesktop, Entry};
+use crate::runtimes::{self, Place};
 use crate::spec;
 use axum::body::Body;
 use axum::extract::State;
@@ -76,6 +77,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{id}/resume", post(resume_box))
         .route("/v1/boxes/{id}/stop", post(stop_box))
         .route("/v1/boxes/{id}/exec", post(exec))
+        .route("/v1/boxes/{id}/apps", post(install_apps))
         .route("/v1/boxes/{id}/trace", get(read_trace))
         .route("/v1/boxes/{id}/trace/frames/{hash}", get(trace_frame))
         .route("/v1/boxes/{id}/files", get(read_file).put(write_file))
@@ -128,8 +130,13 @@ pub fn router(state: Arc<AppState>) -> Router {
             axum::routing::delete(close_window),
         )
         .route("/v1/catalog", get(catalog))
-        .route("/v1/runtimes", get(list_runtimes))
-        .route("/v1/runtimes/{name}", get(get_runtime))
+        .route("/v1/runtimes", get(list_runtimes).post(add_runtime))
+        .route(
+            "/v1/runtimes/{name}",
+            get(get_runtime)
+                .patch(change_runtime)
+                .delete(forget_runtime),
+        )
         .route("/v1/boxes/{id}/pages", get(list_tabs))
         .route("/v1/boxes/{id}/pages/{tab}", delete(close_tab))
         .route("/v1/boxes/{id}/pages/{tab}/focus", post(focus_tab))
@@ -3379,6 +3386,233 @@ async fn get_runtime(
     let holding = holding(&state).await;
 
     Ok(Json(runtime.view(*holding.get(&name).unwrap_or(&0))))
+}
+
+async fn install_apps(
+    State(state): State<Arc<AppState>>,
+    ApiPath(id): ApiPath<String>,
+    ApiJson(body): ApiJson<InstallApps>,
+) -> ApiResult<Json<InstalledApps>> {
+    let entry = state.registry.get(&id).await?;
+
+    tracing::info!(box_ = %id, apps = ?body.apps, "installing into a running box");
+    let installed =
+        computer::apps::install(&entry.computer, &body.apps, &entry.spec, MAX_EXEC).await?;
+
+    state
+        .record(
+            &id,
+            Actor::Agent,
+            TraceEvent::AppsInstalled {
+                apps: installed.clone(),
+            },
+        )
+        .await;
+
+    Ok(Json(InstalledApps { installed }))
+}
+
+async fn add_runtime(
+    State(state): State<Arc<AppState>>,
+    ApiJson(body): ApiJson<NewRuntime>,
+) -> ApiResult<Response> {
+    crate::runtimes::nameable(&body.name).map_err(ApiError::bad_request)?;
+
+    if state.runtimes.get(&body.name).is_some() {
+        return Err(ApiError::bad_request(format!(
+            "this server already has a runtime named {}",
+            body.name
+        )));
+    }
+
+    if runtimes::HOSTS.contains(&body.provider.as_str()) {
+        return Err(ApiError::bad_request(format!(
+            "{} is a host engine, which this server finds for itself; the API adds              vendors only",
+            body.provider
+        )));
+    }
+
+    let record = sealed(
+        &state,
+        &body.name,
+        &body.provider,
+        &body.fields,
+        &body.secrets,
+        None,
+    )?;
+    let runtime = put(&state, record).await?;
+
+    let view = runtime.view(0);
+    Ok((StatusCode::CREATED, Json(view)).into_response())
+}
+
+async fn change_runtime(
+    State(state): State<Arc<AppState>>,
+    ApiPath(name): ApiPath<String>,
+    ApiJson(body): ApiJson<ChangeRuntime>,
+) -> ApiResult<Json<RuntimeView>> {
+    let held = state
+        .store
+        .get_runtime(&name)
+        .await?
+        .ok_or_else(|| stored_only(&state, &name))?;
+
+    let fields = body.fields.unwrap_or_else(|| held.fields.clone());
+    let record = sealed(
+        &state,
+        &name,
+        &held.provider,
+        &fields,
+        &body.secrets,
+        Some(&held),
+    )?;
+
+    let runtime = put(&state, record).await?;
+    let again = rebuilt(&state, &runtime).await;
+    if again > 0 {
+        tracing::info!(runtime = %name, boxes = again, "took the boxes on this runtime again");
+    }
+
+    let holding = holding(&state).await;
+    Ok(Json(runtime.view(*holding.get(&name).unwrap_or(&0))))
+}
+
+async fn forget_runtime(
+    State(state): State<Arc<AppState>>,
+    ApiPath(name): ApiPath<String>,
+) -> ApiResult<StatusCode> {
+    let held = state
+        .store
+        .get_runtime(&name)
+        .await?
+        .ok_or_else(|| stored_only(&state, &name))?;
+
+    let records = state.store.list_boxes().await?;
+    let boxes = records
+        .iter()
+        .filter(|record| record.runtime == name)
+        .count();
+
+    if boxes > 0 {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            ErrorCode::Denied,
+            format!(
+                "{name} holds {boxes} box(es), and removing it would leave them with                  nothing that can reach them"
+            ),
+        ));
+    }
+
+    state.store.forget_runtime(&held.name).await?;
+    state.runtimes.forget(&name);
+    state.runtimes.settle();
+
+    tracing::info!(runtime = %name, "a runtime was removed");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn stored_only(state: &AppState, name: &str) -> ApiError {
+    match state.runtimes.get(name) {
+        Some(runtime) => ApiError::bad_request(format!(
+            "{name} comes from {}, so it is changed where it is written rather than here",
+            match runtime.source {
+                Source::File => "the configuration file",
+                Source::Environment => "the environment",
+                _ => "this host",
+            }
+        )),
+        None => ApiError::not_found(format!("no runtime named {name} here")),
+    }
+}
+
+fn sealed(
+    state: &AppState,
+    name: &str,
+    provider: &str,
+    fields: &serde_json::Value,
+    given: &BTreeMap<String, String>,
+    held: Option<&computer_storage::RuntimeRecord>,
+) -> ApiResult<computer_storage::RuntimeRecord> {
+    runtimes::public(fields).map_err(ApiError::bad_request)?;
+
+    let mut secrets = held.map(|held| held.secrets.clone()).unwrap_or_default();
+
+    for (field, value) in given {
+        let secret = computer::Secret::new(value.clone())
+            .map_err(|error| ApiError::bad_request(error.to_string()))?;
+
+        let whose = crate::secrets::Whose::new(name, provider, field);
+        secrets.insert(
+            field.clone(),
+            state
+                .secrets
+                .seal(&whose, &secret)
+                .map_err(ApiError::bad_request)?,
+        );
+    }
+
+    let now = millis(SystemTime::now());
+
+    Ok(computer_storage::RuntimeRecord {
+        name: name.to_string(),
+        provider: provider.to_string(),
+        fields: fields.clone(),
+        secrets,
+        created_at_ms: held.map(|held| held.created_at_ms).unwrap_or(now),
+        updated_at_ms: now,
+    })
+}
+
+async fn put(
+    state: &AppState,
+    record: computer_storage::RuntimeRecord,
+) -> ApiResult<Arc<crate::runtimes::Runtime>> {
+    let runtime = runtimes::stored(&record, &state.secrets, state.vendors.as_ref())
+        .map_err(ApiError::bad_request)?;
+
+    if let Place::Remote { api, .. } = &runtime.place {
+        api.available().await?;
+    }
+
+    state.store.put_runtime(&record).await?;
+
+    let name = runtime.name.clone();
+    state.runtimes.add(runtime);
+    state.runtimes.settle();
+
+    state
+        .runtimes
+        .get(&name)
+        .ok_or_else(|| ApiError::internal("a runtime was stored and then lost"))
+}
+
+async fn rebuilt(state: &AppState, runtime: &crate::runtimes::Runtime) -> usize {
+    let mut again = 0;
+
+    for entry in state.registry.list().await {
+        if entry.runtime != runtime.name {
+            continue;
+        }
+
+        let (machine, profile) = runtime.pair(entry.spec.desktop.server);
+        let taken = computer::Computer::attach_using(machine, &entry.id, profile, None).await;
+
+        match taken {
+            Ok(mut computer) => {
+                computer.expires_when(entry.computer.expires_at());
+                if state.registry.replace(&entry.id, computer).await.is_ok() {
+                    again += 1;
+                }
+            }
+            Err(error) => tracing::warn!(
+                box_ = %entry.id,
+                %error,
+                "this box was not taken again with the runtime's new key"
+            ),
+        }
+    }
+
+    again
 }
 
 async fn holding(state: &AppState) -> BTreeMap<String, u32> {

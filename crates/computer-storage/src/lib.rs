@@ -20,6 +20,7 @@ pub use error::{Error, Result};
 use async_trait::async_trait;
 use computer_api::{Actor, Placement, Spec, TraceEntry, TraceEvent};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -38,6 +39,37 @@ pub struct BoxRecord {
     pub expires_at_ms: Option<u64>,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sealed(String);
+
+impl Sealed {
+    pub fn of(carried: impl Into<String>) -> Self {
+        Self(carried.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Sealed {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("Sealed(…)")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeRecord {
+    pub name: String,
+    pub provider: String,
+    #[serde(default)]
+    pub fields: serde_json::Value,
+    #[serde(default)]
+    pub secrets: BTreeMap<String, Sealed>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
 #[async_trait]
 pub trait Store: Send + Sync {
     async fn put_box(&self, record: &BoxRecord) -> Result<()>;
@@ -48,6 +80,14 @@ pub trait Store: Send + Sync {
     async fn list_boxes(&self) -> Result<Vec<BoxRecord>>;
 
     async fn forget_box(&self, id: &str) -> Result<()>;
+
+    async fn put_runtime(&self, record: &RuntimeRecord) -> Result<()>;
+
+    async fn get_runtime(&self, name: &str) -> Result<Option<RuntimeRecord>>;
+
+    async fn list_runtimes(&self) -> Result<Vec<RuntimeRecord>>;
+
+    async fn forget_runtime(&self, name: &str) -> Result<()>;
 
     async fn append(
         &self,

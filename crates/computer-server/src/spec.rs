@@ -16,15 +16,16 @@ pub fn plan(
 
     runtime.check(placement)?;
 
+    let digest = spec.digest();
     let mut builder = runtime
-        .drive(Builder::from_spec(spec)?, spec.desktop.server)
+        .drive(Builder::from_spec(spec)?, spec)
         .place(placement)?
         .name(name)
         // The box outlives the request, so a dropped handle must not take it away.
         .keep_on_drop(true);
 
     let label = BoxLabel {
-        digest: spec.digest(),
+        digest: digest.clone(),
         spec: spec.clone(),
         placement: placement.clone(),
         width: resolved.width,

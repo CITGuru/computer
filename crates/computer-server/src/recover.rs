@@ -269,7 +269,7 @@ mod tests {
     }
 
     fn holding(api: Arc<ScriptedRemote>) -> AppState {
-        let mut runtimes = Runtimes::default();
+        let runtimes = Runtimes::default();
         runtimes.add(runtimes::remote(
             "cloud".to_string(),
             api,

@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use crate::sandboxes::remote::{self, RemoteApi};
 use async_trait::async_trait;
+use computer_types::{Capabilities, Environment, Resources, Start};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -56,6 +57,21 @@ impl E2bVendor {
 impl RemoteApi for E2bVendor {
     fn vendor(&self) -> &str {
         "e2b"
+    }
+
+    fn environment(&self) -> Environment {
+        Environment::MicroVm(serde_json::json!({ "hypervisor": "firecracker" }))
+    }
+
+    fn can(&self) -> Capabilities {
+        Capabilities {
+            start: Start::Snapshot,
+            pause: true,
+            fork: true,
+            volumes: true,
+            resources: Resources::AtImage,
+            ..Capabilities::default()
+        }
     }
 
     async fn available(&self) -> Result<()> {

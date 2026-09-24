@@ -13,6 +13,7 @@ pub mod recover;
 pub mod registry;
 pub mod routes;
 pub mod runtimes;
+pub mod secrets;
 pub mod spec;
 pub mod states;
 pub mod viewer;
@@ -38,6 +39,8 @@ pub struct AppState {
     seen: Mutex<HashMap<(String, u32), String>>,
     out_of_reach: Mutex<BTreeMap<String, String>>,
     pub runtimes: Runtimes,
+    pub secrets: secrets::Keeper,
+    pub vendors: Arc<dyn runtimes::Vendors>,
     pub tickets: viewer::Tickets,
     pub cdp_tokens: viewer::Tickets,
     pub presses: presses::Presses,
@@ -68,6 +71,8 @@ impl AppState {
             seen: Mutex::new(HashMap::new()),
             out_of_reach: Mutex::new(BTreeMap::new()),
             runtimes: Runtimes::default(),
+            secrets: secrets::Keeper::default(),
+            vendors: Arc::new(runtimes::Builtin),
             tickets: viewer::Tickets::default(),
             cdp_tokens: viewer::Tickets::default(),
             presses: presses::Presses::default(),
@@ -77,11 +82,29 @@ impl AppState {
     }
 
     pub async fn from_env() -> Result<Self, String> {
-        let state = Self::stored().await?;
+        let mut state = Self::stored().await?;
+        state.secrets = secrets::Keeper::from_env()?;
 
         let config = config::ServerConfig::from_env()?;
-        let found =
-            runtimes::discover(&config, &runtimes::offered(), &runtimes::sandboxes()).await?;
+        let found = runtimes::discover(
+            &config,
+            &runtimes::offered(),
+            &runtimes::sandboxes(),
+            state.vendors.as_ref(),
+        )
+        .await?;
+
+        let taken = runtimes::from_store(
+            &found,
+            state.store.as_ref(),
+            &state.secrets,
+            state.vendors.as_ref(),
+        )
+        .await;
+        if taken > 0 {
+            tracing::info!(taken, "runtimes this server was given earlier");
+        }
+        found.settle();
 
         Ok(state.with(found))
     }
@@ -158,12 +181,22 @@ impl AppState {
         self
     }
 
+    pub fn keeping(mut self, secrets: secrets::Keeper) -> Self {
+        self.secrets = secrets;
+        self
+    }
+
+    pub fn serving(mut self, vendors: Arc<dyn runtimes::Vendors>) -> Self {
+        self.vendors = vendors;
+        self
+    }
+
     pub fn with(mut self, runtimes: Runtimes) -> Self {
         self.runtimes = runtimes;
         self
     }
 
-    pub fn through(mut self, cli: Option<Arc<dyn Engine>>) -> Self {
+    pub fn through(self, cli: Option<Arc<dyn Engine>>) -> Self {
         if let Some(cli) = cli {
             self.runtimes.add(runtimes::engine(
                 "docker",

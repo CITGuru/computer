@@ -99,6 +99,35 @@ impl Client {
         Ok(listed.runtimes)
     }
 
+    pub async fn add_runtime(&self, asked: &NewRuntime) -> Result<RuntimeView> {
+        let body = serde_json::to_value(asked).unwrap_or_default();
+
+        self.send(reqwest::Method::POST, "/v1/runtimes", Some(body), &[])
+            .await
+    }
+
+    pub async fn change_runtime(&self, name: &str, asked: &ChangeRuntime) -> Result<RuntimeView> {
+        let body = serde_json::to_value(asked).unwrap_or_default();
+
+        self.send(
+            reqwest::Method::PATCH,
+            &format!("/v1/runtimes/{name}"),
+            Some(body),
+            &[],
+        )
+        .await
+    }
+
+    pub async fn forget_runtime(&self, name: &str) -> Result<()> {
+        self.nothing(
+            reqwest::Method::DELETE,
+            &format!("/v1/runtimes/{name}"),
+            None,
+            &[],
+        )
+        .await
+    }
+
     pub async fn runtime(&self, name: &str) -> Result<RuntimeView> {
         self.send(
             reqwest::Method::GET,

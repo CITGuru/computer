@@ -1,4 +1,4 @@
-use crate::{BoxRecord, Error, Frames, Result, Store, now_ms};
+use crate::{BoxRecord, Error, Frames, Result, RuntimeRecord, Store, now_ms};
 use async_trait::async_trait;
 use computer_api::{Actor, TraceEntry, TraceEvent};
 use sqlx::any::AnyPoolOptions;
@@ -76,6 +76,13 @@ impl Sql {
                      PRIMARY KEY (box_id, hash)
                  )"
             ),
+            "CREATE TABLE IF NOT EXISTS runtimes (
+                 name TEXT PRIMARY KEY,
+                 created_at_ms BIGINT NOT NULL,
+                 updated_at_ms BIGINT NOT NULL,
+                 record TEXT NOT NULL
+             )"
+            .to_string(),
             "CREATE TABLE IF NOT EXISTS sequences (
                  box_id TEXT PRIMARY KEY,
                  next BIGINT NOT NULL
@@ -185,6 +192,69 @@ impl Store for Sql {
                 .await
                 .map_err(|error| failed("a box would not be forgotten", error))?;
         }
+
+        Ok(())
+    }
+
+    async fn put_runtime(&self, record: &RuntimeRecord) -> Result<()> {
+        let body = serde_json::to_string(record)
+            .map_err(|error| Error::Internal(format!("a record would not serialise: {error}")))?;
+
+        sqlx::query(self.q(
+            "INSERT INTO runtimes (name, created_at_ms, updated_at_ms, record)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (name) DO UPDATE SET
+                 updated_at_ms = excluded.updated_at_ms,
+                 record = excluded.record",
+        ))
+        .bind(&record.name)
+        .bind(record.created_at_ms as i64)
+        .bind(record.updated_at_ms as i64)
+        .bind(body)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| failed("a runtime would not go down", error))?;
+
+        Ok(())
+    }
+
+    async fn get_runtime(&self, name: &str) -> Result<Option<RuntimeRecord>> {
+        let held: Option<String> =
+            sqlx::query_scalar(self.q("SELECT record FROM runtimes WHERE name = ?"))
+                .bind(name)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|error| failed("a runtime would not be read", error))?;
+
+        held.map(|body| {
+            serde_json::from_str(&body).map_err(|error| {
+                Error::Corrupt(format!("the runtime {name} does not parse: {error}"))
+            })
+        })
+        .transpose()
+    }
+
+    async fn list_runtimes(&self) -> Result<Vec<RuntimeRecord>> {
+        let rows: Vec<String> =
+            sqlx::query_scalar(self.q("SELECT record FROM runtimes ORDER BY name"))
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|error| failed("the runtimes would not be read", error))?;
+
+        rows.into_iter()
+            .map(|body| {
+                serde_json::from_str(&body)
+                    .map_err(|error| Error::Corrupt(format!("a runtime does not parse: {error}")))
+            })
+            .collect()
+    }
+
+    async fn forget_runtime(&self, name: &str) -> Result<()> {
+        sqlx::query(self.q("DELETE FROM runtimes WHERE name = ?"))
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| failed("a runtime would not go away", error))?;
 
         Ok(())
     }
@@ -450,6 +520,7 @@ mod tests {
         let store = Sql::open(&scratch.url()).await.expect("opened");
 
         conformance::store(&store).await;
+        conformance::runtimes(&store).await;
     }
 
     #[tokio::test]
@@ -567,6 +638,7 @@ mod tests {
             .expect("a clean start");
 
         conformance::store(&store).await;
+        conformance::runtimes(&store).await;
         conformance::frames(&store).await;
     }
 }

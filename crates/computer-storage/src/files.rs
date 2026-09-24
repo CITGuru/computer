@@ -2,7 +2,7 @@
 //! One writer per box: the next sequence is read once and then held.
 
 use crate::error::poisoned;
-use crate::{Blobs, BoxRecord, Error, Frames, Result, Store, now_ms};
+use crate::{Blobs, BoxRecord, Error, Frames, Result, RuntimeRecord, Store, now_ms};
 use async_trait::async_trait;
 use computer_api::{Actor, TraceEntry, TraceEvent};
 use std::collections::HashMap;
@@ -174,6 +174,47 @@ impl<B: Blobs + 'static> Store for Files<B> {
         self.next.lock().map_err(poisoned)?.remove(id);
 
         Ok(())
+    }
+
+    async fn put_runtime(&self, record: &RuntimeRecord) -> Result<()> {
+        let body = serde_json::to_vec(record)
+            .map_err(|error| Error::Internal(format!("a record would not serialise: {error}")))?;
+
+        self.blobs.put(&runtime(&record.name)?, &body).await
+    }
+
+    async fn get_runtime(&self, name: &str) -> Result<Option<RuntimeRecord>> {
+        let Some(body) = self.blobs.get(&runtime(name)?).await? else {
+            return Ok(None);
+        };
+
+        serde_json::from_slice(&body)
+            .map(Some)
+            .map_err(|error| Error::Corrupt(format!("the runtime {name} does not parse: {error}")))
+    }
+
+    async fn list_runtimes(&self) -> Result<Vec<RuntimeRecord>> {
+        let mut records = Vec::new();
+
+        for key in self.blobs.list("runtimes/", None).await? {
+            if !key.ends_with(".json") {
+                continue;
+            }
+
+            let Some(body) = self.blobs.get(&key).await? else {
+                continue;
+            };
+
+            records.push(serde_json::from_slice(&body).map_err(|error| {
+                Error::Corrupt(format!("the runtime at {key} does not parse: {error}"))
+            })?);
+        }
+
+        Ok(records)
+    }
+
+    async fn forget_runtime(&self, name: &str) -> Result<()> {
+        self.blobs.delete_prefix(&runtime(name)?).await
     }
 
     async fn append(
@@ -420,6 +461,10 @@ fn lines(entries: &[TraceEntry]) -> Result<Vec<u8>> {
 
 fn main(id: &str) -> Result<String> {
     Ok(format!("boxes/{}/main.json", part(id)?))
+}
+
+fn runtime(name: &str) -> Result<String> {
+    Ok(format!("runtimes/{}.json", part(name)?))
 }
 
 fn traces(id: &str) -> Result<String> {

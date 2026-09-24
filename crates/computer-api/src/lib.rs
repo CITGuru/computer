@@ -77,6 +77,37 @@ pub struct RuntimeList {
     pub runtimes: Vec<RuntimeView>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InstallApps {
+    pub apps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InstalledApps {
+    pub installed: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NewRuntime {
+    pub name: String,
+    pub provider: String,
+    #[serde(default)]
+    pub fields: serde_json::Value,
+    #[serde(default)]
+    pub secrets: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeRuntime {
+    #[serde(default)]
+    pub fields: Option<serde_json::Value>,
+    #[serde(default)]
+    pub secrets: std::collections::BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
@@ -1357,6 +1388,9 @@ pub enum TraceEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         args: Vec<String>,
         window: String,
+    },
+    AppsInstalled {
+        apps: Vec<String>,
     },
     FileWritten {
         path: String,

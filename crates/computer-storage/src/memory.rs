@@ -1,5 +1,5 @@
 use crate::error::poisoned;
-use crate::{Blobs, BoxRecord, Frames, Result, Store, now_ms};
+use crate::{Blobs, BoxRecord, Frames, Result, RuntimeRecord, Store, now_ms};
 use async_trait::async_trait;
 use computer_api::{Actor, TraceEntry, TraceEvent};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -13,6 +13,7 @@ const MAX_TRACES: usize = 256;
 #[derive(Default)]
 pub struct Memory {
     boxes: Mutex<BTreeMap<String, BoxRecord>>,
+    runtimes: Mutex<BTreeMap<String, RuntimeRecord>>,
     traces: Mutex<HashMap<String, Arc<Trace>>>,
     order: Mutex<VecDeque<String>>,
     frames: Mutex<HashMap<String, Held>>,
@@ -88,6 +89,35 @@ impl Store for Memory {
             .lock()
             .map_err(poisoned)?
             .retain(|held| held != id);
+
+        Ok(())
+    }
+
+    async fn put_runtime(&self, record: &RuntimeRecord) -> Result<()> {
+        self.runtimes
+            .lock()
+            .map_err(poisoned)?
+            .insert(record.name.clone(), record.clone());
+
+        Ok(())
+    }
+
+    async fn get_runtime(&self, name: &str) -> Result<Option<RuntimeRecord>> {
+        Ok(self.runtimes.lock().map_err(poisoned)?.get(name).cloned())
+    }
+
+    async fn list_runtimes(&self) -> Result<Vec<RuntimeRecord>> {
+        Ok(self
+            .runtimes
+            .lock()
+            .map_err(poisoned)?
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    async fn forget_runtime(&self, name: &str) -> Result<()> {
+        self.runtimes.lock().map_err(poisoned)?.remove(name);
 
         Ok(())
     }
@@ -267,6 +297,7 @@ mod tests {
     #[tokio::test]
     async fn test_memory_behaves_like_a_store() {
         conformance::store(&Memory::default()).await;
+        conformance::runtimes(&Memory::default()).await;
     }
 
     #[tokio::test]
