@@ -241,10 +241,29 @@ impl DesktopNeed {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BrowserEndpoint {
     pub http_url: String,
     pub ws_url: String,
+    pub headers: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for BrowserEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrowserEndpoint")
+            .field("http_url", &self.http_url)
+            .field("ws_url", &self.ws_url)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

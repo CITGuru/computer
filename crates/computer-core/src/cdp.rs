@@ -5,9 +5,11 @@ use computer_types::Motion;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 
 pub const TIMEOUT: Duration = Duration::from_secs(30);
@@ -99,11 +101,32 @@ fn websocket_path(url: &str) -> Option<String> {
     Some(format!("/{path}"))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Devtools {
     host: String,
     port: u16,
+    secure: bool,
+    headers: Vec<(String, String)>,
     browser_path: Arc<OnceLock<String>>,
+}
+
+impl std::fmt::Debug for Devtools {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Devtools")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("secure", &self.secure)
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
+    }
 }
 
 impl Devtools {
@@ -111,26 +134,39 @@ impl Devtools {
         Self {
             host: host.into(),
             port,
+            secure: false,
+            headers: Vec::new(),
             browser_path: Arc::new(OnceLock::new()),
         }
     }
 
     pub fn from_endpoint(endpoint: &BrowserEndpoint) -> Result<Self> {
-        let authority = endpoint
-            .http_url
-            .split_once("://")
-            .map(|(_, rest)| rest)
-            .unwrap_or(&endpoint.http_url);
-        let (host, port) = authority
-            .split_once(':')
-            .ok_or_else(|| Error::denied(format!("{} has no port", endpoint.http_url)))?;
+        let (secure, host, port) = split_url(&endpoint.http_url)?;
 
-        let port = port
-            .trim_end_matches('/')
-            .parse()
-            .map_err(|_| Error::denied(format!("{port} is not a port")))?;
+        Ok(Self {
+            secure,
+            headers: endpoint.headers.clone(),
+            ..Self::new(host, port)
+        })
+    }
 
-        Ok(Self::new(host, port))
+    fn authority(&self) -> String {
+        match (self.secure, self.port) {
+            (true, 443) => self.host.clone(),
+            _ => format!("{}:{}", self.host, self.port),
+        }
+    }
+
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.headers
+    }
+
+    pub async fn dial(&self) -> Result<Wire> {
+        let socket = connect(&self.host, self.port).await?;
+        match self.secure {
+            true => secured(&self.host, socket).await,
+            false => Ok(Wire::Plain(socket)),
+        }
     }
 
     pub async fn version(&self) -> Result<Value> {
@@ -142,7 +178,11 @@ impl Devtools {
     }
 
     pub fn socket_url(&self, path: &str) -> String {
-        format!("ws://{}:{}{path}", self.host, self.port)
+        let scheme = match self.secure {
+            true => "wss",
+            false => "ws",
+        };
+        format!("{scheme}://{}{path}", self.authority())
     }
 
     pub async fn targets(&self) -> Result<Vec<Target>> {
@@ -179,7 +219,7 @@ impl Devtools {
     }
 
     pub async fn attach(&self, target: &Target) -> Result<Page> {
-        let mut connection = Connection::open(&self.host, self.port, &target.ws_path).await?;
+        let mut connection = Connection::open(self, &target.ws_path).await?;
 
         match tokio::time::timeout(ANSWERS_WITHIN, connection.call("Page.enable", json!({}))).await
         {
@@ -524,7 +564,7 @@ impl Devtools {
 
     async fn browser_connection(&self) -> Result<Connection> {
         let path = self.browser_path().await?;
-        Connection::open(&self.host, self.port, &path).await
+        Connection::open(self, &path).await
     }
 
     async fn browser_path(&self) -> Result<String> {
@@ -606,16 +646,10 @@ impl Devtools {
     }
 
     async fn request(&self, method: &str, path: &str) -> Result<Value> {
-        let mut socket = connect(&self.host, self.port).await?;
+        let mut socket = self.dial().await?;
 
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
-            self.host, self.port
-        );
-        socket
-            .write_all(request.as_bytes())
-            .await
-            .map_err(|error| Error::transport(error.to_string(), true))?;
+        let request = self.request_head(method, path);
+        send(&mut socket, request.as_bytes()).await?;
 
         let answer = read_http(&mut socket).await?;
         if answer.status != 200 {
@@ -627,6 +661,25 @@ impl Devtools {
 
         // `/json/close` answers with a bare word rather than JSON.
         Ok(serde_json::from_str(&answer.body).unwrap_or(Value::String(answer.body)))
+    }
+
+    fn request_head(&self, method: &str, path: &str) -> String {
+        let length = match method {
+            "GET" | "HEAD" => "",
+            _ => "Content-Length: 0\r\n",
+        };
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: {}\r\n{}{length}Connection: close\r\n\r\n",
+            self.authority(),
+            self.header_lines()
+        )
+    }
+
+    fn header_lines(&self) -> String {
+        self.headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect()
     }
 }
 
@@ -887,7 +940,7 @@ pub struct Event {
 }
 
 struct Connection {
-    socket: TcpStream,
+    socket: Wire,
     next: u64,
     events: VecDeque<Event>,
     dropped: usize,
@@ -923,9 +976,9 @@ fn dialog_refusal(kind: &str, message: &str) -> String {
 }
 
 impl Connection {
-    async fn open(host: &str, port: u16, path: &str) -> Result<Self> {
+    async fn open(devtools: &Devtools, path: &str) -> Result<Self> {
         Ok(Self {
-            socket: handshake(host, port, path).await?,
+            socket: handshake(devtools, path).await?,
             next: 1,
             events: VecDeque::new(),
             dropped: 0,
@@ -1085,7 +1138,13 @@ impl Connection {
 impl Drop for Connection {
     fn drop(&mut self) {
         if !self.closed {
-            let _ = self.socket.try_write(&close_frame());
+            match &self.socket {
+                Wire::Plain(socket) => {
+                    let _ = socket.try_write(&close_frame());
+                }
+                #[cfg(feature = "e2b")]
+                Wire::Tls(_) => {}
+            }
         }
     }
 }
@@ -3554,10 +3613,131 @@ impl Keystroke {
     }
 }
 
+fn split_url(url: &str) -> Result<(bool, &str, u16)> {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("http", url));
+    let secure = match scheme {
+        "http" | "ws" => false,
+        "https" | "wss" => true,
+        other => {
+            return Err(Error::denied(format!(
+                "{other} is not http, https, ws or wss"
+            )));
+        }
+    };
+
+    let authority = rest.split(['/', '?']).next().unwrap_or_default();
+    match authority.rsplit_once(':') {
+        Some((host, port)) => port
+            .parse()
+            .map(|port| (secure, host, port))
+            .map_err(|_| Error::denied(format!("{port} is not a port"))),
+        None if secure => Ok((secure, authority, 443)),
+        None => Err(Error::denied(format!("{url} has no port"))),
+    }
+}
+
+pub async fn dial(url: &str) -> Result<Wire> {
+    let (secure, host, port) = split_url(url)?;
+    let socket = connect(host, port).await?;
+    match secure {
+        true => secured(host, socket).await,
+        false => Ok(Wire::Plain(socket)),
+    }
+}
+
 async fn connect(host: &str, port: u16) -> Result<TcpStream> {
     TcpStream::connect((host, port))
         .await
         .map_err(|error| Error::transport(format!("{host}:{port}: {error}"), true))
+}
+
+pub enum Wire {
+    Plain(TcpStream),
+    #[cfg(feature = "e2b")]
+    Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
+}
+
+impl AsyncRead for Wire {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Plain(socket) => Pin::new(socket).poll_read(context, buffer),
+            #[cfg(feature = "e2b")]
+            Self::Tls(socket) => Pin::new(socket.as_mut()).poll_read(context, buffer),
+        }
+    }
+}
+
+impl AsyncWrite for Wire {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Self::Plain(socket) => Pin::new(socket).poll_write(context, bytes),
+            #[cfg(feature = "e2b")]
+            Self::Tls(socket) => Pin::new(socket.as_mut()).poll_write(context, bytes),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Plain(socket) => Pin::new(socket).poll_flush(context),
+            #[cfg(feature = "e2b")]
+            Self::Tls(socket) => Pin::new(socket.as_mut()).poll_flush(context),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Plain(socket) => Pin::new(socket).poll_shutdown(context),
+            #[cfg(feature = "e2b")]
+            Self::Tls(socket) => Pin::new(socket.as_mut()).poll_shutdown(context),
+        }
+    }
+}
+
+#[cfg(feature = "e2b")]
+async fn secured(host: &str, socket: TcpStream) -> Result<Wire> {
+    use tokio_rustls::rustls::{self, pki_types::ServerName};
+
+    static CONFIG: OnceLock<std::result::Result<Arc<rustls::ClientConfig>, String>> =
+        OnceLock::new();
+
+    let config = CONFIG
+        .get_or_init(|| {
+            let roots = rustls::RootCertStore {
+                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+            };
+            rustls::ClientConfig::builder_with_provider(Arc::new(
+                rustls::crypto::ring::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .map(|builder| Arc::new(builder.with_root_certificates(roots).with_no_client_auth()))
+            .map_err(|error| error.to_string())
+        })
+        .clone()
+        .map_err(|error| Error::transport(error, false))?;
+
+    let name = ServerName::try_from(host.to_string())
+        .map_err(|error| Error::denied(format!("{host}: {error}")))?;
+
+    tokio_rustls::TlsConnector::from(config)
+        .connect(name, socket)
+        .await
+        .map(|secured| Wire::Tls(Box::new(secured)))
+        .map_err(|error| Error::transport(format!("{host}: {error}"), true))
+}
+
+#[cfg(not(feature = "e2b"))]
+async fn secured(host: &str, _socket: TcpStream) -> Result<Wire> {
+    Err(Error::denied(format!(
+        "{host} speaks DevTools over TLS, and this build has no TLS: turn on the e2b feature"
+    )))
 }
 
 struct HttpAnswer {
@@ -3565,7 +3745,7 @@ struct HttpAnswer {
     body: String,
 }
 
-async fn read_http(socket: &mut TcpStream) -> Result<HttpAnswer> {
+async fn read_http(socket: &mut Wire) -> Result<HttpAnswer> {
     let mut raw = Vec::new();
     let mut buffer = [0u8; 4096];
 
@@ -3573,6 +3753,7 @@ async fn read_http(socket: &mut TcpStream) -> Result<HttpAnswer> {
         match tokio::time::timeout(TIMEOUT, socket.read(&mut buffer)).await {
             Ok(Ok(0)) | Err(_) => break,
             Ok(Ok(read)) => raw.extend_from_slice(&buffer[..read]),
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Ok(Err(error)) => return Err(Error::transport(error.to_string(), true)),
         }
 
@@ -3612,11 +3793,27 @@ fn parse_http(raw: &[u8]) -> Option<ParsedHttp> {
         .parse()
         .ok()?;
 
-    let length = head.lines().find_map(|line| {
-        let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case("content-length")
-            .then(|| value.trim().parse::<usize>().ok())?
-    });
+    let header = |wanted: &str| {
+        head.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.trim()
+                .eq_ignore_ascii_case(wanted)
+                .then(|| value.trim().to_string())
+        })
+    };
+
+    let chunked = header("transfer-encoding")
+        .is_some_and(|coding| coding.to_ascii_lowercase().contains("chunked"));
+    if chunked {
+        let (body, complete) = dechunked(body);
+        return Some(ParsedHttp {
+            status,
+            complete,
+            body,
+        });
+    }
+
+    let length = header("content-length").and_then(|length| length.parse::<usize>().ok());
 
     Some(ParsedHttp {
         status,
@@ -3625,23 +3822,46 @@ fn parse_http(raw: &[u8]) -> Option<ParsedHttp> {
     })
 }
 
-/// Does not check `Sec-WebSocket-Accept`: loopback only, and a bad answer fails to parse.
-async fn handshake(host: &str, port: u16, path: &str) -> Result<TcpStream> {
-    let mut socket = connect(host, port).await?;
+fn dechunked(mut rest: &str) -> (String, bool) {
+    let mut body = String::new();
+
+    loop {
+        let Some((size, after)) = rest.split_once("\r\n") else {
+            return (body, false);
+        };
+        let size = size.split(';').next().unwrap_or_default().trim();
+        let Ok(size) = usize::from_str_radix(size, 16) else {
+            return (body, false);
+        };
+        if size == 0 {
+            return (body, true);
+        }
+        let Some(chunk) = after.get(..size) else {
+            return (body, false);
+        };
+        body.push_str(chunk);
+        rest = after.get(size..).unwrap_or_default();
+        rest = rest.strip_prefix("\r\n").unwrap_or(rest);
+    }
+}
+
+/// Does not check `Sec-WebSocket-Accept`: a bad answer fails to parse.
+async fn handshake(devtools: &Devtools, path: &str) -> Result<Wire> {
+    let mut socket = devtools.dial().await?;
 
     let key = base64_encode(&nonce());
     let request = format!(
         "GET {path} HTTP/1.1\r\n\
-         Host: {host}:{port}\r\n\
+         Host: {}\r\n\
+         {}\
          Upgrade: websocket\r\n\
          Connection: Upgrade\r\n\
          Sec-WebSocket-Key: {key}\r\n\
-         Sec-WebSocket-Version: 13\r\n\r\n"
+         Sec-WebSocket-Version: 13\r\n\r\n",
+        devtools.authority(),
+        devtools.header_lines()
     );
-    socket
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|error| Error::transport(error.to_string(), true))?;
+    send(&mut socket, request.as_bytes()).await?;
 
     // Byte by byte: anything past the head is the first frame.
     let mut head = Vec::new();
@@ -3670,14 +3890,22 @@ fn close_frame() -> [u8; 6] {
     [0x88, 0x80, mask[0], mask[1], mask[2], mask[3]]
 }
 
-async fn send_close(socket: &mut TcpStream) -> Result<()> {
+async fn send(socket: &mut Wire, bytes: &[u8]) -> Result<()> {
     socket
-        .write_all(&close_frame())
+        .write_all(bytes)
+        .await
+        .map_err(|error| Error::transport(error.to_string(), true))?;
+    socket
+        .flush()
         .await
         .map_err(|error| Error::transport(error.to_string(), true))
 }
 
-async fn send_text(socket: &mut TcpStream, text: &str) -> Result<()> {
+async fn send_close(socket: &mut Wire) -> Result<()> {
+    send(socket, &close_frame()).await
+}
+
+async fn send_text(socket: &mut Wire, text: &str) -> Result<()> {
     let payload = text.as_bytes();
     let mut frame = vec![0x81u8];
 
@@ -3703,13 +3931,10 @@ async fn send_text(socket: &mut TcpStream, text: &str) -> Result<()> {
             .map(|(byte, key)| byte ^ key),
     );
 
-    socket
-        .write_all(&frame)
-        .await
-        .map_err(|error| Error::transport(error.to_string(), true))
+    send(socket, &frame).await
 }
 
-async fn read_text(socket: &mut TcpStream) -> Result<String> {
+async fn read_text(socket: &mut Wire) -> Result<String> {
     let mut assembled = Vec::new();
 
     loop {
@@ -3767,10 +3992,7 @@ async fn read_text(socket: &mut TcpStream) -> Result<String> {
                         .zip(mask.iter().cycle())
                         .map(|(byte, key)| byte ^ key),
                 );
-                socket
-                    .write_all(&pong)
-                    .await
-                    .map_err(|error| Error::transport(error.to_string(), true))?;
+                send(socket, &pong).await?;
             }
             0xa => {}
             0x8 => return Err(Error::transport("the browser closed the connection", true)),
@@ -3781,7 +4003,7 @@ async fn read_text(socket: &mut TcpStream) -> Result<String> {
     }
 }
 
-async fn read_exact(socket: &mut TcpStream, into: &mut [u8]) -> Result<()> {
+async fn read_exact(socket: &mut Wire, into: &mut [u8]) -> Result<()> {
     match tokio::time::timeout(TIMEOUT, socket.read_exact(into)).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(Error::transport(error.to_string(), true)),
@@ -3792,7 +4014,7 @@ async fn read_exact(socket: &mut TcpStream, into: &mut [u8]) -> Result<()> {
     }
 }
 
-/// Not cryptographic: the mask only guards proxies, and this is loopback.
+/// Not cryptographic: the mask only guards proxies, and a remote endpoint is TLS.
 fn nonce() -> [u8; 16] {
     // The counter keeps two calls in one clock tick apart.
     static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -5309,11 +5531,112 @@ mod tests {
         let endpoint = BrowserEndpoint {
             http_url: "http://127.0.0.1:49632".to_string(),
             ws_url: "ws://127.0.0.1:49632/devtools/browser".to_string(),
+            headers: Vec::new(),
         };
         let devtools = Devtools::from_endpoint(&endpoint).expect("an endpoint");
 
         assert_eq!(devtools.host, "127.0.0.1");
         assert_eq!(devtools.port, 49632);
+    }
+
+    #[test]
+    fn test_a_vendor_endpoint_is_tls_on_443_with_its_headers() {
+        let endpoint = BrowserEndpoint {
+            http_url: "https://9223-sbx.e2b.app".to_string(),
+            ws_url: "wss://9223-sbx.e2b.app/devtools/browser".to_string(),
+            headers: vec![("gate".to_string(), "hunter2".to_string())],
+        };
+        let devtools = Devtools::from_endpoint(&endpoint).expect("an endpoint");
+
+        assert_eq!(
+            (devtools.host.as_str(), devtools.port),
+            ("9223-sbx.e2b.app", 443)
+        );
+        assert_eq!(
+            devtools.socket_url("/devtools/page/ABC"),
+            "wss://9223-sbx.e2b.app/devtools/page/ABC",
+            "the vendor's host, not the 127.0.0.1:9222 the browser reports"
+        );
+        assert_eq!(devtools.header_lines(), "gate: hunter2\r\n");
+    }
+
+    #[test]
+    fn test_a_request_with_no_body_still_says_its_length() {
+        let devtools = Devtools::new("127.0.0.1", 9223);
+
+        assert!(
+            devtools
+                .request_head("PUT", "/json/new?about:blank")
+                .contains("\r\nContent-Length: 0\r\n"),
+            "a vendor's front end answers 411 to a PUT that names no length"
+        );
+        assert!(
+            !devtools
+                .request_head("GET", "/json/version")
+                .contains("Content-Length")
+        );
+    }
+
+    #[test]
+    fn test_a_plain_endpoint_still_names_its_port() {
+        let devtools = Devtools::new("127.0.0.1", 49632);
+
+        assert_eq!(
+            devtools.socket_url("/devtools/browser/B"),
+            "ws://127.0.0.1:49632/devtools/browser/B"
+        );
+        assert!(devtools.header_lines().is_empty());
+    }
+
+    #[test]
+    fn test_a_header_value_is_not_printed() {
+        let devtools = Devtools::from_endpoint(&BrowserEndpoint {
+            http_url: "https://9223-sbx.e2b.app".to_string(),
+            ws_url: String::new(),
+            headers: vec![("gate".to_string(), "hunter2".to_string())],
+        })
+        .expect("an endpoint");
+
+        assert!(!format!("{devtools:?}").contains("hunter2"));
+    }
+
+    #[test]
+    fn test_an_endpoint_that_is_not_http_is_refused() {
+        let endpoint = BrowserEndpoint {
+            http_url: "ftp://127.0.0.1:9223".to_string(),
+            ws_url: String::new(),
+            headers: Vec::new(),
+        };
+
+        assert!(Devtools::from_endpoint(&endpoint).is_err());
+    }
+
+    #[test]
+    fn test_a_socket_url_is_split_like_an_endpoint() {
+        assert_eq!(
+            split_url("wss://6080-sbx.e2b.app/websockify?token=abc").expect("a url"),
+            (true, "6080-sbx.e2b.app", 443)
+        );
+        assert_eq!(
+            split_url("ws://127.0.0.1:6080/websockify").expect("a url"),
+            (false, "127.0.0.1", 6080)
+        );
+        assert!(split_url("ws://127.0.0.1/websockify").is_err());
+    }
+
+    #[test]
+    fn test_a_chunked_body_is_joined() {
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{\"\r\n5\r\na\":1}\r\n0\r\n\r\n";
+        let parsed = parse_http(raw).expect("an answer");
+
+        assert!(parsed.complete);
+        assert_eq!(parsed.body, r#"{"a":1}"#);
+    }
+
+    #[test]
+    fn test_a_chunked_body_still_arriving_is_not_complete() {
+        let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n{\"a\"";
+        assert!(!parse_http(raw).expect("an answer").complete);
     }
 
     #[test]

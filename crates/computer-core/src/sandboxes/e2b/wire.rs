@@ -18,6 +18,7 @@ pub fn new_sandbox(plan: &SandboxPlan) -> Value {
         "timeout": plan.ttl.as_secs(),
         "secure": true,
         "allow_internet_access": plan.network,
+        "network": { "allowPublicTraffic": plan.public },
         "metadata": metadata,
         "envVars": plan.env,
     })
@@ -427,6 +428,21 @@ mod tests {
     }
 
     #[test]
+    fn test_public_traffic_is_asked_for_only_when_it_is_wanted() {
+        let public = new_sandbox(&SandboxPlan {
+            public: true,
+            ..SandboxPlan::default()
+        });
+
+        assert_eq!(public["network"]["allowPublicTraffic"], json!(true));
+        assert_eq!(
+            public["secure"],
+            json!(true),
+            "envd stays gated whatever the ports are"
+        );
+    }
+
+    #[test]
     fn test_a_sandbox_is_always_asked_for_secure() {
         let body = new_sandbox(&SandboxPlan {
             name: "box-7".to_string(),
@@ -437,6 +453,11 @@ mod tests {
         });
 
         assert_eq!(body["secure"], json!(true));
+        assert_eq!(
+            body["network"]["allowPublicTraffic"],
+            json!(false),
+            "secure alone gates envd; without this every port answers anyone with the ID"
+        );
         assert_eq!(
             body["allow_internet_access"],
             json!(false),

@@ -24,6 +24,8 @@ pub const INPUT_GUARD: &str = include_str!("../images/desktop/input-guard.sh");
 
 pub const A11Y_PY: &str = include_str!("../images/desktop/a11y.py");
 
+pub const DEVTOOLS_BRIDGE_PY: &str = include_str!("../images/desktop/devtools-bridge.py");
+
 pub const WAYLAND_DOCKERFILE: &str = include_str!("../images/wayland/Dockerfile");
 pub const WAYLAND_START_SH: &str = include_str!("../images/wayland/start.sh");
 pub const WAYLAND_SCREEN_SH: &str = include_str!("../images/wayland/screen.sh");
@@ -68,6 +70,7 @@ pub static DESKTOP: Bundle = Bundle {
         ("browser.desktop", BROWSER_DESKTOP),
         ("input-guard.sh", INPUT_GUARD),
         ("a11y.py", A11Y_PY),
+        ("devtools-bridge.py", DEVTOOLS_BRIDGE_PY),
     ],
 };
 
@@ -85,6 +88,7 @@ pub static WAYLAND: Bundle = Bundle {
         ("wlr-virtual-pointer-unstable-v1.xml", VIRTUAL_POINTER_XML),
         ("virtual-keyboard-unstable-v1.xml", VIRTUAL_KEYBOARD_XML),
         ("a11y.py", A11Y_PY),
+        ("devtools-bridge.py", DEVTOOLS_BRIDGE_PY),
     ],
 };
 

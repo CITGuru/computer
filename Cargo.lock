@@ -1094,7 +1094,9 @@ dependencies = [
  "tar",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tracing",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]

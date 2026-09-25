@@ -2,7 +2,7 @@ use super::api::Sandbox;
 use crate::profile::{
     AppRuntime, BrowserRuntime, PortLayout, Profile, ScreenRuntime, WallpaperRuntime,
 };
-use crate::{DesktopFactory, DesktopSupport, ImageSource, ScreenAction, ScreenId};
+use crate::{BrowserEndpoint, DesktopFactory, DesktopSupport, ImageSource, ScreenAction, ScreenId};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
@@ -33,14 +33,23 @@ impl Remote {
     }
 }
 
+pub const DEVTOOLS_SECRET_ENV: &str = "COMPUTER_DEVTOOLS_SECRET";
+
+pub const DEVTOOLS_SECRET_HEADER: &str = "x-computer-devtools";
+
 pub struct RemoteProfile {
     inner: Arc<dyn Profile>,
     remote: Arc<Remote>,
+    devtools_secret: Option<crate::Secret>,
 }
 
 impl RemoteProfile {
     pub fn new(inner: Arc<dyn Profile>, remote: Arc<Remote>) -> Self {
-        Self { inner, remote }
+        Self {
+            inner,
+            remote,
+            devtools_secret: crate::Secret::generate().ok(),
+        }
     }
 
     pub fn inner(&self) -> &Arc<dyn Profile> {
@@ -57,12 +66,8 @@ impl Profile for RemoteProfile {
         self.inner.image()
     }
 
-    /// A remote endpoint is `wss`, and [`crate::cdp`] speaks plain `TcpStream`.
     fn ports(&self) -> PortLayout {
-        PortLayout {
-            devtools_bridge: None,
-            ..self.inner.ports()
-        }
+        self.inner.ports()
     }
 
     fn default_size(&self) -> (u32, u32) {
@@ -70,13 +75,7 @@ impl Profile for RemoteProfile {
     }
 
     fn support_at(&self, width: u32, height: u32) -> DesktopSupport {
-        let mut support = self.inner.support_at(width, height);
-
-        if let Some(browser) = support.browser.as_mut() {
-            // Withdrawn, so `audit` skips the check instead of failing it.
-            browser.cdp = false;
-        }
-        support
+        self.inner.support_at(width, height)
     }
 
     fn driver(&self) -> Arc<dyn DesktopFactory> {
@@ -113,7 +112,11 @@ impl Profile for RemoteProfile {
     }
 
     fn launch_env(&self, width: u32, height: u32) -> BTreeMap<String, String> {
-        self.inner.launch_env(width, height)
+        let mut env = self.inner.launch_env(width, height);
+        if let Some(secret) = &self.devtools_secret {
+            env.insert(DEVTOOLS_SECRET_ENV.to_string(), secret.expose().to_string());
+        }
+        env
     }
 
     fn screen_env(&self, screen: ScreenId) -> BTreeMap<String, String> {
@@ -122,6 +125,58 @@ impl Profile for RemoteProfile {
 
     fn geometry_from(&self, environment: &BTreeMap<String, String>) -> Option<(u32, u32)> {
         self.inner.geometry_from(environment)
+    }
+
+    fn devtools(&self, bridge: u16) -> Option<BrowserEndpoint> {
+        let sandbox = self.remote.get()?;
+        let base = sandbox.url(bridge)?;
+        let socket = base
+            .strip_prefix("https://")
+            .map(|host| format!("wss://{host}"))
+            .or_else(|| {
+                base.strip_prefix("http://")
+                    .map(|host| format!("ws://{host}"))
+            })?;
+
+        Some(BrowserEndpoint {
+            http_url: base.to_string(),
+            ws_url: format!("{socket}/devtools/browser"),
+            headers: sandbox
+                .headers
+                .into_iter()
+                .chain(self.devtools_secret.iter().map(|secret| {
+                    (
+                        DEVTOOLS_SECRET_HEADER.to_string(),
+                        secret.expose().to_string(),
+                    )
+                }))
+                .collect(),
+        })
+    }
+
+    fn port_headers(&self) -> Vec<(String, String)> {
+        self.remote
+            .get()
+            .map(|sandbox| sandbox.headers.into_iter().collect())
+            .unwrap_or_default()
+    }
+
+    fn viewer_socket(&self, at: &crate::Address, ticket: Option<&crate::Secret>) -> String {
+        let Some(host) = self.remote.get().and_then(|sandbox| {
+            sandbox
+                .url(at.port)
+                .and_then(|base| base.strip_prefix("https://"))
+                .map(str::to_string)
+        }) else {
+            return self.inner.viewer_socket(at, ticket);
+        };
+
+        let mut url = format!("wss://{host}/websockify");
+        if let Some(ticket) = ticket {
+            url.push_str("?token=");
+            url.push_str(ticket.expose());
+        }
+        url
     }
 
     fn viewer_url(&self, at: &crate::Address, ticket: Option<&crate::Secret>) -> String {
@@ -194,24 +249,76 @@ mod tests {
     }
 
     #[test]
-    fn test_the_devtools_bridge_is_not_published() {
+    fn test_the_devtools_bridge_is_published() {
         let (_, profile) = profile();
 
-        assert!(profile.ports().devtools_bridge.is_none());
+        assert_eq!(profile.ports().devtools_bridge, Some(9223));
         assert!(
-            !profile.ports().to_publish().contains(&9223),
-            "a port nothing out here can reach is worse published than absent"
+            profile.ports().to_publish().contains(&9223),
+            "the vendor only hands back an address for what was asked for"
         );
     }
 
     #[test]
-    fn test_the_descriptor_stops_claiming_devtools() {
+    fn test_the_descriptor_still_claims_devtools() {
         let (_, profile) = profile();
         let support = profile.support_at(1280, 800);
         let browser = support.browser.expect("chromium is still in the box");
 
-        assert!(!browser.cdp);
+        assert!(browser.cdp);
         assert!(browser.headed, "it still has a window on the screen");
+    }
+
+    #[test]
+    fn test_devtools_is_reached_at_the_vendors_address_with_its_headers() {
+        let (remote, profile) = profile();
+        remote.set(
+            Sandbox::new("i7q3")
+                .published_as([9223], |port, id| format!("{port}-{id}.x.dev"))
+                .with_header("gate", "hunter2"),
+        );
+
+        let endpoint = profile.devtools(9223).expect("an endpoint");
+        assert_eq!(endpoint.http_url, "https://9223-i7q3.x.dev");
+        assert_eq!(endpoint.ws_url, "wss://9223-i7q3.x.dev/devtools/browser");
+        assert_eq!(
+            endpoint.headers.first(),
+            Some(&("gate".to_string(), "hunter2".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_the_bridge_is_given_the_secret_devtools_carries() {
+        let (remote, profile) = profile();
+        remote.set(sandbox().published_as([9223], |port, id| format!("{port}-{id}.x.dev")));
+
+        let env = profile.launch_env(1280, 800);
+        let secret = env.get(DEVTOOLS_SECRET_ENV).expect("a secret in the box");
+        let endpoint = profile.devtools(9223).expect("an endpoint");
+
+        assert!(
+            endpoint
+                .headers
+                .contains(&(DEVTOOLS_SECRET_HEADER.to_string(), secret.clone())),
+            "the vendor's address answers anyone, so the bridge answers only this"
+        );
+        assert_ne!(
+            RemoteProfile::new(Arc::new(X11Profile), Arc::new(Remote::new()))
+                .launch_env(1280, 800)
+                .get(DEVTOOLS_SECRET_ENV),
+            Some(secret),
+            "one box's secret opens no other box"
+        );
+    }
+
+    #[test]
+    fn test_devtools_has_no_endpoint_before_the_box_exists() {
+        let (_, profile) = profile();
+
+        assert!(
+            profile.devtools(9223).is_none(),
+            "127.0.0.1 is this machine, not the sandbox"
+        );
     }
 
     #[test]

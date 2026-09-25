@@ -28,8 +28,12 @@ boot() {
   a11y_bus
   computer-screen start 0 || return 1
 
-  socat TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222 \
-    >/tmp/computer/devtools-bridge.log 2>&1 &
+  if [ -n "${COMPUTER_DEVTOOLS_SECRET:-}" ] && command -v computer-devtools-bridge >/dev/null; then
+    computer-devtools-bridge >/tmp/computer/devtools-bridge.log 2>&1 &
+  else
+    socat TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222 \
+      >/tmp/computer/devtools-bridge.log 2>&1 &
+  fi
 }
 
 # `--once` for a microVM, which outlives the call that started it.

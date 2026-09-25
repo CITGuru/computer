@@ -176,6 +176,14 @@ pub trait Profile: Send + Sync {
         url
     }
 
+    fn devtools(&self, _bridge: u16) -> Option<crate::BrowserEndpoint> {
+        None
+    }
+
+    fn port_headers(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
     /// The socket behind the viewer page, for a proxy that carries the RFB bytes itself.
     fn viewer_socket(&self, at: &crate::Address, ticket: Option<&crate::Secret>) -> String {
         let scheme = match at.scheme {

@@ -2,35 +2,28 @@
 //!
 //! ```text
 //! export E2B_API_KEY=...
-//! export COMPUTER_E2B_TEMPLATE=<template id>
 //! cargo test --features e2b --test live_e2b -- --ignored --nocapture
 //! ```
 //!
-//! Needs a template derived from the desktop image:
-//!
-//! ```text
-//! python3 images/context.py images/desktop /tmp/e2b-ctx --for e2b
-//! e2b template create computer-desktop -p /tmp/e2b-ctx -d Dockerfile \
-//!     -c "/usr/local/bin/computer-desktop" --ready-cmd "true" \
-//!     --cpu-count 2 --memory-mb 2048
-//! ```
+//! Without `COMPUTER_E2B_TEMPLATE`, the template is built from the bundled desktop image.
 
 #![cfg(feature = "e2b")]
 
 use computer::sandboxes::e2b::{self, E2bApi, cloud::Cloud};
-use computer::{Auth, Button, Computer, Delta, Point, ScreenId, Selection, X11Profile};
+use computer::{
+    Auth, BrowserEndpoint, Button, Computer, Delta, Devtools, Point, ScreenId, Selection,
+    X11Profile,
+};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const TEMPLATE_ENV: &str = "COMPUTER_E2B_TEMPLATE";
 
 #[tokio::test]
 #[ignore = "needs an E2B account and a built template"]
 async fn a_real_sandbox_runs_the_same_desktop() {
-    let Ok(template) = std::env::var(TEMPLATE_ENV) else {
-        eprintln!("{TEMPLATE_ENV} is not set; nothing to test against");
-        return;
-    };
+    let template = std::env::var(TEMPLATE_ENV).ok();
 
     let Ok(cloud) = Cloud::from_env() else {
         eprintln!("E2B_API_KEY is not set; nothing to test against");
@@ -44,21 +37,18 @@ async fn a_real_sandbox_runs_the_same_desktop() {
 
     let (machine, profile) = e2b::pair(Arc::new(cloud), Arc::new(X11Profile));
 
-    let computer = Computer::builder()
+    let mut builder = Computer::builder()
         .auth(Auth::Token)
         .machine(Arc::new(machine.public_viewer(true)))
-        .profile(profile)
-        .image(&template)
-        .launch()
-        .await
-        .expect("a sandbox");
+        .profile(profile);
+    if let Some(template) = &template {
+        builder = builder.image(template);
+    }
+    let computer = builder.launch().await.expect("a sandbox");
 
     println!("  {} on {}", computer.name(), computer.provider());
-    if computer.viewer_url().is_some() {
-        println!("  viewer available");
-    }
 
-    let gate = the_viewer_refuses_a_wrong_ticket(&computer);
+    let gate = gates(&computer).await;
     let outcome = exercise(&computer).await;
     let removed = computer.shutdown().await;
 
@@ -70,58 +60,124 @@ async fn a_real_sandbox_runs_the_same_desktop() {
     removed.expect("it goes away");
 }
 
-fn the_viewer_refuses_a_wrong_ticket(computer: &Computer) -> Result<(), String> {
-    let url = computer.viewer_url().ok_or("no viewer URL")?;
-    let authority = url
-        .split("//")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .ok_or("no authority")?;
-    let ticket = computer
-        .credentials()
-        .ok_or("a gated box holds a pair")?
-        .view
-        .expose()
-        .to_string();
-
-    let upgrade = |token: &str| -> String {
-        let output = std::process::Command::new("curl")
-            .args([
-                "-s",
-                "-o",
-                "/dev/null",
-                "-w",
-                "%{http_code}",
-                "--max-time",
-                "20",
-                "--http1.1",
-                "-H",
-                "Connection: Upgrade",
-                "-H",
-                "Upgrade: websocket",
-                "-H",
-                "Sec-WebSocket-Version: 13",
-                "-H",
-                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-            ])
-            .arg(format!("https://{authority}/websockify?token={token}"))
-            .output()
-            .expect("curl is on the path");
-        String::from_utf8_lossy(&output.stdout).trim().to_string()
+async fn upgrade(url: &str, headers: &[(String, String)]) -> String {
+    let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let Ok(mut wire) = computer::cdp::dial(url).await else {
+        return "no connection".to_string();
     };
 
-    let refused = upgrade("not-the-ticket");
-    println!("  a wrong ticket over the internet: {refused}");
-    if refused == "101" {
-        return Err("a wrong ticket opened a public viewer".to_string());
+    let mut request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+         Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Protocol: binary\r\n"
+    );
+    for (name, value) in headers {
+        request.push_str(&format!("{name}: {value}\r\n"));
+    }
+    request.push_str("\r\n");
+
+    if wire.write_all(request.as_bytes()).await.is_err() || wire.flush().await.is_err() {
+        return "no request".to_string();
+    }
+    let mut answer = vec![0u8; 256];
+    let read = tokio::time::timeout(Duration::from_secs(20), wire.read(&mut answer))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(0);
+    String::from_utf8_lossy(&answer[..read])
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("no answer")
+        .to_string()
+}
+
+async fn gates(computer: &Computer) -> Result<(), String> {
+    if computer.viewer_url().is_some() {
+        return Err("a browser cannot send the traffic token, so no link should be given".into());
     }
 
-    let opened = upgrade(&ticket);
-    println!("  the right ticket over the internet: {opened}");
-    match opened == "101" {
-        true => Ok(()),
-        false => Err(format!("the right ticket was refused: {opened}")),
+    let screen = computer.primary();
+    let headers = screen.socket_headers();
+    let socket = screen.viewer_socket().ok_or("no viewer socket")?;
+
+    let opened = upgrade(&socket, &headers).await;
+    println!("  the viewer with the traffic token: {opened}");
+    if opened != "101" {
+        return Err(format!("the viewer refused the right ticket: {opened}"));
     }
+
+    let bare = upgrade(&socket, &[]).await;
+    println!("  the viewer without the traffic token: {bare}");
+    if bare != "403" {
+        return Err(format!(
+            "the sandbox let a request in without its token: {bare}"
+        ));
+    }
+
+    let (base, _) = socket
+        .split_once("?token=")
+        .ok_or("no ticket in the socket")?;
+    let wrong = upgrade(&format!("{base}?token=not-the-ticket"), &headers).await;
+    println!("  a wrong ticket with the traffic token: {wrong}");
+    if wrong == "101" {
+        return Err("a wrong ticket opened the viewer".to_string());
+    }
+
+    let endpoint = computer.devtools().ok_or("no DevTools endpoint")?;
+    let no_secret = Devtools::from_endpoint(&BrowserEndpoint {
+        headers: endpoint
+            .headers
+            .iter()
+            .filter(|(name, _)| name != "x-computer-devtools")
+            .cloned()
+            .collect(),
+        ..endpoint
+    })
+    .map_err(|error| error.to_string())?;
+    match no_secret.version().await {
+        Ok(_) => Err("the DevTools bridge answered without its secret".to_string()),
+        Err(error) => {
+            println!("  DevTools without the bridge secret: {error}");
+            Ok(())
+        }
+    }
+}
+
+async fn browser(computer: &Computer) -> computer::Result<()> {
+    let browser = computer.browser().expect("a DevTools endpoint");
+
+    let started = std::time::Instant::now();
+    let mut page = browser
+        .open_page("https://example.com", Duration::from_secs(30))
+        .await?;
+    assert_eq!(page.title().await?, "Example Domain");
+    let snapshot = page.snapshot(None, Some(20)).await?;
+    assert!(snapshot.total > 0, "example.com has a link to list");
+    println!(
+        "  the browser drove itself over wss in {:?}",
+        started.elapsed()
+    );
+
+    page.bring_to_front().await?;
+    assert!(page.visible().await?);
+
+    computer.open_url("https://example.net").await?;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    let showing = browser.visible_page().await?;
+    let mut showing = showing.expect("something is on the screen");
+    assert!(
+        showing.url().await?.contains("example.net"),
+        "open_url joined the browser DevTools reaches, not a second one"
+    );
+    assert!(!page.visible().await?);
+    println!("  open_url and DevTools see the same browser");
+
+    let id = page.target().id.clone();
+    browser.close(&id).await?;
+    Ok(())
 }
 
 async fn exercise(computer: &Computer) -> computer::Result<()> {
@@ -186,10 +242,7 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     );
     println!("  files went over and came back, directories and all");
 
-    assert!(
-        computer.devtools().is_none(),
-        "an endpoint out here would be wss, and cdp.rs speaks plain TCP"
-    );
+    browser(computer).await?;
 
     let second = computer.screen(ScreenId(1)).await?;
     assert_eq!(second.display(), ":2");
@@ -202,8 +255,8 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     let audit = computer::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
     println!("  audit: {audit}");
     assert!(
-        !audit.met.contains(&"browser"),
-        "the CDP claim was withdrawn, so nothing should have checked it"
+        audit.met.contains(&"browser"),
+        "DevTools reaches the box, so the audit checks it"
     );
 
     Ok(())

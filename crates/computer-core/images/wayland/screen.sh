@@ -23,6 +23,11 @@ sockfile="/tmp/computer/screen-${screen}.sway"
 control_token="/tmp/computer/screen-${screen}.control"
 pointer_door="${runtime}/computer-pointer"
 profile="${HOME:-/home/computer}/.browser-profiles/screen-${number}"
+running="$(ps -eo args= | grep -oE -- "--user-data-dir=[^ ]*/\.browser-profiles/screen-${number}( |$)" | head -n 1)"
+if [ -n "$running" ]; then
+  profile="${running#--user-data-dir=}"
+  profile="${profile% }"
+fi
 logs="/tmp/computer/screen-${number}"
 
 export XDG_RUNTIME_DIR="$runtime"

@@ -118,6 +118,10 @@ pub trait Machine: Send + Sync {
         config.bind.reach()
     }
 
+    fn exposes_every_port(&self) -> bool {
+        false
+    }
+
     fn sweepable(&self) -> bool {
         false
     }

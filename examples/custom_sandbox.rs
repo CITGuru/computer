@@ -53,6 +53,7 @@ impl Fleet {
             id: id.to_string(),
             endpoints: self.endpoints(id).await?,
             token: None,
+            headers: BTreeMap::new(),
         })
     }
 }
