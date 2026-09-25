@@ -115,6 +115,7 @@ COPY fluxbox.init /etc/computer/fluxbox/init
 COPY fluxbox.style /etc/computer/fluxbox/style
 COPY wallpaper.sh /usr/local/bin/computer-wallpaper
 COPY launch.sh /usr/local/bin/computer-launch
+COPY devtools-bridge.py /usr/local/bin/computer-devtools-bridge
 COPY tint2rc /etc/computer/tint2rc
 COPY terminal.desktop /usr/share/applications/computer-terminal.desktop
 COPY browser.desktop /usr/share/applications/computer-browser.desktop
@@ -132,7 +133,8 @@ RUN chmod +x /usr/local/bin/computer-desktop \
              /usr/local/bin/computer-browser \
              /usr/local/bin/xdotool \
              /usr/local/bin/computer-wallpaper \
-             /usr/local/bin/computer-launch
+             /usr/local/bin/computer-launch \
+             /usr/local/bin/computer-devtools-bridge
 
 LABEL computer.profile="computer-desktop"
 

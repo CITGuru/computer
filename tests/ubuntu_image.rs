@@ -1,4 +1,6 @@
-use computer::bundle::{BROWSER_SH, FLUXBOX_INIT, INPUT_GUARD, SCREEN_SH, START_SH};
+use computer::bundle::{
+    BROWSER_SH, DEVTOOLS_BRIDGE_PY, FLUXBOX_INIT, INPUT_GUARD, SCREEN_SH, START_SH,
+};
 use computer::image::{
     BROWSER_COMMAND, DESKTOP_COMMAND, DEVTOOLS_BRIDGE_PORT, DEVTOOLS_PORT, HEIGHT, HEIGHT_ENV,
     SCREEN_COMMAND, WIDTH, WIDTH_ENV,
@@ -34,6 +36,7 @@ fn the_scripts_are_the_ones_the_contract_is_proven_against() {
         ("browser.sh", BROWSER_SH),
         ("input-guard.sh", INPUT_GUARD),
         ("fluxbox.init", FLUXBOX_INIT),
+        ("devtools-bridge.py", DEVTOOLS_BRIDGE_PY),
     ] {
         let theirs = read(name);
         assert_eq!(
