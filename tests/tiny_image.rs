@@ -1,7 +1,7 @@
 use computer::bundle::{
-    BROWSER_DESKTOP, BROWSER_SH, DOCKERFILE, EMBED_HTML, FLUXBOX_APPS, FLUXBOX_INIT, FLUXBOX_MENU,
-    FLUXBOX_STYLE, INPUT_GUARD, LAUNCH_SH, SCREEN_SH, START_SH, TERMINAL_DESKTOP, TINT2RC,
-    WALLPAPER_SH,
+    BROWSER_DESKTOP, BROWSER_SH, DEVTOOLS_BRIDGE_PY, DOCKERFILE, EMBED_HTML, FLUXBOX_APPS,
+    FLUXBOX_INIT, FLUXBOX_MENU, FLUXBOX_STYLE, INPUT_GUARD, LAUNCH_SH, SCREEN_SH, START_SH,
+    TERMINAL_DESKTOP, TINT2RC, WALLPAPER_SH,
 };
 use computer::image::{
     BROWSER_COMMAND, DESKTOP_COMMAND, DEVTOOLS_BRIDGE_PORT, HEIGHT, HEIGHT_ENV, SCREEN_COMMAND,
@@ -80,6 +80,7 @@ fn the_scripts_are_the_ones_the_contract_is_proven_against() {
         ("wallpaper.sh", WALLPAPER_SH),
         ("launch.sh", LAUNCH_SH),
         ("fluxbox.init", FLUXBOX_INIT),
+        ("devtools-bridge.py", DEVTOOLS_BRIDGE_PY),
     ] {
         assert_eq!(
             instructions(&read(name)),
