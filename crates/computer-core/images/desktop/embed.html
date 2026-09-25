@@ -25,6 +25,7 @@
     </style>
     <script type="module">
       import RFB from "./core/rfb.js";
+      import paste from "./app/paste.js";
 
       function query(name, fallback) {
         const match = `${document.location.href}${window.location.hash}`.match(
@@ -54,6 +55,7 @@
       rfb.viewOnly = flag("view_only");
       rfb.scaleViewport = true;
       rfb.clipViewport = false;
+      paste(() => rfb);
 
       // Without these, every failure renders as a black rectangle.
       rfb.addEventListener("securityfailure", (event) =>
