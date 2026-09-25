@@ -1658,7 +1658,9 @@ cargo run --features e2b --example e2b_takeover -- <template-id> "search text"
 
 The viewer URL is withheld by default. A machine configured with `public_viewer(true)` is internet-reachable and must use `Auth::Password` or `Auth::Token`; launch is refused without that gate.
 
-Remote cloud profiles do not expose Chrome DevTools. Screen input, screenshots, clipboard operations, human control, and file transfer remain available.
+E2B sandboxes are created with public traffic off by default, so every port refuses a request without the traffic token that E2B issues for the sandbox. A browser cannot send that token, so such a box gives no direct viewer or takeover URL: watch it and take it over through `computerd`, which carries the token. `public_traffic(true)` on the machine, or `--field public_traffic=true` on `computer runtime add`, opens the ports, and the viewer and takeover URLs come back. Every port is then reachable by anyone with the sandbox ID: the viewer keeps its own token and the DevTools bridge its secret, but Chromium's own port 9222 is protected only by its refusal of any host name other than an IP address or `localhost`.
+
+Page tools reach Chrome DevTools at the vendor's address for port 9223. A bridge in the box answers only requests that carry a secret made for that box. A template built from an older image does not have the bridge, so build it again.
 
 ### X11 and Wayland
 

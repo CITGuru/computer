@@ -101,9 +101,12 @@ impl Runtime {
 
         match &self.place {
             Place::Host { machine } => (Arc::clone(machine), image),
-            Place::Remote { api, .. } => {
+            Place::Remote { api, fields } => {
                 let (machine, profile) = remote::pair(Arc::clone(api), image);
-                (Arc::new(machine.public_viewer(true)), profile)
+                let machine = machine
+                    .public_viewer(true)
+                    .public_traffic(public_traffic(fields));
+                (Arc::new(machine), profile)
             }
         }
     }
@@ -935,6 +938,14 @@ pub fn stored(
     })
 }
 
+fn public_traffic(fields: &Value) -> bool {
+    match fields.get("public_traffic") {
+        Some(Value::Bool(public)) => *public,
+        Some(Value::String(said)) => said.eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
+
 fn lives(fields: &Value) -> Tuning {
     Tuning {
         lifetime_secs: fields.get("lifetime_secs").and_then(Value::as_u64),
@@ -1087,6 +1098,43 @@ mod tests {
             can,
             tuning: Tuning::default(),
             state: RuntimeState::Ready,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_public_traffic_is_a_field_the_runtime_is_given() {
+        for (fields, public) in [
+            (serde_json::json!({}), false),
+            (serde_json::json!({ "public_traffic": "true" }), true),
+            (serde_json::json!({ "public_traffic": true }), true),
+            (serde_json::json!({ "public_traffic": "false" }), false),
+        ] {
+            let api = Arc::new(ScriptedRemote::new());
+            let runtime = Runtime {
+                place: Place::Remote {
+                    api: Arc::clone(&api) as Arc<dyn RemoteApi>,
+                    fields: fields.clone(),
+                },
+                ..cloud()
+            };
+
+            let (machine, _) = runtime.pair(DisplayServer::default());
+            machine
+                .start(
+                    "box",
+                    &computer::Config {
+                        boot: vec!["true".to_string()],
+                        ..computer::Config::default()
+                    },
+                )
+                .await
+                .expect("started");
+
+            assert_eq!(
+                api.plans().pop().expect("one plan").public,
+                public,
+                "{fields}"
+            );
         }
     }
 

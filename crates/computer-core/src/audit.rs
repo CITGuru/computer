@@ -135,7 +135,7 @@ pub async fn audit(computer: &Computer) -> Audit {
     }
 
     if let Some(viewer) = &support.viewer {
-        let outcome = match screen.viewer_url() {
+        let outcome = match screen.viewer_socket() {
             None => Err(crate::Error::denied(
                 "no viewer port reaches this box from here",
             )),

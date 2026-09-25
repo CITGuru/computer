@@ -25,6 +25,7 @@ pub struct RemoteMachine {
     images: Mutex<BTreeMap<String, String>>,
     ttl: Duration,
     public_viewer: bool,
+    public_traffic: bool,
 }
 
 impl RemoteMachine {
@@ -36,6 +37,7 @@ impl RemoteMachine {
             images: Mutex::new(BTreeMap::new()),
             ttl: DEFAULT_TTL,
             public_viewer: false,
+            public_traffic: false,
         }
     }
 
@@ -49,6 +51,11 @@ impl RemoteMachine {
     /// answers.
     pub fn public_viewer(mut self, public: bool) -> Self {
         self.public_viewer = public;
+        self
+    }
+
+    pub fn public_traffic(mut self, public: bool) -> Self {
+        self.public_traffic = public;
         self
     }
 
@@ -74,6 +81,7 @@ impl RemoteMachine {
             env: config.env.clone(),
             metadata,
             network: config.network,
+            public: self.public_traffic,
             ttl: self.ttl,
         }
     }
@@ -169,6 +177,10 @@ impl Machine for RemoteMachine {
             true => crate::Reach::Routable,
             false => crate::Reach::Loopback,
         }
+    }
+
+    fn exposes_every_port(&self) -> bool {
+        self.api.exposes_every_port()
     }
 
     async fn ensure_image(&self, config: &Config) -> Result<()> {
@@ -408,6 +420,24 @@ mod tests {
         let plan = api.plans().pop().expect("one plan");
         assert_eq!(plan.metadata.get(NAME_KEY), Some(&"desk-1".to_string()));
         assert_eq!(plan.publish, vec![6080, 6081]);
+    }
+
+    #[tokio::test]
+    async fn test_public_traffic_is_off_until_it_is_asked_for() {
+        let api = Arc::new(ScriptedRemote::new());
+        machine(Arc::clone(&api))
+            .start("desk-1", &config())
+            .await
+            .expect("started");
+        assert!(!api.plans().pop().expect("one plan").public);
+
+        let api = Arc::new(ScriptedRemote::new());
+        machine(Arc::clone(&api))
+            .public_traffic(true)
+            .start("desk-1", &config())
+            .await
+            .expect("started");
+        assert!(api.plans().pop().expect("one plan").public);
     }
 
     #[tokio::test]

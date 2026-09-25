@@ -19,6 +19,8 @@ pub struct Sandbox {
     pub endpoints: BTreeMap<u16, String>,
 
     pub token: Option<String>,
+
+    pub headers: BTreeMap<String, String>,
 }
 
 /// Redacted: this ends up in `tracing` fields.
@@ -29,6 +31,7 @@ impl std::fmt::Debug for Sandbox {
             .field("id", &self.id)
             .field("endpoints", &self.endpoints)
             .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -58,6 +61,11 @@ impl Sandbox {
         self
     }
 
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(name.into(), value.into());
+        self
+    }
+
     pub fn url(&self, port: u16) -> Option<&str> {
         self.endpoints.get(&port).map(String::as_str)
     }
@@ -76,6 +84,8 @@ pub struct SandboxPlan {
 
     pub network: bool,
 
+    pub public: bool,
+
     pub ttl: Duration,
 }
 
@@ -88,6 +98,7 @@ impl Default for SandboxPlan {
             env: BTreeMap::new(),
             metadata: BTreeMap::new(),
             network: true,
+            public: false,
             ttl: DEFAULT_TTL,
         }
     }
@@ -155,6 +166,10 @@ pub trait RemoteApi: Send + Sync {
 
     async fn carrying(&self, _key: &str) -> Result<Vec<(String, String)>> {
         Ok(Vec::new())
+    }
+
+    fn exposes_every_port(&self) -> bool {
+        false
     }
 
     /// A sweep over a vendor that lists nothing reports every box as gone.
@@ -247,6 +262,17 @@ mod tests {
 
         assert!(!printed.contains("hunter2"));
         assert!(printed.contains("i7q3"), "the ID is what a log is read for");
+    }
+
+    #[test]
+    fn test_a_header_value_does_not_survive_a_debug() {
+        let printed = format!("{:?}", Sandbox::new("i7q3").with_header("gate", "hunter2"));
+
+        assert!(!printed.contains("hunter2"));
+        assert!(
+            printed.contains("gate"),
+            "which header is carried is not the secret"
+        );
     }
 
     #[tokio::test]

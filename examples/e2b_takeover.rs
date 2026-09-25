@@ -27,6 +27,7 @@ async fn main() -> computer::Result<()> {
         .machine(Arc::new(
             machine
                 .public_viewer(true)
+                .public_traffic(true)
                 .expiring_after(Duration::from_secs(30 * 60)),
         ))
         .profile(profile)

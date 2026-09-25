@@ -800,7 +800,7 @@ impl E2bApi for ScriptedE2b {
     async fn create(&self, plan: &SandboxPlan) -> Result<Sandbox> {
         let sandbox = Sandbox {
             envd_token: Some("envd".to_string()),
-            traffic_token: Some("traffic".to_string()),
+            traffic_token: (!plan.public).then(|| "traffic".to_string()),
             ..Sandbox::new(format!("sbx-{}", self.next.fetch_add(1, Ordering::Relaxed)))
         };
 

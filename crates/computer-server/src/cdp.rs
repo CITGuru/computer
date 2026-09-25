@@ -6,7 +6,7 @@ use crate::viewer::BoxSide;
 use axum::Json;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{RawQuery, State};
-use axum::http::{HeaderMap, Method, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use computer_api::{CdpToken, ErrorCode};
 use futures_util::{SinkExt, StreamExt};
@@ -122,17 +122,26 @@ pub async fn socket(
     upgrade: WebSocketUpgrade,
 ) -> ApiResult<Response> {
     let entry = admitted(&state, &token).await?;
-    let inside = browser_of(&entry)?.socket_url(&format!("/devtools/{rest}"));
+    let browser = browser_of(&entry)?;
 
-    let request = inside
+    let mut request = browser
+        .socket_url(&format!("/devtools/{rest}"))
         .into_client_request()
         .map_err(|error| ApiError::internal(format!("the DevTools socket address: {error}")))?;
+    for (name, value) in browser.headers() {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|error| ApiError::internal(format!("a DevTools header name: {error}")))?;
+        let value = HeaderValue::from_str(value)
+            .map_err(|error| ApiError::internal(format!("a DevTools header value: {error}")))?;
+        request.headers_mut().insert(name, value);
+    }
 
     let config = WebSocketConfig::default()
         .max_message_size(Some(LARGEST_MESSAGE))
         .max_frame_size(Some(LARGEST_MESSAGE));
 
-    let (box_side, _) = tokio_tungstenite::connect_async_with_config(request, Some(config), false)
+    let wire = browser.dial().await?;
+    let (box_side, _) = tokio_tungstenite::client_async_with_config(request, wire, Some(config))
         .await
         .map_err(|error| {
             ApiError::new(

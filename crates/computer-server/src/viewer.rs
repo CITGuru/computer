@@ -8,7 +8,7 @@ use crate::extract::{ApiPath, ApiQuery};
 use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use computer_api::{ErrorCode, ViewerTicket};
 use futures_util::{SinkExt, StreamExt};
@@ -152,19 +152,28 @@ pub async fn socket(
     .ok_or_else(|| ApiError::not_found("this screen publishes no viewer port"))?;
 
     let mut request = inside
+        .as_str()
         .into_client_request()
         .map_err(|error| ApiError::internal(format!("the viewer socket address: {error}")))?;
     request.headers_mut().insert(
         "Sec-WebSocket-Protocol",
         HeaderValue::from_static(SUBPROTOCOL),
     );
+    for (name, value) in held.socket_headers() {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|error| ApiError::internal(format!("a viewer header name: {error}")))?;
+        let value = HeaderValue::from_str(&value)
+            .map_err(|error| ApiError::internal(format!("a viewer header value: {error}")))?;
+        request.headers_mut().insert(name, value);
+    }
 
     // Connected before the upgrade, so a box that refuses answers with a status and a
     // reason rather than a socket that closes at once.
-    let (box_side, _) = tokio_tungstenite::connect_async_with_config(
+    let wire = computer::cdp::dial(&inside).await?;
+    let (box_side, _) = tokio_tungstenite::client_async_with_config(
         request,
+        wire,
         Some(WebSocketConfig::default()),
-        false,
     )
     .await
     .map_err(|error| {
@@ -180,8 +189,7 @@ pub async fn socket(
         .on_upgrade(move |person| carry(person, box_side)))
 }
 
-pub(crate) type BoxSide =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+pub(crate) type BoxSide = tokio_tungstenite::WebSocketStream<computer::cdp::Wire>;
 
 async fn carry(mut person: WebSocket, mut box_side: BoxSide) {
     loop {

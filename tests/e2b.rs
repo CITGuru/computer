@@ -66,12 +66,57 @@ async fn a_port_becomes_a_subdomain_rather_than_a_host_port() {
     let api = Arc::new(ScriptedE2b::new());
     let computer = launched(Arc::clone(&api), true).await;
 
-    let viewer = computer.viewer_url().expect("a public viewer");
+    let socket = computer.primary().viewer_socket().expect("a viewer socket");
     assert!(
-        viewer.starts_with("https://6080-sbx-0."),
-        "got {viewer}, which is not the sandbox's own host"
+        socket.starts_with("wss://6080-sbx-0.e2b.app/websockify?token="),
+        "got {socket}, which is not the sandbox's own host"
     );
-    assert!(viewer.contains("/vnc.html?autoconnect=1&resize=scale"));
+    assert!(
+        computer.primary().socket_headers().contains(&(
+            "e2b-traffic-access-token".to_string(),
+            "traffic".to_string()
+        )),
+        "the proxy refuses the socket without the traffic token"
+    );
+    assert!(
+        computer.viewer_url().is_none(),
+        "a browser cannot send the token, so a direct link would refuse"
+    );
+}
+
+#[tokio::test]
+async fn a_public_sandbox_hands_out_the_links_a_browser_can_open() {
+    let api = Arc::new(ScriptedE2b::new());
+    let (machine, profile) = e2b::pair(Arc::clone(&api) as Arc<dyn E2bApi>, Arc::new(X11Profile));
+    let computer = Computer::builder()
+        .machine(Arc::new(machine.public_viewer(true).public_traffic(true)))
+        .profile(profile)
+        .image("tmpl-abc")
+        .name("box")
+        .auth(Auth::Token)
+        .launch()
+        .await
+        .expect("a sandbox");
+
+    let viewer = computer.viewer_url().expect("a viewer link");
+    assert!(
+        viewer.starts_with("https://6080-sbx-0.e2b.app/vnc.html"),
+        "got {viewer}"
+    );
+
+    let takeover = computer.hand_over().await.expect("the screen goes over");
+    let control = takeover.url().expect("a takeover link");
+    assert!(control.starts_with("https://6081-sbx-0."), "got {control}");
+    takeover.end().await.expect("it comes back");
+
+    let devtools = computer.devtools().expect("a DevTools endpoint");
+    assert!(
+        devtools
+            .headers
+            .iter()
+            .any(|(name, _)| name == "x-computer-devtools"),
+        "open ports or not, the bridge still wants its secret"
+    );
 }
 
 #[tokio::test]
@@ -90,17 +135,34 @@ async fn a_secure_sandbox_hands_out_no_url_that_would_refuse() {
 }
 
 #[tokio::test]
-async fn devtools_is_withdrawn_rather_than_published_to_nowhere() {
-    let api = Arc::new(ScriptedE2b::new());
-    let computer = launched(Arc::clone(&api), true).await;
+async fn devtools_is_the_sandboxs_own_host_behind_the_traffic_token() {
+    for public_viewer in [true, false] {
+        let api = Arc::new(ScriptedE2b::new());
+        let computer = launched(Arc::clone(&api), public_viewer).await;
 
-    assert!(computer.devtools().is_none());
-    assert!(computer.browser().is_none());
-    assert_eq!(
-        computer.support().browser.as_ref().map(|b| b.cdp),
-        Some(false),
-        "a claim withdrawn, so `audit` skips it rather than failing it"
-    );
+        let endpoint = computer.devtools().expect("a DevTools endpoint");
+        assert_eq!(endpoint.http_url, "https://9223-sbx-0.e2b.app");
+        assert_eq!(endpoint.ws_url, "wss://9223-sbx-0.e2b.app/devtools/browser");
+        assert!(
+            endpoint.headers.contains(&(
+                "e2b-traffic-access-token".to_string(),
+                "traffic".to_string()
+            )),
+            "a secure sandbox refuses the upgrade without it"
+        );
+        assert!(
+            endpoint
+                .headers
+                .iter()
+                .any(|(name, _)| name == "x-computer-devtools"),
+            "and the bridge in the box refuses it without this"
+        );
+        assert!(computer.browser().is_some());
+        assert_eq!(
+            computer.support().browser.as_ref().map(|b| b.cdp),
+            Some(true)
+        );
+    }
 }
 
 #[tokio::test]
@@ -122,11 +184,11 @@ async fn every_screen_gets_its_own_host() {
     let computer = launched(Arc::clone(&api), true).await;
 
     let second = computer.screen(ScreenId(1)).await.expect("a second screen");
-    let viewer = second.viewer_url().expect("a public viewer");
+    let socket = second.viewer_socket().expect("a viewer socket");
 
     assert!(
-        viewer.starts_with("https://6082-sbx-0."),
-        "got {viewer}; screen 1 views on 6082"
+        socket.starts_with("wss://6082-sbx-0."),
+        "got {socket}; screen 1 views on 6082"
     );
 }
 
@@ -136,9 +198,16 @@ async fn a_takeover_is_a_second_host_and_not_a_mode_on_the_first() {
     let computer = launched(Arc::clone(&api), true).await;
 
     let takeover = computer.hand_over().await.expect("the screen goes over");
-    let control = takeover.url().expect("a control URL");
+    let control = computer
+        .primary()
+        .control_socket()
+        .expect("a control socket");
 
-    assert!(control.starts_with("https://6081-sbx-0."), "got {control}");
+    assert!(control.starts_with("wss://6081-sbx-0."), "got {control}");
+    assert!(
+        takeover.url().is_none(),
+        "the person takes over through the server, which can send the token"
+    );
     assert!(
         computer
             .click(Point::new(1, 1), Button::Left)

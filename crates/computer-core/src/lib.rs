@@ -434,7 +434,8 @@ impl Builder {
         }
 
         // CDP has no authentication, and a forward cannot add one to a WebSocket upgrade.
-        if routable && let Some(bridge) = self.profile.ports().devtools_bridge {
+        let devtools_withheld = routable && !machine.exposes_every_port();
+        if devtools_withheld && let Some(bridge) = self.profile.ports().devtools_bridge {
             config.publish.retain(|port| *port != bridge);
         }
 
@@ -519,7 +520,7 @@ impl Builder {
             self.profile.support_at(config.width, config.height),
             driver.as_ref(),
         );
-        if routable && let Some(browser) = support.browser.as_mut() {
+        if devtools_withheld && let Some(browser) = support.browser.as_mut() {
             // Withdrawn rather than broken, so `audit` skips the check instead of failing it.
             browser.cdp = false;
         }
@@ -1020,10 +1021,14 @@ impl Computer {
 
     pub fn devtools(&self) -> Option<BrowserEndpoint> {
         let bridge = self.profile.ports().devtools_bridge?;
+        if let Some(endpoint) = self.profile.devtools(bridge) {
+            return Some(endpoint);
+        }
         let port = self.mapped.get(&bridge)?;
         Some(BrowserEndpoint {
             http_url: format!("http://127.0.0.1:{port}"),
             ws_url: format!("ws://127.0.0.1:{port}/devtools/browser"),
+            headers: Vec::new(),
         })
     }
 
@@ -1605,17 +1610,27 @@ impl Screen {
     }
 
     pub fn viewer_url(&self) -> Option<String> {
-        self.mapped.get(&self.ports.view).map(|port| {
-            self.profile
-                .viewer_url(&self.host.address(*port), self.host.view_ticket())
-        })
+        self.mapped
+            .get(&self.ports.view)
+            .filter(|_| self.profile.port_headers().is_empty())
+            .map(|port| {
+                self.profile
+                    .viewer_url(&self.host.address(*port), self.host.view_ticket())
+            })
     }
 
     pub fn control_url(&self) -> Option<String> {
-        self.mapped.get(&self.ports.control).map(|port| {
-            self.profile
-                .viewer_url(&self.host.address(*port), self.host.control_ticket())
-        })
+        self.mapped
+            .get(&self.ports.control)
+            .filter(|_| self.profile.port_headers().is_empty())
+            .map(|port| {
+                self.profile
+                    .viewer_url(&self.host.address(*port), self.host.control_ticket())
+            })
+    }
+
+    pub fn socket_headers(&self) -> Vec<(String, String)> {
+        self.profile.port_headers()
     }
 
     pub fn viewer_socket(&self) -> Option<String> {

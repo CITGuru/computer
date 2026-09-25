@@ -80,6 +80,7 @@ COPY screen.sh  /usr/local/bin/computer-screen
 COPY browser.sh /usr/local/bin/computer-browser
 COPY input.sh   /usr/local/bin/computer-input
 COPY a11y.py    /usr/local/bin/computer-a11y
+COPY devtools-bridge.py /usr/local/bin/computer-devtools-bridge
 COPY sway.config /etc/computer/sway.config
 COPY paste.js /usr/share/novnc/app/paste.js
 RUN sed -i 's|</head>|<script type="module">import UI from "./app/ui.js"; import paste from "./app/paste.js"; paste(() => UI.rfb);</script>\n</head>|' /usr/share/novnc/vnc.html \
@@ -88,7 +89,8 @@ RUN chmod +x /usr/local/bin/computer-desktop \
              /usr/local/bin/computer-screen \
              /usr/local/bin/computer-browser \
              /usr/local/bin/computer-input \
-             /usr/local/bin/computer-a11y
+             /usr/local/bin/computer-a11y \
+             /usr/local/bin/computer-devtools-bridge
 
 LABEL computer.profile="computer-wayland"
 

@@ -12,6 +12,9 @@ pub fn api_url(domain: &str) -> String {
 
 pub const ENVD_PORT: u16 = 49983;
 
+/// A browser cannot send it, so a secure sandbox has no viewer URL.
+pub const TRAFFIC_TOKEN_HEADER: &str = "e2b-traffic-access-token";
+
 pub use crate::sandboxes::remote::NAME_KEY;
 
 /// E2B's builder appends `USER user` to every Dockerfile, so the display and
@@ -73,6 +76,7 @@ pub struct SandboxPlan {
     pub env: BTreeMap<String, String>,
     pub metadata: BTreeMap<String, String>,
     pub network: bool,
+    pub public: bool,
     pub ttl: Duration,
 }
 
@@ -84,6 +88,7 @@ impl Default for SandboxPlan {
             env: BTreeMap::new(),
             metadata: BTreeMap::new(),
             network: true,
+            public: false,
             ttl: DEFAULT_TTL,
         }
     }

@@ -90,6 +90,11 @@ impl E2bVendor {
                 .map(|port| (*port, sandbox.url(*port)))
                 .collect(),
             token: sandbox.envd_token.clone(),
+            headers: sandbox
+                .traffic_token
+                .iter()
+                .map(|token| (api::TRAFFIC_TOKEN_HEADER.to_string(), token.clone()))
+                .collect(),
         }
     }
 }
@@ -102,6 +107,10 @@ impl RemoteApi for E2bVendor {
 
     fn environment(&self) -> Environment {
         Environment::MicroVm(serde_json::json!({ "hypervisor": "firecracker" }))
+    }
+
+    fn exposes_every_port(&self) -> bool {
+        true
     }
 
     fn can(&self) -> Capabilities {
@@ -128,11 +137,12 @@ impl RemoteApi for E2bVendor {
                 env: plan.env.clone(),
                 metadata: plan.metadata.clone(),
                 network: plan.network,
+                public: plan.public,
                 ttl: plan.ttl,
             })
             .await?;
 
-        if sandbox.traffic_token.is_none() {
+        if sandbox.traffic_token.is_none() && !plan.public {
             tracing::warn!(
                 sandbox = %sandbox.id,
                 "e2b returned no traffic token; every published port on this \
@@ -346,6 +356,49 @@ mod tests {
             sandbox.url(9223),
             None,
             "a port the box does not serve has no host of its own"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_published_port_carries_the_traffic_token() {
+        let sandbox = vendor(Arc::new(ScriptedE2b::new()))
+            .create(&plan())
+            .await
+            .expect("a sandbox");
+
+        assert_eq!(
+            sandbox
+                .headers
+                .get(api::TRAFFIC_TOKEN_HEADER)
+                .map(String::as_str),
+            Some("traffic"),
+            "a secure sandbox refuses a port request without it"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_public_sandbox_is_asked_for_as_public_and_carries_no_token() {
+        let api = Arc::new(ScriptedE2b::new());
+        let sandbox = vendor(Arc::clone(&api))
+            .create(&remote::SandboxPlan {
+                public: true,
+                ..plan()
+            })
+            .await
+            .expect("a sandbox");
+
+        assert!(api.plans().pop().expect("one plan").public);
+        assert!(
+            sandbox.headers.is_empty(),
+            "a public sandbox has no gate, so there is nothing to send"
+        );
+    }
+
+    #[test]
+    fn test_withholding_a_port_closes_nothing() {
+        assert!(
+            vendor(Arc::new(ScriptedE2b::new())).exposes_every_port(),
+            "e2b answers on every port the box listens on, asked for or not"
         );
     }
 

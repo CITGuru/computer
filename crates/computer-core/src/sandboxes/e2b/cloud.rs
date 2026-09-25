@@ -1,5 +1,6 @@
 use super::api::{
-    Built, DEFAULT_DOMAIN, DEFAULT_USER, E2bApi, NAME_KEY, Sandbox, SandboxPlan, api_url,
+    Built, DEFAULT_DOMAIN, DEFAULT_USER, E2bApi, NAME_KEY, Sandbox, SandboxPlan,
+    TRAFFIC_TOKEN_HEADER, api_url,
 };
 use super::template::{self, Carried, Plan as TemplatePlan};
 use super::wire;
@@ -22,8 +23,6 @@ pub const DOMAIN_ENV: &str = "E2B_DOMAIN";
 const API_KEY_HEADER: &str = "X-API-Key";
 /// Lowercase because `HeaderName::from_static` panics otherwise.
 const ENVD_TOKEN_HEADER: &str = "x-access-token";
-/// A browser cannot send it, so a secure sandbox has no viewer URL.
-const TRAFFIC_TOKEN_HEADER: &str = "e2b-traffic-access-token";
 
 const CONNECT_JSON: &str = "application/connect+json";
 const CONNECT_VERSION: &str = "Connect-Protocol-Version";

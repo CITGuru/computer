@@ -22,6 +22,11 @@ pulse_home="/tmp/computer/pulse"
 pulse_socket="/tmp/computer/pulse.socket"
 wm_home="/tmp/computer-wm-${number}"
 profile="${HOME:-/home/computer}/.browser-profiles/screen-${number}"
+running="$(ps -eo args= | grep -oE -- "--user-data-dir=[^ ]*/\.browser-profiles/screen-${number}( |$)" | head -n 1)"
+if [ -n "$running" ]; then
+  profile="${running#--user-data-dir=}"
+  profile="${profile% }"
+fi
 logs="/tmp/computer/screen-${number}"
 
 viewer_auth="${COMPUTER_VIEWER_AUTH:-open}"

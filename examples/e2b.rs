@@ -56,6 +56,27 @@ async fn main() -> computer::Result<()> {
     std::fs::write("e2b.png", &frame).ok();
     println!("  screenshot: {} bytes -> e2b.png", frame.len());
 
+    match computer.browser() {
+        Some(devtools) => {
+            let started = std::time::Instant::now();
+            let pages = devtools.pages().await?;
+            let target = pages
+                .iter()
+                .find(|page| page.url.contains("example.com"))
+                .or(pages.first())
+                .ok_or_else(|| computer::Error::denied("the browser has no page"))?;
+            let mut page = devtools.attach(target).await?;
+            let snapshot = page.snapshot(None, Some(20)).await?;
+            println!(
+                "  devtools: {:?} with {} controls in {:?}",
+                snapshot.title,
+                snapshot.total,
+                started.elapsed()
+            );
+        }
+        None => println!("  devtools: none reaches this box"),
+    }
+
     computer.click(Point::new(640, 400), Button::Left).await?;
     println!("  cursor: {:?}", computer.cursor().await?);
 
