@@ -89,6 +89,15 @@ closed() {
   ! listening "$1"
 }
 
+finish() {
+  pkill -f "$1" || return 0
+  for _ in $(seq 20); do
+    pgrep -f "$1" >/dev/null || return 0
+    sleep 0.1
+  done
+  pkill -9 -f "$1" || true
+}
+
 # Asked of sway: a dead compositor leaves its socket file behind.
 alive() {
   local sock
@@ -217,11 +226,13 @@ control() {
   alive || { echo "screen ${screen} is not running" >&2; exit 1; }
 
   # Already open: record anyway, or the replaced holder could end this takeover.
-  if listening "${control_port}"; then
+  if listening "${control_port}" && listening "${control_vnc}"; then
     record_token
     exit 0
   fi
 
+  finish "wayvnc .* ${control_vnc}$"
+  finish "websockify.*${control_port}"
   # No `-d`: this one accepts input.
   wayvnc 127.0.0.1 "$control_vnc" >"${logs}-vnc-control.log" 2>&1 &
   build_gate control "127.0.0.1:${control_vnc}" || exit 1
@@ -253,8 +264,8 @@ release() {
     exit 3
   fi
 
-  pkill -f "wayvnc .* ${control_vnc}$" || true
-  pkill -f "websockify.*${control_port}" || true
+  finish "wayvnc .* ${control_vnc}$"
+  finish "websockify.*${control_port}"
   rm -f "$control_token"
 }
 
