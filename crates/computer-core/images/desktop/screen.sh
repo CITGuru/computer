@@ -85,6 +85,15 @@ closed() {
   ! listening "$1"
 }
 
+finish() {
+  pkill -f "$1" || return 0
+  for _ in $(seq 20); do
+    pgrep -f "$1" >/dev/null || return 0
+    sleep 0.1
+  done
+  pkill -9 -f "$1" || true
+}
+
 # websockify holds its x11vnc connection only while a client is attached.
 established() {
   local hex
@@ -229,11 +238,13 @@ control() {
     || { echo "screen ${screen} is not running" >&2; exit 1; }
 
   # Already open: record anyway, or the replaced holder could end this takeover.
-  if listening "${control_port}"; then
+  if listening "${control_port}" && listening "${control_vnc}"; then
     record_token
     exit 0
   fi
 
+  finish "^x11vnc .* -rfbport ${control_vnc}"
+  finish "websockify.*${control_port}"
   mkdir -p /tmp/computer
   x11vnc -display "$display" -forever -shared -nopw \
     -listen 0.0.0.0 -rfbport "$control_vnc" -xkb -ncache 0 >"${logs}-vnc-control.log" 2>&1 &
@@ -266,8 +277,8 @@ release() {
     exit 3
   fi
 
-  pkill -f "^x11vnc .* -rfbport ${control_vnc}" || true
-  pkill -f "websockify.*${control_port}" || true
+  finish "^x11vnc .* -rfbport ${control_vnc}"
+  finish "websockify.*${control_port}"
   rm -f "$control_token"
 }
 

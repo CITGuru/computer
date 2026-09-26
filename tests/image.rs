@@ -288,6 +288,27 @@ fn releasing_control_leaves_the_read_only_viewer_up() {
 }
 
 #[test]
+fn a_control_server_that_ignores_sigterm_is_still_gone_before_the_next_takeover() {
+    let action = |name: &str| {
+        SCREEN_SH
+            .split(&format!("\n{name}() {{"))
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .unwrap_or_else(|| panic!("the script has {name}"))
+    };
+
+    assert!(
+        action("finish").contains("pkill -9 -f"),
+        "a server stuck in its SIGTERM handler keeps the port, and the next one cannot bind"
+    );
+    assert!(action("release").contains("finish "));
+    assert!(
+        action("control").contains("finish "),
+        "a server a failed release left behind is cleared before a new one starts"
+    );
+}
+
+#[test]
 fn a_viewer_is_counted_by_connection_and_not_by_whether_a_server_is_up() {
     assert!(SCREEN_SH.contains("/proc/net/tcp"));
     assert!(
