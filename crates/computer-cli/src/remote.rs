@@ -537,7 +537,7 @@ pub async fn press(client: &Client, args: &[String]) -> Done {
     .await
 }
 
-pub async fn state(client: &Client, args: &[String]) -> Done {
+async fn state(client: &Client, args: &[String]) -> Done {
     match args.first().map(String::as_str) {
         Some("list") => {
             let names = client.states().await.map_err(|e| e.to_string())?;
@@ -665,7 +665,7 @@ fn write_private(path: &str, text: &str) -> Done {
         .map_err(|error| format!("{path}: {error}"))
 }
 
-pub async fn cookies(client: &Client, args: &[String]) -> Done {
+async fn cookies(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let rest = bare(
         args,
@@ -1808,15 +1808,29 @@ const VALUED: [&str; 14] = [
 
 pub async fn browser(client: &Client, args: &[String]) -> Done {
     let rest = bare(args, &VALUED);
+    if rest.first().map(String::as_str) == Some("state") {
+        return state(client, &args[1..]).await;
+    }
     let id = positional(&rest, 0, "a box").map_err(|e| e.to_string())?;
     let op = positional(
         &rest,
         1,
         "read, snapshot, find, click, fill, focus, check, uncheck, select, \
          deselect, options, upload, wait, hover, highlight, drag, eval, screenshot, pdf, tabs, \
-         switch, close, back, forward, reload, dialog, console or errors",
+         switch, close, back, forward, reload, dialog, console, errors, state or cookies",
     )
     .map_err(|e| e.to_string())?;
+
+    if op == "state" || op == "cookies" {
+        let mut args = args.to_vec();
+        if let Some(at) = args.iter().position(|arg| arg == op) {
+            args.remove(at);
+        }
+        return match op {
+            "state" => state(client, &args).await,
+            _ => cookies(client, &args).await,
+        };
+    }
 
     let tab = flag(args, "--tab");
     let query = |at: usize| -> Result<String, String> {

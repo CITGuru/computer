@@ -853,13 +853,13 @@ let tabs = browser.import_session(&session).await?;
 From the CLI, save to a file or leave it with the server under a name:
 
 ```bash
-computer state "$BOX" save login.json --origin https://mail.example.com
-computer state "$OTHER" load login.json
+computer browser "$BOX" state save login.json --origin https://mail.example.com
+computer browser "$OTHER" state load login.json
 
-computer state "$BOX" save --name work
-computer state "$OTHER" load --name work
-computer state list
-computer state rm work
+computer browser "$BOX" state save --name work
+computer browser "$OTHER" state load --name work
+computer browser state list
+computer browser state rm work
 ```
 
 With no `--origin`, the origins of the tabs open now are saved. The file is written readable by its owner only. A named state stays with the server until it restarts; the MCP tools `save_state` and `load_state` use names only, so the login never passes through the model.
@@ -867,10 +867,10 @@ With no `--origin`, the origins of the tabs open now are saved. The file is writ
 Read, set and clear single cookies:
 
 ```bash
-computer cookies "$BOX" --url https://example.com
-computer cookies "$BOX" set theme=dark --url https://example.com
-computer cookies "$BOX" set --curl "$(pbpaste)"      # a browser's "copy as cURL"
-computer cookies "$BOX" clear --url https://example.com
+computer browser "$BOX" cookies --url https://example.com
+computer browser "$BOX" cookies set theme=dark --url https://example.com
+computer browser "$BOX" cookies set --curl "$(pbpaste)"      # a browser's "copy as cURL"
+computer browser "$BOX" cookies clear --url https://example.com
 ```
 
 ### CLI command reference
@@ -917,6 +917,19 @@ computer browser <box> dialog accept [TEXT] | dismiss
 computer browser <box> tabs
 computer browser <box> switch <tab>
 computer browser <box> close <tab>
+
+computer browser <box> state save <file> | --name NAME [--origin URL]...
+                                  [--session-storage] [--indexed-db]
+                                  [--no-local-storage]
+computer browser <box> state load <file> | --name NAME
+computer browser state list
+computer browser state rm <name>
+computer browser <box> cookies [--url URL]
+computer browser <box> cookies set NAME=VALUE... --url URL [--domain D]
+                                   [--path P] [--secure] [--http-only]
+                                   [--expires SECONDS]
+computer browser <box> cookies set --curl '<curl command>'
+computer browser <box> cookies clear --url URL | --all
 ```
 
 `--tab` takes a tab id or the label `open --label` gave it. `read`, `snapshot`, `find`, `eval` and `console` take `--content-boundaries`, which puts what the page wrote between two markers that hold a nonce the page cannot know; `COMPUTER_CONTENT_BOUNDARIES=1` does the same for every call and for the MCP tools.
