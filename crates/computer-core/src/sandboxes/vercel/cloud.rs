@@ -1,4 +1,4 @@
-use super::{API_URL, wire};
+use super::{API_URL, build, wire};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const TOKEN_ENV: &str = "VERCEL_TOKEN";
 pub const TEAM_ENV: &str = "VERCEL_TEAM_ID";
 pub const PROJECT_ENV: &str = "VERCEL_PROJECT_ID";
+pub const TEAM_SLUG_ENV: &str = "VERCEL_TEAM_SLUG";
 
 pub const TIMEOUT: Duration = Duration::from_secs(150);
 
@@ -25,6 +26,7 @@ pub const MOST_LIFETIME: Duration = Duration::from_secs(45 * 60);
 pub struct Cloud {
     token: String,
     team: Option<String>,
+    team_slug: Option<String>,
     project: String,
     base: String,
     http: Client,
@@ -45,6 +47,7 @@ impl Cloud {
         Ok(Self {
             token: token.into(),
             team: team.filter(|team| !team.is_empty()),
+            team_slug: None,
             project: project.into(),
             base: API_URL.to_string(),
             http,
@@ -63,11 +66,21 @@ impl Cloud {
                 })
         };
 
-        Self::new(
+        let cloud = Self::new(
             needed(TOKEN_ENV)?,
             std::env::var(TEAM_ENV).ok(),
             needed(PROJECT_ENV)?,
-        )
+        )?;
+
+        Ok(match std::env::var(TEAM_SLUG_ENV) {
+            Ok(slug) => cloud.team_slug(slug),
+            Err(_) => cloud,
+        })
+    }
+
+    pub fn team_slug(mut self, slug: impl Into<String>) -> Self {
+        self.team_slug = Some(slug.into()).filter(|slug| !slug.is_empty());
+        self
     }
 
     pub fn at(mut self, base: impl Into<String>) -> Self {
@@ -216,24 +229,24 @@ fn escape(segment: &str) -> String {
         .collect()
 }
 
-fn tarred(path: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+fn tarred(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
     let failed = |error: std::io::Error| Error::transport(format!("a tar: {error}"), false);
-
-    let mut header = tar::Header::new_gnu();
-    header.set_size(bytes.len() as u64);
-    header.set_mode(0o644);
-    header.set_mtime(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|since| since.as_secs())
-            .unwrap_or_default(),
-    );
+    let mtime = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or_default();
 
     let gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     let mut archive = tar::Builder::new(gzip);
-    archive
-        .append_data(&mut header, path.trim_start_matches('/'), bytes)
-        .map_err(failed)?;
+    for (path, bytes) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_mtime(mtime);
+        archive
+            .append_data(&mut header, path.trim_start_matches('/'), bytes.as_slice())
+            .map_err(failed)?;
+    }
 
     archive
         .into_inner()
@@ -434,7 +447,7 @@ impl RemoteApi for Cloud {
             .in_session(Method::POST, &session, "/fs/write")
             .header(CONTENT_TYPE, "application/gzip")
             .header("x-cwd", "/")
-            .body(tarred(path, bytes)?);
+            .body(tarred(&[(path.to_string(), bytes.to_vec())])?);
 
         self.body(self.send(request).await?).await.map(|_| ())
     }
@@ -444,16 +457,149 @@ impl RemoteApi for Cloud {
             return Ok(None);
         };
 
-        Err(Error::Unavailable {
+        if !config.extras.is_empty() {
+            return Err(Error::Unsupported {
+                gaps: vec!["packages in an image this crate does not build"],
+            });
+        }
+
+        let tag = build::tag(bundle, &config.extras);
+        let (slug, project) = self.registry().await?;
+        let reference = build::reference(&slug, &project, bundle.name, &tag);
+        let short = format!("{}:{tag}", bundle.name);
+
+        if self.pushed(&slug, &project, bundle.name, &tag).await? {
+            return Ok(Some(short));
+        }
+
+        tracing::info!(image = %reference, "building the image in a vercel sandbox");
+        self.build(bundle, &reference).await?;
+        tracing::info!(image = %reference, "the image is pushed");
+
+        Ok(Some(short))
+    }
+}
+
+impl Cloud {
+    fn registry_login(&self) -> Result<String> {
+        let team = self.team.as_deref().ok_or_else(|| Error::Unavailable {
             provider: "vercel".to_string(),
-            detail: format!(
-                "{} is a local image, and vercel starts a sandbox only from its own \
-                 registry. Build the {} context for linux/amd64, push it to \
-                 vcr.vercel.com/<team>/<project>/<repository>, and pass that \
-                 repository to Builder::image",
-                config.image, bundle.name
-            ),
-        })
+            detail: format!("the registry takes the team as its user: set {TEAM_ENV}"),
+        })?;
+
+        Ok(crate::cdp::base64_encode(
+            format!("{team}:{}", self.token).as_bytes(),
+        ))
+    }
+
+    async fn registry(&self) -> Result<(String, String)> {
+        let project = self
+            .json(self.request(
+                Method::GET,
+                &format!("/v9/projects/{}", escape(&self.project)),
+            ))
+            .await
+            .ok()
+            .and_then(|answer| build::name_of(&answer))
+            .ok_or_else(|| Error::Unavailable {
+                provider: "vercel".to_string(),
+                detail: format!("the name of project {} could not be read", self.project),
+            })?;
+
+        if let Some(slug) = &self.team_slug {
+            return Ok((slug.clone(), project));
+        }
+
+        let team = self.team.as_deref().unwrap_or_default();
+        let slug = self
+            .json(self.request(Method::GET, &format!("/v2/teams/{}", escape(team))))
+            .await
+            .ok()
+            .and_then(|answer| build::slug_of(&answer))
+            .ok_or_else(|| Error::Unavailable {
+                provider: "vercel".to_string(),
+                detail: format!(
+                    "this token cannot read the team's slug, which the registry path                      needs: set {TEAM_SLUG_ENV}"
+                ),
+            })?;
+
+        Ok((slug, project))
+    }
+
+    async fn pushed(&self, slug: &str, project: &str, repository: &str, tag: &str) -> Result<bool> {
+        let response = self
+            .send(
+                self.http
+                    .head(build::manifest_url(slug, project, repository, tag))
+                    .header("Authorization", format!("Basic {}", self.registry_login()?))
+                    .header(
+                        "Accept",
+                        "application/vnd.oci.image.index.v1+json, \
+                         application/vnd.oci.image.manifest.v1+json, \
+                         application/vnd.docker.distribution.manifest.v2+json",
+                    ),
+            )
+            .await?;
+
+        match response.status() {
+            status if status.is_success() => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            status => Err(from_status(status, "the registry")),
+        }
+    }
+
+    async fn build(&self, bundle: &crate::bundle::Bundle, reference: &str) -> Result<()> {
+        let name = format!("computer-build-{}-{:x}", std::process::id(), now_ms());
+
+        let answer = self
+            .json(
+                self.request(Method::POST, "/v3/sandboxes")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(build::builder(&self.project, &name, reference).to_string()),
+            )
+            .await?;
+        let (builder, session) = wire::sandbox_from(&answer)?;
+
+        let built = self.build_in(&session, bundle, reference).await;
+
+        if let Err(error) = self.kill(&builder.id).await {
+            tracing::warn!(sandbox = %builder.id, %error, "the builder sandbox was left to its deadline");
+        }
+
+        built
+    }
+
+    async fn build_in(
+        &self,
+        session: &str,
+        bundle: &crate::bundle::Bundle,
+        reference: &str,
+    ) -> Result<()> {
+        let upload = self
+            .in_session(Method::POST, session, "/fs/write")
+            .header(CONTENT_TYPE, "application/gzip")
+            .header("x-cwd", "/")
+            .body(tarred(&build::context(bundle))?);
+        self.body(self.send(upload).await?).await?;
+
+        let run = self
+            .in_session(Method::POST, session, "/cmd")
+            .header(CONTENT_TYPE, "application/json")
+            .timeout(build::BUILD_WAIT)
+            .body(build::command(&self.registry_login()?, reference).to_string());
+
+        let result = wire::parse_stream(&self.body(self.send(run).await?).await?)?;
+        if result.code != 0 {
+            return Err(Error::Failed {
+                code: result.code,
+                stderr: build::tail(
+                    &format!("{}{}", result.stdout_utf8(), result.stderr_utf8()),
+                    40,
+                ),
+            });
+        }
+
+        Ok(())
     }
 }
 
@@ -479,7 +625,8 @@ mod tests {
 
     #[test]
     fn test_a_written_file_lands_at_its_path_under_the_root() {
-        let packed = tarred("/tmp/deep/one.bin", b"\x00\xff").expect("a tar");
+        let packed =
+            tarred(&[("/tmp/deep/one.bin".to_string(), b"\x00\xff".to_vec())]).expect("a tar");
 
         let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(packed.as_slice()));
         let mut entries = archive.entries().expect("entries");

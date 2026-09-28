@@ -845,6 +845,10 @@ impl Vendors for Builtin {
 
             let cloud = Cloud::new(key.expose(), field("team_id"), project)
                 .map_err(|error| error.to_string())?;
+            let cloud = match field("team_slug") {
+                Some(slug) => cloud.team_slug(slug),
+                None => cloud,
+            };
             return Ok(Arc::new(match field("endpoint") {
                 Some(endpoint) => cloud.at(endpoint),
                 None => cloud,

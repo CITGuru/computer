@@ -1,3 +1,4 @@
+pub mod build;
 pub mod wire;
 
 #[cfg(feature = "vercel")]

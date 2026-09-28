@@ -114,6 +114,13 @@ pub fn command(argv: &[String], env: &BTreeMap<String, String>) -> Result<Value>
 }
 
 pub fn parse_command(body: &[u8]) -> Result<ExecResult> {
+    let mut result = parse_stream(body)?;
+    result.stdout = crate::cdp::base64_decode(&String::from_utf8_lossy(&result.stdout))
+        .ok_or_else(|| Error::transport("stdout that is not the base64 it was sent as", false))?;
+    Ok(result)
+}
+
+pub fn parse_stream(body: &[u8]) -> Result<ExecResult> {
     let mut result = ExecResult::default();
     let mut code = None;
 
@@ -156,8 +163,6 @@ pub fn parse_command(body: &[u8]) -> Result<ExecResult> {
 
     let code = code.ok_or_else(|| Error::transport("the command never finished", true))?;
     result.code = i32::try_from(code).unwrap_or(i32::MAX);
-    result.stdout = crate::cdp::base64_decode(&String::from_utf8_lossy(&result.stdout))
-        .ok_or_else(|| Error::transport("stdout that is not the base64 it was sent as", false))?;
     Ok(result)
 }
 

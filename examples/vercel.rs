@@ -8,26 +8,26 @@ async fn main() -> computer::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let keep = args.iter().any(|arg| arg == "--keep");
 
-    let Some(image) = args.iter().find(|arg| !arg.starts_with("--")).cloned() else {
-        eprintln!("usage: vercel <image> [--keep]");
-        std::process::exit(2);
-    };
+    let image = args.iter().find(|arg| !arg.starts_with("--")).cloned();
 
     let (machine, profile) = remote::pair(Arc::new(Cloud::from_env()?), Arc::new(X11Profile));
 
     println!("starting a sandbox …");
-    let computer = Computer::builder()
+    let builder = Computer::builder()
         .machine(Arc::new(
             machine
                 .public_viewer(true)
                 .expiring_after(Duration::from_secs(15 * 60)),
         ))
         .profile(profile)
-        .image(&image)
         .auth(Auth::Token)
-        .keep_on_drop(keep)
-        .launch()
-        .await?;
+        .keep_on_drop(keep);
+    let computer = match &image {
+        Some(image) => builder.image(image),
+        None => builder,
+    }
+    .launch()
+    .await?;
 
     println!("  runtime  {}", computer.provider());
     match computer.viewer_url() {
