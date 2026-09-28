@@ -1,6 +1,8 @@
 use crate::bundle::{Bundle, Extras};
+use crate::error::{Error, Result};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::time::Duration;
 
 pub const REGISTRY: &str = "vcr.vercel.com";
@@ -36,8 +38,93 @@ docker buildx build --platform linux/amd64 --progress plain \
   /tmp/computer-build
 "#;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct File {
+    pub path: String,
+    pub bytes: Vec<u8>,
+    pub mode: u32,
+}
+
+impl File {
+    pub fn new(path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            path: path.into(),
+            bytes,
+            mode: 0o644,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Context {
+    pub repository: String,
+    pub tag: String,
+    pub files: Vec<File>,
+}
+
 pub fn tag(bundle: &Bundle, extras: &Extras) -> String {
     format!("{}-x86_64", bundle.fingerprint(extras))
+}
+
+pub fn bundled(bundle: &Bundle, extras: &Extras) -> Context {
+    Context {
+        repository: bundle.name.to_string(),
+        tag: tag(bundle, extras),
+        files: context(bundle),
+    }
+}
+
+pub fn directory(root: &Path, image: &str) -> Result<Context> {
+    let (repository, rest) = image
+        .split_once(':')
+        .ok_or_else(|| Error::denied(format!("{image} has no tag")))?;
+    let hash = rest.rsplit_once('-').map_or(rest, |(hash, _)| hash);
+
+    let mut files = Vec::new();
+    walk(root, root, &mut files)?;
+    files.sort_by(|left, right| left.path.cmp(&right.path));
+
+    Ok(Context {
+        repository: repository.to_string(),
+        tag: format!("{hash}-x86_64"),
+        files,
+    })
+}
+
+fn walk(root: &Path, directory: &Path, files: &mut Vec<File>) -> Result<()> {
+    let failed = |path: &Path, error: std::io::Error| {
+        Error::denied(format!("image directory {}: {error}", path.display()))
+    };
+
+    for entry in std::fs::read_dir(directory).map_err(|error| failed(directory, error))? {
+        let path = entry.map_err(|error| failed(directory, error))?.path();
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| failed(&path, error))?;
+
+        if metadata.is_dir() {
+            walk(root, &path, files)?;
+            continue;
+        }
+
+        if !metadata.is_file() {
+            return Err(Error::Unsupported {
+                gaps: vec!["a symlink in an image directory built on vercel"],
+            });
+        }
+
+        let relative = path.strip_prefix(root).unwrap_or(&path);
+        #[cfg(unix)]
+        let mode = std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o777;
+        #[cfg(not(unix))]
+        let mode = 0o644;
+
+        files.push(File {
+            path: format!("{CONTEXT_DIR}/{}", relative.display()),
+            bytes: std::fs::read(&path).map_err(|error| failed(&path, error))?,
+            mode,
+        });
+    }
+
+    Ok(())
 }
 
 pub fn reference(slug: &str, project: &str, repository: &str, tag: &str) -> String {
@@ -48,11 +135,11 @@ pub fn manifest_url(slug: &str, project: &str, repository: &str, tag: &str) -> S
     format!("https://{REGISTRY}/v2/{slug}/{project}/{repository}/manifests/{tag}")
 }
 
-pub fn context(bundle: &Bundle) -> Vec<(String, Vec<u8>)> {
+fn context(bundle: &Bundle) -> Vec<File> {
     bundle
         .files
         .iter()
-        .map(|(name, body)| (format!("{CONTEXT_DIR}/{name}"), body.as_bytes().to_vec()))
+        .map(|(name, body)| File::new(format!("{CONTEXT_DIR}/{name}"), body.as_bytes().to_vec()))
         .collect()
 }
 
@@ -148,7 +235,7 @@ mod tests {
         assert!(
             files
                 .iter()
-                .any(|(path, _)| path == "/tmp/computer-build/Dockerfile")
+                .any(|file| file.path == "/tmp/computer-build/Dockerfile")
         );
         assert!(SCRIPT.trim_end().ends_with(CONTEXT_DIR));
     }
@@ -189,6 +276,70 @@ mod tests {
             name_of(&json!({ "name": "melt" })),
             Some("melt".to_string())
         );
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "computer-vercel-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(directory.join("bin")).expect("a scratch directory");
+        directory
+    }
+
+    #[test]
+    fn test_a_directory_image_goes_up_whole_with_its_modes() {
+        let root = scratch("whole");
+        std::fs::write(root.join("Dockerfile"), "FROM debian\n").expect("written");
+        std::fs::write(root.join("bin/start.sh"), "#!/bin/sh\n").expect("written");
+        #[cfg(unix)]
+        std::fs::set_permissions(
+            root.join("bin/start.sh"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .expect("chmod");
+
+        let context =
+            directory(&root, "computer-local:0123456789abcdef-aarch64").expect("a context");
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(context.repository, "computer-local");
+        assert_eq!(
+            context.tag, "0123456789abcdef-x86_64",
+            "the hash of the directory, named for the arch vercel runs"
+        );
+        let paths: Vec<&str> = context
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "/tmp/computer-build/Dockerfile",
+                "/tmp/computer-build/bin/start.sh"
+            ]
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            context.files[1].mode, 0o755,
+            "a script the Dockerfile runs as it is copied must stay executable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_a_symlink_in_a_directory_image_is_refused() {
+        let root = scratch("link");
+        std::fs::write(root.join("Dockerfile"), "FROM debian\n").expect("written");
+        std::os::unix::fs::symlink("/etc/hostname", root.join("host")).expect("a link");
+
+        let refused = directory(&root, "computer-local:abc-aarch64");
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert!(matches!(refused, Err(Error::Unsupported { .. })));
     }
 
     #[test]

@@ -83,6 +83,8 @@ impl RemoteMachine {
             network: config.network,
             public: self.public_traffic,
             ttl: self.ttl,
+            cpus: config.cpus.clone(),
+            memory: config.memory.clone(),
         }
     }
 

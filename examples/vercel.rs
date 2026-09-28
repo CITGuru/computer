@@ -23,6 +23,7 @@ async fn main() -> computer::Result<()> {
         .auth(Auth::Token)
         .keep_on_drop(keep);
     let computer = match &image {
+        Some(directory) if std::path::Path::new(directory).is_dir() => builder.image_dir(directory),
         Some(image) => builder.image(image),
         None => builder,
     }

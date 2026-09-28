@@ -2,7 +2,7 @@ use super::{API_URL, build, wire};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
-use crate::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
+use crate::sandboxes::remote::{self, NAME_KEY, RemoteApi, Sandbox, SandboxPlan};
 use async_trait::async_trait;
 use computer_types::{Arch, Capabilities, Environment, PortReach, Resources, Start};
 use reqwest::header::CONTENT_TYPE;
@@ -20,8 +20,6 @@ pub const TEAM_SLUG_ENV: &str = "VERCEL_TEAM_SLUG";
 pub const TIMEOUT: Duration = Duration::from_secs(150);
 
 pub const IMAGE_WAIT: Duration = Duration::from_secs(10 * 60);
-
-pub const MOST_LIFETIME: Duration = Duration::from_secs(45 * 60);
 
 pub struct Cloud {
     token: String,
@@ -229,7 +227,7 @@ fn escape(segment: &str) -> String {
         .collect()
 }
 
-fn tarred(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
+fn tarred(files: &[build::File]) -> Result<Vec<u8>> {
     let failed = |error: std::io::Error| Error::transport(format!("a tar: {error}"), false);
     let mtime = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -238,10 +236,10 @@ fn tarred(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {
 
     let gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     let mut archive = tar::Builder::new(gzip);
-    for (path, bytes) in files {
+    for build::File { path, bytes, mode } in files {
         let mut header = tar::Header::new_gnu();
         header.set_size(bytes.len() as u64);
-        header.set_mode(0o644);
+        header.set_mode(*mode);
         header.set_mtime(mtime);
         archive
             .append_data(&mut header, path.trim_start_matches('/'), bytes.as_slice())
@@ -276,7 +274,6 @@ impl RemoteApi for Cloud {
             start: Start::AfterEveryStart,
             reach: PortReach::VendorUrl,
             resources: Resources::AtCreate,
-            max_lifetime_secs: Some(MOST_LIFETIME.as_secs()),
             ports: Some(super::MOST_PORTS as u32),
             arch: vec![Arch::Amd64],
             ..Capabilities::default()
@@ -334,6 +331,18 @@ impl RemoteApi for Cloud {
                 })?;
             }
 
+            if wire::image_missing(&text) {
+                return Err(Error::Unavailable {
+                    provider: "vercel".to_string(),
+                    detail: format!(
+                        "{} is not in Vercel Container Registry for this project. Push a \
+                         linux/amd64 build of the desktop image there, or name no image \
+                         and it is built for you",
+                        plan.image
+                    ),
+                });
+            }
+
             if !wire::image_not_ready(&text) {
                 return Err(from_status(status, &text));
             }
@@ -350,6 +359,14 @@ impl RemoteApi for Cloud {
         };
 
         let (sandbox, session) = wire::sandbox_from(&answer)?;
+
+        if wire::untagged(&plan.metadata)
+            && let Err(error) = self.write_labels(&session, &plan.metadata).await
+        {
+            let _ = self.kill(&sandbox.id).await;
+            return Err(error);
+        }
+
         self.remember(&sandbox.id, session);
         Ok(sandbox)
     }
@@ -400,13 +417,36 @@ impl RemoteApi for Cloud {
         loop {
             let mut request = self
                 .request(Method::GET, "/v2/sandboxes")
-                .query(&[("project", self.project.as_str()), ("limit", "100")]);
+                .query(&[("project", self.project.as_str()), ("limit", "50")]);
             if let Some(cursor) = &cursor {
                 request = request.query(&[("cursor", cursor)]);
             }
 
             let listing = self.json(request).await?;
-            found.extend(wire::carrying(&listing, key));
+            for listed in wire::listed(&listing) {
+                if !listed.tags.contains_key(NAME_KEY) {
+                    continue;
+                }
+
+                if let Some(value) = listed.tags.get(key) {
+                    found.push((listed.name, value.clone()));
+                    continue;
+                }
+
+                let Some(session) = &listed.session else {
+                    continue;
+                };
+                match self.read_labels(session).await {
+                    Ok(labels) => {
+                        if let Some(value) = labels.get(key) {
+                            found.push((listed.name, value.clone()));
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(sandbox = %listed.name, %error, "its labels could not be read")
+                    }
+                }
+            }
 
             match wire::next_page(&listing) {
                 Some(next) => cursor = Some(next),
@@ -447,14 +487,18 @@ impl RemoteApi for Cloud {
             .in_session(Method::POST, &session, "/fs/write")
             .header(CONTENT_TYPE, "application/gzip")
             .header("x-cwd", "/")
-            .body(tarred(&[(path.to_string(), bytes.to_vec())])?);
+            .body(tarred(&[build::File::new(path, bytes.to_vec())])?);
 
         self.body(self.send(request).await?).await.map(|_| ())
     }
 
     async fn ensure_image(&self, config: &Config) -> Result<Option<String>> {
-        let Some(bundle) = config.bundle.as_ref().filter(|b| b.owns(&config.image)) else {
-            return Ok(None);
+        let context = match (&config.bundle, &config.image_dir) {
+            (Some(bundle), _) if bundle.owns(&config.image) => {
+                build::bundled(bundle, &config.extras)
+            }
+            (_, Some(directory)) => build::directory(directory, &config.image)?,
+            _ => return Ok(None),
         };
 
         if !config.extras.is_empty() {
@@ -463,17 +507,19 @@ impl RemoteApi for Cloud {
             });
         }
 
-        let tag = build::tag(bundle, &config.extras);
         let (slug, project) = self.registry().await?;
-        let reference = build::reference(&slug, &project, bundle.name, &tag);
-        let short = format!("{}:{tag}", bundle.name);
+        let reference = build::reference(&slug, &project, &context.repository, &context.tag);
+        let short = format!("{}:{}", context.repository, context.tag);
 
-        if self.pushed(&slug, &project, bundle.name, &tag).await? {
+        if self
+            .pushed(&slug, &project, &context.repository, &context.tag)
+            .await?
+        {
             return Ok(Some(short));
         }
 
         tracing::info!(image = %reference, "building the image in a vercel sandbox");
-        self.build(bundle, &reference).await?;
+        self.build(&context, &reference).await?;
         tracing::info!(image = %reference, "the image is pushed");
 
         Ok(Some(short))
@@ -481,6 +527,34 @@ impl RemoteApi for Cloud {
 }
 
 impl Cloud {
+    async fn write_labels(&self, session: &str, labels: &BTreeMap<String, String>) -> Result<()> {
+        let bytes = serde_json::to_vec(labels)
+            .map_err(|error| Error::transport(format!("labels: {error}"), false))?;
+        let request = self
+            .in_session(Method::POST, session, "/fs/write")
+            .header(CONTENT_TYPE, "application/gzip")
+            .header("x-cwd", "/")
+            .body(tarred(&[build::File::new(super::LABELS_PATH, bytes)])?);
+
+        self.body(self.send(request).await?).await.map(|_| ())
+    }
+
+    async fn read_labels(&self, session: &str) -> Result<BTreeMap<String, String>> {
+        let response = self
+            .send(
+                self.in_session(Method::POST, session, "/fs/read")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(serde_json::json!({ "path": super::LABELS_PATH }).to_string()),
+            )
+            .await?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(BTreeMap::new());
+        }
+
+        Ok(wire::labels(&self.body(response).await?))
+    }
+
     fn registry_login(&self) -> Result<String> {
         let team = self.team.as_deref().ok_or_else(|| Error::Unavailable {
             provider: "vercel".to_string(),
@@ -519,7 +593,7 @@ impl Cloud {
             .ok_or_else(|| Error::Unavailable {
                 provider: "vercel".to_string(),
                 detail: format!(
-                    "this token cannot read the team's slug, which the registry path                      needs: set {TEAM_SLUG_ENV}"
+                    "this token cannot read the team's slug, which the registry path needs: set {TEAM_SLUG_ENV}"
                 ),
             })?;
 
@@ -548,7 +622,7 @@ impl Cloud {
         }
     }
 
-    async fn build(&self, bundle: &crate::bundle::Bundle, reference: &str) -> Result<()> {
+    async fn build(&self, context: &build::Context, reference: &str) -> Result<()> {
         let name = format!("computer-build-{}-{:x}", std::process::id(), now_ms());
 
         let answer = self
@@ -560,7 +634,7 @@ impl Cloud {
             .await?;
         let (builder, session) = wire::sandbox_from(&answer)?;
 
-        let built = self.build_in(&session, bundle, reference).await;
+        let built = self.build_in(&session, context, reference).await;
 
         if let Err(error) = self.kill(&builder.id).await {
             tracing::warn!(sandbox = %builder.id, %error, "the builder sandbox was left to its deadline");
@@ -572,14 +646,14 @@ impl Cloud {
     async fn build_in(
         &self,
         session: &str,
-        bundle: &crate::bundle::Bundle,
+        context: &build::Context,
         reference: &str,
     ) -> Result<()> {
         let upload = self
             .in_session(Method::POST, session, "/fs/write")
             .header(CONTENT_TYPE, "application/gzip")
             .header("x-cwd", "/")
-            .body(tarred(&build::context(bundle))?);
+            .body(tarred(&context.files)?);
         self.body(self.send(upload).await?).await?;
 
         let run = self
@@ -626,7 +700,7 @@ mod tests {
     #[test]
     fn test_a_written_file_lands_at_its_path_under_the_root() {
         let packed =
-            tarred(&[("/tmp/deep/one.bin".to_string(), b"\x00\xff".to_vec())]).expect("a tar");
+            tarred(&[build::File::new("/tmp/deep/one.bin", b"\x00\xff".to_vec())]).expect("a tar");
 
         let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(packed.as_slice()));
         let mut entries = archive.entries().expect("entries");
