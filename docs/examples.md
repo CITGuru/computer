@@ -54,6 +54,7 @@ Some examples take the name of a box that is already running. Start one with `ca
 | `custom_sandbox` | A remote vendor of your own, written as a `RemoteApi` implementation. This one runs its sandboxes on the local Docker. | `cargo run --example custom_sandbox` | Docker |
 | `microvm` | Build the image, give it to the microsandbox hypervisor, and boot a box in a microVM. | `cargo run --example microvm` | Docker and microsandbox (`msb`) |
 | `e2b` | Launch a box on E2B, drive it, and remove it. `--keep` leaves it running. | `cargo run --features e2b --example e2b -- <template-id> [--keep]` | `E2B_API_KEY` and an E2B template ID |
+| `vercel` | Launch a box on Vercel, drive it, and remove it. With no image, it builds the built-in image at Vercel. It also takes a VCR image or an image directory. `--keep` leaves it running. | `cargo run --features vercel --example vercel [-- <image-or-dir>] [--keep]` | `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID` |
 
 `examples/images/acme/Dockerfile` adds `htop`, `jq`, and a file to the bundled image. It keeps the `computer.profile` label, which a custom image needs.
 

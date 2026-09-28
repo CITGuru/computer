@@ -62,11 +62,16 @@ jobs:
       - name: The commands, with everything a daemon can be built with
         run: |
           cargo clippy -p computer --all-targets --locked \
-            --features sqlite,postgres,s3,e2b -- -D warnings
+            --features sqlite,postgres,s3,e2b,vercel -- -D warnings
           cargo test -p computer-server --locked --features sqlite,s3
 
       - name: A box in a microVM
         run: cargo clippy -p computer-core --all-targets --locked --features microsandbox -- -D warnings
+
+      - name: A box on Vercel
+        run: |
+          cargo clippy -p computer-core --all-targets --locked --features vercel -- -D warnings
+          cargo test -p computer-core --locked --features vercel vercel
 
   docs:
     runs-on: ubuntu-22.04

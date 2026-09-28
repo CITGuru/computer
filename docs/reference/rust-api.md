@@ -57,7 +57,7 @@ let computer = Computer::builder()
 | `network(false)` | Block network access. |
 | `memory(limit)`, `cpus(n)` | Resource limits. |
 | `runtime(program)` | `docker` (default), `podman`, or `nerdctl`. |
-| `machine(Arc<dyn Machine>)` | Another runtime, such as a microVM or E2B. |
+| `machine(Arc<dyn Machine>)` | Another runtime, such as a microVM, E2B, or Vercel. |
 | `name(name)` | The box name, for `attach`. |
 | `image(tag)` | Use an image that is already built. |
 | `profiles(volume)` | Keep the browser profile in a named volume. |
@@ -113,7 +113,7 @@ page.wait_for("Dashboard", false, Duration::from_secs(10)).await?;
 let text = page.read(Reading::Markdown, None, None).await?;
 ```
 
-`browser()` returns `None` when the box has no DevTools port. On E2B, see [Browser mode on remote runtimes](../concepts/control-modes.md#browser-mode-on-remote-runtimes).
+`browser()` returns `None` when the box has no DevTools port. On E2B and Vercel, see [Browser mode on remote runtimes](../concepts/control-modes.md#browser-mode-on-remote-runtimes).
 
 `Devtools`:
 
@@ -233,3 +233,4 @@ Run each with `cargo run --example <name>`.
 | `custom_sandbox` | A custom remote vendor |
 | `microvm` | A microVM through microsandbox |
 | `e2b`, `e2b_takeover` | E2B, with and without a takeover. Need `--features e2b` and `E2B_API_KEY`. |
+| `vercel` | Vercel Sandbox. Needs `--features vercel` and the `VERCEL_*` variables. |

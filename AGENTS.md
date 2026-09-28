@@ -23,6 +23,8 @@ cargo clippy -p computer --no-default-features -- -D warnings
 cargo test -p computer-storage --features sqlite,postgres,s3
 cargo test -p computer-server --features sqlite,s3
 cargo clippy -p computer-core --features microsandbox --all-targets -- -D warnings
+cargo clippy -p computer-core --features vercel --all-targets -- -D warnings
+cargo test -p computer-core --features vercel vercel
 ```
 
 The scripts this crate evaluates inside a page are Rust strings that nothing

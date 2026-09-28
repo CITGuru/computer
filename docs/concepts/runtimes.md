@@ -30,6 +30,7 @@ The two properties are independent. For example, Docker gives a container on run
 | `smolvm` | Host | MicroVM | libkrun: Hypervisor.framework on macOS, KVM on Linux. |
 | `microsandbox` | Host | MicroVM | libkrun, through the `msb` CLI. |
 | `e2b` | Remote | MicroVM | Firecracker. Needs an API key. A source build needs the `e2b` feature. |
+| `vercel` | Remote | MicroVM | Firecracker. Needs a token, a team, and a project. A source build needs the `vercel` feature. |
 
 To see the runtimes a server has, and what each can do:
 
@@ -62,7 +63,7 @@ From the Rust library with no server, `runtime()` selects a container engine:
 let computer = Computer::builder().runtime("podman").launch().await?;
 ```
 
-For a microVM or a cloud sandbox, give the builder a `machine()`. See `examples/microvm.rs` and `examples/e2b.rs`.
+For a microVM or a cloud sandbox, give the builder a `machine()`. See `examples/microvm.rs`, `examples/e2b.rs`, and `examples/vercel.rs`.
 
 ## Host runtimes
 
@@ -169,6 +170,7 @@ MCP tools cannot add a runtime, because a key given to an agent goes through its
 | docker, podman, nerdctl | Yes | Yes | Yes |
 | smolvm | No | Yes | No |
 | e2b | Yes | No | No |
+| vercel | No | No | No |
 
 After a stop, a start gives a new desktop with new ports and a new viewer URL.
 
@@ -178,7 +180,9 @@ On E2B, memory and CPUs are set when the template is built, not when the box is 
 
 On E2B, every port of a box refuses a request without the sandbox's traffic token, so a browser cannot open the viewer URL directly: watch and take over through `computerd`. Add a runtime with `--field public_traffic=true` to open the ports and get direct viewer and takeover URLs back.
 
-On E2B, page tools reach Chromium through a bridge in the box. See [Control modes](control-modes.md#browser-mode-on-remote-runtimes).
+On E2B and Vercel, page tools reach Chromium through a bridge in the box. See [Control modes](control-modes.md#browser-mode-on-remote-runtimes).
+
+On Vercel, each port has a public URL with no gate of its own, so the viewer and takeover URLs open in a browser and need their own token. A box has at most 6 screens, because Vercel publishes at most 14 ports. Vercel sets memory from the vCPU count: see [Vercel Sandbox](../guides/vercel-sandbox.md#cpus-and-memory).
 
 A runtime says what it can do in `GET /v1/runtimes/{name}` under `can`. The server refuses a request that the runtime cannot do before it starts the box.
 
@@ -189,6 +193,7 @@ Each runtime gets its image in a different way:
 - **Container engine:** the server builds the image on the host from the bundled Dockerfile.
 - **MicroVM:** a hypervisor cannot read an engine's images. The server builds the image with `build_with`, then gives it to the hypervisor one time. Later boxes start from that copy.
 - **E2B:** the server makes an E2B template from the bundled image, uploads the files, and waits for the build. It makes one template for each box specification.
+- **Vercel:** the server builds the bundled image, or an image directory, in a builder sandbox at Vercel and pushes it to Vercel Container Registry. A later box finds the tag there and starts from it. Applications and packages added at launch are not supported yet.
 
 Each set of applications and packages is a different image. The first box with a new set waits for a build. To build before a box needs it:
 

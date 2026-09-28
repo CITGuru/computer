@@ -37,6 +37,16 @@ pub const DEVTOOLS_SECRET_ENV: &str = "COMPUTER_DEVTOOLS_SECRET";
 
 pub const DEVTOOLS_SECRET_HEADER: &str = "x-computer-devtools";
 
+pub const REKEY_SCRIPT: &str = r#"command -v computer-devtools-bridge >/dev/null 2>&1 || exit 0
+bridge='^[^ ]*python[0-9.]* [^ ]*/computer-devtools-bridge'
+pkill -f "$bridge" || true
+for _ in $(seq 1 50); do pgrep -f "$bridge" >/dev/null || break; sleep 0.1; done
+mkdir -p /tmp/computer
+nohup computer-devtools-bridge >>/tmp/computer/devtools-bridge.log 2>&1 </dev/null &
+sleep 0.5
+pgrep -f "$bridge" >/dev/null || { tail -5 /tmp/computer/devtools-bridge.log >&2; exit 1; }
+"#;
+
 pub struct RemoteProfile {
     inner: Arc<dyn Profile>,
     remote: Arc<Remote>,
@@ -154,6 +164,15 @@ impl Profile for RemoteProfile {
         })
     }
 
+    fn rekey(&self) -> Option<(Vec<String>, BTreeMap<String, String>)> {
+        let secret = self.devtools_secret.as_ref()?;
+
+        Some((
+            vec!["sh".to_string(), "-c".to_string(), REKEY_SCRIPT.to_string()],
+            BTreeMap::from([(DEVTOOLS_SECRET_ENV.to_string(), secret.expose().to_string())]),
+        ))
+    }
+
     fn port_headers(&self) -> Vec<(String, String)> {
         self.remote
             .get()
@@ -209,6 +228,52 @@ mod tests {
 
     fn sandbox() -> Sandbox {
         Sandbox::new("i7q3").published_as([6080, 6081], |port, id| format!("{port}-{id}.x.dev"))
+    }
+
+    #[test]
+    fn test_a_bridge_is_restarted_with_the_secret_this_profile_sends() {
+        let (remote, profile) = profile();
+        remote.set(
+            Sandbox::new("i7q3").published_as([9223], |port, id| format!("{port}-{id}.x.dev")),
+        );
+
+        let (argv, env) = profile.rekey().expect("a remote profile has a secret");
+        let sent = profile
+            .devtools(9223)
+            .expect("the bridge is published")
+            .headers
+            .into_iter()
+            .find(|(name, _)| name == DEVTOOLS_SECRET_HEADER)
+            .map(|(_, value)| value);
+
+        assert_eq!(argv[..2], ["sh", "-c"]);
+        assert_eq!(
+            env.get(DEVTOOLS_SECRET_ENV),
+            sent.as_ref(),
+            "the bridge must expect exactly what the client carries"
+        );
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| arg.contains(env[DEVTOOLS_SECRET_ENV].as_str())),
+            "the secret stays out of the command line that ps shows"
+        );
+    }
+
+    #[test]
+    fn test_the_restart_matches_the_bridge_and_not_its_own_shell() {
+        let pattern = REKEY_SCRIPT
+            .lines()
+            .find_map(|line| line.strip_prefix("bridge='"))
+            .and_then(|rest| rest.strip_suffix('\''))
+            .expect("the pattern");
+
+        assert!(
+            pattern.starts_with('^'),
+            "the script holds the bridge's name, so an unanchored pkill -f kills \
+             the shell that runs it, as it did live with exit 143"
+        );
+        assert!(pattern.contains("python"));
     }
 
     #[test]

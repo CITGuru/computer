@@ -87,6 +87,10 @@ pub struct SandboxPlan {
     pub public: bool,
 
     pub ttl: Duration,
+
+    pub cpus: Option<String>,
+
+    pub memory: Option<String>,
 }
 
 impl Default for SandboxPlan {
@@ -100,6 +104,8 @@ impl Default for SandboxPlan {
             network: true,
             public: false,
             ttl: DEFAULT_TTL,
+            cpus: None,
+            memory: None,
         }
     }
 }

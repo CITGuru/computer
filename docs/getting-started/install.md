@@ -14,7 +14,7 @@ You need one runtime on the host:
 
 You do not fetch a desktop image. The first box builds its image from source, which takes a few minutes. Later boxes with the same configuration start in seconds.
 
-Cloud sandboxes such as E2B need no local runtime, only a vendor API key. See [Runtimes](../concepts/runtimes.md).
+Cloud sandboxes such as E2B and Vercel need no local runtime, only a vendor API key. See [Runtimes](../concepts/runtimes.md).
 
 ## Install script
 
@@ -41,15 +41,16 @@ cd computer
 cargo install --path . --locked
 ```
 
-Release builds include `e2b`, `sqlite`, `postgres`, and `s3`. A source build adds them with features:
+Release builds include `e2b`, `vercel`, `sqlite`, `postgres`, and `s3`. A source build adds them with features:
 
 ```bash
-cargo install --path . --locked --features e2b,microsandbox,sqlite,postgres,s3
+cargo install --path . --locked --features e2b,vercel,microsandbox,sqlite,postgres,s3
 ```
 
 | Feature | Adds |
 | --- | --- |
 | `e2b` | E2B cloud sandboxes |
+| `vercel` | Vercel Sandbox |
 | `microsandbox` | The microsandbox Rust library, for the library API. The server uses the `msb` CLI with no feature. |
 | `sqlite`, `postgres`, `s3` | Durable storage for `computerd` |
 

@@ -834,6 +834,27 @@ impl Vendors for Builtin {
             return Ok(Arc::new(E2bVendor::new(Arc::new(cloud))));
         }
 
+        #[cfg(feature = "vercel")]
+        if provider == "vercel" {
+            use computer::sandboxes::vercel::cloud::Cloud;
+
+            let key = key.ok_or_else(|| "vercel takes a token as its api_key".to_string())?;
+            let field = |name: &str| fields.get(name).and_then(Value::as_str).map(str::to_string);
+            let project =
+                field("project_id").ok_or_else(|| "vercel takes a project_id".to_string())?;
+
+            let cloud = Cloud::new(key.expose(), field("team_id"), project)
+                .map_err(|error| error.to_string())?;
+            let cloud = match field("team_slug") {
+                Some(slug) => cloud.team_slug(slug),
+                None => cloud,
+            };
+            return Ok(Arc::new(match field("endpoint") {
+                Some(endpoint) => cloud.at(endpoint),
+                None => cloud,
+            }));
+        }
+
         let _ = (fields, key);
         Err(format!(
             "{provider} is not a vendor this server was built with"
@@ -847,6 +868,19 @@ impl Vendors for Builtin {
 
             return match Cloud::from_env() {
                 Ok(cloud) => Some(Arc::new(E2bVendor::new(Arc::new(cloud)))),
+                Err(error) => {
+                    tracing::warn!(vendor = %provider, %error, "this vendor cannot be reached");
+                    None
+                }
+            };
+        }
+
+        #[cfg(feature = "vercel")]
+        if provider == "vercel" {
+            use computer::sandboxes::vercel::cloud::Cloud;
+
+            return match Cloud::from_env() {
+                Ok(cloud) => Some(Arc::new(cloud)),
                 Err(error) => {
                     tracing::warn!(vendor = %provider, %error, "this vendor cannot be reached");
                     None

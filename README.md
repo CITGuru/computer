@@ -141,7 +141,7 @@ The root `computer` package exports the desktop API. Disable its default `cli` f
 computer = { git = "https://github.com/CITGuru/computer", default-features = false }
 ```
 
-Optional features add the E2B client, microsandbox library binding, and daemon storage backends: `e2b`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
+Optional features add the E2B and Vercel Sandbox clients, microsandbox library binding, and daemon storage backends: `e2b`, `vercel`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
 
 ### REST and Rust client
 
@@ -1357,7 +1357,7 @@ From the CLI or MCP, name the profile when the box is made:
 computer new --profile work
 ```
 
-The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B and microsandbox boxes refuse a profile, since they have no Docker volume.
+The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B, Vercel, and microsandbox boxes refuse a profile, since they have no Docker volume.
 
 Use session export when the data must move between hosts. Use a named profile when all browser state must stay on one host.
 
@@ -1496,7 +1496,7 @@ Clients send the token as `Authorization: Bearer ...`. The gate protects REST an
 
 The REST API uses shared request and response types from [`computer-api`](crates/computer-api). Box creation, action batches, and forks accept idempotency keys so a transport retry does not repeat a click or create a second box. See the [server guide](crates/computer-server/README.md) for routes and semantics.
 
-By default every box the server creates lives an hour unless you change it from the confiuration. `computerd` offers one runtime per host runtime it finds — docker, podman and nerdctl for containers, smolvm for a microVM on libkrun — and `GET /v1/runtimes` says what each one runs a box in and what it can do. A placement names one; a box that names none lands on the default. `COMPUTER_SERVER_CONFIG` points at a file that tunes them, offers an engine twice, or turns one off, and `COMPUTER_SERVER_SANDBOXES=e2b` adds a remote vendor when the daemon was built with E2B support. A vendor can also be added while the server runs — `computer runtime add cloud --provider e2b --api-key` takes the key on stdin — and is then sealed in the store and offered again after a restart.
+By default every box the server creates lives an hour unless you change it from the confiuration. `computerd` offers one runtime per host runtime it finds — docker, podman and nerdctl for containers, smolvm for a microVM on libkrun — and `GET /v1/runtimes` says what each one runs a box in and what it can do. A placement names one; a box that names none lands on the default. `COMPUTER_SERVER_CONFIG` points at a file that tunes them, offers an engine twice, or turns one off, and `COMPUTER_SERVER_SANDBOXES=e2b` (or `vercel`) adds a remote vendor when the daemon was built with that vendor's support. A vendor can also be added while the server runs — `computer runtime add cloud --provider e2b --api-key` takes the key on stdin — and is then sealed in the store and offered again after a restart.
 
 On restart, `computerd` takes back every box it recorded, through the runtime its record names, and then scans each runtime for boxes left labelled by an earlier server.
 
@@ -1675,6 +1675,19 @@ E2B sandboxes are created with public traffic off by default, so every port refu
 
 Page tools reach Chrome DevTools at the vendor's address for port 9223. A bridge in the box answers only requests that carry a secret made for that box. A template built from an older image does not have the bridge, so build it again.
 
+The included Vercel Sandbox integration works the same way from the library. Build with the `vercel` feature and set the token, team, and project:
+
+```toml
+computer = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["vercel"] }
+```
+
+```bash
+export VERCEL_TOKEN=... VERCEL_TEAM_ID=... VERCEL_PROJECT_ID=...
+cargo run --features vercel --example vercel
+```
+
+Vercel starts sandboxes only from its own registry, for `linux/amd64`. With no image, the first launch builds the bundled image in a builder sandbox at Vercel, pushes it to `vcr.vercel.com/<team-slug>/<project>/computer-desktop:<fingerprint>-x86_64`, and removes the builder; later launches find the tag and start in seconds. An image directory is built the same way. A named image goes to Vercel as it is and must already be in the registry. Every published port has a public URL, so viewers need `Auth::Token` or `Auth::Password`, and page tools go through the same DevTools bridge with its secret. Vercel publishes at most 14 ports, so a box has at most 6 screens. See [docs/guides/vercel-sandbox.md](docs/guides/vercel-sandbox.md).
+
 ### X11 and Wayland
 
 X11 is the default display profile. Select the Wayland profile explicitly:
@@ -1754,7 +1767,7 @@ A profile defines the image contract, ports, geometry, environment, capabilities
 
 ### Add a cloud sandbox vendor
 
-`RemoteApi` is the common interface for E2B, Daytona, Modal, and similar services. An adapter creates, finds, and removes a sandbox; runs commands; and reads and writes files.
+`RemoteApi` is the common interface for E2B, Vercel, Daytona, Modal, and similar services. An adapter creates, finds, and removes a sandbox; runs commands; and reads and writes files.
 
 `RemoteMachine` supplies shared lifetime, naming, and keep-alive behavior. `RemoteProfile` maps vendor endpoints and removes capabilities that the remote service cannot expose.
 
@@ -1865,6 +1878,7 @@ The repository also includes:
 - [custom_sandbox](examples/custom_sandbox.rs) implements a sandbox vendor.
 - [e2b](examples/e2b.rs) runs in an E2B sandbox.
 - [e2b_takeover](examples/e2b_takeover.rs) gives an E2B desktop to a person.
+- [vercel](examples/vercel.rs) runs in a Vercel sandbox.
 - [client drive](crates/computer-client/examples/drive.rs) exercises the REST client end to end.
 
 Run an example with Cargo:

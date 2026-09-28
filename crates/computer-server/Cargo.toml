@@ -9,6 +9,7 @@ license = "MIT"
 [features]
 default = []
 e2b = ["computer/e2b"]
+vercel = ["computer/vercel"]
 sql = []
 sqlite = ["sql", "computer-storage/sqlite"]
 postgres = ["sql", "computer-storage/postgres"]

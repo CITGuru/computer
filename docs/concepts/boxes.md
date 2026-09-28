@@ -127,7 +127,7 @@ The default X11 image is based on `debian:bookworm-slim`:
 | xdotool, wmctrl | Pointer, keyboard, and window control |
 | ImageMagick | Screenshots |
 | xclip | Clipboard and primary selection |
-| socat, `computer-devtools-bridge` | The Chrome DevTools bridge on port 9223. Host runtimes use socat. On E2B, a bridge that accepts only requests with the box's secret. |
+| socat, `computer-devtools-bridge` | The Chrome DevTools bridge on port 9223. Host runtimes use socat. On E2B and Vercel, a bridge that accepts only requests with the box's secret. |
 | xterm | A terminal |
 | Input guard | Blocks agent input while a person has control |
 

@@ -1,6 +1,6 @@
 # Cloud sandboxes
 
-A cloud sandbox runs a box at a vendor, not on your host. The vendor supplies the machine, and you need no container runtime. This guide sets up E2B, the vendor that is built in. At the end, it shows how to add a different vendor.
+A cloud sandbox runs a box at a vendor, not on your host. The vendor supplies the machine, and you need no container runtime. This guide sets up E2B. For Vercel, the other vendor that is built in, see [Vercel Sandbox](vercel-sandbox.md). At the end, this guide shows how to add a different vendor.
 
 For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/runtimes.md).
 
@@ -11,7 +11,7 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 | Screenshots, mouse, keyboard, and waits | Browser profiles (`--profile`) |
 | Windows, applications, and native widgets | Stop. Pause works. |
 | Files, commands, and clipboard | Memory and CPUs for each box. They are set when the template is built. |
-| Page tools and `computer cdp`, with a template built from the current image. See [Control modes](../concepts/control-modes.md#browser-mode-on-remote-runtimes). | Page tools on boxes that a restarted server finds again |
+| Page tools and `computer cdp`, with a template built from the current image, also after a server restart. See [Control modes](../concepts/control-modes.md#browser-mode-on-remote-runtimes). | |
 | Human control, through the MCP Apps live screen. Viewer and takeover URLs open in a browser only when the runtime sets `public_traffic`. | |
 | Pause and resume | |
 | Network policy (`--no-network`) | |
