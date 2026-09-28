@@ -1142,7 +1142,7 @@ impl Drop for Connection {
                 Wire::Plain(socket) => {
                     let _ = socket.try_write(&close_frame());
                 }
-                #[cfg(feature = "e2b")]
+                #[cfg(any(feature = "e2b", feature = "vercel"))]
                 Wire::Tls(_) => {}
             }
         }
@@ -3653,7 +3653,7 @@ async fn connect(host: &str, port: u16) -> Result<TcpStream> {
 
 pub enum Wire {
     Plain(TcpStream),
-    #[cfg(feature = "e2b")]
+    #[cfg(any(feature = "e2b", feature = "vercel"))]
     Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
 }
 
@@ -3665,7 +3665,7 @@ impl AsyncRead for Wire {
     ) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
             Self::Plain(socket) => Pin::new(socket).poll_read(context, buffer),
-            #[cfg(feature = "e2b")]
+            #[cfg(any(feature = "e2b", feature = "vercel"))]
             Self::Tls(socket) => Pin::new(socket.as_mut()).poll_read(context, buffer),
         }
     }
@@ -3679,7 +3679,7 @@ impl AsyncWrite for Wire {
     ) -> Poll<std::io::Result<usize>> {
         match self.get_mut() {
             Self::Plain(socket) => Pin::new(socket).poll_write(context, bytes),
-            #[cfg(feature = "e2b")]
+            #[cfg(any(feature = "e2b", feature = "vercel"))]
             Self::Tls(socket) => Pin::new(socket.as_mut()).poll_write(context, bytes),
         }
     }
@@ -3687,7 +3687,7 @@ impl AsyncWrite for Wire {
     fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
             Self::Plain(socket) => Pin::new(socket).poll_flush(context),
-            #[cfg(feature = "e2b")]
+            #[cfg(any(feature = "e2b", feature = "vercel"))]
             Self::Tls(socket) => Pin::new(socket.as_mut()).poll_flush(context),
         }
     }
@@ -3695,13 +3695,13 @@ impl AsyncWrite for Wire {
     fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match self.get_mut() {
             Self::Plain(socket) => Pin::new(socket).poll_shutdown(context),
-            #[cfg(feature = "e2b")]
+            #[cfg(any(feature = "e2b", feature = "vercel"))]
             Self::Tls(socket) => Pin::new(socket.as_mut()).poll_shutdown(context),
         }
     }
 }
 
-#[cfg(feature = "e2b")]
+#[cfg(any(feature = "e2b", feature = "vercel"))]
 async fn secured(host: &str, socket: TcpStream) -> Result<Wire> {
     use tokio_rustls::rustls::{self, pki_types::ServerName};
 
@@ -3733,10 +3733,10 @@ async fn secured(host: &str, socket: TcpStream) -> Result<Wire> {
         .map_err(|error| Error::transport(format!("{host}: {error}"), true))
 }
 
-#[cfg(not(feature = "e2b"))]
+#[cfg(not(any(feature = "e2b", feature = "vercel")))]
 async fn secured(host: &str, _socket: TcpStream) -> Result<Wire> {
     Err(Error::denied(format!(
-        "{host} speaks DevTools over TLS, and this build has no TLS: turn on the e2b feature"
+        "{host} speaks DevTools over TLS, and this build has no TLS: turn on the e2b or vercel feature"
     )))
 }
 

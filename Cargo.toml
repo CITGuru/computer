@@ -15,6 +15,7 @@ default = ["cli"]
 cli = ["dep:computer-cli", "dep:tokio", "dep:libc"]
 microsandbox = ["computer-core/microsandbox"]
 e2b = ["computer-core/e2b", "computer-cli?/e2b"]
+vercel = ["computer-core/vercel", "computer-cli?/vercel"]
 sqlite = ["computer-cli?/sqlite"]
 postgres = ["computer-cli?/postgres"]
 s3 = ["computer-cli?/s3"]
@@ -61,6 +62,11 @@ required-features = ["cli"]
 name = "e2b"
 path = "examples/e2b.rs"
 required-features = ["e2b"]
+
+[[example]]
+name = "vercel"
+path = "examples/vercel.rs"
+required-features = ["vercel"]
 
 [[example]]
 name = "e2b_takeover"
