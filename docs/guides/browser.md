@@ -2,7 +2,7 @@
 
 This guide does common browser tasks: open pages, find and act on controls, wait for results, read and capture pages, and move a login between boxes. For why and when to use the browser mode, see [Control modes](../concepts/control-modes.md#browser).
 
-On remote runtimes such as E2B and Vercel, page tools are slower. On E2B, they also need a template built from the current image, and they stop working on boxes that a restarted server finds again. See [Browser mode on remote runtimes](../concepts/control-modes.md#browser-mode-on-remote-runtimes).
+On remote runtimes such as E2B and Vercel, page tools are slower. On E2B, they also need a template built from the current image. See [Browser mode on remote runtimes](../concepts/control-modes.md#browser-mode-on-remote-runtimes).
 
 ## The interfaces
 

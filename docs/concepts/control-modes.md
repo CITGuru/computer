@@ -166,7 +166,7 @@ On E2B, page tools and `computer cdp` reach Chromium at the address that E2B pub
 
 Each CDP call goes to the vendor and back, so a page tool takes longer than on a host runtime.
 
-When a server takes a box back after a restart, it restarts the bridge in the box with a new secret, so the secret of an earlier server no longer opens the browser. On Vercel, page tools then work again. On E2B, a box that a restarted server finds again has no DevTools address, so page tools stay unavailable on it. Screenshots, input, clipboard, files, commands, and human control continue to work.
+When a server takes a box back after a restart, it restarts the bridge in the box with a new secret, so the secret of an earlier server no longer opens the browser. Page tools then work again on the box. Screenshots, input, clipboard, files, commands, and human control continue to work.
 
 ## Compare the modes
 

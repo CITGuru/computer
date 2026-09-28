@@ -155,15 +155,14 @@ impl RemoteApi for E2bVendor {
         Ok(Self::published(&sandbox, &plan.publish))
     }
 
-    /// No endpoints: which ports the box serves depends on an image nothing
-    /// here was told.
     async fn find(&self, name: &str) -> Result<Option<remote::Sandbox>> {
         let Some(sandbox) = self.api.find(name).await? else {
             return Ok(None);
         };
 
         self.remember(&sandbox);
-        Ok(Some(Self::published(&sandbox, &[])))
+        let standard = crate::Profile::ports(&crate::X11Profile).to_publish();
+        Ok(Some(Self::published(&sandbox, &standard)))
     }
 
     async fn kill(&self, id: &str) -> Result<()> {
@@ -430,7 +429,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_a_box_from_another_process_is_driveable_and_unwatched() {
+    async fn test_a_box_from_another_process_is_driveable_and_reachable() {
         let api = Arc::new(ScriptedE2b::new().holding("left-over", "sbx-9"));
         let vendor = vendor(api);
 
@@ -440,11 +439,13 @@ mod tests {
             .expect("a listing")
             .expect("it is there");
 
-        assert!(
-            found.endpoints.is_empty(),
-            "which ports the box serves is the image's answer, and nothing \
-             here was told which image"
+        assert_eq!(
+            found.url(9223),
+            Some("https://9223-sbx-9.e2b.app"),
+            "a restarted server reaches page tools through the bridge, and e2b \
+             names every port's host by pattern, so the address is known"
         );
+        assert_eq!(found.url(6080), Some("https://6080-sbx-9.e2b.app"));
         assert!(
             vendor.exec(&found, &[], &BTreeMap::new()).await.is_ok(),
             "it still drives: connect answered with both tokens"
