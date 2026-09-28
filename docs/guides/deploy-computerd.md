@@ -219,6 +219,12 @@ printf '%s' "$E2B_API_KEY" | computer runtime add cloud --provider e2b --api-key
 computer runtime ls
 ```
 
+For Vercel, give the project and team as fields. See [Vercel Sandbox](vercel-sandbox.md).
+
+```bash
+computer runtime add vercel --provider vercel --field project_id=prj_... --field team_id=team_... --api-key-env VERCEL_TOKEN
+```
+
 The server encrypts the key with the key file from step 4. Keep that file: if it is lost, the server cannot decrypt the vendor keys, and the runtime shows `unavailable` until you set the key again.
 
 ## Upgrade

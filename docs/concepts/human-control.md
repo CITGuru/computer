@@ -134,4 +134,4 @@ Choose `Password` when a link can be copied to other places, such as chat or log
 
 Treat viewer URLs as credentials. A control URL gives full control of the desktop.
 
-Chrome DevTools has no authentication of its own. On host runtimes its port stays on loopback. On E2B, the bridge in the box refuses requests without the box's secret. Use `computer cdp` for an address with a short-lived token through the server.
+Chrome DevTools has no authentication of its own. On host runtimes its port stays on loopback. On E2B and Vercel, the bridge in the box refuses requests without the box's secret. Use `computer cdp` for an address with a short-lived token through the server.

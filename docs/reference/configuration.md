@@ -32,7 +32,7 @@ See [Runtimes](../concepts/runtimes.md).
 | --- | --- | --- |
 | `COMPUTER_SERVER_CONFIG` | None | The path to the [runtimes file](#runtimes-file). Read at start. |
 | `COMPUTER_SERVER_RUNTIMES` | All that answer | Host runtimes to offer, separated by commas: `docker`, `podman`, `nerdctl`, `smolvm`, `microsandbox`. |
-| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, separated by commas, such as `e2b`. |
+| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, separated by commas, such as `e2b` or `vercel`. |
 | `COMPUTER_SERVER_SECRET_KEY` | None | 32 bytes, base64 or hex. Encrypts vendor keys that the server stores. |
 | `COMPUTER_SERVER_SECRET_FILE` | None | A file that holds the secret key. The server makes it, with mode `0600`, if it does not exist. |
 
@@ -62,6 +62,17 @@ The E2B client reads these, in the library and in the server.
 | --- | --- | --- |
 | `E2B_API_KEY` | None | The API key. Necessary. |
 | `E2B_DOMAIN` | `e2b.app` | The E2B domain, for a self-hosted E2B. |
+
+## Vercel
+
+The Vercel client reads these, in the library and in the server.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `VERCEL_TOKEN` | None | The access token. Necessary. It must be able to write to Vercel Container Registry. |
+| `VERCEL_TEAM_ID` | None | The team that owns the project. Necessary for the image build. |
+| `VERCEL_PROJECT_ID` | None | The project for the sandboxes and the image. Necessary. |
+| `VERCEL_TEAM_SLUG` | Read from the API | The team slug for the registry path, when the token cannot read the team. |
 
 ## Container engines
 
@@ -126,6 +137,9 @@ Fields for a remote runtime added with `computer runtime add --field name=value`
 | `lifetime_secs` | Lifetime of a box that does not give one. |
 | `max_lifetime_secs` | The longest lifetime a box can ask for. |
 | `public_traffic` | `true` lets anyone reach the box's published ports with no E2B traffic token. Default `false`. |
+| `project_id` | Vercel: the project. Necessary. |
+| `team_id` | Vercel: the team that owns the project. |
+| `team_slug` | Vercel: the team slug, when the token cannot read the team. |
 
 Secrets, such as `api_key`, go in with `--api-key` or `--api-key-env`, or under `secrets` in the API. The server never returns them.
 
@@ -137,12 +151,13 @@ For the root `computer` package. See [Install](../getting-started/install.md#bui
 | --- | --- | --- |
 | `cli` | On | The `computer` and `computerd` binaries. Turn it off for a library-only dependency. |
 | `e2b` | Off | The E2B client. |
+| `vercel` | Off | The Vercel Sandbox client. |
 | `microsandbox` | Off | The microsandbox Rust library. The server uses the `msb` CLI with no feature. |
 | `sqlite` | Off | SQLite storage for the server. |
 | `postgres` | Off | PostgreSQL storage for the server. |
 | `s3` | Off | S3 storage for the server. |
 
-Release builds turn on `e2b`, `sqlite`, `postgres`, and `s3`.
+Release builds turn on `e2b`, `vercel`, `sqlite`, `postgres`, and `s3`.
 
 ## Box settings
 

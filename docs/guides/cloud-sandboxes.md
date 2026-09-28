@@ -1,6 +1,6 @@
 # Cloud sandboxes
 
-A cloud sandbox runs a box at a vendor, not on your host. The vendor supplies the machine, and you need no container runtime. This guide sets up E2B, the vendor that is built in. At the end, it shows how to add a different vendor.
+A cloud sandbox runs a box at a vendor, not on your host. The vendor supplies the machine, and you need no container runtime. This guide sets up E2B. For Vercel, the other vendor that is built in, see [Vercel Sandbox](vercel-sandbox.md). At the end, this guide shows how to add a different vendor.
 
 For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/runtimes.md).
 
