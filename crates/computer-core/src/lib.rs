@@ -434,7 +434,8 @@ impl Builder {
         }
 
         // CDP has no authentication, and a forward cannot add one to a WebSocket upgrade.
-        let devtools_withheld = routable && !machine.exposes_every_port();
+        let devtools_withheld =
+            withholds_devtools(routable, machine.exposes_every_port(), &config.env);
         if devtools_withheld && let Some(bridge) = self.profile.ports().devtools_bridge {
             config.publish.retain(|port| *port != bridge);
         }
@@ -2389,9 +2390,71 @@ fn unique_name() -> String {
     )
 }
 
+fn withholds_devtools(
+    routable: bool,
+    exposes_every_port: bool,
+    env: &BTreeMap<String, String>,
+) -> bool {
+    let gated = env
+        .get(sandboxes::remote::profile::DEVTOOLS_SECRET_ENV)
+        .is_some_and(|secret| !secret.is_empty());
+
+    routable && !exposes_every_port && !gated
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gated() -> BTreeMap<String, String> {
+        BTreeMap::from([(
+            sandboxes::remote::profile::DEVTOOLS_SECRET_ENV.to_string(),
+            "s3cret".to_string(),
+        )])
+    }
+
+    #[test]
+    fn test_an_open_devtools_forward_is_not_published_beyond_loopback() {
+        assert!(
+            withholds_devtools(true, false, &BTreeMap::new()),
+            "without the secret the box runs socat, and CDP has no password"
+        );
+    }
+
+    #[test]
+    fn test_a_bridge_that_checks_the_secret_is_published() {
+        assert!(
+            !withholds_devtools(true, false, &gated()),
+            "the bridge answers 403 to a request without the secret header"
+        );
+    }
+
+    #[test]
+    fn test_an_empty_secret_does_not_count_as_a_gate() {
+        let empty = BTreeMap::from([(
+            sandboxes::remote::profile::DEVTOOLS_SECRET_ENV.to_string(),
+            String::new(),
+        )]);
+
+        assert!(
+            withholds_devtools(true, false, &empty),
+            "start.sh falls back to the open socat forward on an empty secret"
+        );
+    }
+
+    #[test]
+    fn test_a_vendor_that_serves_every_port_keeps_devtools_as_before() {
+        assert!(!withholds_devtools(true, true, &BTreeMap::new()));
+        assert!(
+            !withholds_devtools(true, true, &gated()),
+            "e2b answers on every port, so withholding one closes nothing"
+        );
+    }
+
+    #[test]
+    fn test_a_box_on_loopback_keeps_devtools() {
+        assert!(!withholds_devtools(false, false, &BTreeMap::new()));
+    }
 
     #[test]
     fn test_two_boxes_opened_at_once_do_not_share_a_name() {

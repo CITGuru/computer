@@ -42,7 +42,7 @@ fn fitted(publish: &[u16]) -> Result<Vec<u16>> {
     let room = MOST_PORTS.saturating_sub(rest.len()) / 2 * 2;
     if room == 0 {
         return Err(Error::Unsupported {
-            gaps: vec!["more than 15 published ports on vercel"],
+            gaps: vec!["more than 14 published ports on vercel"],
         });
     }
 
@@ -266,15 +266,15 @@ mod tests {
 
         let kept = fitted(&publish).expect("fitted");
 
-        assert_eq!(kept.len(), 15);
+        assert_eq!(kept.len(), 13, "vercel answers 500 to a 15th port");
         assert_eq!(
             kept.last(),
             Some(&9223),
-            "DevTools is worth more than screen 7"
+            "DevTools is worth more than screens 6 and 7"
         );
         assert_eq!(
-            kept[..14],
-            (6080..6094).collect::<Vec<_>>()[..],
+            kept[..12],
+            (6080..6092).collect::<Vec<_>>()[..],
             "a screen keeps both of its ports or neither"
         );
     }
