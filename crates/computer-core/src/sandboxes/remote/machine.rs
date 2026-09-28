@@ -680,6 +680,38 @@ mod lifecycle {
     use crate::testing::ScriptedRemote;
 
     #[tokio::test]
+    async fn test_a_box_taken_back_gets_a_bridge_with_this_process_secret() {
+        let api = Arc::new(ScriptedRemote::new().holding("desk", "sbx-1"));
+        let (machine, profile) = super::super::pair(
+            Arc::clone(&api) as Arc<dyn RemoteApi>,
+            Arc::new(crate::X11Profile),
+        );
+
+        let computer = crate::Computer::attach_using(
+            Arc::new(machine),
+            "desk",
+            Arc::clone(&profile) as Arc<dyn crate::Profile>,
+            None,
+        )
+        .await
+        .expect("taken back");
+
+        let (restart, env) = crate::Profile::rekey(profile.as_ref()).expect("a secret");
+        let at = api
+            .commands()
+            .iter()
+            .position(|argv| *argv == restart)
+            .expect("the bridge was restarted");
+        assert_eq!(
+            api.environments()[at].get(super::super::profile::DEVTOOLS_SECRET_ENV),
+            env.get(super::super::profile::DEVTOOLS_SECRET_ENV),
+            "the secret of the process that took the box back, which the old \
+             bridge has never seen"
+        );
+        drop(computer);
+    }
+
+    #[tokio::test]
     async fn test_a_vendor_that_cannot_pause_says_so_rather_than_pretending() {
         let machine = RemoteMachine::new(
             Arc::new(ScriptedRemote::new().holding("desk", "sbx-1")),

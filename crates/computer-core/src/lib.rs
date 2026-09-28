@@ -700,7 +700,9 @@ impl Computer {
             .and_then(|said| profile::builtin(said))
             .unwrap_or_else(|| Arc::new(X11Profile));
 
-        Self::pick_up(machine, name, profile, None, environment).await
+        let computer = Self::pick_up(machine, name, profile, None, environment).await?;
+        computer.rekey().await;
+        Ok(computer)
     }
 
     pub async fn attach_using(
@@ -716,7 +718,32 @@ impl Computer {
         }
 
         let environment = machine.env(&name).await;
-        Self::pick_up(machine, name, profile, driver, environment).await
+        let computer = Self::pick_up(machine, name, profile, driver, environment).await?;
+        computer.rekey().await;
+        Ok(computer)
+    }
+
+    async fn rekey(&self) {
+        let Some((argv, env)) = self.profile.rekey() else {
+            return;
+        };
+
+        match self.machine.exec(&self.name, &argv, &env).await {
+            Ok(result) if result.code == 0 => {
+                tracing::info!(box_ = %self.name, "the DevTools bridge has a new secret");
+            }
+            Ok(result) => tracing::warn!(
+                box_ = %self.name,
+                code = result.code,
+                stderr = %result.stderr_utf8().trim(),
+                "the DevTools bridge kept its old secret, so page tools will be refused"
+            ),
+            Err(error) => tracing::warn!(
+                box_ = %self.name,
+                %error,
+                "the DevTools bridge kept its old secret, so page tools will be refused"
+            ),
+        }
     }
 
     /// Only [`Computer::start`] and [`Computer::shutdown`] work on the handle this answers.

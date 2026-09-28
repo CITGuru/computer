@@ -180,6 +180,10 @@ pub trait Profile: Send + Sync {
         None
     }
 
+    fn rekey(&self) -> Option<(Vec<String>, BTreeMap<String, String>)> {
+        None
+    }
+
     fn port_headers(&self) -> Vec<(String, String)> {
         Vec::new()
     }

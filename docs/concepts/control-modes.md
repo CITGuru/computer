@@ -160,13 +160,13 @@ The address goes through the server and contains a short-lived token, valid for 
 
 ### Browser mode on remote runtimes
 
-On Vercel, page tools and `computer cdp` reach Chromium at the address that Vercel publishes for port 9223, through the same bridge. The server builds the image, so it is current. The limits for a restarted server are the same as on E2B.
+On Vercel, page tools and `computer cdp` reach Chromium at the address that Vercel publishes for port 9223, through the same bridge. The server builds the image, so it is current.
 
 On E2B, page tools and `computer cdp` reach Chromium at the address that E2B publishes for port 9223. A bridge in the box answers only requests that carry a secret made for that box, so the address alone does not open the browser. Build the template from the current image: an older template does not have the bridge, and Chromium refuses the requests.
 
 Each CDP call goes to the vendor and back, so a page tool takes longer than on a host runtime.
 
-A server that restarts does not get the secret back, so page tools stop working on the boxes that it finds again. Screenshots, input, clipboard, files, commands, and human control continue to work.
+When a server takes a box back after a restart, it restarts the bridge in the box with a new secret, so the secret of an earlier server no longer opens the browser. On Vercel, page tools then work again. On E2B, a box that a restarted server finds again has no DevTools address, so page tools stay unavailable on it. Screenshots, input, clipboard, files, commands, and human control continue to work.
 
 ## Compare the modes
 

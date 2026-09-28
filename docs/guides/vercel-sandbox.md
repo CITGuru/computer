@@ -11,8 +11,8 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 | Screenshots, mouse, keyboard, and waits | Pause and stop |
 | Windows, applications, and native widgets | Browser profiles (`--profile`) |
 | Files, commands, and clipboard | Applications and packages added at launch (`--app`, extras) |
-| Page tools and `computer cdp` | Page tools on boxes that a restarted server finds again |
-| Viewer and takeover URLs in a browser | More than 6 screens |
+| Page tools and `computer cdp`, also after a server restart | More than 6 screens |
+| Viewer and takeover URLs in a browser | |
 | CPUs and memory for each box | |
 | Network policy (`--no-network`) | |
 
@@ -121,7 +121,7 @@ Vercel publishes at most 14 ports for each sandbox. Each screen needs two ports,
 
 Vercel publishes each port at a public URL, with no gate of its own. The server always sets token access on a remote box with no other viewer access, so the viewer and takeover URLs need their own token.
 
-Page tools reach Chromium through a bridge in the box on port 9223. The bridge refuses each request without the secret that the server made for the box, so the public address alone does not open the browser. The secret stays with the server that created the box. After a restart, the server finds the box again, but page tools answer 403 on it.
+Page tools reach Chromium through a bridge in the box on port 9223. The bridge refuses each request without the secret that the server made for the box, so the public address alone does not open the browser. When a restarted server takes a box back, it restarts the bridge with a new secret. Page tools then work again, and the secret of the earlier server is refused.
 
 ## Lifetimes
 

@@ -901,6 +901,7 @@ pub struct ScriptedRemote {
     known: Mutex<BTreeMap<String, RemoteSandbox>>,
     metadata: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
     commands: Mutex<Vec<Vec<String>>>,
+    environments: Mutex<Vec<BTreeMap<String, String>>>,
     files: Mutex<BTreeMap<String, Vec<u8>>>,
     killed: Mutex<Vec<String>>,
     refreshed: Mutex<Vec<String>>,
@@ -928,6 +929,7 @@ impl ScriptedRemote {
             known: Mutex::new(BTreeMap::new()),
             metadata: Mutex::new(BTreeMap::new()),
             commands: Mutex::new(Vec::new()),
+            environments: Mutex::new(Vec::new()),
             files: Mutex::new(BTreeMap::new()),
             killed: Mutex::new(Vec::new()),
             refreshed: Mutex::new(Vec::new()),
@@ -1021,6 +1023,13 @@ impl ScriptedRemote {
         self.commands
             .lock()
             .map(|commands| commands.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn environments(&self) -> Vec<BTreeMap<String, String>> {
+        self.environments
+            .lock()
+            .map(|environments| environments.clone())
             .unwrap_or_default()
     }
 
@@ -1183,6 +1192,9 @@ impl RemoteApi for ScriptedRemote {
     ) -> Result<ExecResult> {
         if let Ok(mut commands) = self.commands.lock() {
             commands.push(argv.to_vec());
+        }
+        if let Ok(mut environments) = self.environments.lock() {
+            environments.push(env.clone());
         }
 
         let mut recorded = argv.to_vec();
