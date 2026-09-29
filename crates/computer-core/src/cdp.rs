@@ -106,6 +106,7 @@ pub struct Devtools {
     host: String,
     port: u16,
     secure: bool,
+    prefix: String,
     headers: Vec<(String, String)>,
     browser_path: Arc<OnceLock<String>>,
 }
@@ -135,6 +136,7 @@ impl Devtools {
             host: host.into(),
             port,
             secure: false,
+            prefix: String::new(),
             headers: Vec::new(),
             browser_path: Arc::new(OnceLock::new()),
         }
@@ -145,6 +147,7 @@ impl Devtools {
 
         Ok(Self {
             secure,
+            prefix: path_prefix(&endpoint.http_url),
             headers: endpoint.headers.clone(),
             ..Self::new(host, port)
         })
@@ -182,7 +185,7 @@ impl Devtools {
             true => "wss",
             false => "ws",
         };
-        format!("{scheme}://{}{path}", self.authority())
+        format!("{scheme}://{}{}{path}", self.authority(), self.prefix)
     }
 
     pub async fn targets(&self) -> Result<Vec<Target>> {
@@ -669,7 +672,8 @@ impl Devtools {
             _ => "Content-Length: 0\r\n",
         };
         format!(
-            "{method} {path} HTTP/1.1\r\nHost: {}\r\n{}{length}Connection: close\r\n\r\n",
+            "{method} {}{path} HTTP/1.1\r\nHost: {}\r\n{}{length}Connection: close\r\n\r\n",
+            self.prefix,
             self.authority(),
             self.header_lines()
         )
@@ -1146,7 +1150,8 @@ impl Drop for Connection {
                     feature = "e2b",
                     feature = "vercel",
                     feature = "daytona",
-                    feature = "modal"
+                    feature = "modal",
+                    feature = "smol"
                 ))]
                 Wire::Tls(_) => {}
             }
@@ -3618,6 +3623,22 @@ impl Keystroke {
     }
 }
 
+fn path_prefix(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let path = rest
+        .split_once('/')
+        .map_or("", |(_, path)| path)
+        .split(['?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/');
+
+    match path.is_empty() {
+        true => String::new(),
+        false => format!("/{path}"),
+    }
+}
+
 fn split_url(url: &str) -> Result<(bool, &str, u16)> {
     let (scheme, rest) = url.split_once("://").unwrap_or(("http", url));
     let secure = match scheme {
@@ -3662,7 +3683,8 @@ pub enum Wire {
         feature = "e2b",
         feature = "vercel",
         feature = "daytona",
-        feature = "modal"
+        feature = "modal",
+        feature = "smol"
     ))]
     Tls(Box<tokio_rustls::client::TlsStream<TcpStream>>),
 }
@@ -3679,7 +3701,8 @@ impl AsyncRead for Wire {
                 feature = "e2b",
                 feature = "vercel",
                 feature = "daytona",
-                feature = "modal"
+                feature = "modal",
+                feature = "smol"
             ))]
             Self::Tls(socket) => Pin::new(socket.as_mut()).poll_read(context, buffer),
         }
@@ -3698,7 +3721,8 @@ impl AsyncWrite for Wire {
                 feature = "e2b",
                 feature = "vercel",
                 feature = "daytona",
-                feature = "modal"
+                feature = "modal",
+                feature = "smol"
             ))]
             Self::Tls(socket) => Pin::new(socket.as_mut()).poll_write(context, bytes),
         }
@@ -3711,7 +3735,8 @@ impl AsyncWrite for Wire {
                 feature = "e2b",
                 feature = "vercel",
                 feature = "daytona",
-                feature = "modal"
+                feature = "modal",
+                feature = "smol"
             ))]
             Self::Tls(socket) => Pin::new(socket.as_mut()).poll_flush(context),
         }
@@ -3724,7 +3749,8 @@ impl AsyncWrite for Wire {
                 feature = "e2b",
                 feature = "vercel",
                 feature = "daytona",
-                feature = "modal"
+                feature = "modal",
+                feature = "smol"
             ))]
             Self::Tls(socket) => Pin::new(socket.as_mut()).poll_shutdown(context),
         }
@@ -3735,7 +3761,8 @@ impl AsyncWrite for Wire {
     feature = "e2b",
     feature = "vercel",
     feature = "daytona",
-    feature = "modal"
+    feature = "modal",
+    feature = "smol"
 ))]
 async fn secured(host: &str, socket: TcpStream) -> Result<Wire> {
     use tokio_rustls::rustls::{self, pki_types::ServerName};
@@ -3772,11 +3799,12 @@ async fn secured(host: &str, socket: TcpStream) -> Result<Wire> {
     feature = "e2b",
     feature = "vercel",
     feature = "daytona",
-    feature = "modal"
+    feature = "modal",
+    feature = "smol"
 )))]
 async fn secured(host: &str, _socket: TcpStream) -> Result<Wire> {
     Err(Error::denied(format!(
-        "{host} speaks DevTools over TLS, and this build has no TLS: turn on the e2b, vercel, daytona or modal feature"
+        "{host} speaks DevTools over TLS, and this build has no TLS: turn on the e2b, vercel, daytona, modal or smol feature"
     )))
 }
 
@@ -3891,13 +3919,14 @@ async fn handshake(devtools: &Devtools, path: &str) -> Result<Wire> {
 
     let key = base64_encode(&nonce());
     let request = format!(
-        "GET {path} HTTP/1.1\r\n\
+        "GET {}{path} HTTP/1.1\r\n\
          Host: {}\r\n\
          {}\
          Upgrade: websocket\r\n\
          Connection: Upgrade\r\n\
          Sec-WebSocket-Key: {key}\r\n\
          Sec-WebSocket-Version: 13\r\n\r\n",
+        devtools.prefix,
         devtools.authority(),
         devtools.header_lines()
     );
@@ -4630,6 +4659,44 @@ mod tests {
         assert_eq!(
             websocket_path("ws://127.0.0.1:9222/devtools/browser/BROWSER-1").as_deref(),
             Some("/devtools/browser/BROWSER-1")
+        );
+    }
+
+    #[test]
+    fn test_an_address_with_a_path_keeps_it_in_front_of_every_request() {
+        let devtools = Devtools::from_endpoint(&BrowserEndpoint {
+            http_url: "https://api.example.com/v1/machines/m1/connect/9223".to_string(),
+            ws_url: "wss://api.example.com/v1/machines/m1/connect/9223/devtools/browser"
+                .to_string(),
+            headers: Vec::new(),
+        })
+        .expect("an address");
+
+        assert!(
+            devtools
+                .request_head("GET", "/json/list")
+                .starts_with("GET /v1/machines/m1/connect/9223/json/list HTTP/1.1"),
+            "a vendor that routes ports under a path answers 404 at the host's root"
+        );
+        assert_eq!(
+            devtools.socket_url("/devtools/page/A"),
+            "wss://api.example.com/v1/machines/m1/connect/9223/devtools/page/A"
+        );
+    }
+
+    #[test]
+    fn test_an_address_with_no_path_asks_the_root_as_before() {
+        let devtools = Devtools::from_endpoint(&BrowserEndpoint {
+            http_url: "https://9223-sbx.e2b.app/".to_string(),
+            ws_url: "wss://9223-sbx.e2b.app/devtools/browser".to_string(),
+            headers: Vec::new(),
+        })
+        .expect("an address");
+
+        assert!(
+            devtools
+                .request_head("GET", "/json/version")
+                .starts_with("GET /json/version ")
         );
     }
 

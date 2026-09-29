@@ -896,6 +896,23 @@ impl Vendors for Builtin {
             }));
         }
 
+        #[cfg(feature = "smol")]
+        if provider == "smol" {
+            use computer::sandboxes::smol::cloud::Cloud;
+
+            let key = key.ok_or_else(|| "smol takes an api_key".to_string())?;
+            let field = |name: &str| fields.get(name).and_then(Value::as_str).map(str::to_string);
+
+            let mut cloud = Cloud::new(key.expose()).map_err(|error| error.to_string())?;
+            if let Some(endpoint) = field("endpoint") {
+                cloud = cloud.at(endpoint);
+            }
+            if field("pack").is_some_and(|pack| matches!(pack.as_str(), "false" | "0" | "no")) {
+                cloud = cloud.packing(false);
+            }
+            return Ok(Arc::new(cloud));
+        }
+
         let _ = (fields, key);
         Err(format!(
             "{provider} is not a vendor this server was built with"
@@ -945,6 +962,19 @@ impl Vendors for Builtin {
         #[cfg(feature = "modal")]
         if provider == "modal" {
             use computer::sandboxes::modal::cloud::Cloud;
+
+            return match Cloud::from_env() {
+                Ok(cloud) => Some(Arc::new(cloud)),
+                Err(error) => {
+                    tracing::warn!(vendor = %provider, %error, "this vendor cannot be reached");
+                    None
+                }
+            };
+        }
+
+        #[cfg(feature = "smol")]
+        if provider == "smol" {
+            use computer::sandboxes::smol::cloud::Cloud;
 
             return match Cloud::from_env() {
                 Ok(cloud) => Some(Arc::new(cloud)),

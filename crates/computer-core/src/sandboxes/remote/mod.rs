@@ -37,7 +37,7 @@ pub mod api;
 pub mod machine;
 pub mod profile;
 
-pub use api::{DEFAULT_TTL, NAME_KEY, RemoteApi, Sandbox, SandboxPlan};
+pub use api::{DEFAULT_TTL, LABELS_PATH, NAME_KEY, RemoteApi, Sandbox, SandboxPlan, fit_ports};
 pub use machine::RemoteMachine;
 pub use profile::{Remote, RemoteProfile};
 

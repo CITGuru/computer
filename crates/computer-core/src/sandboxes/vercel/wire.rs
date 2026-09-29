@@ -59,30 +59,7 @@ pub fn vcpus(cpus: Option<&str>, memory: Option<&str>) -> Result<Option<u64>> {
 }
 
 fn fitted(publish: &[u16]) -> Result<Vec<u16>> {
-    if publish.len() <= MOST_PORTS {
-        return Ok(publish.to_vec());
-    }
-
-    let run = publish
-        .windows(2)
-        .take_while(|pair| pair[1] == pair[0] + 1)
-        .count()
-        + 1;
-    let (screens, rest) = publish.split_at(run);
-
-    let room = MOST_PORTS.saturating_sub(rest.len()) / 2 * 2;
-    if room == 0 {
-        return Err(Error::Unsupported {
-            gaps: vec!["more than 14 published ports on vercel"],
-        });
-    }
-
-    let kept: Vec<u16> = screens[..room].iter().chain(rest).copied().collect();
-    tracing::warn!(
-        dropped = ?&screens[room..],
-        "vercel publishes at most {MOST_PORTS} ports, so the screens past these have no viewer"
-    );
-    Ok(kept)
+    crate::sandboxes::remote::fit_ports("vercel", publish, MOST_PORTS)
 }
 
 pub fn sandbox_from(answer: &Value) -> Result<(Sandbox, String)> {

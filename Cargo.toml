@@ -18,6 +18,7 @@ e2b = ["computer-core/e2b", "computer-cli?/e2b"]
 vercel = ["computer-core/vercel", "computer-cli?/vercel"]
 daytona = ["computer-core/daytona", "computer-cli?/daytona"]
 modal = ["computer-core/modal", "computer-cli?/modal"]
+smol = ["computer-core/smol", "computer-cli?/smol"]
 sqlite = ["computer-cli?/sqlite"]
 postgres = ["computer-cli?/postgres"]
 s3 = ["computer-cli?/s3"]
@@ -79,6 +80,11 @@ required-features = ["daytona"]
 name = "modal"
 path = "examples/modal.rs"
 required-features = ["modal"]
+
+[[example]]
+name = "smol"
+path = "examples/smol.rs"
+required-features = ["smol"]
 
 [[example]]
 name = "e2b_takeover"
