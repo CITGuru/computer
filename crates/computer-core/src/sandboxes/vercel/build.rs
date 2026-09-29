@@ -38,22 +38,7 @@ docker buildx build --platform linux/amd64 --progress plain \
   /tmp/computer-build
 "#;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct File {
-    pub path: String,
-    pub bytes: Vec<u8>,
-    pub mode: u32,
-}
-
-impl File {
-    pub fn new(path: impl Into<String>, bytes: Vec<u8>) -> Self {
-        Self {
-            path: path.into(),
-            bytes,
-            mode: 0o644,
-        }
-    }
-}
+pub use crate::sandboxes::context::File;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Context {
@@ -80,51 +65,11 @@ pub fn directory(root: &Path, image: &str) -> Result<Context> {
         .ok_or_else(|| Error::denied(format!("{image} has no tag")))?;
     let hash = rest.rsplit_once('-').map_or(rest, |(hash, _)| hash);
 
-    let mut files = Vec::new();
-    walk(root, root, &mut files)?;
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-
     Ok(Context {
         repository: repository.to_string(),
         tag: format!("{hash}-x86_64"),
-        files,
+        files: in_context(crate::sandboxes::context::directory(root)?),
     })
-}
-
-fn walk(root: &Path, directory: &Path, files: &mut Vec<File>) -> Result<()> {
-    let failed = |path: &Path, error: std::io::Error| {
-        Error::denied(format!("image directory {}: {error}", path.display()))
-    };
-
-    for entry in std::fs::read_dir(directory).map_err(|error| failed(directory, error))? {
-        let path = entry.map_err(|error| failed(directory, error))?.path();
-        let metadata = std::fs::symlink_metadata(&path).map_err(|error| failed(&path, error))?;
-
-        if metadata.is_dir() {
-            walk(root, &path, files)?;
-            continue;
-        }
-
-        if !metadata.is_file() {
-            return Err(Error::Unsupported {
-                gaps: vec!["a symlink in an image directory built on vercel"],
-            });
-        }
-
-        let relative = path.strip_prefix(root).unwrap_or(&path);
-        #[cfg(unix)]
-        let mode = std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o777;
-        #[cfg(not(unix))]
-        let mode = 0o644;
-
-        files.push(File {
-            path: format!("{CONTEXT_DIR}/{}", relative.display()),
-            bytes: std::fs::read(&path).map_err(|error| failed(&path, error))?,
-            mode,
-        });
-    }
-
-    Ok(())
 }
 
 pub fn reference(slug: &str, project: &str, repository: &str, tag: &str) -> String {
@@ -136,10 +81,16 @@ pub fn manifest_url(slug: &str, project: &str, repository: &str, tag: &str) -> S
 }
 
 fn context(bundle: &Bundle) -> Vec<File> {
-    bundle
-        .files
-        .iter()
-        .map(|(name, body)| File::new(format!("{CONTEXT_DIR}/{name}"), body.as_bytes().to_vec()))
+    in_context(crate::sandboxes::context::bundled(bundle))
+}
+
+fn in_context(files: Vec<File>) -> Vec<File> {
+    files
+        .into_iter()
+        .map(|file| File {
+            path: format!("{CONTEXT_DIR}/{}", file.path),
+            ..file
+        })
         .collect()
 }
 

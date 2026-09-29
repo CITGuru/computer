@@ -62,7 +62,7 @@ jobs:
       - name: The commands, with everything a daemon can be built with
         run: |
           cargo clippy -p computer --all-targets --locked \
-            --features sqlite,postgres,s3,e2b,vercel -- -D warnings
+            --features sqlite,postgres,s3,e2b,vercel,daytona -- -D warnings
           cargo test -p computer-server --locked --features sqlite,s3
 
       - name: A box in a microVM
@@ -72,6 +72,11 @@ jobs:
         run: |
           cargo clippy -p computer-core --all-targets --locked --features vercel -- -D warnings
           cargo test -p computer-core --locked --features vercel vercel
+
+      - name: A box on Daytona
+        run: |
+          cargo clippy -p computer-core --all-targets --locked --features daytona -- -D warnings
+          cargo test -p computer-core --locked --features daytona daytona
 
   docs:
     runs-on: ubuntu-22.04

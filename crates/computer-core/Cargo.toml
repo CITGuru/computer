@@ -14,6 +14,7 @@ default = []
 microsandbox = ["dep:microsandbox"]
 e2b = ["dep:reqwest", "dep:tar", "dep:flate2", "dep:tokio-rustls", "dep:webpki-roots"]
 vercel = ["dep:reqwest", "dep:tar", "dep:flate2", "dep:tokio-rustls", "dep:webpki-roots"]
+daytona = ["dep:reqwest", "dep:tokio-rustls", "dep:webpki-roots"]
 
 [dependencies]
 async-trait = "0.1"

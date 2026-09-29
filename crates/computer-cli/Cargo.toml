@@ -10,6 +10,7 @@ license = "MIT"
 default = []
 e2b = ["computer-server/e2b"]
 vercel = ["computer-server/vercel"]
+daytona = ["computer-server/daytona"]
 sqlite = ["computer-server/sqlite"]
 postgres = ["computer-server/postgres"]
 s3 = ["computer-server/s3"]
