@@ -1,0 +1,14 @@
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release --locked --bin computerd --features vercel,postgres
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/computerd /usr/local/bin/computerd
+ENV COMPUTER_SERVER_RUNTIMES=docker \
+    COMPUTER_SERVER_SANDBOXES=vercel \
+    RUST_LOG=computerd=info,computer_server=info,computer=info
+CMD ["sh", "-c", "COMPUTER_SERVER_ADDR=0.0.0.0:${PORT:-80} exec computerd"]
