@@ -259,7 +259,7 @@ async fn get_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
-    let entry = match state.registry.get(&id).await {
+    let entry = match state.entry(&id).await {
         Ok(entry) => entry,
         Err(missing) => {
             let why = state.why_out_of_reach(&id).ok_or_else(|| missing.clone())?;
@@ -284,6 +284,7 @@ async fn delete_box(
         )));
     }
 
+    let _ = state.entry(&id).await;
     state.registry.remove(&id).await?;
     state
         .record(&id, Actor::Agent, TraceEvent::BoxDeleted)
@@ -312,7 +313,7 @@ async fn actions(
         return Ok(replayed);
     }
 
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let lock = entry.screen_lock(screen).await?;
     let _held = lock.lock().await;
 
@@ -1163,7 +1164,7 @@ async fn frame(
         tokio::time::sleep(RAISE).await;
     }
 
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
 
     let png = match shot.is_whole() {
@@ -1253,7 +1254,7 @@ async fn on_node(
     ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiJson(body): ApiJson<OnNode>,
 ) -> ApiResult<Json<NodeResult>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
 
     Ok(Json(on_tree(target.as_desktop(), body).await?))
@@ -1307,7 +1308,7 @@ fn hold(state: &Arc<AppState>, id: &str, screen: u32, pressed: &Pressed, ms: u64
         if !state.presses.close_turn(&id, screen, &pressed, turn) {
             return;
         }
-        let Ok(entry) = state.registry.get(&id).await else {
+        let Ok(entry) = state.entry(&id).await else {
             return;
         };
         let Ok(lock) = entry.screen_lock(screen).await else {
@@ -1373,7 +1374,7 @@ async fn cursor(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<Point>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
 
     Ok(Json(target.as_desktop().find_cursor().await?))
@@ -1390,7 +1391,7 @@ async fn get_clipboard(
     ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiQuery(query): ApiQuery<SelectionQuery>,
 ) -> ApiResult<Json<ClipboardView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
@@ -1417,7 +1418,7 @@ async fn set_clipboard(
     ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiJson(body): ApiJson<SetClipboard>,
 ) -> ApiResult<StatusCode> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
@@ -1444,7 +1445,7 @@ async fn start_takeover(
     ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiJson(body): ApiJson<TakeoverRequest>,
 ) -> ApiResult<Json<TakeoverView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
@@ -1485,7 +1486,7 @@ async fn end_takeover(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<StatusCode> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
@@ -1514,7 +1515,7 @@ async fn viewers(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<ViewersView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
@@ -1537,7 +1538,7 @@ async fn recording(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<RecordingView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
@@ -1562,7 +1563,7 @@ async fn start_recording(
         return Err(ApiError::bad_request("fps must be between 1 and 60"));
     }
 
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
@@ -1580,7 +1581,7 @@ async fn stop_recording(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<RecordingView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
@@ -1598,7 +1599,7 @@ async fn pause_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     for (screen, pressed) in state.presses.take_box(&id) {
         let_go(&state, &entry, &id, screen, &pressed).await;
     }
@@ -1613,7 +1614,7 @@ async fn resume_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
 
     if entry.computer.stopped().await.unwrap_or(false) {
         let woken = entry.computer.start(WAKE).await?;
@@ -1638,7 +1639,7 @@ async fn stop_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     state.presses.take_box(&id);
     entry.computer.stop().await?;
 
@@ -1658,7 +1659,7 @@ async fn exec(
         return Err(ApiError::bad_request("argv is empty"));
     }
 
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let result = match body.timeout_ms {
         Some(ms) => {
             entry
@@ -1699,7 +1700,7 @@ async fn list_dir(
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<PathQuery>,
 ) -> ApiResult<Json<Listing>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let entries = entry.computer.list_dir(&query.path).await?;
 
     Ok(Json(Listing {
@@ -1713,7 +1714,7 @@ async fn grep(
     ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<Search>,
 ) -> ApiResult<Json<Found>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     Ok(Json(found(&entry.computer, &body).await?))
 }
 
@@ -1746,7 +1747,7 @@ async fn glob(
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<GlobQuery>,
 ) -> ApiResult<Json<Globbed>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     Ok(Json(
         globbed(
             &entry.computer,
@@ -1789,7 +1790,7 @@ async fn read_file(
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<PathQuery>,
 ) -> ApiResult<Json<ReadFile>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let bytes = entry.computer.read_file(&query.path).await?;
 
     state
@@ -1820,7 +1821,7 @@ async fn write_file(
             ApiError::bad_request(format!("contents_base64 is not base64: {error}"))
         })?;
 
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     entry.computer.write_file(&body.path, &bytes).await?;
 
     state
@@ -1889,7 +1890,7 @@ async fn fork(
     let new_id = new_id();
     let asked = match placement.runtime.clone() {
         named @ Some(_) => named,
-        None => match state.registry.get(&id).await {
+        None => match state.entry(&id).await {
             Ok(source) => Some(source.runtime.clone()),
             Err(_) => state
                 .store
@@ -2367,7 +2368,7 @@ async fn missing(state: &AppState, id: &str, paths: &[String]) -> ApiResult<()> 
         ));
     }
 
-    let entry = state.registry.get(id).await?;
+    let entry = state.entry(id).await?;
 
     for path in paths {
         let mut argv = vec!["test".to_string(), "-f".to_string()];
@@ -2971,7 +2972,7 @@ async fn page_pdf(
         }));
     };
 
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     entry.computer.write_file(&path, &document).await?;
     state
         .record(
@@ -3045,7 +3046,7 @@ async fn close_tab(
 }
 
 async fn debugger(state: &AppState, id: &str) -> ApiResult<computer::Devtools> {
-    let entry = state.registry.get(id).await?;
+    let entry = state.entry(id).await?;
 
     entry
         .computer
@@ -3075,7 +3076,7 @@ async fn named(state: &AppState, id: &str, tab: &str) -> ApiResult<computer::Pag
 }
 
 async fn visible(state: &AppState, id: &str) -> ApiResult<computer::Page> {
-    let entry = state.registry.get(id).await?;
+    let entry = state.entry(id).await?;
     let browser = entry
         .computer
         .browser()
@@ -3220,7 +3221,7 @@ async fn list_windows(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<Vec<Window>>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let screen = target
         .as_screen()
@@ -3234,7 +3235,7 @@ async fn focus_window(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen, window)): ApiPath<(String, u32, String)>,
 ) -> ApiResult<StatusCode> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let screen = target
         .as_screen()
@@ -3248,7 +3249,7 @@ async fn close_window(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen, window)): ApiPath<(String, u32, String)>,
 ) -> ApiResult<StatusCode> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let screen = target
         .as_screen()
@@ -3263,7 +3264,7 @@ async fn arrange_window(
     ApiPath((id, screen, window)): ApiPath<(String, u32, String)>,
     ApiJson(how): ApiJson<Arrange>,
 ) -> ApiResult<Json<Window>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let screen = target
         .as_screen()
@@ -3276,7 +3277,7 @@ async fn active_window(
     State(state): State<Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<Option<Window>>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let screen = target
         .as_screen()
@@ -3290,7 +3291,7 @@ async fn await_window(
     ApiPath((id, screen)): ApiPath<(String, u32)>,
     ApiJson(body): ApiJson<AwaitWindow>,
 ) -> ApiResult<Json<Window>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let screen = target
         .as_screen()
@@ -3399,7 +3400,7 @@ async fn install_apps(
     ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<InstallApps>,
 ) -> ApiResult<Json<InstalledApps>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
 
     tracing::info!(box_ = %id, apps = ?body.apps, "installing into a running box");
     let installed =

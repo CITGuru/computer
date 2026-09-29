@@ -259,6 +259,15 @@ impl AppState {
             .unwrap_or_default()
     }
 
+    pub async fn entry(&self, id: &str) -> error::ApiResult<Arc<registry::Entry>> {
+        if let Ok(entry) = self.registry.get(id).await {
+            return Ok(entry);
+        }
+
+        recover::one(self, id).await;
+        self.registry.get(id).await
+    }
+
     pub fn out_of_reach(&self, id: &str, why: String) {
         if let Ok(mut held) = self.out_of_reach.lock() {
             held.insert(id.to_string(), why);

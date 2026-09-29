@@ -34,7 +34,7 @@ pub async fn token(
     ApiPath(id): ApiPath<String>,
     ApiQuery(query): ApiQuery<TokenQuery>,
 ) -> ApiResult<Json<CdpToken>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let browser = browser_of(&entry)?;
 
     let life = match query.ttl_secs {
@@ -205,7 +205,7 @@ async fn admitted(state: &AppState, token: &str) -> ApiResult<Arc<Entry>> {
         )
     })?;
 
-    state.registry.get(&id).await
+    state.entry(&id).await
 }
 
 fn browser_of(entry: &Entry) -> ApiResult<computer::Devtools> {
