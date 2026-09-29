@@ -1,4 +1,3 @@
-pub mod dockerfile;
 pub mod wire;
 
 #[cfg(feature = "daytona")]

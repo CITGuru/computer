@@ -1,6 +1,6 @@
-use super::dockerfile::quote;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
+use crate::sandboxes::context::dockerfile::quote;
 use crate::sandboxes::remote::SandboxPlan;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

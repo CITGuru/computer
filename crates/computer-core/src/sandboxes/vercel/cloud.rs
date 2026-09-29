@@ -478,7 +478,15 @@ impl RemoteApi for Cloud {
             .header(CONTENT_TYPE, "application/json")
             .body(serde_json::json!({ "path": path }).to_string());
 
-        self.body(self.send(request).await?).await
+        self.body(self.send(request).await?)
+            .await
+            .map_err(|error| match error {
+                Error::Gone(detail) => Error::Failed {
+                    code: 1,
+                    stderr: detail,
+                },
+                other => other,
+            })
     }
 
     async fn write(&self, sandbox: &Sandbox, path: &str, bytes: &[u8]) -> Result<()> {

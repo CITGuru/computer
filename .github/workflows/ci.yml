@@ -62,7 +62,7 @@ jobs:
       - name: The commands, with everything a daemon can be built with
         run: |
           cargo clippy -p computer --all-targets --locked \
-            --features sqlite,postgres,s3,e2b,vercel,daytona -- -D warnings
+            --features sqlite,postgres,s3,e2b,vercel,daytona,modal -- -D warnings
           cargo test -p computer-server --locked --features sqlite,s3
 
       - name: A box in a microVM
@@ -77,6 +77,11 @@ jobs:
         run: |
           cargo clippy -p computer-core --all-targets --locked --features daytona -- -D warnings
           cargo test -p computer-core --locked --features daytona daytona
+
+      - name: A box on Modal
+        run: |
+          cargo clippy -p computer-core --all-targets --locked --features modal -- -D warnings
+          cargo test -p computer-core --locked --features modal modal
 
   docs:
     runs-on: ubuntu-22.04

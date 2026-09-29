@@ -1,8 +1,8 @@
-use super::{API_URL, dockerfile, wire};
+use super::{API_URL, wire};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
-use crate::sandboxes::context;
+use crate::sandboxes::context::{self, dockerfile};
 use crate::sandboxes::e2b::wire::{escape, multipart};
 use crate::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
 use async_trait::async_trait;
@@ -241,6 +241,16 @@ fn from_status(status: StatusCode, detail: &str) -> Error {
     }
 }
 
+fn missing_is_a_failure(read: Result<Vec<u8>>) -> Result<Vec<u8>> {
+    read.map_err(|error| match error {
+        Error::Gone(detail) => Error::Failed {
+            code: 1,
+            stderr: detail,
+        },
+        other => other,
+    })
+}
+
 fn boundary() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(0);
 
@@ -409,7 +419,7 @@ impl RemoteApi for Cloud {
             &format!("/files/download?path={}", escape(path)),
         )?;
 
-        self.body(self.send(request).await?).await
+        missing_is_a_failure(self.body(self.send(request).await?).await)
     }
 
     async fn write(&self, sandbox: &Sandbox, path: &str, bytes: &[u8]) -> Result<()> {
@@ -521,6 +531,16 @@ mod tests {
         };
 
         assert_eq!(cloud.ensure_image(&config).await.expect("asked"), None);
+    }
+
+    #[test]
+    fn test_a_missing_file_is_not_a_missing_box() {
+        let read = missing_is_a_failure(Err(Error::Gone("no such file".to_string())));
+
+        assert!(
+            matches!(read, Err(Error::Failed { .. })),
+            "Gone would tell the caller the box is gone"
+        );
     }
 
     #[test]

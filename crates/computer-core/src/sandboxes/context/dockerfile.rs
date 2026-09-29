@@ -1,5 +1,5 @@
+use super::File;
 use crate::error::{Error, Result};
-use crate::sandboxes::context::File;
 
 pub fn inline(dockerfile: &str, files: &[File]) -> Result<String> {
     let mut out = Vec::new();
@@ -17,7 +17,7 @@ pub fn inline(dockerfile: &str, files: &[File]) -> Result<String> {
             }
             "ADD" => {
                 return Err(Error::Unsupported {
-                    gaps: vec!["ADD in a Dockerfile built at daytona; use COPY"],
+                    gaps: vec!["ADD in a Dockerfile built at a vendor; use COPY"],
                 });
             }
             _ => out.push(line.to_string()),

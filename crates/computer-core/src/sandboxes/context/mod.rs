@@ -1,3 +1,5 @@
+pub mod dockerfile;
+
 use crate::bundle::Bundle;
 use crate::error::{Error, Result};
 use std::path::Path;

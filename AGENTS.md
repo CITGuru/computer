@@ -27,6 +27,8 @@ cargo clippy -p computer-core --features vercel --all-targets -- -D warnings
 cargo test -p computer-core --features vercel vercel
 cargo clippy -p computer-core --features daytona --all-targets -- -D warnings
 cargo test -p computer-core --features daytona daytona
+cargo clippy -p computer-core --features modal --all-targets -- -D warnings
+cargo test -p computer-core --features modal modal
 ```
 
 The scripts this crate evaluates inside a page are Rust strings that nothing
