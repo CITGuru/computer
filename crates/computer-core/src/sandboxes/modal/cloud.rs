@@ -801,7 +801,7 @@ impl RemoteApi for Cloud {
         let image_id = self.image_id(&plan.image).await?;
 
         let definition = proto::Sandbox {
-            entrypoint_args: Vec::new(),
+            entrypoint_args: wire::idle_entrypoint(),
             image_id,
             resources: Some(proto::Resources {
                 memory_mb: wire::memory_mib(plan.memory.as_deref())?,

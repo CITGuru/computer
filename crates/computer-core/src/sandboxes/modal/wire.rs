@@ -13,6 +13,10 @@ pub fn dockerfile_commands(dockerfile: &str) -> Vec<String> {
         .collect()
 }
 
+pub fn idle_entrypoint() -> Vec<String> {
+    vec!["sleep".to_string(), "infinity".to_string()]
+}
+
 pub fn from_registry(tag: &str) -> Vec<String> {
     vec![format!("FROM {tag}")]
 }
@@ -111,6 +115,16 @@ mod tests {
             dockerfile_commands("FROM debian\n\nRUN a \\\n  && b\n"),
             ["FROM debian", "RUN a \\", "  && b"],
             "modal joins the lines again, so a continued line stays continued"
+        );
+    }
+
+    #[test]
+    fn test_the_main_process_leaves_the_desktop_to_the_boot_command() {
+        assert_eq!(
+            idle_entrypoint(),
+            ["sleep", "infinity"],
+            "with no entrypoint modal runs the image CMD, a second desktop that races \
+             the boot command for the browser profile"
         );
     }
 
