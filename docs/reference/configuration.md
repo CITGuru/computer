@@ -32,7 +32,7 @@ See [Runtimes](../concepts/runtimes.md).
 | --- | --- | --- |
 | `COMPUTER_SERVER_CONFIG` | None | The path to the [runtimes file](#runtimes-file). Read at start. |
 | `COMPUTER_SERVER_RUNTIMES` | All that answer | Host runtimes to offer, separated by commas: `docker`, `podman`, `nerdctl`, `smolvm`, `microsandbox`. |
-| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, separated by commas, such as `e2b`, `vercel`, or `daytona`. |
+| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, separated by commas, such as `e2b`, `vercel`, `daytona`, or `modal`. |
 | `COMPUTER_SERVER_SECRET_KEY` | None | 32 bytes, base64 or hex. Encrypts vendor keys that the server stores. |
 | `COMPUTER_SERVER_SECRET_FILE` | None | A file that holds the secret key. The server makes it, with mode `0600`, if it does not exist. |
 
@@ -83,6 +83,18 @@ The Daytona client reads these, in the library and in the server.
 | `DAYTONA_API_KEY` | None | The API key. Necessary. |
 | `DAYTONA_API_URL` | `https://app.daytona.io/api` | The API URL. |
 | `DAYTONA_TARGET` | Daytona's | The region, such as `us` or `eu`. |
+
+## Modal
+
+The Modal client reads these, in the library and in the server.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MODAL_TOKEN_ID` | None | The token ID. Necessary. |
+| `MODAL_TOKEN_SECRET` | None | The token secret. Necessary. |
+| `MODAL_ENVIRONMENT` | The workspace default | The Modal environment. |
+| `MODAL_APP` | `computer` | The Modal app that holds the images and sandboxes. |
+| `MODAL_SERVER_URL` | `https://api.modal.com:443` | The API address. |
 
 ## Container engines
 
@@ -151,6 +163,9 @@ Fields for a remote runtime added with `computer runtime add --field name=value`
 | `team_id` | Vercel: the team that owns the project. |
 | `team_slug` | Vercel: the team slug, when the token cannot read the team. |
 | `target` | Daytona: the region. |
+| `token_id` | Modal: the token ID. The secret goes in as `api_key`. |
+| `environment` | Modal: the environment. |
+| `app` | Modal: the app. |
 
 Secrets, such as `api_key`, go in with `--api-key` or `--api-key-env`, or under `secrets` in the API. The server never returns them.
 
@@ -164,12 +179,13 @@ For the root `computer` package. See [Install](../getting-started/install.md#bui
 | `e2b` | Off | The E2B client. |
 | `vercel` | Off | The Vercel Sandbox client. |
 | `daytona` | Off | The Daytona client. |
+| `modal` | Off | The Modal client. |
 | `microsandbox` | Off | The microsandbox Rust library. The server uses the `msb` CLI with no feature. |
 | `sqlite` | Off | SQLite storage for the server. |
 | `postgres` | Off | PostgreSQL storage for the server. |
 | `s3` | Off | S3 storage for the server. |
 
-Release builds turn on `e2b`, `vercel`, `daytona`, `sqlite`, `postgres`, and `s3`.
+Release builds turn on `e2b`, `vercel`, `daytona`, `modal`, `sqlite`, `postgres`, and `s3`.
 
 ## Box settings
 

@@ -160,7 +160,7 @@ The address goes through the server and contains a short-lived token, valid for 
 
 ### Browser mode on remote runtimes
 
-On Vercel, page tools and `computer cdp` reach Chromium at the address that Vercel publishes for port 9223, through the same bridge. The server builds the image, so it is current. Daytona works the same way.
+On Vercel, page tools and `computer cdp` reach Chromium at the address that Vercel publishes for port 9223, through the same bridge. The server builds the image, so it is current. Daytona and Modal work the same way.
 
 On E2B, page tools and `computer cdp` reach Chromium at the address that E2B publishes for port 9223. A bridge in the box answers only requests that carry a secret made for that box, so the address alone does not open the browser. Build the template from the current image: an older template does not have the bridge, and Chromium refuses the requests.
 
