@@ -137,7 +137,7 @@ All API errors have the same shape:
 | `COMPUTER_PUBLIC_URL` | None | The public origin behind a reverse proxy |
 | `COMPUTER_SERVER_CONFIG` | None | The path to the [runtimes file](runtimes.md#the-runtimes-file) |
 | `COMPUTER_SERVER_RUNTIMES` | All that answer | The host runtimes to offer, separated by commas |
-| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, such as `e2b` or `vercel` |
+| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, such as `e2b`, `vercel`, or `daytona` |
 | `COMPUTER_SERVER_SECRET_KEY` | None | 32 bytes, base64 or hex, that encrypt stored vendor keys. With no key, `computer runtime add` is refused. |
 | `COMPUTER_SERVER_SECRET_FILE` | None | A file that holds the secret key. If the file does not exist, the server makes it with mode `0600`. |
 | `COMPUTER_SERVER_REAP_SECS` | 30 | How often to remove expired boxes |

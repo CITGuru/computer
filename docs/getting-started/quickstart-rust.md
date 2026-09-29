@@ -72,6 +72,7 @@ let computer = Computer::builder()
 | --- | --- |
 | `e2b` | E2B cloud sandboxes |
 | `vercel` | Vercel Sandbox |
+| `daytona` | Daytona sandboxes |
 | `microsandbox` | microVM boxes |
 | `sqlite`, `postgres`, `s3` | Storage backends for the server |
 

@@ -28,6 +28,7 @@
 - [Custom images](guides/custom-images.md) — your own desktop image and profile, and how to audit it
 - [Cloud sandboxes](guides/cloud-sandboxes.md) — run boxes on E2B, and add another vendor
 - [Vercel Sandbox](guides/vercel-sandbox.md) — run boxes on Vercel, with the image built there
+- [Daytona](guides/daytona.md) — run boxes on Daytona, with the image built there
 - [Trace and fork](guides/trace-and-fork.md) — read what happened to a box, and make a new box from it
 - [Deploy computerd](guides/deploy-computerd.md) — run the server as a service behind TLS, and connect clients to it
 

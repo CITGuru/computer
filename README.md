@@ -141,7 +141,7 @@ The root `computer` package exports the desktop API. Disable its default `cli` f
 computer = { git = "https://github.com/CITGuru/computer", default-features = false }
 ```
 
-Optional features add the E2B and Vercel Sandbox clients, microsandbox library binding, and daemon storage backends: `e2b`, `vercel`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
+Optional features add the E2B, Vercel Sandbox, and Daytona clients, microsandbox library binding, and daemon storage backends: `e2b`, `vercel`, `daytona`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
 
 ### REST and Rust client
 
@@ -1357,7 +1357,7 @@ From the CLI or MCP, name the profile when the box is made:
 computer new --profile work
 ```
 
-The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B, Vercel, and microsandbox boxes refuse a profile, since they have no Docker volume.
+The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B, Vercel, Daytona, and microsandbox boxes refuse a profile, since they have no Docker volume.
 
 Use session export when the data must move between hosts. Use a named profile when all browser state must stay on one host.
 
@@ -1688,6 +1688,8 @@ cargo run --features vercel --example vercel
 
 Vercel starts sandboxes only from its own registry, for `linux/amd64`. With no image, the first launch builds the bundled image in a builder sandbox at Vercel, pushes it to `vcr.vercel.com/<team-slug>/<project>/computer-desktop:<fingerprint>-x86_64`, and removes the builder; later launches find the tag and start in seconds. An image directory is built the same way. A named image goes to Vercel as it is and must already be in the registry. Every published port has a public URL, so viewers need `Auth::Token` or `Auth::Password`, and page tools go through the same DevTools bridge with its secret. Vercel publishes at most 14 ports, so a box has at most 6 screens. See [docs/guides/vercel-sandbox.md](docs/guides/vercel-sandbox.md).
 
+The included Daytona integration needs only `DAYTONA_API_KEY` and the `daytona` feature. Daytona builds from a Dockerfile but has no build context, so each `COPY` of a file in the bundled image or an image directory is sent as a `RUN` that writes the file from base64; Daytona keeps each build by the Dockerfile's content, so a later box starts in seconds. Each published port gets a signed preview URL that a browser opens with no header. See [docs/guides/daytona.md](docs/guides/daytona.md).
+
 ### X11 and Wayland
 
 X11 is the default display profile. Select the Wayland profile explicitly:
@@ -1879,6 +1881,7 @@ The repository also includes:
 - [e2b](examples/e2b.rs) runs in an E2B sandbox.
 - [e2b_takeover](examples/e2b_takeover.rs) gives an E2B desktop to a person.
 - [vercel](examples/vercel.rs) runs in a Vercel sandbox.
+- [daytona](examples/daytona.rs) runs in a Daytona sandbox.
 - [client drive](crates/computer-client/examples/drive.rs) exercises the REST client end to end.
 
 Run an example with Cargo:
