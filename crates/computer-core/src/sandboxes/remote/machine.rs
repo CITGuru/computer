@@ -208,12 +208,6 @@ impl Machine for RemoteMachine {
     }
 
     async fn start(&self, name: &str, config: &Config) -> Result<PortMap> {
-        if !config.extras.is_empty() {
-            return Err(Error::Unsupported {
-                gaps: vec!["packages in an image this crate does not build"],
-            });
-        }
-
         if config.profiles.is_some() {
             return Err(Error::Unsupported {
                 gaps: vec!["a named browser profile, which needs a Docker volume"],

@@ -478,7 +478,15 @@ impl RemoteApi for Cloud {
             .header(CONTENT_TYPE, "application/json")
             .body(serde_json::json!({ "path": path }).to_string());
 
-        self.body(self.send(request).await?).await
+        self.body(self.send(request).await?)
+            .await
+            .map_err(|error| match error {
+                Error::Gone(detail) => Error::Failed {
+                    code: 1,
+                    stderr: detail,
+                },
+                other => other,
+            })
     }
 
     async fn write(&self, sandbox: &Sandbox, path: &str, bytes: &[u8]) -> Result<()> {
@@ -500,12 +508,7 @@ impl RemoteApi for Cloud {
             (_, Some(directory)) => build::directory(directory, &config.image)?,
             _ => return Ok(None),
         };
-
-        if !config.extras.is_empty() {
-            return Err(Error::Unsupported {
-                gaps: vec!["packages in an image this crate does not build"],
-            });
-        }
+        let context = build::with_extras(context, &config.extras);
 
         let (slug, project) = self.registry().await?;
         let reference = build::reference(&slug, &project, &context.repository, &context.tag);

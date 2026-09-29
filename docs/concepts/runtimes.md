@@ -31,6 +31,8 @@ The two properties are independent. For example, Docker gives a container on run
 | `microsandbox` | Host | MicroVM | libkrun, through the `msb` CLI. |
 | `e2b` | Remote | MicroVM | Firecracker. Needs an API key. A source build needs the `e2b` feature. |
 | `vercel` | Remote | MicroVM | Firecracker. Needs a token, a team, and a project. A source build needs the `vercel` feature. |
+| `daytona` | Remote | Container | Needs an API key. A source build needs the `daytona` feature. |
+| `modal` | Remote | Container | gVisor. Needs a token ID and secret. A source build needs the `modal` feature. |
 
 To see the runtimes a server has, and what each can do:
 
@@ -63,7 +65,7 @@ From the Rust library with no server, `runtime()` selects a container engine:
 let computer = Computer::builder().runtime("podman").launch().await?;
 ```
 
-For a microVM or a cloud sandbox, give the builder a `machine()`. See `examples/microvm.rs`, `examples/e2b.rs`, and `examples/vercel.rs`.
+For a microVM or a cloud sandbox, give the builder a `machine()`. See `examples/microvm.rs`, `examples/e2b.rs`, `examples/vercel.rs`, `examples/daytona.rs`, and `examples/modal.rs`.
 
 ## Host runtimes
 
@@ -171,6 +173,8 @@ MCP tools cannot add a runtime, because a key given to an agent goes through its
 | smolvm | No | Yes | No |
 | e2b | Yes | No | No |
 | vercel | No | No | No |
+| daytona | No | No | No |
+| modal | No | No | No |
 
 After a stop, a start gives a new desktop with new ports and a new viewer URL.
 
@@ -193,7 +197,9 @@ Each runtime gets its image in a different way:
 - **Container engine:** the server builds the image on the host from the bundled Dockerfile.
 - **MicroVM:** a hypervisor cannot read an engine's images. The server builds the image with `build_with`, then gives it to the hypervisor one time. Later boxes start from that copy.
 - **E2B:** the server makes an E2B template from the bundled image, uploads the files, and waits for the build. It makes one template for each box specification.
-- **Vercel:** the server builds the bundled image, or an image directory, in a builder sandbox at Vercel and pushes it to Vercel Container Registry. A later box finds the tag there and starts from it. Applications and packages added at launch are not supported yet.
+- **Vercel:** the server builds the bundled image, or an image directory, in a builder sandbox at Vercel and pushes it to Vercel Container Registry. A later box finds the tag there and starts from it.
+- **Daytona:** the server sends the bundled image, or an image directory, to Daytona as a Dockerfile with the copied files written inline. Daytona keeps each build by the Dockerfile's content.
+- **Modal:** the same Dockerfile, sent as lines. Modal keeps each image by its recipe.
 
 Each set of applications and packages is a different image. The first box with a new set waits for a build. To build before a box needs it:
 

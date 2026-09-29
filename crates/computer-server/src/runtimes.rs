@@ -855,6 +855,47 @@ impl Vendors for Builtin {
             }));
         }
 
+        #[cfg(feature = "daytona")]
+        if provider == "daytona" {
+            use computer::sandboxes::daytona::cloud::Cloud;
+
+            let key = key.ok_or_else(|| "daytona takes an api_key".to_string())?;
+            let field = |name: &str| fields.get(name).and_then(Value::as_str).map(str::to_string);
+
+            let mut cloud = Cloud::new(key.expose()).map_err(|error| error.to_string())?;
+            if let Some(endpoint) = field("endpoint") {
+                cloud = cloud.at(endpoint);
+            }
+            if let Some(target) = field("target") {
+                cloud = cloud.target(target);
+            }
+            return Ok(Arc::new(cloud));
+        }
+
+        #[cfg(feature = "modal")]
+        if provider == "modal" {
+            use computer::sandboxes::modal::cloud::Cloud;
+
+            let key =
+                key.ok_or_else(|| "modal takes its token secret as the api_key".to_string())?;
+            let field = |name: &str| fields.get(name).and_then(Value::as_str).map(str::to_string);
+            let token_id = field("token_id").ok_or_else(|| "modal takes a token_id".to_string())?;
+
+            let cloud = match field("endpoint") {
+                Some(endpoint) => Cloud::at(token_id, key.expose(), &endpoint),
+                None => Cloud::new(token_id, key.expose()),
+            }
+            .map_err(|error| error.to_string())?;
+            let cloud = match field("environment") {
+                Some(environment) => cloud.environment(environment),
+                None => cloud,
+            };
+            return Ok(Arc::new(match field("app") {
+                Some(app) => cloud.app(app),
+                None => cloud,
+            }));
+        }
+
         let _ = (fields, key);
         Err(format!(
             "{provider} is not a vendor this server was built with"
@@ -878,6 +919,32 @@ impl Vendors for Builtin {
         #[cfg(feature = "vercel")]
         if provider == "vercel" {
             use computer::sandboxes::vercel::cloud::Cloud;
+
+            return match Cloud::from_env() {
+                Ok(cloud) => Some(Arc::new(cloud)),
+                Err(error) => {
+                    tracing::warn!(vendor = %provider, %error, "this vendor cannot be reached");
+                    None
+                }
+            };
+        }
+
+        #[cfg(feature = "daytona")]
+        if provider == "daytona" {
+            use computer::sandboxes::daytona::cloud::Cloud;
+
+            return match Cloud::from_env() {
+                Ok(cloud) => Some(Arc::new(cloud)),
+                Err(error) => {
+                    tracing::warn!(vendor = %provider, %error, "this vendor cannot be reached");
+                    None
+                }
+            };
+        }
+
+        #[cfg(feature = "modal")]
+        if provider == "modal" {
+            use computer::sandboxes::modal::cloud::Cloud;
 
             return match Cloud::from_env() {
                 Ok(cloud) => Some(Arc::new(cloud)),

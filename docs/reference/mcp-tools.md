@@ -248,10 +248,18 @@ Drive a native window by the names of its widgets. Needs a box launched with `ac
 
 | Parameter | Type | Effect |
 | --- | --- | --- |
-| `app`* | string | A name the box was launched with. |
+| `app`* | string | A name the box was launched with, or one that `install_app` installed. |
 | `args` | string[] | Arguments for the application, such as a file to open. |
 
 Opens the application and returns when it is ready for input.
+
+### `install_app`
+
+| Parameter | Type | Effect |
+| --- | --- | --- |
+| `apps`* | string[] | Names from `list_apps`, such as `gimp` or `vscode`. |
+
+Installs the applications into the running box with the package manager, so that `open_app` can open them. It takes from seconds to a minute, and the box must reach the package mirrors.
 
 ## Files and commands
 

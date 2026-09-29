@@ -373,6 +373,20 @@ impl Client {
         .await
     }
 
+    pub async fn install_apps(&self, id: &str, apps: &[String]) -> Result<Vec<String>> {
+        let body = serde_json::json!({ "apps": apps });
+        let installed: computer_api::InstalledApps = self
+            .send(
+                reqwest::Method::POST,
+                &format!("/v1/boxes/{id}/apps"),
+                Some(body),
+                &[],
+            )
+            .await?;
+
+        Ok(installed.installed)
+    }
+
     pub async fn catalog(&self) -> Result<Vec<String>> {
         let apps: std::collections::BTreeMap<String, serde_json::Value> = self
             .send(reqwest::Method::GET, "/v1/catalog", None, &[])
