@@ -57,6 +57,7 @@ Some examples take the name of a box that is already running. Start one with `ca
 | `vercel` | Launch a box on Vercel, drive it, and remove it. With no image, it builds the built-in image at Vercel. It also takes a VCR image or an image directory. `--keep` leaves it running. | `cargo run --features vercel --example vercel [-- <image-or-dir>] [--keep]` | `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, and `VERCEL_PROJECT_ID` |
 | `daytona` | Launch a box on Daytona, drive it, and remove it. With no image, Daytona builds the built-in image. It also takes a snapshot name or an image directory. `--keep` leaves it running. | `cargo run --features daytona --example daytona [-- <snapshot-or-dir>] [--keep]` | `DAYTONA_API_KEY` |
 | `modal` | Launch a box on Modal, drive it, and remove it. With no image, Modal builds the built-in image. It also takes a Modal image ID, a registry tag, or an image directory. `--keep` leaves it running. | `cargo run --features modal --example modal [-- <image-or-dir>] [--keep]` | `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` |
+| `smol` | Launch a box on smol cloud, drive it, and remove it. With no image, it builds the built-in image into the account's smol registry. `--keep` leaves it running. | `cargo run --features smol --example smol [-- <image>] [--keep]` | `SMOL_CLOUD_TOKEN`, and Docker the first time |
 
 `examples/images/acme/Dockerfile` adds `htop`, `jq`, and a file to the bundled image. It keeps the `computer.profile` label, which a custom image needs.
 

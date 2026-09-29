@@ -141,7 +141,7 @@ The root `computer` package exports the desktop API. Disable its default `cli` f
 computer = { git = "https://github.com/CITGuru/computer", default-features = false }
 ```
 
-Optional features add the E2B, Vercel Sandbox, Daytona, and Modal clients, microsandbox library binding, and daemon storage backends: `e2b`, `vercel`, `daytona`, `modal`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
+Optional features add the E2B, Vercel Sandbox, Daytona, Modal, and smol cloud clients, microsandbox library binding, and daemon storage backends: `e2b`, `vercel`, `daytona`, `modal`, `smol`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
 
 ### REST and Rust client
 
@@ -1357,7 +1357,7 @@ From the CLI or MCP, name the profile when the box is made:
 computer new --profile work
 ```
 
-The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B, Vercel, Daytona, Modal, and microsandbox boxes refuse a profile, since they have no Docker volume.
+The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B, Vercel, Daytona, Modal, smol cloud, and microsandbox boxes refuse a profile, since they have no Docker volume.
 
 Use session export when the data must move between hosts. Use a named profile when all browser state must stay on one host.
 
@@ -1692,6 +1692,8 @@ The included Daytona integration needs only `DAYTONA_API_KEY` and the `daytona` 
 
 The included Modal integration needs `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, and the `modal` feature. Modal has no REST API, so the client speaks Modal's gRPC API with hand-written messages; Modal says that API is not public and can change. The image goes as Dockerfile lines with copied files inline, commands and files go through Modal's command router, and each published port is a public HTTPS tunnel. See [docs/guides/modal.md](docs/guides/modal.md).
 
+The included smol cloud integration needs `SMOL_CLOUD_TOKEN` and the `smol` feature. The server builds the bundled image with Docker once, pushes it to the account's smol registry, and packs it into a `.smolmachine` when the `smolvm` CLI is there. A box publishes no ports, because smol reaches a port only with the account key and forwards that key into the machine; so the viewer and page tools are not available on smol yet. See [docs/guides/smol-cloud.md](docs/guides/smol-cloud.md).
+
 ### X11 and Wayland
 
 X11 is the default display profile. Select the Wayland profile explicitly:
@@ -1771,7 +1773,7 @@ A profile defines the image contract, ports, geometry, environment, capabilities
 
 ### Add a cloud sandbox vendor
 
-`RemoteApi` is the common interface for E2B, Vercel, Daytona, Modal, and similar services. An adapter creates, finds, and removes a sandbox; runs commands; and reads and writes files.
+`RemoteApi` is the common interface for E2B, Vercel, Daytona, Modal, smol cloud, and similar services. An adapter creates, finds, and removes a sandbox; runs commands; and reads and writes files.
 
 `RemoteMachine` supplies shared lifetime, naming, and keep-alive behavior. `RemoteProfile` maps vendor endpoints and removes capabilities that the remote service cannot expose.
 
@@ -1885,6 +1887,7 @@ The repository also includes:
 - [vercel](examples/vercel.rs) runs in a Vercel sandbox.
 - [daytona](examples/daytona.rs) runs in a Daytona sandbox.
 - [modal](examples/modal.rs) runs in a Modal sandbox.
+- [smol](examples/smol.rs) runs on smol cloud.
 - [client drive](crates/computer-client/examples/drive.rs) exercises the REST client end to end.
 
 Run an example with Cargo:

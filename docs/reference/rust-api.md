@@ -57,7 +57,7 @@ let computer = Computer::builder()
 | `network(false)` | Block network access. |
 | `memory(limit)`, `cpus(n)` | Resource limits. |
 | `runtime(program)` | `docker` (default), `podman`, or `nerdctl`. |
-| `machine(Arc<dyn Machine>)` | Another runtime, such as a microVM, E2B, Vercel, Daytona, or Modal. |
+| `machine(Arc<dyn Machine>)` | Another runtime, such as a microVM, E2B, Vercel, Daytona, Modal, or smol cloud. |
 | `name(name)` | The box name, for `attach`. |
 | `image(tag)` | Use an image that is already built. |
 | `profiles(volume)` | Keep the browser profile in a named volume. |
@@ -236,3 +236,4 @@ Run each with `cargo run --example <name>`.
 | `vercel` | Vercel Sandbox. Needs `--features vercel` and the `VERCEL_*` variables. |
 | `daytona` | Daytona. Needs `--features daytona` and `DAYTONA_API_KEY`. |
 | `modal` | Modal. Needs `--features modal`, `MODAL_TOKEN_ID`, and `MODAL_TOKEN_SECRET`. |
+| `smol` | smol cloud. Needs `--features smol` and `SMOL_CLOUD_TOKEN`. |
