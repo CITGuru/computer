@@ -12,7 +12,8 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 | --- | --- |
 | Screenshots, mouse, keyboard, and waits | Pause and stop |
 | Windows, applications, and native widgets | Browser profiles (`--profile`) |
-| Files, commands, and clipboard | Applications and packages added at launch (`--app`, extras) |
+| Files, commands, and clipboard | |
+| Applications and packages at launch (`--app`), and applications installed into a running box | |
 | Page tools and `computer cdp`, also after a server restart | A box that lives more than 24 hours |
 | Viewer and takeover URLs in a browser | |
 | CPUs and memory for each box | |

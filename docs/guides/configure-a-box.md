@@ -100,10 +100,19 @@ An application with its own `source` makes the image build download and trust th
 The server can install a catalog application, or an application from the box's spec, into a running box:
 
 ```bash
+computer app "$BOX" install gimp
+computer app "$BOX" gimp
+```
+
+MCP: `install_app` with `apps: ["gimp"]`, then `open_app`. REST:
+
+```bash
 curl -X POST "$BASE/v1/boxes/$BOX/apps" \
   -H 'content-type: application/json' \
   -d '{"apps": ["gimp"]}'
 ```
+
+The install runs as root. Where the box's commands run as another user, as on E2B, it runs through `sudo`.
 
 The box installs it with apt, so the box needs network access, and each install takes time. A fork does not keep it, because a fork builds from the spec. When you know the application in advance, put it in the spec.
 

@@ -197,7 +197,7 @@ Each runtime gets its image in a different way:
 - **Container engine:** the server builds the image on the host from the bundled Dockerfile.
 - **MicroVM:** a hypervisor cannot read an engine's images. The server builds the image with `build_with`, then gives it to the hypervisor one time. Later boxes start from that copy.
 - **E2B:** the server makes an E2B template from the bundled image, uploads the files, and waits for the build. It makes one template for each box specification.
-- **Vercel:** the server builds the bundled image, or an image directory, in a builder sandbox at Vercel and pushes it to Vercel Container Registry. A later box finds the tag there and starts from it. Applications and packages added at launch are not supported yet.
+- **Vercel:** the server builds the bundled image, or an image directory, in a builder sandbox at Vercel and pushes it to Vercel Container Registry. A later box finds the tag there and starts from it.
 - **Daytona:** the server sends the bundled image, or an image directory, to Daytona as a Dockerfile with the copied files written inline. Daytona keeps each build by the Dockerfile's content.
 - **Modal:** the same Dockerfile, sent as lines. Modal keeps each image by its recipe.
 
