@@ -50,11 +50,13 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         runtimes = %state.runtimes.names(),
         "computerd is listening"
     );
-    let app = routes::router(Arc::clone(&state)).merge(computer_server::mcp::router(
-        Arc::clone(&state),
-        api,
-        public,
-    ));
+    let app = routes::router(Arc::clone(&state))
+        .merge(computer_server::mcp::router(
+            Arc::clone(&state),
+            api,
+            public,
+        ))
+        .layer(axum::middleware::from_fn(computer_server::oidc::offered));
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

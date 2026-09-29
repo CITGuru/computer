@@ -1,4 +1,4 @@
-use super::{API_URL, build, wire};
+use super::{API_URL, build, oidc, wire};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
@@ -21,11 +21,25 @@ pub const TIMEOUT: Duration = Duration::from_secs(150);
 
 pub const IMAGE_WAIT: Duration = Duration::from_secs(10 * 60);
 
-pub struct Cloud {
+enum Credential {
+    Token {
+        token: String,
+        team: Option<String>,
+        project: String,
+    },
+    Oidc,
+}
+
+struct Access {
     token: String,
     team: Option<String>,
-    team_slug: Option<String>,
     project: String,
+    named: Option<(String, String)>,
+}
+
+pub struct Cloud {
+    credential: Credential,
+    team_slug: Option<String>,
     base: String,
     http: Client,
     sessions: Mutex<BTreeMap<String, String>>,
@@ -37,16 +51,26 @@ impl Cloud {
         team: Option<String>,
         project: impl Into<String>,
     ) -> Result<Self> {
+        Self::with(Credential::Token {
+            token: token.into(),
+            team: team.filter(|team| !team.is_empty()),
+            project: project.into(),
+        })
+    }
+
+    pub fn oidc() -> Result<Self> {
+        Self::with(Credential::Oidc)
+    }
+
+    fn with(credential: Credential) -> Result<Self> {
         let http = Client::builder()
             .timeout(TIMEOUT)
             .build()
             .map_err(|error| Error::transport(error.to_string(), false))?;
 
         Ok(Self {
-            token: token.into(),
-            team: team.filter(|team| !team.is_empty()),
+            credential,
             team_slug: None,
-            project: project.into(),
             base: API_URL.to_string(),
             http,
             sessions: Mutex::new(BTreeMap::new()),
@@ -64,11 +88,19 @@ impl Cloud {
                 })
         };
 
-        let cloud = Self::new(
-            needed(TOKEN_ENV)?,
-            std::env::var(TEAM_ENV).ok(),
-            needed(PROJECT_ENV)?,
-        )?;
+        let cloud = match needed(TOKEN_ENV) {
+            Ok(token) => Self::new(token, std::env::var(TEAM_ENV).ok(), needed(PROJECT_ENV)?)?,
+            Err(_) if oidc::possible() => Self::oidc()?,
+            Err(_) => {
+                return Err(Error::Unavailable {
+                    provider: "vercel".to_string(),
+                    detail: format!(
+                        "neither {TOKEN_ENV} nor {} is set, and this is not a Vercel function",
+                        oidc::TOKEN_ENV
+                    ),
+                });
+            }
+        };
 
         Ok(match std::env::var(TEAM_SLUG_ENV) {
             Ok(slug) => cloud.team_slug(slug),
@@ -86,24 +118,59 @@ impl Cloud {
         self
     }
 
-    fn request(&self, method: Method, path: &str) -> RequestBuilder {
-        let request = self
-            .http
-            .request(method, format!("{}{path}", self.base))
-            .bearer_auth(&self.token);
-
-        match &self.team {
-            Some(team) => request.query(&[("teamId", team)]),
-            None => request,
+    fn access(&self) -> Result<Access> {
+        match &self.credential {
+            Credential::Token {
+                token,
+                team,
+                project,
+            } => Ok(Access {
+                token: token.clone(),
+                team: team.clone(),
+                project: project.clone(),
+                named: None,
+            }),
+            Credential::Oidc => oidc::current()
+                .map(|oidc| Access {
+                    named: oidc.team_slug.zip(oidc.project_name),
+                    token: oidc.token,
+                    team: Some(oidc.team),
+                    project: oidc.project,
+                })
+                .ok_or_else(|| Error::Unavailable {
+                    provider: "vercel".to_string(),
+                    detail: format!(
+                        "no OIDC token has arrived yet: Vercel sends one in {} on each request",
+                        oidc::HEADER
+                    ),
+                }),
         }
     }
 
-    fn named(&self, method: Method, name: &str) -> RequestBuilder {
-        self.request(method, &format!("/v2/sandboxes/{}", escape(name)))
-            .query(&[("projectId", &self.project)])
+    fn project(&self) -> Result<String> {
+        self.access().map(|access| access.project)
     }
 
-    fn in_session(&self, method: Method, session: &str, path: &str) -> RequestBuilder {
+    fn request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
+        let access = self.access()?;
+        let request = self
+            .http
+            .request(method, format!("{}{path}", self.base))
+            .bearer_auth(&access.token);
+
+        Ok(match &access.team {
+            Some(team) => request.query(&[("teamId", team)]),
+            None => request,
+        })
+    }
+
+    fn named(&self, method: Method, name: &str) -> Result<RequestBuilder> {
+        Ok(self
+            .request(method, &format!("/v2/sandboxes/{}", escape(name)))?
+            .query(&[("projectId", &self.project()?)]))
+    }
+
+    fn in_session(&self, method: Method, session: &str, path: &str) -> Result<RequestBuilder> {
         self.request(method, &format!("/v2/sandboxes/sessions/{session}{path}"))
     }
 
@@ -152,7 +219,7 @@ impl Cloud {
     }
 
     async fn described(&self, name: &str) -> Result<Option<Value>> {
-        let response = self.send(self.named(Method::GET, name)).await?;
+        let response = self.send(self.named(Method::GET, name)?).await?;
 
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -285,10 +352,11 @@ impl RemoteApi for Cloud {
     }
 
     async fn available(&self) -> Result<()> {
+        let project = self.project()?;
         let response = self
             .send(
-                self.request(Method::GET, "/v2/sandboxes")
-                    .query(&[("project", self.project.as_str()), ("limit", "1")]),
+                self.request(Method::GET, "/v2/sandboxes")?
+                    .query(&[("project", project.as_str()), ("limit", "1")]),
             )
             .await?;
 
@@ -296,7 +364,7 @@ impl RemoteApi for Cloud {
             status if status.is_success() => Ok(()),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(Error::Unavailable {
                 provider: "vercel".to_string(),
-                detail: format!("{TOKEN_ENV} was refused for this team and project"),
+                detail: "the token was refused for this team and project".to_string(),
             }),
             status => Err(Error::Unavailable {
                 provider: "vercel".to_string(),
@@ -306,13 +374,13 @@ impl RemoteApi for Cloud {
     }
 
     async fn create(&self, plan: &SandboxPlan) -> Result<Sandbox> {
-        let body = wire::new_sandbox(&self.project, plan)?.to_string();
+        let body = wire::new_sandbox(&self.project()?, plan)?.to_string();
         let deadline = Instant::now() + IMAGE_WAIT;
 
         let answer = loop {
             let response = self
                 .send(
-                    self.request(Method::POST, "/v3/sandboxes")
+                    self.request(Method::POST, "/v3/sandboxes")?
                         .header(CONTENT_TYPE, "application/json")
                         .body(body.clone()),
                 )
@@ -382,7 +450,7 @@ impl RemoteApi for Cloud {
     }
 
     async fn kill(&self, id: &str) -> Result<()> {
-        let response = self.send(self.named(Method::DELETE, id)).await?;
+        let response = self.send(self.named(Method::DELETE, id)?).await?;
         self.forget(id);
 
         match response.status() {
@@ -395,7 +463,7 @@ impl RemoteApi for Cloud {
     async fn keep_alive(&self, id: &str, ttl: Duration) -> Result<()> {
         let session = self.session(id).await?;
         let answer = self
-            .json(self.in_session(Method::GET, &session, ""))
+            .json(self.in_session(Method::GET, &session, "")?)
             .await?;
 
         let Some(short) = wire::shortfall(&answer, ttl, now_ms()) else {
@@ -403,7 +471,7 @@ impl RemoteApi for Cloud {
         };
 
         let request = self
-            .in_session(Method::POST, &session, "/extend-timeout")
+            .in_session(Method::POST, &session, "/extend-timeout")?
             .header(CONTENT_TYPE, "application/json")
             .body(serde_json::json!({ "duration": short }).to_string());
 
@@ -411,13 +479,14 @@ impl RemoteApi for Cloud {
     }
 
     async fn carrying(&self, key: &str) -> Result<Vec<(String, String)>> {
+        let project = self.project()?;
         let mut found = Vec::new();
         let mut cursor: Option<String> = None;
 
         loop {
             let mut request = self
-                .request(Method::GET, "/v2/sandboxes")
-                .query(&[("project", self.project.as_str()), ("limit", "50")]);
+                .request(Method::GET, "/v2/sandboxes")?
+                .query(&[("project", project.as_str()), ("limit", "50")]);
             if let Some(cursor) = &cursor {
                 request = request.query(&[("cursor", cursor)]);
             }
@@ -463,7 +532,7 @@ impl RemoteApi for Cloud {
     ) -> Result<ExecResult> {
         let session = self.session(&sandbox.id).await?;
         let request = self
-            .in_session(Method::POST, &session, "/cmd")
+            .in_session(Method::POST, &session, "/cmd")?
             .header(CONTENT_TYPE, "application/json")
             .body(wire::command(argv, env)?.to_string());
 
@@ -474,7 +543,7 @@ impl RemoteApi for Cloud {
     async fn read(&self, sandbox: &Sandbox, path: &str) -> Result<Vec<u8>> {
         let session = self.session(&sandbox.id).await?;
         let request = self
-            .in_session(Method::POST, &session, "/fs/read")
+            .in_session(Method::POST, &session, "/fs/read")?
             .header(CONTENT_TYPE, "application/json")
             .body(serde_json::json!({ "path": path }).to_string());
 
@@ -492,7 +561,7 @@ impl RemoteApi for Cloud {
     async fn write(&self, sandbox: &Sandbox, path: &str, bytes: &[u8]) -> Result<()> {
         let session = self.session(&sandbox.id).await?;
         let request = self
-            .in_session(Method::POST, &session, "/fs/write")
+            .in_session(Method::POST, &session, "/fs/write")?
             .header(CONTENT_TYPE, "application/gzip")
             .header("x-cwd", "/")
             .body(tarred(&[build::File::new(path, bytes.to_vec())])?);
@@ -534,7 +603,7 @@ impl Cloud {
         let bytes = serde_json::to_vec(labels)
             .map_err(|error| Error::transport(format!("labels: {error}"), false))?;
         let request = self
-            .in_session(Method::POST, session, "/fs/write")
+            .in_session(Method::POST, session, "/fs/write")?
             .header(CONTENT_TYPE, "application/gzip")
             .header("x-cwd", "/")
             .body(tarred(&[build::File::new(super::LABELS_PATH, bytes)])?);
@@ -545,7 +614,7 @@ impl Cloud {
     async fn read_labels(&self, session: &str) -> Result<BTreeMap<String, String>> {
         let response = self
             .send(
-                self.in_session(Method::POST, session, "/fs/read")
+                self.in_session(Method::POST, session, "/fs/read")?
                     .header(CONTENT_TYPE, "application/json")
                     .body(serde_json::json!({ "path": super::LABELS_PATH }).to_string()),
             )
@@ -559,37 +628,43 @@ impl Cloud {
     }
 
     fn registry_login(&self) -> Result<String> {
-        let team = self.team.as_deref().ok_or_else(|| Error::Unavailable {
+        let access = self.access()?;
+        let team = access.team.ok_or_else(|| Error::Unavailable {
             provider: "vercel".to_string(),
             detail: format!("the registry takes the team as its user: set {TEAM_ENV}"),
         })?;
 
         Ok(crate::cdp::base64_encode(
-            format!("{team}:{}", self.token).as_bytes(),
+            format!("{team}:{}", access.token).as_bytes(),
         ))
     }
 
     async fn registry(&self) -> Result<(String, String)> {
+        let access = self.access()?;
+        if let Some(named) = access.named {
+            return Ok(named);
+        }
+
         let project = self
             .json(self.request(
                 Method::GET,
-                &format!("/v9/projects/{}", escape(&self.project)),
-            ))
+                &format!("/v9/projects/{}", escape(&access.project)),
+            )?)
             .await
             .ok()
             .and_then(|answer| build::name_of(&answer))
             .ok_or_else(|| Error::Unavailable {
                 provider: "vercel".to_string(),
-                detail: format!("the name of project {} could not be read", self.project),
+                detail: format!("the name of project {} could not be read", access.project),
             })?;
 
         if let Some(slug) = &self.team_slug {
             return Ok((slug.clone(), project));
         }
 
-        let team = self.team.as_deref().unwrap_or_default();
+        let team = access.team.unwrap_or_default();
         let slug = self
-            .json(self.request(Method::GET, &format!("/v2/teams/{}", escape(team))))
+            .json(self.request(Method::GET, &format!("/v2/teams/{}", escape(&team)))?)
             .await
             .ok()
             .and_then(|answer| build::slug_of(&answer))
@@ -630,9 +705,9 @@ impl Cloud {
 
         let answer = self
             .json(
-                self.request(Method::POST, "/v3/sandboxes")
+                self.request(Method::POST, "/v3/sandboxes")?
                     .header(CONTENT_TYPE, "application/json")
-                    .body(build::builder(&self.project, &name, reference).to_string()),
+                    .body(build::builder(&self.project()?, &name, reference).to_string()),
             )
             .await?;
         let (builder, session) = wire::sandbox_from(&answer)?;
@@ -653,14 +728,14 @@ impl Cloud {
         reference: &str,
     ) -> Result<()> {
         let upload = self
-            .in_session(Method::POST, session, "/fs/write")
+            .in_session(Method::POST, session, "/fs/write")?
             .header(CONTENT_TYPE, "application/gzip")
             .header("x-cwd", "/")
             .body(tarred(&context.files)?);
         self.body(self.send(upload).await?).await?;
 
         let run = self
-            .in_session(Method::POST, session, "/cmd")
+            .in_session(Method::POST, session, "/cmd")?
             .header(CONTENT_TYPE, "application/json")
             .timeout(build::BUILD_WAIT)
             .body(build::command(&self.registry_login()?, reference).to_string());

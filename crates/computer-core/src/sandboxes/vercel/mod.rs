@@ -3,6 +3,8 @@ pub mod wire;
 
 #[cfg(feature = "vercel")]
 pub mod cloud;
+#[cfg(feature = "vercel")]
+pub mod oidc;
 
 pub const API_URL: &str = "https://api.vercel.com";
 

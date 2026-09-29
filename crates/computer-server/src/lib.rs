@@ -7,6 +7,7 @@ pub mod idempotency;
 pub mod images;
 pub mod labels;
 pub mod mcp;
+pub mod oidc;
 pub mod presses;
 pub mod prune;
 pub mod reap;
