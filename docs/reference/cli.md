@@ -157,6 +157,7 @@ The server releases a key that `down` pressed after `--hold` seconds (default 10
 | --- | --- |
 | `apps` | List the application names that a box can have. |
 | `app <box> <name> [args…]` | Open an application and wait until it draws. |
+| `app <box> install <name>…` | Install catalog applications into the running box. |
 | `window <box> list` | List the windows on the screen. |
 | `window <box> active` | Show the window that gets keyboard input. |
 | `window <box> wait <class> [--within SECONDS]` | Wait for a window to appear and stop moving. |
