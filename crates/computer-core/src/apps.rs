@@ -7,6 +7,8 @@ pub const SETTLE_MS: u64 = 600;
 
 pub const READY_MS: u64 = 30_000;
 
+const AS_ROOT: &str = r#"if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then exec sudo -n sh -c "$1"; fi; exec sh -c "$1""#;
+
 pub fn builtin() -> BTreeMap<String, App> {
     let mut apps = BTreeMap::new();
 
@@ -134,7 +136,7 @@ pub async fn install(
     }
 
     let result = computer
-        .exec_within(["sh", "-c", &script(&wanted)], within)
+        .exec_within(["sh", "-c", AS_ROOT, "sh", &script(&wanted)], within)
         .await?;
 
     if !result.ok() {

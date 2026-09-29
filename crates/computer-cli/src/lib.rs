@@ -85,6 +85,7 @@ computer — a desktop in a box
                               --label names the tab, and every --tab, switch
                               and close then takes the name as well as the id
   app <box> <name> [args…]    open an application, and wait until it has drawn
+  app <box> install <name>…   install catalog apps into the running box
   apps                        the application names a box can be given
   window <box> list           what is on the screen
   window <box> active         which window the keyboard reaches

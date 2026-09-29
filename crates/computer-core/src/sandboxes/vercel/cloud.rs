@@ -508,12 +508,7 @@ impl RemoteApi for Cloud {
             (_, Some(directory)) => build::directory(directory, &config.image)?,
             _ => return Ok(None),
         };
-
-        if !config.extras.is_empty() {
-            return Err(Error::Unsupported {
-                gaps: vec!["packages in an image this crate does not build"],
-            });
-        }
+        let context = build::with_extras(context, &config.extras);
 
         let (slug, project) = self.registry().await?;
         let reference = build::reference(&slug, &project, &context.repository, &context.tag);

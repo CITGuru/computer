@@ -280,6 +280,20 @@ pub async fn app(client: &Client, args: &[String]) -> Done {
     let id = positional(args, 0, "a box").map_err(|e| e.to_string())?;
     let app = positional(args, 1, "an app").map_err(|e| e.to_string())?;
 
+    if app == "install" {
+        let names = args.get(2..).unwrap_or_default();
+        if names.is_empty() {
+            return Err("app <box> install takes app names, such as gimp".to_string());
+        }
+
+        let installed = client
+            .install_apps(id, names)
+            .await
+            .map_err(|e| e.to_string())?;
+        println!("{}", installed.join(" "));
+        return Ok(());
+    }
+
     act(
         client,
         id,

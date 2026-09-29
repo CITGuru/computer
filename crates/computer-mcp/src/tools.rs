@@ -303,7 +303,7 @@ pub fn catalogue() -> Value {
         tool(
             "open_app",
             "Open an application by name and wait until it has drawn. The name has to be one \
-             the box was created with — `list_apps` says which. The picture that comes back is \
+             the box was created with or given by `install_app` — `list_apps` says which. The picture that comes back is \
              of the app once it is ready to be clicked, not of the moment its window appeared.",
             with_frame(
                 json!({
@@ -315,6 +315,22 @@ pub fn catalogue() -> Value {
                     }
                 }),
                 &["app"]
+            )
+        ),
+        tool(
+            "install_app",
+            "Install applications from the catalog into this running box, so `open_app` can \
+             open them. Names come from `list_apps`. It runs the package manager in the box, \
+             which takes seconds to a minute and needs the box to reach the package mirrors.",
+            with_box(
+                json!({
+                    "apps": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Catalog names, such as gimp or vscode."
+                    }
+                }),
+                &["apps"]
             )
         ),
         tool(
@@ -1564,6 +1580,22 @@ pub async fn call(
             act_saying(client, arguments, action_of(name, arguments)?, 2500, landed).await
         }
         "open_app" => act(client, arguments, action_of(name, arguments)?, 0).await,
+        "install_app" => {
+            let id = text(arguments, "box_id")?;
+            let apps = strings(arguments, "apps");
+            if apps.is_empty() {
+                return Err("name an app to install, such as gimp".to_string());
+            }
+
+            let installed = client
+                .install_apps(&id, &apps)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(Answer::Text(format!(
+                "installed {}; open it with open_app",
+                installed.join(", ")
+            )))
+        }
         "tabs" => {
             let id = text(arguments, "box_id")?;
 

@@ -1,4 +1,5 @@
 use super::File;
+use crate::bundle::Extras;
 use crate::error::{Error, Result};
 
 pub fn inline(dockerfile: &str, files: &[File]) -> Result<String> {
@@ -25,6 +26,49 @@ pub fn inline(dockerfile: &str, files: &[File]) -> Result<String> {
     }
 
     Ok(out.join("\n") + "\n")
+}
+
+pub fn with_extras(dockerfile: &str, extras: &Extras) -> String {
+    let values = [
+        ("EXTRA_PACKAGES", extras.build_arg()),
+        ("EXTRA_SOURCES", extras.sources_arg()),
+        ("EXTRA_APPS", extras.apps_arg()),
+    ];
+
+    let mut out: Vec<String> = Vec::new();
+    let mut in_run = false;
+    let mut continued = false;
+
+    for line in dockerfile.lines() {
+        if !continued {
+            let first = line.split_whitespace().next().unwrap_or_default();
+            in_run = first.eq_ignore_ascii_case("RUN");
+        }
+        continued = line.trim_end().ends_with('\\');
+
+        let mut written = line.to_string();
+        if in_run {
+            for (name, value) in &values {
+                if value.is_empty() {
+                    continue;
+                }
+                let printed = format!("$(printf '%b' {})", quote(&escaped(value)));
+                written = written
+                    .replace(&format!("\"${name}\""), &format!("\"{printed}\""))
+                    .replace(&format!("${name}"), &printed);
+            }
+        }
+        out.push(written);
+    }
+
+    out.join("\n") + "\n"
+}
+
+fn escaped(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\t', "\\t")
 }
 
 fn copied(words: &[&str], files: &[File]) -> Result<Vec<String>> {
@@ -208,6 +252,51 @@ mod tests {
             inline("ADD start.sh /x\n", &files()).is_err(),
             "ADD can fetch and unpack, which a written file cannot stand in for"
         );
+    }
+
+    #[test]
+    fn test_extras_ride_in_the_run_lines_on_one_line_each() {
+        let extras = Extras::with(["gimp", "mousepad"]).with_launchers([crate::bundle::Launcher {
+            name: "gimp".to_string(),
+            class: "Gimp".to_string(),
+            command: vec!["gimp".to_string()],
+        }]);
+        let dockerfile = concat!(
+            "ARG EXTRA_PACKAGES=\"\"\n",
+            "RUN if [ -n \"$EXTRA_PACKAGES\" ]; then \\\n",
+            "      apt-get install -y $EXTRA_PACKAGES; \\\n",
+            "    fi\n",
+            "ARG EXTRA_APPS=\"\"\n",
+            "RUN printf '%s\\n' \"$EXTRA_APPS\" > /apps\n",
+            "ENV NOT_A_RUN=$EXTRA_PACKAGES\n",
+        );
+
+        let written = with_extras(dockerfile, &extras);
+        let lines: Vec<&str> = written.lines().collect();
+
+        assert_eq!(
+            lines.len(),
+            7,
+            "a value with line breaks must not add lines"
+        );
+        assert_eq!(lines[0], "ARG EXTRA_PACKAGES=\"\"", "the ARG default stays");
+        assert!(lines[1].contains(r#""$(printf '%b' 'gimp mousepad')""#));
+        assert!(
+            lines[2].contains(r"install -y $(printf '%b' 'gimp mousepad');"),
+            "unquoted, so the packages still split into words, also on a continued line"
+        );
+        assert!(lines[5].contains(r"'gimp\tGimp\tgimp'"));
+        assert_eq!(
+            lines[6], "ENV NOT_A_RUN=$EXTRA_PACKAGES",
+            "only RUN lines are rewritten"
+        );
+    }
+
+    #[test]
+    fn test_no_extras_leaves_the_dockerfile_alone() {
+        let dockerfile = "RUN apt-get install -y $EXTRA_PACKAGES\n";
+
+        assert_eq!(with_extras(dockerfile, &Extras::none()), dockerfile);
     }
 
     #[test]

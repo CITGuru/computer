@@ -1013,17 +1013,14 @@ impl RemoteApi for Cloud {
             _ => return Ok(None),
         };
 
-        if !config.extras.is_empty() {
-            return Err(Error::Unsupported {
-                gaps: vec!["packages in an image this crate does not build"],
-            });
-        }
-
         let original = files
             .iter()
             .find(|file| file.path == "Dockerfile")
             .ok_or_else(|| Error::denied(format!("{} has no Dockerfile", config.image)))?;
-        let inlined = dockerfile::inline(&String::from_utf8_lossy(&original.bytes), &files)?;
+        let inlined = dockerfile::inline(
+            &dockerfile::with_extras(&String::from_utf8_lossy(&original.bytes), &config.extras),
+            &files,
+        )?;
 
         if let Ok(mut builds) = self.builds.lock() {
             builds.insert(config.image.clone(), wire::dockerfile_commands(&inlined));

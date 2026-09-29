@@ -72,6 +72,29 @@ pub fn directory(root: &Path, image: &str) -> Result<Context> {
     })
 }
 
+pub fn with_extras(context: Context, extras: &Extras) -> Context {
+    let dockerfile = format!("{CONTEXT_DIR}/Dockerfile");
+
+    Context {
+        files: context
+            .files
+            .into_iter()
+            .map(|file| match file.path == dockerfile {
+                true => File {
+                    bytes: crate::sandboxes::context::dockerfile::with_extras(
+                        &String::from_utf8_lossy(&file.bytes),
+                        extras,
+                    )
+                    .into_bytes(),
+                    ..file
+                },
+                false => file,
+            })
+            .collect(),
+        ..context
+    }
+}
+
 pub fn reference(slug: &str, project: &str, repository: &str, tag: &str) -> String {
     format!("{REGISTRY}/{slug}/{project}/{repository}:{tag}")
 }
@@ -291,6 +314,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
 
         assert!(matches!(refused, Err(Error::Unsupported { .. })));
+    }
+
+    #[test]
+    fn test_apps_asked_for_at_launch_go_into_the_dockerfile() {
+        let extras = Extras::with(["gimp"]);
+        let context = with_extras(bundled(&bundle::DESKTOP, &extras), &extras);
+
+        let dockerfile = context
+            .files
+            .iter()
+            .find(|file| file.path == "/tmp/computer-build/Dockerfile")
+            .map(|file| String::from_utf8_lossy(&file.bytes).into_owned())
+            .expect("a Dockerfile");
+        assert!(dockerfile.contains("$(printf '%b' 'gimp')"));
+        assert_ne!(
+            context.tag,
+            tag(&bundle::DESKTOP, &Extras::none()),
+            "an image with gimp is not the image without it"
+        );
     }
 
     #[test]
