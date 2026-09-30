@@ -31,6 +31,10 @@ impl Profile for WaylandProfile {
         Self::contract().name()
     }
 
+    fn server(&self) -> computer_types::DisplayServer {
+        computer_types::DisplayServer::Wayland
+    }
+
     fn image(&self) -> ImageSource {
         Self::contract().image()
     }

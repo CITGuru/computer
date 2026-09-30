@@ -136,6 +136,7 @@ pub struct Builder {
     driver: Option<Arc<dyn DesktopFactory>>,
     image: Option<String>,
     image_dir: Option<PathBuf>,
+    features: Option<Vec<computer_types::Feature>>,
     size: Option<(u32, u32)>,
     publish: bool,
     cli: Option<Arc<dyn Engine>>,
@@ -157,6 +158,7 @@ impl Default for Builder {
             driver: None,
             image: None,
             image_dir: None,
+            features: None,
             size: None,
             publish: true,
             cli: None,
@@ -177,6 +179,12 @@ impl Builder {
         self.image = Some(image.into());
         self.image_dir = None;
         self
+    }
+
+    pub fn prebuilt(mut self, image: impl Into<String>) -> Self {
+        self.config.extras = bundle::Extras::none();
+        self.features = Some(Vec::new());
+        self.image(image)
     }
 
     pub fn image_dir(mut self, directory: impl Into<PathBuf>) -> Self {
@@ -210,25 +218,63 @@ impl Builder {
         self
     }
 
+    pub fn features(mut self, features: impl IntoIterator<Item = computer_types::Feature>) -> Self {
+        self.features = Some(features.into_iter().collect());
+        self
+    }
+
+    pub fn bare(self) -> Self {
+        self.features([])
+    }
+
+    pub fn with(mut self, feature: computer_types::Feature) -> Self {
+        let mut features = self.chosen_features();
+        if !features.contains(&feature) {
+            features.push(feature);
+        }
+        self.features = Some(features);
+        self
+    }
+
+    pub fn without(mut self, feature: computer_types::Feature) -> Self {
+        let mut features = self.chosen_features();
+        features.retain(|held| *held != feature);
+        self.features = Some(features);
+        self
+    }
+
+    pub fn chosen_features(&self) -> Vec<computer_types::Feature> {
+        let bundled = self.image_dir.is_none() && self.source().bundle().is_some();
+        match (&self.features, bundled) {
+            (Some(chosen), _) => chosen.clone(),
+            (None, true) => computer_types::Desktop::default_features(self.profile.server()),
+            (None, false) => Vec::new(),
+        }
+    }
+
     pub fn dock(self) -> Self {
-        let wanted = bundle::Extras::dock();
-        self.packages(wanted.packages)
+        self.with(computer_types::Feature::Dock)
     }
 
     pub fn wide_fonts(self) -> Self {
-        let wanted = bundle::Extras::wide_fonts();
-        self.packages(wanted.packages)
+        self.with(computer_types::Feature::WideFonts)
     }
 
     /// Launch-time only: an app joins the tree only if the bus exists before its first window.
     pub fn accessibility(self) -> Self {
-        let wanted = bundle::Extras::accessibility();
-        self.packages(wanted.packages)
+        self.with(computer_types::Feature::Accessibility)
     }
 
     pub fn video(self) -> Self {
-        let wanted = bundle::Extras::video();
-        self.packages(wanted.packages)
+        self.with(computer_types::Feature::Video)
+    }
+
+    pub fn audio(self) -> Self {
+        self.with(computer_types::Feature::Audio)
+    }
+
+    pub fn x11_apps(self) -> Self {
+        self.with(computer_types::Feature::X11Apps)
     }
 
     pub fn runtime(mut self, program: impl Into<String>) -> Self {
@@ -371,6 +417,13 @@ impl Builder {
 
     pub fn config(&self) -> Result<Config> {
         let mut config = self.config.clone();
+
+        let mut packages = config.extras.packages.clone();
+        for feature in self.chosen_features() {
+            packages.extend(bundle::Extras::of(feature).packages);
+        }
+        config.extras = bundle::Extras::from_sources(packages, config.extras.sources.clone())
+            .with_launchers(config.extras.launchers.clone());
 
         let (width, height) = self.size.unwrap_or_else(|| self.profile.default_size());
         config.width = width;
@@ -2432,6 +2485,60 @@ fn withholds_devtools(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_the_builder_starts_from_the_default_extras_and_can_change_them() {
+        let packages = |builder: Builder| builder.config().expect("a config").extras.packages;
+        let has = |list: &[String], name: &str| list.iter().any(|one| one == name);
+
+        let default = packages(Computer::builder());
+        assert!(
+            has(&default, "ffmpeg") && has(&default, "tint2") && has(&default, "fonts-noto-cjk")
+        );
+
+        let chained = packages(Computer::builder().bare().dock().video());
+        assert!(
+            has(&chained, "tint2") && has(&chained, "ffmpeg"),
+            "each adds, none replaces"
+        );
+        assert!(!has(&chained, "fonts-noto-cjk"));
+
+        let without = packages(Computer::builder().without(computer_types::Feature::Video));
+        assert!(!has(&without, "ffmpeg") && has(&without, "tint2"));
+
+        let mixed = packages(Computer::builder().bare().packages(["jq"]).audio());
+        assert_eq!(mixed, ["jq", "pulseaudio", "pulseaudio-utils"]);
+
+        let wayland = packages(Computer::builder().profile(Arc::new(WaylandProfile)));
+        assert!(
+            has(&wayland, "xwayland"),
+            "a Wayland box can open X11 apps by default"
+        );
+
+        assert!(
+            packages(Computer::builder().image("ghcr.io/me/desktop")).is_empty(),
+            "an image this crate does not build gets no extras it was not asked for"
+        );
+    }
+
+    #[test]
+    fn test_a_prebuilt_image_is_used_as_it_is_without_its_extras_again() {
+        let asking = || Computer::builder().packages(["ffmpeg"]);
+        assert!(
+            asking().image("tmpl-1").config().is_err(),
+            "packages cannot go into an image this crate did not build"
+        );
+
+        let config = asking()
+            .prebuilt("tmpl-1")
+            .config()
+            .expect("a prebuilt image");
+        assert_eq!(config.image, "tmpl-1");
+        assert!(
+            config.extras.is_empty(),
+            "its extras went in when it was built"
+        );
+    }
 
     fn gated() -> BTreeMap<String, String> {
         BTreeMap::from([(

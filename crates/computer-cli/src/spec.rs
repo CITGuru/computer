@@ -16,6 +16,10 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
         None => CreateBox::default(),
     };
 
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut bare = false;
+
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         let mut value = |what: &str| {
@@ -25,9 +29,14 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
         };
 
         if let Some((_, feature)) = FEATURES.iter().find(|(name, _)| name == arg) {
-            if !body.spec.desktop.features.contains(feature) {
-                body.spec.desktop.features.push(*feature);
-            }
+            added.push(*feature);
+            continue;
+        }
+        if let Some((_, feature)) = FEATURES
+            .iter()
+            .find(|(name, _)| arg.strip_prefix("--no-") == name.strip_prefix("--"))
+        {
+            removed.push(*feature);
             continue;
         }
 
@@ -60,6 +69,7 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
                 }
             }
             "--no-network" => body.spec.policy.network = false,
+            "--bare" => bare = true,
             "--memory" => body.placement.memory = Some(value("a size, such as 4g")?.to_string()),
             "--cpus" => body.placement.cpus = Some(value("a number, such as 2")?.to_string()),
             "--runtime" => {
@@ -81,6 +91,20 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
             }
             other => return Err(format!("unknown option for new: {other}")),
         }
+    }
+
+    if bare || !added.is_empty() || !removed.is_empty() {
+        let mut features = match bare {
+            true => Vec::new(),
+            false => body.spec.desktop.features(),
+        };
+        for feature in added {
+            if !features.contains(&feature) {
+                features.push(feature);
+            }
+        }
+        features.retain(|feature| !removed.contains(feature));
+        body.spec.desktop.features = Some(features);
     }
 
     Ok(body)
@@ -179,7 +203,18 @@ mod tests {
         assert_eq!(body.spec.desktop.screens, Some(2));
         assert_eq!(body.spec.desktop.server, DisplayServer::Wayland);
         assert_eq!(body.spec.desktop.packages, ["jq", "ripgrep"]);
-        assert_eq!(body.spec.desktop.features, [Feature::Audio, Feature::Dock]);
+        assert_eq!(
+            body.spec.desktop.features,
+            Some(vec![
+                Feature::WideFonts,
+                Feature::Video,
+                Feature::Dock,
+                Feature::Accessibility,
+                Feature::X11Apps,
+                Feature::Audio,
+            ]),
+            "a flag adds to the default set of the server the flags ask for, wherever --wayland sits"
+        );
         assert!(!body.spec.policy.network);
         assert_eq!(body.placement.memory.as_deref(), Some("4g"));
         assert_eq!(body.placement.cpus.as_deref(), Some("2"));
@@ -213,6 +248,20 @@ mod tests {
             .err()
             .expect("an app the catalog does not have");
         assert!(error.to_string().contains("no-such-app"), "{error}");
+    }
+
+    #[test]
+    fn test_no_flag_keeps_the_default_and_a_no_flag_or_bare_takes_away() {
+        assert_eq!(asked(&[]).expect("nothing").spec.desktop.features, None);
+
+        let body = asked(&args(&["--no-dock", "--no-video"])).expect("flags");
+        assert_eq!(
+            body.spec.desktop.features,
+            Some(vec![Feature::WideFonts, Feature::Accessibility])
+        );
+
+        let body = asked(&args(&["--bare", "--audio"])).expect("flags");
+        assert_eq!(body.spec.desktop.features, Some(vec![Feature::Audio]));
     }
 
     #[test]
@@ -259,8 +308,8 @@ mod tests {
         assert_eq!(body.spec.desktop.width, Some(1920));
         assert_eq!(
             body.spec.desktop.features,
-            [Feature::Video],
-            "asked for twice is asked for once"
+            Some(vec![Feature::Video]),
+            "asked for twice is asked for once, and the file's own list is kept"
         );
         assert_eq!(
             body.spec.apps["gimp"].packages,

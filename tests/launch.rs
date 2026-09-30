@@ -497,11 +497,18 @@ async fn a_stale_holder_cannot_take_a_screen_back_from_its_replacement() {
 
 #[tokio::test]
 async fn asking_for_extra_packages_asks_for_a_different_image() {
-    let plain = Computer::builder().preview().expect("the built-in image");
+    let plain = Computer::builder()
+        .bare()
+        .preview()
+        .expect("the built-in image");
     let wide = Computer::builder()
+        .bare()
         .wide_fonts()
         .preview()
         .expect("the built-in image, with fonts");
+    let default = Computer::builder()
+        .preview()
+        .expect("the built-in image, with the default extras");
 
     let plain_image = plain.last().expect("an image");
     let wide_image = wide.last().expect("an image");
@@ -510,6 +517,11 @@ async fn asking_for_extra_packages_asks_for_a_different_image() {
     assert_ne!(
         plain_image, wide_image,
         "one tag for two different images hands a box fonts it was not built with"
+    );
+    assert_ne!(
+        default.last().expect("an image"),
+        plain_image,
+        "the default box is not the bare one"
     );
 }
 

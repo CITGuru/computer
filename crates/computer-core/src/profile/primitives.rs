@@ -1625,6 +1625,10 @@ impl Profile for ConfiguredProfile {
         self.name.as_deref().unwrap_or_else(|| self.base.name())
     }
 
+    fn server(&self) -> computer_types::DisplayServer {
+        self.base.server()
+    }
+
     fn image(&self) -> ImageSource {
         self.image.clone().unwrap_or_else(|| self.base.image())
     }

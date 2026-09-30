@@ -18,7 +18,14 @@ pub struct Spec {
 impl Spec {
     /// Through [`serde_json::Value`], so key order does not change the digest.
     pub fn digest(&self) -> String {
-        let canonical = serde_json::to_value(self)
+        let mut features = self.desktop.features();
+        features.sort();
+        features.dedup();
+
+        let mut resolved = self.clone();
+        resolved.desktop.features = Some(features);
+
+        let canonical = serde_json::to_value(&resolved)
             .and_then(|value| serde_json::to_string(&value))
             .unwrap_or_default();
 
@@ -39,10 +46,34 @@ pub struct Desktop {
     pub height: Option<u32>,
     #[serde(default)]
     pub screens: Option<u32>,
-    #[serde(default)]
-    pub features: Vec<Feature>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features: Option<Vec<Feature>>,
     #[serde(default)]
     pub packages: Vec<String>,
+}
+
+pub const DEFAULT_FEATURES: [Feature; 4] = [
+    Feature::WideFonts,
+    Feature::Video,
+    Feature::Dock,
+    Feature::Accessibility,
+];
+
+impl Desktop {
+    pub fn default_features(server: DisplayServer) -> Vec<Feature> {
+        let mut features = DEFAULT_FEATURES.to_vec();
+        if server == DisplayServer::Wayland {
+            features.push(Feature::X11Apps);
+        }
+        features
+    }
+
+    pub fn features(&self) -> Vec<Feature> {
+        match &self.features {
+            Some(chosen) => chosen.clone(),
+            None => Self::default_features(self.server),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,7 +84,7 @@ pub enum DisplayServer {
     Wayland,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Feature {
     WideFonts,
@@ -252,6 +283,45 @@ pub enum Arch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spec(json: &str) -> Spec {
+        serde_json::from_str(json).expect("a spec")
+    }
+
+    #[test]
+    fn test_a_spec_that_names_no_features_gets_the_default_set() {
+        assert_eq!(spec("{}").desktop.features(), DEFAULT_FEATURES);
+        assert_eq!(
+            spec(r#"{"desktop":{"server":"wayland"}}"#)
+                .desktop
+                .features(),
+            [DEFAULT_FEATURES.as_slice(), &[Feature::X11Apps]].concat(),
+            "Wayland also needs XWayland for apps that only speak X11"
+        );
+        assert!(
+            spec(r#"{"desktop":{"features":[]}}"#)
+                .desktop
+                .features()
+                .is_empty(),
+            "an empty list is the bare desktop, not the default"
+        );
+    }
+
+    #[test]
+    fn test_the_default_named_or_left_out_is_one_spec() {
+        let named = r#"{"desktop":{"features":["accessibility","dock","video","wide_fonts"]}}"#;
+
+        assert_eq!(spec("{}").digest(), spec(named).digest());
+        assert_ne!(
+            spec("{}").digest(),
+            spec(r#"{"desktop":{"features":[]}}"#).digest()
+        );
+        assert_eq!(
+            spec(r#"{"desktop":{"features":["video","audio"]}}"#).digest(),
+            spec(r#"{"desktop":{"features":["audio","video","video"]}}"#).digest(),
+            "order and repeats do not make another image"
+        );
+    }
 
     #[test]
     fn test_a_match_line_is_read_or_left_alone() {

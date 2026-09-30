@@ -47,7 +47,7 @@ async fn launch(
 ) -> Result<(Computer, Resolved, String), ApiError> {
     let (mut builder, resolved) = crate::spec::plan(spec, placement, id, runtime)?;
     if let Some(image) = image {
-        builder = builder.image(image);
+        builder = builder.prebuilt(image);
     }
 
     let config = builder.config()?;

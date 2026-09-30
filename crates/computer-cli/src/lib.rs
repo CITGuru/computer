@@ -12,17 +12,20 @@ pub const USAGE: &str = "\
 computer — a desktop in a box
 
   new [--size WxH] [--screens N] [--wayland] [--url URL]
-      [--app NAME]… [--package PKG]… [--wide-fonts] [--audio] [--video]
-      [--dock] [--x11-apps] [--accessibility]
-      [--no-network] [--memory SIZE] [--cpus N] [--runtime NAME]
+      [--app NAME]… [--package PKG]… [--audio] [--x11-apps]
+      [--no-wide-fonts] [--no-video] [--no-dock] [--no-accessibility]
+      [--bare] [--no-network] [--memory SIZE] [--cpus N] [--runtime NAME]
       [--ttl MINUTES] [--idle MINUTES] [--profile NAME] [--spec FILE]
                               open a box and print where to watch it. --app
                               installs one from the catalog, such as gimp or
                               vscode, for the app command below; it and
-                              --package take several, or a,b. --accessibility
-                              reads native windows by widget name, for the
-                              widget command. --video puts ffmpeg in the box,
-                              for record. --wayland runs sway in place of X11.
+                              --package take several, or a,b. every box has
+                              wide fonts, video (ffmpeg, for record), the dock
+                              and accessibility (the widget command), and a
+                              Wayland box also X11 apps; --no-<one> leaves one
+                              out, --bare leaves them all out, and --audio or
+                              --x11-apps adds one. --wayland runs sway in
+                              place of X11.
                               none of those can be turned on afterwards. --ttl
                               removes the box that long after it opens, --idle
                               that long after it was last used. --spec is a
@@ -280,8 +283,8 @@ computer — a desktop in a box
   record <box> stop [file.mp4]
   record <box> status         record the screen to a file. ffmpeg writes it
                               inside the box, so the frames never cross the
-                              wire; stop brings the file out. needs a box
-                              opened with --video
+                              wire; stop brings the file out. needs video,
+                              which a box has unless opened with --no-video
   wait <box> [--settle MS] [--within MS]
                               wait until the screen stops changing: unchanged
                               for --settle, or give up after --within. the

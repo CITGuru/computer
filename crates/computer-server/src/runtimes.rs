@@ -131,7 +131,7 @@ impl Runtime {
         }
 
         if let Some(image) = self.image_for(&spec.digest()) {
-            builder = builder.image(image);
+            builder = builder.prebuilt(image);
         }
 
         if let Some(memory) = &self.tuning.memory {
