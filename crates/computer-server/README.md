@@ -87,7 +87,7 @@ A box is described by a **spec** — what desktop is wanted — and placed by a 
 curl -s localhost:8080/v1/boxes -H 'content-type: application/json' \
   -H 'idempotency-key: launch-1' -d '{
     "spec": {
-      "desktop": { "width": 1280, "height": 800, "features": ["wide_fonts"] },
+      "desktop": { "width": 1280, "height": 800, "packages": ["jq"] },
       "policy":  { "network": true }
     },
     "placement": { "memory": "2g", "expires_after_secs": 3600 }

@@ -18,7 +18,7 @@ They are separate because two desktops that differ only in a memory limit are th
 ```json
 {
   "spec": {
-    "desktop": { "width": 1280, "height": 800, "features": ["wide_fonts"] },
+    "desktop": { "width": 1280, "height": 800, "packages": ["jq"] },
     "policy": { "network": true }
   },
   "placement": { "runtime": "docker", "memory": "2g", "expires_after_secs": 3600 }
@@ -133,15 +133,17 @@ The default X11 image is based on `debian:bookworm-slim`:
 
 The Wayland image uses headless sway, wayvnc, and grim instead. See [Runtimes](runtimes.md#display-servers).
 
-Features and applications add more packages:
+Features and applications add more packages. A box gets the default features unless its spec lists its own:
 
-| Feature | Adds |
-| --- | --- |
-| `wide_fonts` | Noto CJK and color emoji fonts |
-| `audio` | PulseAudio |
-| `video` | ffmpeg |
-| `dock` | tint2 |
-| `accessibility` | AT-SPI, for reading native widgets |
-| `x11_apps` | XWayland |
+| Feature | Adds | Default |
+| --- | --- | --- |
+| `wide_fonts` | Noto CJK and color emoji fonts | Yes |
+| `video` | ffmpeg | Yes |
+| `dock` | tint2 | Yes |
+| `accessibility` | AT-SPI, for reading native widgets | Yes |
+| `x11_apps` | XWayland | On Wayland |
+| `audio` | PulseAudio | No |
+
+A spec that lists features gets exactly that list, and `"features": []` is the bare desktop. The default set and the same features listed by name are one spec, so they use one image.
 
 The image tag contains a hash of the image source and the added packages, and the CPU architecture. A change to the source or the packages makes a new image, so a box never uses an old image by mistake.

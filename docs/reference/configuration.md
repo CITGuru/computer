@@ -198,7 +198,7 @@ Each box setting is available from each interface.
 | Wayland | `--wayland` | `wayland` | `spec.desktop.server: "wayland"` | `profile(Arc::new(WaylandProfile))` |
 | Applications | `--app NAME` | `apps` | `spec.apps` | `Builder::from_spec` |
 | Packages | `--package PKG` | `packages` | `spec.desktop.packages` | `packages([…])` |
-| Features | `--wide-fonts`, `--audio`, `--video`, `--dock`, `--x11-apps`, `--accessibility` | `wide_fonts`, `audio`, `video`, `accessibility` | `spec.desktop.features` | `wide_fonts()`, `video()`, `dock()`, `accessibility()` |
+| Features (default: wide fonts, video, dock, accessibility, and X11 apps on Wayland) | `--audio`, `--no-<feature>`, `--bare` | `wide_fonts`, `audio`, `video`, `accessibility`: `true` adds, `false` leaves out | `spec.desktop.features` | `audio()`, `without(feature)`, `bare()`, `features([…])` |
 | Network | `--no-network` | `network: false` | `spec.policy.network` | `network(false)` |
 | Runtime | `--runtime NAME` | `runtime` | `placement.runtime` | `runtime(name)`, `machine(…)` |
 | Memory | `--memory SIZE` | `memory` | `placement.memory` | `memory(size)` |

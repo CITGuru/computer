@@ -7,7 +7,7 @@ Two halves. A `Spec` says what desktop is wanted:
 ```toml
 [desktop]
 server   = "x11"
-features = ["wide_fonts"]
+packages = ["jq"]
 
 [policy]
 network = true
@@ -17,6 +17,8 @@ auth    = "token"
 And `Point`, `Button` and `Selection` are the values every caller names once it has one. A server, a client, a CLI and the engine all need both, and none of them should be redefining a coordinate.
 
 A spec says nothing about *where* it runs, which is what lets one travel between a container, a microVM and somebody else's cloud. `Placement` carries that half, and is kept out of the spec so two identical desktops that differ only in a memory limit hash the same. `Spec::digest()` names a spec by its contents, so the same desktop asked for in two key orders is one digest.
+
+A spec with no `features` gets the default set: wide fonts, video, the dock and accessibility, and XWayland on Wayland. A list is taken as the whole set, so `[]` is the bare desktop. The digest is taken over the resolved set, so leaving `features` out and naming the default set are one spec.
 
 ## Nothing here knows about an image
 

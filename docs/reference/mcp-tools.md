@@ -48,10 +48,10 @@ Start a Linux desktop with a browser. Returns the box ID and a viewer URL. Remov
 | `runtime` | string | A runtime name from `list_runtimes`. Default: the server's default. |
 | `apps` | string[] | Applications from `list_apps`, such as `gimp` or `vscode`. |
 | `packages` | string[] | Apt packages, such as `jq` or `ripgrep`. |
-| `accessibility` | boolean | Let `widget` read native windows. |
-| `video` | boolean | Install ffmpeg, for `record`. |
-| `audio` | boolean | Install a sound server. |
-| `wide_fonts` | boolean | Install Chinese, Japanese, Korean, and emoji fonts. |
+| `accessibility` | boolean | Let `widget` read native windows. On unless `false`. |
+| `video` | boolean | ffmpeg, for `record`. On unless `false`. |
+| `audio` | boolean | A sound server. Off unless `true`. |
+| `wide_fonts` | boolean | Chinese, Japanese, Korean, and emoji fonts. On unless `false`. |
 | `wayland` | boolean | Run sway instead of X11. |
 | `network` | boolean | `false` removes all network access. Default `true`. |
 | `memory` | string | Memory limit, such as `4g`. |

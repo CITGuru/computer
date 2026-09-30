@@ -10,7 +10,7 @@ Some settings go into the image. The first box with a new combination of them bu
 | --- | --- |
 | Applications | Screen size and number of screens |
 | Packages | Network |
-| Features: `wide_fonts`, `audio`, `video`, `dock`, `x11_apps`, `accessibility` | Memory, CPUs, lifetime |
+| Features: `wide_fonts`, `video`, `dock`, `accessibility`, and `x11_apps` on Wayland by default; `audio` | Memory, CPUs, lifetime |
 | X11 or Wayland | Browser profile |
 
 You cannot add a feature to a running box. To add an application to a running box, see [Add an application to a running box](#add-an-application-to-a-running-box).
@@ -33,10 +33,9 @@ For Wayland instead of X11:
 
 ```bash
 BOX=$(computer new --wayland)
-BOX=$(computer new --wayland --x11-apps)
 ```
 
-`--x11-apps` adds XWayland, so X11 applications also run on a Wayland box.
+A Wayland box has XWayland by default, so X11 applications also run on it. `--no-x11-apps` leaves it out.
 
 ## Applications
 
@@ -128,15 +127,23 @@ BOX=$(computer new --package jq --package ripgrep)
 let computer = Computer::builder().packages(["jq", "ripgrep"]).launch().await?;
 ```
 
-## Fonts, sound, and recording
+## Features
 
-| Flag | Adds | Use it when |
-| --- | --- | --- |
-| `--wide-fonts` | Noto CJK and color emoji fonts | Pages in Chinese, Japanese, or Korean, or with emoji. Without these fonts, those characters show as empty boxes, and the screenshot still looks correct at a glance. |
-| `--audio` | PulseAudio | A page or application does not work with no sound server. |
-| `--video` | ffmpeg | You want to record the screen with `computer record` or the MCP `record` tool. |
-| `--dock` | A tint2 dock | A person uses the desktop and wants a launcher. |
-| `--accessibility` | AT-SPI | You want to drive native windows by widget name. See [Control modes](../concepts/control-modes.md#accessibility). |
+Every box has wide fonts, video, the dock, and accessibility, so the tools that need them work without asking. A Wayland box also has XWayland. Leave one out with its `--no-` flag, or leave them all out with `--bare`:
+
+| Feature | Adds | Without it | Default |
+| --- | --- | --- | --- |
+| Wide fonts | Noto CJK and color emoji fonts | Chinese, Japanese, Korean, and emoji show as empty boxes, and the screenshot still looks correct at a glance. `--no-wide-fonts` | Yes |
+| Video | ffmpeg | `computer record` and the MCP `record` tool fail. `--no-video` | Yes |
+| Dock | A tint2 dock | A person has no launcher. `--no-dock` | Yes |
+| Accessibility | AT-SPI | Native windows cannot be driven by widget name. See [Control modes](../concepts/control-modes.md#accessibility). `--no-accessibility` | Yes |
+| X11 apps | XWayland | X11 applications do not open on Wayland. `--no-x11-apps` | On Wayland |
+| Audio | PulseAudio | A page or application that needs a sound server does not work. Add it with `--audio`. | No |
+
+```bash
+BOX=$(computer new --no-dock)
+BOX=$(computer new --bare --audio)
+```
 
 ## Network
 
@@ -191,7 +198,6 @@ Put a full spec and placement in a file, and pass it to `computer new`:
       "server": "x11",
       "width": 1280,
       "height": 800,
-      "features": ["wide_fonts"],
       "packages": ["jq"]
     },
     "apps": { "gimp": {} },

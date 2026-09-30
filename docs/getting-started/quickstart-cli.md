@@ -64,7 +64,7 @@ BOX=$(computer new --ttl 60)
 | `--screens N` | Number of screens |
 | `--app NAME` | Install an application from the catalog, such as `gimp` or `vscode` |
 | `--package PKG` | Install a system package |
-| `--accessibility` | Read native windows by widget name |
+| `--bare` | Leave out the default fonts, video, dock, and accessibility |
 | `--no-network` | Block outbound network access |
 | `--runtime NAME` | Select a runtime, such as `podman` |
 | `--ttl MINUTES` | Remove the box after this time |
@@ -72,7 +72,7 @@ BOX=$(computer new --ttl 60)
 | `--profile NAME` | Keep browser logins, cookies, and history in a named volume |
 | `--spec FILE` | Read the full box specification from a JSON file |
 
-You cannot add `--accessibility`, `--video`, or `--wayland` to a box after it opens.
+A box has wide fonts, video, a dock, and accessibility by default. You cannot change them or `--wayland` after a box opens.
 
 See the [CLI reference](../reference/cli.md) for all commands.
 
