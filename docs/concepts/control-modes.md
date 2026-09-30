@@ -47,7 +47,7 @@ This mode works on all runtimes and with all applications. It is also the easies
 
 Native applications publish a tree of widgets through AT-SPI. Each widget has a role, such as `push button` or `text`, and a name. This mode finds widgets by name, so it does not depend on pixels.
 
-A box has accessibility by default. You cannot add it later to a box launched with `--no-accessibility`.
+A box has accessibility by default. You cannot add it later to a box launched with `--minimal`.
 
 ```bash
 BOX=$(computer new)

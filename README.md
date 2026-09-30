@@ -514,7 +514,7 @@ CLI:
 BOX=$(computer new)
 ```
 
-`--no-accessibility` or `without(Feature::Accessibility)` leaves it out.
+`--minimal` or `Computer::builder().minimal()` leaves it out.
 
 ### Read and find nodes
 
@@ -1197,19 +1197,15 @@ BOX=$(computer new \
     --package ripgrep \
     --audio)
 
-BARE_BOX=$(computer new --bare)
-WAYLAND_BOX=$(computer new --wayland --no-dock)
+MINIMAL_BOX=$(computer new --minimal)
 ```
 
-Every box has these features unless it leaves them out:
+A box is one of two desktops:
 
-- Wide fonts: CJK and emoji. `--no-wide-fonts` leaves them out.
-- Video: recording support. `--no-video` leaves it out.
-- Dock: the desktop launcher. `--no-dock` leaves it out.
-- Accessibility: native widget operations. `--no-accessibility` leaves it out.
-- X11 apps: Xwayland, on a Wayland box. `--no-x11-apps` leaves it out.
+- `--base`, the default: CJK and emoji fonts, recording support (ffmpeg), the desktop launcher, native widget operations (accessibility), and Xwayland on a Wayland box.
+- `--minimal`: none of them.
 
-`--audio` adds the sound server, and `--bare` leaves out every default.
+`--audio` adds the sound server to either.
 
 Applications, packages, and features are image inputs. They cannot be added to a running box, and the first box with a new combination must build an image.
 
@@ -1226,8 +1222,7 @@ Complete command reference:
 ```text
 computer new [--size WIDTHxHEIGHT] [--screens N] [--wayland] [--url URL]
              [--app NAME]... [--package PACKAGE]... [--audio]
-             [--no-wide-fonts] [--no-video] [--no-dock]
-             [--no-accessibility] [--no-x11-apps] [--bare]
+             [--base | --minimal]
              [--no-network] [--memory SIZE] [--cpus N]
              [--runtime NAME] [--ttl MINUTES] [--idle MINUTES]
              [--spec FILE|-]
@@ -1322,7 +1317,7 @@ let desktop_with_packages = Computer::builder()
     .launch()
     .await?;
 
-let bare_desktop = Computer::builder().bare().launch().await?;
+let minimal_desktop = Computer::builder().minimal().launch().await?;
 ```
 
 CLI:

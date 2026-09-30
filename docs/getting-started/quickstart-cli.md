@@ -64,7 +64,7 @@ BOX=$(computer new --ttl 60)
 | `--screens N` | Number of screens |
 | `--app NAME` | Install an application from the catalog, such as `gimp` or `vscode` |
 | `--package PKG` | Install a system package |
-| `--bare` | Leave out the default fonts, video, dock, and accessibility |
+| `--minimal` | The bare desktop, without the default fonts, video, dock, and accessibility |
 | `--no-network` | Block outbound network access |
 | `--runtime NAME` | Select a runtime, such as `podman` |
 | `--ttl MINUTES` | Remove the box after this time |

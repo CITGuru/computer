@@ -498,11 +498,11 @@ async fn a_stale_holder_cannot_take_a_screen_back_from_its_replacement() {
 #[tokio::test]
 async fn asking_for_extra_packages_asks_for_a_different_image() {
     let plain = Computer::builder()
-        .bare()
+        .minimal()
         .preview()
         .expect("the built-in image");
     let wide = Computer::builder()
-        .bare()
+        .minimal()
         .wide_fonts()
         .preview()
         .expect("the built-in image, with fonts");

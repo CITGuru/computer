@@ -17,8 +17,7 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
     };
 
     let mut added = Vec::new();
-    let mut removed = Vec::new();
-    let mut bare = false;
+    let mut minimal: Option<bool> = None;
 
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
@@ -30,13 +29,6 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
 
         if let Some((_, feature)) = FEATURES.iter().find(|(name, _)| name == arg) {
             added.push(*feature);
-            continue;
-        }
-        if let Some((_, feature)) = FEATURES
-            .iter()
-            .find(|(name, _)| arg.strip_prefix("--no-") == name.strip_prefix("--"))
-        {
-            removed.push(*feature);
             continue;
         }
 
@@ -69,7 +61,13 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
                 }
             }
             "--no-network" => body.spec.policy.network = false,
-            "--bare" => bare = true,
+            "--base" | "--minimal" => {
+                let asked = arg == "--minimal";
+                if minimal.is_some_and(|held| held != asked) {
+                    return Err("--base and --minimal ask for different desktops: pass one".into());
+                }
+                minimal = Some(asked);
+            }
             "--memory" => body.placement.memory = Some(value("a size, such as 4g")?.to_string()),
             "--cpus" => body.placement.cpus = Some(value("a number, such as 2")?.to_string()),
             "--runtime" => {
@@ -93,17 +91,19 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
         }
     }
 
-    if bare || !added.is_empty() || !removed.is_empty() {
-        let mut features = match bare {
-            true => Vec::new(),
-            false => body.spec.desktop.features(),
+    if minimal == Some(false) {
+        body.spec.desktop.features = None;
+    }
+    if minimal == Some(true) || !added.is_empty() {
+        let mut features = match minimal {
+            Some(true) => Vec::new(),
+            _ => body.spec.desktop.features(),
         };
         for feature in added {
             if !features.contains(&feature) {
                 features.push(feature);
             }
         }
-        features.retain(|feature| !removed.contains(feature));
         body.spec.desktop.features = Some(features);
     }
 
@@ -251,17 +251,32 @@ mod tests {
     }
 
     #[test]
-    fn test_no_flag_keeps_the_default_and_a_no_flag_or_bare_takes_away() {
+    fn test_base_is_the_default_and_minimal_is_the_bare_desktop() {
         assert_eq!(asked(&[]).expect("nothing").spec.desktop.features, None);
-
-        let body = asked(&args(&["--no-dock", "--no-video"])).expect("flags");
         assert_eq!(
-            body.spec.desktop.features,
-            Some(vec![Feature::WideFonts, Feature::Accessibility])
+            asked(&args(&["--base"]))
+                .expect("base")
+                .spec
+                .desktop
+                .features,
+            None
         );
 
-        let body = asked(&args(&["--bare", "--audio"])).expect("flags");
+        let body = asked(&args(&["--minimal"])).expect("minimal");
+        assert_eq!(body.spec.desktop.features, Some(vec![]));
+
+        let body = asked(&args(&["--minimal", "--audio"])).expect("minimal and sound");
         assert_eq!(body.spec.desktop.features, Some(vec![Feature::Audio]));
+
+        let body = asked(&args(&["--video", "--minimal"])).expect("an old flag after minimal");
+        assert_eq!(
+            body.spec.desktop.features,
+            Some(vec![Feature::Video]),
+            "an old feature flag still adds its feature to a minimal desktop"
+        );
+
+        let error = asked(&args(&["--base", "--minimal"])).expect_err("both");
+        assert!(error.contains("pass one"), "{error}");
     }
 
     #[test]

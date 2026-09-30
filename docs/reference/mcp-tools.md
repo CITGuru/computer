@@ -52,6 +52,7 @@ Start a Linux desktop with a browser. Returns the box ID and a viewer URL. Remov
 | `video` | boolean | ffmpeg, for `record`. On unless `false`. |
 | `audio` | boolean | A sound server. Off unless `true`. |
 | `wide_fonts` | boolean | Chinese, Japanese, Korean, and emoji fonts. On unless `false`. |
+| `minimal` | boolean | The bare desktop, without the fonts, ffmpeg, dock, and accessibility. A `true` feature flag adds that feature back. |
 | `wayland` | boolean | Run sway instead of X11. |
 | `network` | boolean | `false` removes all network access. Default `true`. |
 | `memory` | string | Memory limit, such as `4g`. |

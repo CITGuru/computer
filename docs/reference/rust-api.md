@@ -53,7 +53,7 @@ let computer = Computer::builder()
 | `size(w, h)` | Screen size. |
 | `packages([…])` | Apt packages to install. |
 | `wide_fonts()`, `video()`, `dock()`, `accessibility()`, `audio()`, `x11_apps()` | Add a feature. The built-in image has wide fonts, video, the dock, and accessibility by default, and XWayland on Wayland. See [Boxes](../concepts/boxes.md#what-is-inside-a-box). |
-| `without(feature)`, `bare()`, `features([…])` | Leave one feature out, leave them all out, or set the whole list. |
+| `minimal()`, `without(feature)`, `features([…])` | The bare desktop, one feature left out, or the whole list. |
 | `profile(Arc::new(WaylandProfile))` | Use Wayland instead of X11. |
 | `network(false)` | Block network access. |
 | `memory(limit)`, `cpus(n)` | Resource limits. |

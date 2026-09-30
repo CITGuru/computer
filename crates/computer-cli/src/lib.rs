@@ -12,20 +12,18 @@ pub const USAGE: &str = "\
 computer — a desktop in a box
 
   new [--size WxH] [--screens N] [--wayland] [--url URL]
-      [--app NAME]… [--package PKG]… [--audio] [--x11-apps]
-      [--no-wide-fonts] [--no-video] [--no-dock] [--no-accessibility]
-      [--bare] [--no-network] [--memory SIZE] [--cpus N] [--runtime NAME]
+      [--app NAME]… [--package PKG]… [--base | --minimal] [--audio]
+      [--no-network] [--memory SIZE] [--cpus N] [--runtime NAME]
       [--ttl MINUTES] [--idle MINUTES] [--profile NAME] [--spec FILE]
                               open a box and print where to watch it. --app
                               installs one from the catalog, such as gimp or
                               vscode, for the app command below; it and
-                              --package take several, or a,b. every box has
-                              wide fonts, video (ffmpeg, for record), the dock
-                              and accessibility (the widget command), and a
-                              Wayland box also X11 apps; --no-<one> leaves one
-                              out, --bare leaves them all out, and --audio or
-                              --x11-apps adds one. --wayland runs sway in
-                              place of X11.
+                              --package take several, or a,b. --base, the
+                              default, has wide fonts, video (ffmpeg, for
+                              record), the dock and accessibility (the widget
+                              command), and X11 apps on Wayland; --minimal has
+                              none of them. --audio adds sound to either.
+                              --wayland runs sway in place of X11.
                               none of those can be turned on afterwards. --ttl
                               removes the box that long after it opens, --idle
                               that long after it was last used. --spec is a
@@ -284,7 +282,7 @@ computer — a desktop in a box
   record <box> status         record the screen to a file. ffmpeg writes it
                               inside the box, so the frames never cross the
                               wire; stop brings the file out. needs video,
-                              which a box has unless opened with --no-video
+                              which a box has unless opened with --minimal
   wait <box> [--settle MS] [--within MS]
                               wait until the screen stops changing: unchanged
                               for --settle, or give up after --within. the

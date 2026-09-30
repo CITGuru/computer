@@ -223,7 +223,7 @@ impl Builder {
         self
     }
 
-    pub fn bare(self) -> Self {
+    pub fn minimal(self) -> Self {
         self.features([])
     }
 
@@ -2496,7 +2496,7 @@ mod tests {
             has(&default, "ffmpeg") && has(&default, "tint2") && has(&default, "fonts-noto-cjk")
         );
 
-        let chained = packages(Computer::builder().bare().dock().video());
+        let chained = packages(Computer::builder().minimal().dock().video());
         assert!(
             has(&chained, "tint2") && has(&chained, "ffmpeg"),
             "each adds, none replaces"
@@ -2506,7 +2506,7 @@ mod tests {
         let without = packages(Computer::builder().without(computer_types::Feature::Video));
         assert!(!has(&without, "ffmpeg") && has(&without, "tint2"));
 
-        let mixed = packages(Computer::builder().bare().packages(["jq"]).audio());
+        let mixed = packages(Computer::builder().minimal().packages(["jq"]).audio());
         assert_eq!(mixed, ["jq", "pulseaudio", "pulseaudio-utils"]);
 
         let wayland = packages(Computer::builder().profile(Arc::new(WaylandProfile)));

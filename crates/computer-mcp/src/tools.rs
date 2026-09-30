@@ -152,6 +152,12 @@ pub fn catalogue() -> Value {
                         "description": "A sound server, for a page or an app that refuses to \
                                         play without one. Off unless true."
                     },
+                    "minimal": {
+                        "type": "boolean",
+                        "description": "The bare desktop, without the fonts, ffmpeg, dock and \
+                                        accessibility every box has otherwise. A true flag \
+                                        above adds its feature back."
+                    },
                     "screens": {
                         "type": "integer",
                         "description": "How many screens `open_screen` may open. One unless \
@@ -2414,8 +2420,15 @@ fn asked(arguments: &Value) -> (Spec, Placement) {
             .map(|on| (feature, on))
     })
     .collect();
-    if !chosen.is_empty() {
-        let mut features = spec.desktop.features();
+    let minimal = arguments
+        .get("minimal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if minimal || !chosen.is_empty() {
+        let mut features = match minimal {
+            true => Vec::new(),
+            false => spec.desktop.features(),
+        };
         for (feature, on) in chosen {
             match on {
                 true if !features.contains(&feature) => features.push(feature),
@@ -4083,6 +4096,9 @@ mod tests {
             "nothing asked keeps the default set"
         );
 
+        let (spec, _) = asked(&json!({ "minimal": true, "video": true }));
+        assert_eq!(spec.desktop.features, Some(vec![Feature::Video]));
+
         let (spec, _) = asked(&json!({ "video": false, "dock": true }));
         assert_eq!(
             spec.desktop.features,
@@ -4112,6 +4128,7 @@ mod tests {
             "apps": ["gimp", "vscode"],
             "packages": ["jq"],
             "audio": true,
+            "minimal": false,
             "screens": 2,
             "wayland": true,
             "network": false,

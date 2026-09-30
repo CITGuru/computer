@@ -35,7 +35,7 @@ For Wayland instead of X11:
 BOX=$(computer new --wayland)
 ```
 
-A Wayland box has XWayland by default, so X11 applications also run on it. `--no-x11-apps` leaves it out.
+A Wayland box has XWayland by default, so X11 applications also run on it. `--minimal` leaves it out.
 
 ## Applications
 
@@ -129,21 +129,23 @@ let computer = Computer::builder().packages(["jq", "ripgrep"]).launch().await?;
 
 ## Features
 
-Every box has wide fonts, video, the dock, and accessibility, so the tools that need them work without asking. A Wayland box also has XWayland. Leave one out with its `--no-` flag, or leave them all out with `--bare`:
+A box is one of two desktops. `--base` is the default, so the tools that need these features work without asking. `--minimal` is the bare desktop, for when size or build time matters more:
 
-| Feature | Adds | Without it | Default |
-| --- | --- | --- | --- |
-| Wide fonts | Noto CJK and color emoji fonts | Chinese, Japanese, Korean, and emoji show as empty boxes, and the screenshot still looks correct at a glance. `--no-wide-fonts` | Yes |
-| Video | ffmpeg | `computer record` and the MCP `record` tool fail. `--no-video` | Yes |
-| Dock | A tint2 dock | A person has no launcher. `--no-dock` | Yes |
-| Accessibility | AT-SPI | Native windows cannot be driven by widget name. See [Control modes](../concepts/control-modes.md#accessibility). `--no-accessibility` | Yes |
-| X11 apps | XWayland | X11 applications do not open on Wayland. `--no-x11-apps` | On Wayland |
-| Audio | PulseAudio | A page or application that needs a sound server does not work. Add it with `--audio`. | No |
+| Feature | Adds | Without it | `--base` | `--minimal` |
+| --- | --- | --- | --- | --- |
+| Wide fonts | Noto CJK and color emoji fonts | Chinese, Japanese, Korean, and emoji show as empty boxes, and the screenshot still looks correct at a glance. | Yes | No |
+| Video | ffmpeg | `computer record` and the MCP `record` tool fail. | Yes | No |
+| Dock | A tint2 dock | A person has no launcher. | Yes | No |
+| Accessibility | AT-SPI | Native windows cannot be driven by widget name. See [Control modes](../concepts/control-modes.md#accessibility). | Yes | No |
+| X11 apps | XWayland | X11 applications do not open on Wayland. | On Wayland | No |
+| Audio | PulseAudio | A page or application that needs a sound server does not work. | Add with `--audio` | Add with `--audio` |
 
 ```bash
-BOX=$(computer new --no-dock)
-BOX=$(computer new --bare --audio)
+BOX=$(computer new --minimal)
+BOX=$(computer new --minimal --audio)
 ```
+
+For any other set of features, list them in a `--spec` file.
 
 ## Network
 

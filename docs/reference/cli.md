@@ -59,12 +59,8 @@ computer screenshot "$(computer new)" out.png
 | `--app NAME` | Install an application from the catalog, such as `gimp` or `vscode`. Repeat it, or use `a,b`. |
 | `--package PKG` | Install a system package. Repeat it, or use `a,b`. |
 | `--audio` | Install PulseAudio. |
-| `--no-wide-fonts` | Leave out the Noto CJK and color emoji fonts, which a box has by default. |
-| `--no-video` | Leave out ffmpeg, which a box has by default for `record`. |
-| `--no-dock` | Leave out the tint2 dock, which a box has by default. |
-| `--no-accessibility` | Leave out AT-SPI, which a box has by default for `widget`. |
-| `--no-x11-apps` | Leave out XWayland, which a `--wayland` box has by default. |
-| `--bare` | Leave out every default feature. Add some back with `--audio`, `--video`, `--dock`, `--wide-fonts`, `--accessibility`, or `--x11-apps`. |
+| `--base` | The default desktop: Noto CJK and color emoji fonts, ffmpeg for `record`, a tint2 dock, AT-SPI for `widget`, and XWayland in a `--wayland` box. |
+| `--minimal` | The bare desktop, with none of the `--base` features. |
 | `--wayland` | Run sway instead of X11. |
 | `--no-network` | Block outbound network access. |
 | `--memory SIZE` | Memory limit, such as `2g`. |
@@ -99,7 +95,7 @@ You cannot change `--app`, `--package`, a feature, or `--wayland` after a box op
 | --- | --- |
 | `screenshot <box> [file.png]` | Capture the screen. |
 | `wait <box> [--settle MS] [--within MS]` | Wait until the screen is unchanged for `--settle`, or stop after `--within`. |
-| `record <box> start [--fps N]` | Start a screen recording. Needs video, which a box has unless it was opened with `--no-video`. |
+| `record <box> start [--fps N]` | Start a screen recording. Needs video, which a box has unless it was opened with `--minimal`. |
 | `record <box> stop [file.mp4]` | Stop the recording and copy the file out. |
 | `record <box> status` | Show the recording state. |
 
@@ -169,7 +165,7 @@ The server releases a key that `down` pressed after `--hold` seconds (default 10
 
 ## Native widgets
 
-These commands drive a native window by the names of its widgets. They need accessibility, which a box has unless it was opened with `--no-accessibility`. A query matches the label next to a field and the name of the widget.
+These commands drive a native window by the names of its widgets. They need accessibility, which a box has unless it was opened with `--minimal`. A query matches the label next to a field and the name of the widget.
 
 | Command | Effect |
 | --- | --- |

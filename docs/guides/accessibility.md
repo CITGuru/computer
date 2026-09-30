@@ -8,10 +8,10 @@ Every box has accessibility unless it is launched without it. It starts the AT-S
 
 | Interface | Default | To leave it out |
 | --- | --- | --- |
-| CLI | `computer new` | `--no-accessibility` |
+| CLI | `computer new` | `--minimal` |
 | MCP | `launch_box` | `accessibility: false` |
 | REST | No `features` in `spec.desktop` | A `features` list without `accessibility` |
-| Rust | `Computer::builder()` | `without(Feature::Accessibility)` |
+| Rust | `Computer::builder()` | `minimal()` or `without(Feature::Accessibility)` |
 
 You cannot enable it on a running box. An application joins the tree only if the bus was running before the application started. On a box with no accessibility, the widget tools fail with a message that says so.
 
