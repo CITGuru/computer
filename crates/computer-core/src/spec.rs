@@ -1,5 +1,5 @@
 use crate::apps;
-use crate::bundle::{self, Extras};
+use crate::bundle;
 use crate::{Auth, Bind, Builder, Computer, Error, Profile, Result, WaylandProfile, X11Profile};
 use computer_types as spec;
 use computer_types::{Placement, Spec};
@@ -58,12 +58,10 @@ impl Builder {
             .network(spec.policy.network)
             .auth(auth_of(spec.policy.auth))
             .publish_on(bind_of(spec.policy.bind))
-            .profile(profile);
+            .profile(profile)
+            .features(spec.desktop.features());
 
         let mut packages = spec.desktop.packages.clone();
-        for feature in &spec.desktop.features {
-            packages.extend(packages_for(*feature));
-        }
 
         let mut sources = Vec::new();
         let mut launchers = Vec::new();
@@ -174,17 +172,6 @@ fn placeable(placement: &Placement) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn packages_for(feature: spec::Feature) -> Vec<String> {
-    match feature {
-        spec::Feature::WideFonts => Extras::wide_fonts().packages,
-        spec::Feature::Audio => Extras::audio().packages,
-        spec::Feature::Video => Extras::video().packages,
-        spec::Feature::Dock => Extras::dock().packages,
-        spec::Feature::X11Apps => Extras::x11_apps().packages,
-        spec::Feature::Accessibility => Extras::accessibility().packages,
-    }
 }
 
 fn auth_of(auth: spec::Auth) -> Auth {
@@ -414,10 +401,27 @@ mod tests {
     }
 
     #[test]
-    fn test_a_feature_becomes_the_packages_that_serve_it() {
-        assert_eq!(
-            packages_for(spec::Feature::WideFonts),
-            Extras::wide_fonts().packages
-        );
+    fn test_a_spec_builds_the_packages_its_features_need() {
+        let packages = |json: &str| {
+            let spec: Spec = serde_json::from_str(json).expect("a spec");
+            Builder::from_spec(&spec)
+                .and_then(|builder| builder.config())
+                .expect("a config")
+                .extras
+                .packages
+        };
+
+        let default = packages("{}");
+        for feature in spec::DEFAULT_FEATURES {
+            for package in crate::bundle::Extras::of(feature).packages {
+                assert!(
+                    default.contains(&package),
+                    "{package} is in the default image"
+                );
+            }
+        }
+        assert!(!default.contains(&"xwayland".to_string()));
+        assert!(packages(r#"{"desktop":{"server":"wayland"}}"#).contains(&"xwayland".to_string()));
+        assert!(packages(r#"{"desktop":{"features":[]}}"#).is_empty());
     }
 }

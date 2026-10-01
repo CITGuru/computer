@@ -264,7 +264,7 @@ The server encrypts secrets before it stores them and never returns them. See [R
       "width": 1280,
       "height": 800,
       "screens": 1,
-      "features": ["wide_fonts", "accessibility"],
+      "features": ["wide_fonts", "video", "dock", "accessibility", "audio"],
       "packages": ["jq"]
     },
     "policy": { "network": true }
@@ -289,7 +289,7 @@ All fields are optional. `{}` creates a box with the defaults.
 | `server` | `x11` (default) or `wayland` |
 | `width`, `height` | Screen size. Default: the image's size. |
 | `screens` | Number of screens. Default 1. |
-| `features` | `wide_fonts`, `audio`, `video`, `dock`, `x11_apps`, `accessibility` |
+| `features` | The whole set of `wide_fonts`, `audio`, `video`, `dock`, `x11_apps`, `accessibility`. Left out: `wide_fonts`, `video`, `dock`, `accessibility`, and `x11_apps` on Wayland. `[]` is the bare desktop. |
 | `packages` | Apt packages |
 
 `spec.policy`:

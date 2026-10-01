@@ -109,24 +109,22 @@ pub fn catalogue() -> Value {
                     "height": { "type": "integer", "description": "Screen height." },
                     "video": {
                         "type": "boolean",
-                        "description": "Put ffmpeg in the box, so `record` and the Record button \
-                                        on the screen page work. A running box cannot be given \
-                                        it afterwards."
+                        "description": "ffmpeg in the box, so `record` and the Record button \
+                                        on the screen page work. On unless false; a running \
+                                        box cannot be given it afterwards."
                     },
                     "wide_fonts": {
                         "type": "boolean",
-                        "description": "Install Chinese, Japanese, Korean and emoji fonts. \
-                                        Without them those pages render as empty boxes and \
-                                        the screenshot still looks like a working page."
+                        "description": "Chinese, Japanese, Korean and emoji fonts. On unless \
+                                        false; without them those pages render as empty boxes \
+                                        and the screenshot still looks like a working page."
                     },
                     "accessibility": {
                         "type": "boolean",
-                        "description": "Let the `widget` tool read native windows by the \
-                                        names of their widgets rather than by their pixels. \
-                                        Ask for it here if the work involves anything that \
-                                        is not a web page — a file dialog, a settings \
-                                        panel, an installer. A running box cannot be given \
-                                        it afterwards."
+                        "description": "Lets the `widget` tool read native windows by the \
+                                        names of their widgets rather than by their pixels: a \
+                                        file dialog, a settings panel, an installer. On unless \
+                                        false; a running box cannot be given it afterwards."
                     },
                     "runtime": {
                         "type": "string",
@@ -152,7 +150,13 @@ pub fn catalogue() -> Value {
                     "audio": {
                         "type": "boolean",
                         "description": "A sound server, for a page or an app that refuses to \
-                                        play without one."
+                                        play without one. Off unless true."
+                    },
+                    "minimal": {
+                        "type": "boolean",
+                        "description": "The bare desktop, without the fonts, ffmpeg, dock and \
+                                        accessibility every box has otherwise. A true flag \
+                                        above adds its feature back."
                     },
                     "screens": {
                         "type": "integer",
@@ -2391,15 +2395,7 @@ fn asked(arguments: &Value) -> (Spec, Placement) {
             width: whole("width").map(|n| n as u32),
             height: whole("height").map(|n| n as u32),
             screens: whole("screens").map(|n| n as u32),
-            features: [
-                flag(arguments, "video").then_some(Feature::Video),
-                flag(arguments, "wide_fonts").then_some(Feature::WideFonts),
-                flag(arguments, "accessibility").then_some(Feature::Accessibility),
-                flag(arguments, "audio").then_some(Feature::Audio),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
+            features: None,
             packages: named("packages").collect(),
         },
         apps: named("apps").map(|name| (name, App::default())).collect(),
@@ -2409,6 +2405,39 @@ fn asked(arguments: &Value) -> (Spec, Placement) {
         .get("network")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+
+    let chosen: Vec<(Feature, bool)> = [
+        ("video", Feature::Video),
+        ("wide_fonts", Feature::WideFonts),
+        ("accessibility", Feature::Accessibility),
+        ("audio", Feature::Audio),
+    ]
+    .into_iter()
+    .filter_map(|(name, feature)| {
+        arguments
+            .get(name)
+            .and_then(Value::as_bool)
+            .map(|on| (feature, on))
+    })
+    .collect();
+    let minimal = arguments
+        .get("minimal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if minimal || !chosen.is_empty() {
+        let mut features = match minimal {
+            true => Vec::new(),
+            false => spec.desktop.features(),
+        };
+        for (feature, on) in chosen {
+            match on {
+                true if !features.contains(&feature) => features.push(feature),
+                false => features.retain(|held| *held != feature),
+                true => {}
+            }
+        }
+        spec.desktop.features = Some(features);
+    }
 
     let placement = Placement {
         runtime: said("runtime"),
@@ -4060,6 +4089,29 @@ mod tests {
     }
 
     #[test]
+    fn test_launch_box_keeps_the_default_extras_unless_told_otherwise() {
+        let (spec, _) = asked(&json!({}));
+        assert_eq!(
+            spec.desktop.features, None,
+            "nothing asked keeps the default set"
+        );
+
+        let (spec, _) = asked(&json!({ "minimal": true, "video": true }));
+        assert_eq!(spec.desktop.features, Some(vec![Feature::Video]));
+
+        let (spec, _) = asked(&json!({ "video": false, "dock": true }));
+        assert_eq!(
+            spec.desktop.features,
+            Some(vec![
+                Feature::WideFonts,
+                Feature::Dock,
+                Feature::Accessibility
+            ]),
+            "false takes one away, and a name the tool does not offer changes nothing"
+        );
+    }
+
+    #[test]
     fn test_a_box_can_be_asked_for_with_everything_launch_box_offers() {
         let offered = catalogue()
             .as_array()
@@ -4076,6 +4128,7 @@ mod tests {
             "apps": ["gimp", "vscode"],
             "packages": ["jq"],
             "audio": true,
+            "minimal": false,
             "screens": 2,
             "wayland": true,
             "network": false,
@@ -4102,12 +4155,15 @@ mod tests {
         assert_eq!(spec.desktop.packages, ["jq"]);
         assert_eq!(
             spec.desktop.features,
-            [
-                Feature::Video,
+            Some(vec![
                 Feature::WideFonts,
+                Feature::Video,
+                Feature::Dock,
                 Feature::Accessibility,
+                Feature::X11Apps,
                 Feature::Audio
-            ]
+            ]),
+            "true adds to the Wayland default set, and a default asked for again is not doubled"
         );
         assert_eq!(spec.apps.keys().collect::<Vec<_>>(), ["gimp", "vscode"]);
         assert!(

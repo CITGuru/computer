@@ -47,17 +47,17 @@ This mode works on all runtimes and with all applications. It is also the easies
 
 Native applications publish a tree of widgets through AT-SPI. Each widget has a role, such as `push button` or `text`, and a name. This mode finds widgets by name, so it does not depend on pixels.
 
-Launch the box with accessibility. You cannot add it later.
+A box has accessibility by default. You cannot add it later to a box launched with `--minimal`.
 
 ```bash
-BOX=$(computer new --accessibility)
+BOX=$(computer new)
 computer widget "$BOX" find "Street" --role text
 computer widget "$BOX" fill "Street" "12 Bishop Street"
 computer widget "$BOX" press "OK"
 ```
 
 ```rust
-let computer = Computer::builder().accessibility().launch().await?;
+let computer = Computer::builder().launch().await?;
 let screen = computer.primary();
 
 let street = NodeQuery {

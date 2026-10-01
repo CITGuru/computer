@@ -2,16 +2,16 @@
 
 This guide drives native applications, such as file dialogs, settings panels, and installers, by the names of their widgets. For when to use this mode and how it compares with the others, see [Control modes](../concepts/control-modes.md#accessibility).
 
-## 1. Enable accessibility
+## 1. Accessibility is on by default
 
-Launch the box with accessibility. It starts the AT-SPI bus before the desktop, so applications publish their widgets.
+Every box has accessibility unless it is launched without it. It starts the AT-SPI bus before the desktop, so applications publish their widgets.
 
-| Interface | How |
-| --- | --- |
-| CLI | `computer new --accessibility` |
-| MCP | `launch_box` with `accessibility: true` |
-| REST | `"features": ["accessibility"]` in `spec.desktop` |
-| Rust | `Computer::builder().accessibility()` |
+| Interface | Default | To leave it out |
+| --- | --- | --- |
+| CLI | `computer new` | `--minimal` |
+| MCP | `launch_box` | `accessibility: false` |
+| REST | No `features` in `spec.desktop` | A `features` list without `accessibility` |
+| Rust | `Computer::builder()` | `minimal()` or `without(Feature::Accessibility)` |
 
 You cannot enable it on a running box. An application joins the tree only if the bus was running before the application started. On a box with no accessibility, the widget tools fail with a message that says so.
 
@@ -136,7 +136,7 @@ The response has `nodes` for `tree` and `find`, and `node` for the other operati
 ### Rust
 
 ```rust
-let computer = Computer::builder().accessibility().launch().await?;
+let computer = Computer::builder().launch().await?;
 let screen = computer.primary();
 
 let street = NodeQuery {

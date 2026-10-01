@@ -58,12 +58,9 @@ computer screenshot "$(computer new)" out.png
 | `--url URL` | Open this URL when the desktop starts. |
 | `--app NAME` | Install an application from the catalog, such as `gimp` or `vscode`. Repeat it, or use `a,b`. |
 | `--package PKG` | Install a system package. Repeat it, or use `a,b`. |
-| `--wide-fonts` | Install Noto CJK and color emoji fonts. |
 | `--audio` | Install PulseAudio. |
-| `--video` | Install ffmpeg, for `record`. |
-| `--dock` | Show a tint2 dock. |
-| `--x11-apps` | Install XWayland, so X11 applications run in a `--wayland` box. |
-| `--accessibility` | Read native windows by widget name, for `widget`. |
+| `--base` | The default desktop: Noto CJK and color emoji fonts, ffmpeg for `record`, a tint2 dock, AT-SPI for `widget`, and XWayland in a `--wayland` box. |
+| `--minimal` | The bare desktop, with none of the `--base` features. |
 | `--wayland` | Run sway instead of X11. |
 | `--no-network` | Block outbound network access. |
 | `--memory SIZE` | Memory limit, such as `2g`. |
@@ -74,7 +71,7 @@ computer screenshot "$(computer new)" out.png
 | `--profile NAME` | Keep browser logins, cookies, and history in a volume with this name. The next box with the same name starts with them. Only one box at a time can use a profile. |
 | `--spec FILE` | Read a box specification, in the shape of the `POST /v1/boxes` body. Use `-` for standard input. A flag overrides the file. |
 
-You cannot add `--app`, `--package`, `--accessibility`, `--video`, or `--wayland` to a box after it opens. The first box with a new application, package, or feature builds a new image, which takes a few minutes.
+You cannot change `--app`, `--package`, a feature, or `--wayland` after a box opens. The first box with a new application, package, or feature builds a new image, which takes a few minutes.
 
 ## Runtimes and images
 
@@ -98,7 +95,7 @@ You cannot add `--app`, `--package`, `--accessibility`, `--video`, or `--wayland
 | --- | --- |
 | `screenshot <box> [file.png]` | Capture the screen. |
 | `wait <box> [--settle MS] [--within MS]` | Wait until the screen is unchanged for `--settle`, or stop after `--within`. |
-| `record <box> start [--fps N]` | Start a screen recording. Needs a box opened with `--video`. |
+| `record <box> start [--fps N]` | Start a screen recording. Needs video, which a box has unless it was opened with `--minimal`. |
 | `record <box> stop [file.mp4]` | Stop the recording and copy the file out. |
 | `record <box> status` | Show the recording state. |
 
@@ -168,7 +165,7 @@ The server releases a key that `down` pressed after `--hold` seconds (default 10
 
 ## Native widgets
 
-These commands drive a native window by the names of its widgets. They need a box opened with `--accessibility`. A query matches the label next to a field and the name of the widget.
+These commands drive a native window by the names of its widgets. They need accessibility, which a box has unless it was opened with `--minimal`. A query matches the label next to a field and the name of the widget.
 
 | Command | Effect |
 | --- | --- |

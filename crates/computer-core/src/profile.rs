@@ -122,6 +122,10 @@ impl PortLayout {
 pub trait Profile: Send + Sync {
     fn name(&self) -> &str;
 
+    fn server(&self) -> computer_types::DisplayServer {
+        computer_types::DisplayServer::X11
+    }
+
     fn image(&self) -> ImageSource;
 
     fn ports(&self) -> PortLayout;

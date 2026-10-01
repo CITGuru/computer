@@ -384,6 +384,17 @@ impl Extras {
         Self::with(["at-spi2-core", "libatk-adaptor", "python3-pyatspi"])
     }
 
+    pub fn of(feature: computer_types::Feature) -> Self {
+        match feature {
+            computer_types::Feature::WideFonts => Self::wide_fonts(),
+            computer_types::Feature::Audio => Self::audio(),
+            computer_types::Feature::Video => Self::video(),
+            computer_types::Feature::Dock => Self::dock(),
+            computer_types::Feature::X11Apps => Self::x11_apps(),
+            computer_types::Feature::Accessibility => Self::accessibility(),
+        }
+    }
+
     pub fn everything() -> Self {
         let mut packages = Self::wide_fonts().packages;
         packages.extend(Self::audio().packages);

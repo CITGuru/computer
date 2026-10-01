@@ -132,10 +132,10 @@ Give the bytes of an image file. An empty image is refused.
 
 ## Record the screen
 
-Recording needs a box with the `video` feature, which adds ffmpeg. The recording is an MP4 file in the box, so the frames do not go over the network while it records.
+Recording needs the `video` feature, which adds ffmpeg. A box has it by default. The recording is an MP4 file in the box, so the frames do not go over the network while it records.
 
 ```bash
-BOX=$(computer new --video)
+BOX=$(computer new)
 computer record "$BOX" start --fps 12
 computer record "$BOX" status
 computer record "$BOX" stop screen.mp4

@@ -501,21 +501,20 @@ While a person controls the screen, the program can read selections but cannot c
 
 ## Accessibility operations
 
-Accessibility operations use the semantic tree that native applications publish through AT-SPI. Enable the required image packages when you launch the desktop:
+Accessibility operations use the semantic tree that native applications publish through AT-SPI. The built-in image has it by default:
 
 ```rust
-let computer = Computer::builder()
-    .accessibility()
-    .launch()
-    .await?;
+let computer = Computer::builder().launch().await?;
 let screen = computer.primary();
 ```
 
 CLI:
 
 ```bash
-BOX=$(computer new --accessibility)
+BOX=$(computer new)
 ```
+
+`--minimal` or `Computer::builder().minimal()` leaves it out.
 
 ### Read and find nodes
 
@@ -1083,7 +1082,7 @@ The duration-based Rust helper uses X11 capture. Use the profile-aware CLI recor
 CLI:
 
 ```bash
-BOX=$(computer new --video)
+BOX=$(computer new)
 computer record "$BOX" start --fps 20
 computer record "$BOX" status
 computer record "$BOX" stop screen.mp4
@@ -1196,21 +1195,17 @@ BOX=$(computer new \
     --app gimp,vscode \
     --package jq \
     --package ripgrep \
-    --wide-fonts \
-    --audio \
-    --video \
-    --dock \
-    --accessibility)
+    --audio)
 
-WAYLAND_BOX=$(computer new --wayland --x11-apps)
+MINIMAL_BOX=$(computer new --minimal)
 ```
 
-- `--wide-fonts` adds CJK and emoji fonts.
-- `--audio` adds the sound server.
-- `--video` adds recording support.
-- `--dock` adds the desktop launcher.
-- `--x11-apps` adds Xwayland to a Wayland image.
-- `--accessibility` enables native widget operations.
+A box is one of two desktops:
+
+- `--base`, the default: CJK and emoji fonts, recording support (ffmpeg), the desktop launcher, native widget operations (accessibility), and Xwayland on a Wayland box.
+- `--minimal`: none of them.
+
+`--audio` adds the sound server to either.
 
 Applications, packages, and features are image inputs. They cannot be added to a running box, and the first box with a new combination must build an image.
 
@@ -1226,9 +1221,8 @@ Complete command reference:
 
 ```text
 computer new [--size WIDTHxHEIGHT] [--screens N] [--wayland] [--url URL]
-             [--app NAME]... [--package PACKAGE]...
-             [--wide-fonts] [--audio] [--video] [--dock]
-             [--x11-apps] [--accessibility]
+             [--app NAME]... [--package PACKAGE]... [--audio]
+             [--base | --minimal]
              [--no-network] [--memory SIZE] [--cpus N]
              [--runtime NAME] [--ttl MINUTES] [--idle MINUTES]
              [--spec FILE|-]
@@ -1280,7 +1274,7 @@ A `Spec` describes the desktop, installed applications, and access policy. A `Pl
       "server": "x11",
       "width": 1280,
       "height": 800,
-      "features": ["wide_fonts", "accessibility"]
+      "packages": ["jq"]
     },
     "policy": {
       "network": true
@@ -1314,24 +1308,22 @@ computer app "$BOX" gimp
 
 ### Add fonts and packages
 
-The default image includes Latin fonts. Add wider language support or Debian packages when required:
+The default image has CJK and emoji fonts, ffmpeg, the dock, and accessibility. Add Debian packages or sound when required, or leave the defaults out:
 
 ```rust
-let desktop_with_wide_fonts = Computer::builder()
-    .wide_fonts()
+let desktop_with_packages = Computer::builder()
+    .packages(["vim", "curl"])
+    .audio()
     .launch()
     .await?;
 
-let desktop_with_packages = Computer::builder()
-    .packages(["vim", "curl"])
-    .launch()
-    .await?;
+let minimal_desktop = Computer::builder().minimal().launch().await?;
 ```
 
 CLI:
 
 ```bash
-BOX=$(computer new --wide-fonts --accessibility --video)
+BOX=$(computer new --package vim,curl --audio)
 ```
 
 `Extras::audio()`, `Extras::video()`, `Extras::accessibility()`, and `Extras::everything()` provide common package sets.

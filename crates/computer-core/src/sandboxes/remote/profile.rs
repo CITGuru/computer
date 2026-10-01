@@ -72,6 +72,10 @@ impl Profile for RemoteProfile {
         self.inner.name()
     }
 
+    fn server(&self) -> computer_types::DisplayServer {
+        self.inner.server()
+    }
+
     fn image(&self) -> ImageSource {
         self.inner.image()
     }
