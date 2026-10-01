@@ -206,13 +206,11 @@ impl Devtools {
     }
 
     pub async fn open(&self, url: &str) -> Result<Target> {
-        // `PUT`, because Chromium stopped accepting `GET` on this endpoint.
-        let value = self
-            .request("PUT", &format!("/json/new?{}", escape(url)))
+        let result = self
+            .browser_call("Target.createTarget", json!({ "url": url }))
             .await?;
-
-        Target::from_json(&value)
-            .ok_or_else(|| Error::denied(format!("the browser answered {value}")))
+        let id = required_string(&result, "targetId", "Target.createTarget")?;
+        self.wait_for_target(&id, TIMEOUT).await
     }
 
     pub async fn close(&self, target: &str) -> Result<()> {
@@ -236,7 +234,7 @@ impl Devtools {
         })
     }
 
-    /// `/json/new?url=` answers before the page loads, so this navigates and waits.
+    /// A new target answers before the page loads, so this navigates and waits.
     pub async fn open_page(&self, url: &str, within: Duration) -> Result<Page> {
         let target = self.open("about:blank").await?;
         let mut page = self.attach(&target).await?;
@@ -4171,29 +4169,6 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     }
 }
 
-fn escape(url: &str) -> String {
-    let mut out = String::with_capacity(url.len());
-    for byte in url.bytes() {
-        match byte {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'_'
-            | b'.'
-            | b'~'
-            | b':'
-            | b'/'
-            | b'?'
-            | b'='
-            | b'&'
-            | b'#' => out.push(byte as char),
-            other => out.push_str(&format!("%{other:02X}")),
-        }
-    }
-    out
-}
-
 #[derive(Deserialize)]
 struct IdbRead {
     databases: Vec<Database>,
@@ -5744,12 +5719,6 @@ mod tests {
     fn test_a_chunked_body_still_arriving_is_not_complete() {
         let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n{\"a\"";
         assert!(!parse_http(raw).expect("an answer").complete);
-    }
-
-    #[test]
-    fn test_a_url_is_escaped_before_it_goes_in_a_query() {
-        assert_eq!(escape("https://a.dev/x?y=1"), "https://a.dev/x?y=1");
-        assert_eq!(escape("https://a.dev/a b"), "https://a.dev/a%20b");
     }
 
     #[test]
