@@ -1,5 +1,5 @@
 use super::wire::{self, Kind, Source};
-use super::{API_URL, REGISTRY};
+use super::{API_URL, MOST_PORTS, REGISTRY};
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
@@ -455,14 +455,26 @@ impl Cloud {
         Ok(())
     }
 
-    async fn launched(&self, id: &str, plan: &SandboxPlan) -> Result<Sandbox> {
+    fn reached(&self, id: &str, ports: impl IntoIterator<Item = u16>) -> Sandbox {
+        let mut sandbox =
+            Sandbox::new(id).with_header(AUTHORIZATION.as_str(), format!("Bearer {}", self.key));
+        for port in ports {
+            sandbox.endpoints.insert(
+                port,
+                format!("{}/v1/machines/{id}/connect/{port}", self.base),
+            );
+        }
+        sandbox
+    }
+
+    async fn launched(&self, id: &str, plan: &SandboxPlan, ports: Vec<u16>) -> Result<Sandbox> {
         let start = self
             .request(Method::POST, &format!("/v1/machines/{id}/start"))
             .timeout(START_TIMEOUT);
         self.body(self.send(start).await?).await?;
 
         self.write_labels(id, &plan.metadata).await?;
-        Ok(Sandbox::new(id))
+        Ok(self.reached(id, ports))
     }
 }
 
@@ -545,7 +557,7 @@ impl RemoteApi for Cloud {
             start: Start::AfterEveryStart,
             reach: PortReach::VendorUrl,
             resources: Resources::AtCreate,
-            ports: Some(0),
+            ports: Some(MOST_PORTS as u32),
             arch: vec![Arch::Amd64],
             ..Capabilities::default()
         }
@@ -572,17 +584,18 @@ impl RemoteApi for Cloud {
             .ok()
             .and_then(|sources| sources.get(&plan.image).cloned())
             .unwrap_or_else(|| Source::image(&plan.image));
+        let ports = wire::published(plan)?;
 
         let answer = self
             .json(
                 self.request(Method::POST, "/v1/machines")
                     .header(CONTENT_TYPE, "application/json")
-                    .body(wire::new_machine(plan, &source)?.to_string()),
+                    .body(wire::new_machine(plan, &source, &ports)?.to_string()),
             )
             .await?;
         let id = wire::id_of(&answer)?;
 
-        match self.launched(&id, plan).await {
+        match self.launched(&id, plan, ports).await {
             Ok(sandbox) => Ok(sandbox),
             Err(error) => {
                 let _ = self.kill(&id).await;
@@ -596,7 +609,9 @@ impl RemoteApi for Cloud {
         let Some(machine) = wire::named(&listing, name) else {
             return Ok(None);
         };
-        Ok(Some(Sandbox::new(wire::id_of(machine)?)))
+        Ok(Some(
+            self.reached(&wire::id_of(machine)?, wire::ports_of(machine)),
+        ))
     }
 
     async fn kill(&self, id: &str) -> Result<()> {
@@ -758,11 +773,22 @@ mod tests {
     }
 
     #[test]
-    fn test_a_box_is_reached_through_exec_alone() {
+    fn test_a_port_is_reached_through_connect_with_the_key() {
+        let sandbox = Cloud::new("smk_x")
+            .expect("a client")
+            .reached("mach-1", [6080, 9223]);
+
         assert_eq!(
-            Cloud::new("smk_x").expect("a client").can().ports,
-            Some(0),
-            "smol's connect route forwards the account key into the guest, so no port is published"
+            sandbox.url(9223),
+            Some("https://api.smolmachines.com/v1/machines/mach-1/connect/9223")
+        );
+        assert_eq!(
+            sandbox.headers.get("authorization").map(String::as_str),
+            Some("Bearer smk_x")
+        );
+        assert!(
+            !format!("{sandbox:?}").contains("smk_x"),
+            "the key stays out of logs"
         );
     }
 

@@ -1,4 +1,4 @@
-use super::REGISTRY;
+use super::{MOST_PORTS, REGISTRY};
 use crate::error::{Error, Result};
 use crate::exec::ExecResult;
 use crate::sandboxes::remote::SandboxPlan;
@@ -36,7 +36,7 @@ impl Source {
     }
 }
 
-pub fn new_machine(plan: &SandboxPlan, source: &Source) -> Result<Value> {
+pub fn new_machine(plan: &SandboxPlan, source: &Source, ports: &[u16]) -> Result<Value> {
     let mut env = source.env.clone();
     env.extend(plan.env.clone());
 
@@ -55,6 +55,10 @@ pub fn new_machine(plan: &SandboxPlan, source: &Source) -> Result<Value> {
         },
         "network": { "mode": if plan.network { "open" } else { "blocked" } },
         "env": env,
+        "ports": ports
+            .iter()
+            .map(|port| json!({ "port": port }))
+            .collect::<Vec<_>>(),
         "autoStopSeconds": plan.ttl.as_secs().max(60),
         "ephemeral": true,
     });
@@ -64,6 +68,21 @@ pub fn new_machine(plan: &SandboxPlan, source: &Source) -> Result<Value> {
     }
 
     Ok(body)
+}
+
+pub fn published(plan: &SandboxPlan) -> Result<Vec<u16>> {
+    crate::sandboxes::remote::fit_ports("smol", &plan.publish, MOST_PORTS)
+}
+
+pub fn ports_of(machine: &Value) -> Vec<u16> {
+    machine
+        .get("ports")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|port| port.get("port")?.as_u64())
+        .filter_map(|port| u16::try_from(port).ok())
+        .collect()
 }
 
 fn cpus(cpus: Option<&str>) -> Result<u64> {
@@ -336,12 +355,18 @@ mod tests {
     }
 
     #[test]
-    fn test_a_machine_publishes_no_ports() {
-        let body = new_machine(&plan(), &Source::image("r/x:1")).expect("a body");
+    fn test_a_machine_publishes_as_many_ports_as_smol_takes() {
+        let body = new_machine(
+            &plan(),
+            &Source::image("r/x:1"),
+            &published(&plan()).expect("ports"),
+        )
+        .expect("a body");
 
-        assert!(
-            body.get("ports").is_none(),
-            "a port is reached only with the account key, which smol forwards into the guest"
+        assert_eq!(
+            ports_of(&body),
+            vec![6080, 6081, 9223],
+            "smol takes 4 ports: one screen's view and control, and DevTools"
         );
         assert_eq!(body["source"]["type"], "image");
         assert_eq!(body["ephemeral"], true, "a stopped machine is not kept");
@@ -360,7 +385,7 @@ mod tests {
             workdir: Some("/home/computer".to_string()),
         };
 
-        let body = new_machine(&plan(), &source).expect("a body");
+        let body = new_machine(&plan(), &source, &[]).expect("a body");
 
         assert_eq!(body["source"]["type"], "smolmachine");
         assert_eq!(body["env"]["DISPLAY"], ":1", "a pack drops the image env");
@@ -376,6 +401,7 @@ mod tests {
                 ..plan()
             },
             &Source::image("r/x:1"),
+            &[],
         )
         .expect("a body");
 

@@ -33,7 +33,7 @@ The two properties are independent. For example, Docker gives a container on run
 | `vercel` | Remote | MicroVM | Firecracker. Needs a token, a team, and a project. A source build needs the `vercel` feature. |
 | `daytona` | Remote | Container | Needs an API key. A source build needs the `daytona` feature. |
 | `modal` | Remote | Container | gVisor. Needs a token ID and secret. A source build needs the `modal` feature. |
-| `smol` | Remote | MicroVM | libkrun. Needs an API key. A source build needs the `smol` feature. No viewer or page tools yet. |
+| `smol` | Remote | MicroVM | libkrun. Needs an API key. A source build needs the `smol` feature. The viewer goes through `computerd`. |
 
 To see the runtimes a server has, and what each can do:
 

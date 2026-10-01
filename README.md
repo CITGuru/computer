@@ -1692,7 +1692,7 @@ The included Daytona integration needs only `DAYTONA_API_KEY` and the `daytona` 
 
 The included Modal integration needs `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, and the `modal` feature. Modal has no REST API, so the client speaks Modal's gRPC API with hand-written messages; Modal says that API is not public and can change. The image goes as Dockerfile lines with copied files inline, commands and files go through Modal's command router, and each published port is a public HTTPS tunnel. See [docs/guides/modal.md](docs/guides/modal.md).
 
-The included smol cloud integration needs `SMOL_CLOUD_TOKEN` and the `smol` feature. The server builds the bundled image with Docker once, pushes it to the account's smol registry, and packs it into a `.smolmachine` when the `smolvm` CLI is there. A box publishes no ports, because smol reaches a port only with the account key and forwards that key into the machine; so the viewer and page tools are not available on smol yet. See [docs/guides/smol-cloud.md](docs/guides/smol-cloud.md).
+The included smol cloud integration needs `SMOL_CLOUD_TOKEN` and the `smol` feature. The server builds the bundled image with Docker once, pushes it to the account's smol registry, and packs it into a `.smolmachine` when the `smolvm` CLI is there. smol reaches a port only with the account key, so the viewer goes through `computerd`, and only the first screen has one. See [docs/guides/smol-cloud.md](docs/guides/smol-cloud.md).
 
 ### X11 and Wayland
 

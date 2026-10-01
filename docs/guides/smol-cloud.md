@@ -8,14 +8,16 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 
 | Works | Not yet supported |
 | --- | --- |
-| Screenshots, mouse, keyboard, and waits | The live viewer and takeover URLs |
-| Windows, applications, and native widgets | Page tools and `computer cdp` |
-| Files, commands, and clipboard | Pause and fork |
-| Applications at launch (`--app`) and installed into a running box | Browser profiles (`--profile`) |
+| Screenshots, mouse, keyboard, and waits | Direct viewer and takeover URLs |
+| Windows, applications, and native widgets | More than one screen with a viewer |
+| Page tools and `computer cdp` | Pause and fork |
+| The viewer, through `computerd` | Browser profiles (`--profile`) |
+| Files, commands, and clipboard | |
+| Applications at launch (`--app`) and installed into a running box | |
 | CPUs and memory for each box | |
 | Network policy (`--no-network`) | |
 
-Everything in the first column goes through smol's exec API. A box publishes no ports. smol reaches a port only through `https://api.smolmachines.com/v1/machines/<id>/connect/<port>` with the account's API key, and its proxy forwards that key into the machine, where any program in the box could read it. Its proxy also refuses the WebSocket answer that page tools need. The viewer and page tools come back when smol changes this.
+smol reaches a port only through `https://api.smolmachines.com/v1/machines/<id>/connect/<port>` with the account's API key. So a box gives no viewer URL that a browser can open directly: `computerd` opens the viewer and adds the key, and the key stays on the server. smol publishes at most 4 ports, so a box gets one screen's viewer and DevTools. Other screens work through screenshots and input only.
 
 ## 1. Get an API key
 
