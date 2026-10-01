@@ -29,6 +29,8 @@ boot() {
   computer-screen start 0 || return 1
 
   if [ -n "${COMPUTER_DEVTOOLS_SECRET:-}" ] && command -v computer-devtools-bridge >/dev/null; then
+    pkill -f '^socat TCP-LISTEN:9223,' 2>/dev/null || true
+    for _ in $(seq 1 20); do pgrep -f '^socat TCP-LISTEN:9223,' >/dev/null || break; sleep 0.1; done
     computer-devtools-bridge >/tmp/computer/devtools-bridge.log 2>&1 &
   else
     socat TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222 \
@@ -36,13 +38,26 @@ boot() {
   fi
 }
 
+serially() {
+  command -v flock >/dev/null || { boot; return; }
+
+  mkdir -p /tmp/computer
+  exec 9>/tmp/computer/boot.lock
+  flock 9
+  boot
+  local code=$?
+  flock -u 9
+  exec 9>&-
+  return "$code"
+}
+
 # `--once` for a microVM, which outlives the call that started it.
 if [ "${1:-}" = "--once" ]; then
-  boot || exit 1
+  serially || exit 1
   exit 0
 fi
 
-boot || exit 1
+serially || exit 1
 
 # Exiting when screen 0 dies is what makes a healthy-looking box one with a screen.
 while xdpyinfo -display :1 >/dev/null 2>&1; do

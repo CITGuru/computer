@@ -39,7 +39,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
-        run: cargo build --release --locked --features sqlite,postgres,s3,e2b,vercel,daytona,modal
+        run: cargo build --release --locked --features sqlite,postgres,s3,e2b,vercel,daytona,modal,smol
 
       - name: Pack
         run: |

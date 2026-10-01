@@ -993,7 +993,7 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
                 (Some(browser), OpenIn::Blank) => {
                     let opened = browser.open(url).await?;
                     let mut fresh = browser.attach(&opened).await?;
-                    // `PUT /json/new` does not raise it.
+                    // `Target.createTarget` does not raise it.
                     fresh.bring_to_front().await?;
 
                     let mut tab = tab_out(&opened, true);

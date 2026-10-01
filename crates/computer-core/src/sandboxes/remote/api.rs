@@ -110,6 +110,36 @@ impl Default for SandboxPlan {
     }
 }
 
+pub const LABELS_PATH: &str = "/tmp/computer-labels.json";
+
+pub fn fit_ports(vendor: &str, publish: &[u16], most: usize) -> Result<Vec<u16>> {
+    if publish.len() <= most {
+        return Ok(publish.to_vec());
+    }
+
+    let run = publish
+        .windows(2)
+        .take_while(|pair| pair[1] == pair[0] + 1)
+        .count()
+        + 1;
+    let (screens, rest) = publish.split_at(run);
+
+    let room = most.saturating_sub(rest.len()) / 2 * 2;
+    if room == 0 {
+        return Err(Error::Unsupported {
+            gaps: vec!["more published ports than the vendor takes"],
+        });
+    }
+
+    let kept: Vec<u16> = screens[..room].iter().chain(rest).copied().collect();
+    tracing::warn!(
+        vendor,
+        dropped = ?&screens[room..],
+        "the vendor publishes at most {most} ports, so the screens past these have no viewer"
+    );
+    Ok(kept)
+}
+
 pub(crate) fn build_it_yourself(vendor: &str, image: &str, bundle: &str) -> Error {
     Error::Unavailable {
         provider: vendor.to_string(),

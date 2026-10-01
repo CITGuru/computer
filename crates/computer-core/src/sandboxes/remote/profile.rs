@@ -37,6 +37,10 @@ pub const DEVTOOLS_SECRET_ENV: &str = "COMPUTER_DEVTOOLS_SECRET";
 
 pub const DEVTOOLS_SECRET_HEADER: &str = "x-computer-devtools";
 
+pub const DEVTOOLS_PROTOCOL_HEADER: &str = "sec-websocket-protocol";
+
+pub const DEVTOOLS_PROTOCOL_PREFIX: &str = "computer.";
+
 pub const REKEY_SCRIPT: &str = r#"command -v computer-devtools-bridge >/dev/null 2>&1 || exit 0
 bridge='^[^ ]*python[0-9.]* [^ ]*/computer-devtools-bridge'
 pkill -f "$bridge" || true
@@ -154,11 +158,17 @@ impl Profile for RemoteProfile {
             headers: sandbox
                 .headers
                 .into_iter()
-                .chain(self.devtools_secret.iter().map(|secret| {
-                    (
-                        DEVTOOLS_SECRET_HEADER.to_string(),
-                        secret.expose().to_string(),
-                    )
+                .chain(self.devtools_secret.iter().flat_map(|secret| {
+                    [
+                        (
+                            DEVTOOLS_SECRET_HEADER.to_string(),
+                            secret.expose().to_string(),
+                        ),
+                        (
+                            DEVTOOLS_PROTOCOL_HEADER.to_string(),
+                            format!("{DEVTOOLS_PROTOCOL_PREFIX}{}", secret.expose()),
+                        ),
+                    ]
                 }))
                 .collect(),
         })
@@ -257,6 +267,32 @@ mod tests {
                 .iter()
                 .any(|arg| arg.contains(env[DEVTOOLS_SECRET_ENV].as_str())),
             "the secret stays out of the command line that ps shows"
+        );
+    }
+
+    #[test]
+    fn test_the_secret_also_rides_as_a_websocket_subprotocol() {
+        let (remote, profile) = profile();
+        remote.set(
+            Sandbox::new("i7q3").published_as([9223], |port, id| format!("{port}-{id}.x.dev")),
+        );
+
+        let headers = profile
+            .devtools(9223)
+            .expect("the bridge is published")
+            .headers;
+        let secret = headers
+            .iter()
+            .find(|(name, _)| name == DEVTOOLS_SECRET_HEADER)
+            .map(|(_, value)| value.clone())
+            .expect("the secret header");
+
+        assert!(
+            headers.contains(&(
+                DEVTOOLS_PROTOCOL_HEADER.to_string(),
+                format!("{DEVTOOLS_PROTOCOL_PREFIX}{secret}")
+            )),
+            "smol's proxy drops every header on an upgrade except the websocket ones"
         );
     }
 

@@ -74,6 +74,7 @@ let computer = Computer::builder()
 | `vercel` | Vercel Sandbox |
 | `daytona` | Daytona sandboxes |
 | `modal` | Modal sandboxes |
+| `smol` | smol cloud machines |
 | `microsandbox` | microVM boxes |
 | `sqlite`, `postgres`, `s3` | Storage backends for the server |
 

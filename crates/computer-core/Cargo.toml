@@ -16,6 +16,7 @@ e2b = ["dep:reqwest", "dep:tar", "dep:flate2", "dep:tokio-rustls", "dep:webpki-r
 vercel = ["dep:reqwest", "dep:tar", "dep:flate2", "dep:tokio-rustls", "dep:webpki-roots"]
 daytona = ["dep:reqwest", "dep:tokio-rustls", "dep:webpki-roots"]
 modal = ["dep:tonic", "dep:tonic-prost", "dep:prost", "dep:tokio-rustls", "dep:webpki-roots"]
+smol = ["dep:reqwest", "dep:tokio-rustls", "dep:webpki-roots"]
 
 [dependencies]
 async-trait = "0.1"

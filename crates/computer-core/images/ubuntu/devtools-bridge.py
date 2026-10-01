@@ -9,6 +9,8 @@ import sys
 LISTEN = ("0.0.0.0", 9223)
 BROWSER = ("127.0.0.1", 9222)
 SECRET_HEADER = b"x-computer-devtools"
+PROTOCOL_HEADER = b"sec-websocket-protocol"
+PROTOCOL_PREFIX = b"computer."
 LARGEST_HEAD = 64 * 1024
 
 
@@ -45,6 +47,15 @@ def rewritten(head: bytes, secret: bytes):
         if name == SECRET_HEADER:
             carried = value
             continue
+        if name == PROTOCOL_HEADER:
+            offered = [one.strip() for one in value.split(b",")]
+            ours = [one for one in offered if one.startswith(PROTOCOL_PREFIX)]
+            if ours:
+                carried = carried or ours[0][len(PROTOCOL_PREFIX):]
+            others = [one for one in offered if not one.startswith(PROTOCOL_PREFIX)]
+            if not others:
+                continue
+            line = b"Sec-WebSocket-Protocol: " + b", ".join(others)
         if name == b"host" and not chromium_accepts(value):
             line = b"Host: %s:%d" % (BROWSER[0].encode(), BROWSER[1])
         if name == b"content-length":

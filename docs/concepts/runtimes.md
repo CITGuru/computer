@@ -33,6 +33,7 @@ The two properties are independent. For example, Docker gives a container on run
 | `vercel` | Remote | MicroVM | Firecracker. Needs a token, a team, and a project. A source build needs the `vercel` feature. |
 | `daytona` | Remote | Container | Needs an API key. A source build needs the `daytona` feature. |
 | `modal` | Remote | Container | gVisor. Needs a token ID and secret. A source build needs the `modal` feature. |
+| `smol` | Remote | MicroVM | libkrun. Needs an API key. A source build needs the `smol` feature. The viewer goes through `computerd`. |
 
 To see the runtimes a server has, and what each can do:
 
@@ -65,7 +66,7 @@ From the Rust library with no server, `runtime()` selects a container engine:
 let computer = Computer::builder().runtime("podman").launch().await?;
 ```
 
-For a microVM or a cloud sandbox, give the builder a `machine()`. See `examples/microvm.rs`, `examples/e2b.rs`, `examples/vercel.rs`, `examples/daytona.rs`, and `examples/modal.rs`.
+For a microVM or a cloud sandbox, give the builder a `machine()`. See `examples/microvm.rs`, `examples/e2b.rs`, `examples/vercel.rs`, `examples/daytona.rs`, `examples/modal.rs`, and `examples/smol.rs`.
 
 ## Host runtimes
 
@@ -175,6 +176,7 @@ MCP tools cannot add a runtime, because a key given to an agent goes through its
 | vercel | No | No | No |
 | daytona | No | No | No |
 | modal | No | No | No |
+| smol | No | No | No |
 
 After a stop, a start gives a new desktop with new ports and a new viewer URL.
 
@@ -200,6 +202,7 @@ Each runtime gets its image in a different way:
 - **Vercel:** the server builds the bundled image, or an image directory, in a builder sandbox at Vercel and pushes it to Vercel Container Registry. A later box finds the tag there and starts from it.
 - **Daytona:** the server sends the bundled image, or an image directory, to Daytona as a Dockerfile with the copied files written inline. Daytona keeps each build by the Dockerfile's content.
 - **Modal:** the same Dockerfile, sent as lines. Modal keeps each image by its recipe.
+- **smol cloud:** the server builds the bundled image with Docker on its host, pushes it to the account's smol registry, and packs it into a `.smolmachine` when the `smolvm` CLI is there.
 
 Each set of applications and packages is a different image. The first box with a new set waits for a build. To build before a box needs it:
 

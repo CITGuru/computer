@@ -32,7 +32,7 @@ See [Runtimes](../concepts/runtimes.md).
 | --- | --- | --- |
 | `COMPUTER_SERVER_CONFIG` | None | The path to the [runtimes file](#runtimes-file). Read at start. |
 | `COMPUTER_SERVER_RUNTIMES` | All that answer | Host runtimes to offer, separated by commas: `docker`, `podman`, `nerdctl`, `smolvm`, `microsandbox`. |
-| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, separated by commas, such as `e2b`, `vercel`, `daytona`, or `modal`. |
+| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, separated by commas, such as `e2b`, `vercel`, `daytona`, `modal`, or `smol`. |
 | `COMPUTER_SERVER_SECRET_KEY` | None | 32 bytes, base64 or hex. Encrypts vendor keys that the server stores. |
 | `COMPUTER_SERVER_SECRET_FILE` | None | A file that holds the secret key. The server makes it, with mode `0600`, if it does not exist. |
 
@@ -95,6 +95,16 @@ The Modal client reads these, in the library and in the server.
 | `MODAL_ENVIRONMENT` | The workspace default | The Modal environment. |
 | `MODAL_APP` | `computer` | The Modal app that holds the images and sandboxes. |
 | `MODAL_SERVER_URL` | `https://api.modal.com:443` | The API address. |
+
+## smol cloud
+
+The smol cloud client reads these, in the library and in the server.
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `SMOL_CLOUD_TOKEN` | None | The API key. Necessary. |
+| `SMOL_CLOUD_URL` | `https://api.smolmachines.com` | The API address. |
+| `SMOL_CLOUD_PACK` | On | `0` or `false` starts boxes from the image, with no `.smolmachine` pack. |
 
 ## Container engines
 
@@ -166,6 +176,7 @@ Fields for a remote runtime added with `computer runtime add --field name=value`
 | `token_id` | Modal: the token ID. The secret goes in as `api_key`. |
 | `environment` | Modal: the environment. |
 | `app` | Modal: the app. |
+| `pack` | smol cloud: `false` starts boxes from the image, with no `.smolmachine` pack. |
 
 Secrets, such as `api_key`, go in with `--api-key` or `--api-key-env`, or under `secrets` in the API. The server never returns them.
 
@@ -180,12 +191,13 @@ For the root `computer` package. See [Install](../getting-started/install.md#bui
 | `vercel` | Off | The Vercel Sandbox client. |
 | `daytona` | Off | The Daytona client. |
 | `modal` | Off | The Modal client. |
+| `smol` | Off | The smol cloud client. |
 | `microsandbox` | Off | The microsandbox Rust library. The server uses the `msb` CLI with no feature. |
 | `sqlite` | Off | SQLite storage for the server. |
 | `postgres` | Off | PostgreSQL storage for the server. |
 | `s3` | Off | S3 storage for the server. |
 
-Release builds turn on `e2b`, `vercel`, `daytona`, `modal`, `sqlite`, `postgres`, and `s3`.
+Release builds turn on `e2b`, `vercel`, `daytona`, `modal`, `smol`, `sqlite`, `postgres`, and `s3`.
 
 ## Box settings
 

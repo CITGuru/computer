@@ -4,5 +4,6 @@ pub mod e2b;
 pub mod microsandbox;
 pub mod modal;
 pub mod remote;
+pub mod smol;
 pub mod smolvm;
 pub mod vercel;

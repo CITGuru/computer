@@ -16,4 +16,4 @@ pub const MOST_TAG_KEY: usize = 128;
 
 pub const MOST_TAG_VALUE: usize = 256;
 
-pub const LABELS_PATH: &str = "/tmp/computer-labels.json";
+pub use crate::sandboxes::remote::LABELS_PATH;

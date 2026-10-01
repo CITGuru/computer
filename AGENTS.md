@@ -29,6 +29,8 @@ cargo clippy -p computer-core --features daytona --all-targets -- -D warnings
 cargo test -p computer-core --features daytona daytona
 cargo clippy -p computer-core --features modal --all-targets -- -D warnings
 cargo test -p computer-core --features modal modal
+cargo clippy -p computer-core --features smol --all-targets -- -D warnings
+cargo test -p computer-core --features smol smol
 ```
 
 The scripts this crate evaluates inside a page are Rust strings that nothing
