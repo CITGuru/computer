@@ -101,6 +101,30 @@ pub async fn from_records(state: &AppState) -> usize {
     taken
 }
 
+pub async fn one(state: &AppState, id: &str) {
+    let Ok(Some(record)) = state.store.get_box(id).await else {
+        return;
+    };
+    let Some(runtime) = state.runtimes.get(&record.runtime) else {
+        return;
+    };
+    if !runtime.ready() {
+        return;
+    }
+
+    if let Err(why) = take(
+        state,
+        &runtime,
+        &record.id,
+        &BoxLabel::of(&record),
+        Some(&record),
+    )
+    .await
+    {
+        state.out_of_reach(&record.id, why);
+    }
+}
+
 pub async fn from_labels(state: &AppState) -> usize {
     let mut taken = 0;
 

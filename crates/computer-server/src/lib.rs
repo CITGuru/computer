@@ -7,6 +7,7 @@ pub mod idempotency;
 pub mod images;
 pub mod labels;
 pub mod mcp;
+pub mod oidc;
 pub mod presses;
 pub mod prune;
 pub mod reap;
@@ -256,6 +257,15 @@ impl AppState {
             .await
             .map(|entries| !entries.is_empty())
             .unwrap_or_default()
+    }
+
+    pub async fn entry(&self, id: &str) -> error::ApiResult<Arc<registry::Entry>> {
+        if let Ok(entry) = self.registry.get(id).await {
+            return Ok(entry);
+        }
+
+        recover::one(self, id).await;
+        self.registry.get(id).await
     }
 
     pub fn out_of_reach(&self, id: &str, why: String) {

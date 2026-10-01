@@ -1,0 +1,9 @@
+target
+.git
+apps
+demos
+media
+docs
+*.png
+.env*
+.vercel

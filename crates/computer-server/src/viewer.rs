@@ -101,7 +101,7 @@ pub async fn ticket(
     State(state): State<std::sync::Arc<AppState>>,
     ApiPath((id, screen)): ApiPath<(String, u32)>,
 ) -> ApiResult<Json<ViewerTicket>> {
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     entry.desktop(screen).await?;
 
     let (ticket, until) = state.tickets.mint(&id, screen)?;
@@ -140,7 +140,7 @@ pub async fn socket(
         ));
     }
 
-    let entry = state.registry.get(&id).await?;
+    let entry = state.entry(&id).await?;
     let target = entry.desktop(screen).await?;
     let held = target
         .as_screen()
