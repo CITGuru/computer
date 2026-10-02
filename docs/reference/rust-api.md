@@ -1,9 +1,9 @@
 # Rust API reference
 
-The `computer` crate drives a box from Rust with no server. This page gives the main types and methods. For every item, build the API docs:
+The `holm` crate drives a box from Rust with no server. This page gives the main types and methods. For every item, build the API docs:
 
 ```bash
-cargo doc -p computer --no-deps --open
+cargo doc -p holm --no-deps --open
 ```
 
 To add the dependency, see the [Rust quick start](../getting-started/quickstart-rust.md).
@@ -185,7 +185,7 @@ See [Human control](../concepts/human-control.md).
 
 ## Errors
 
-All methods return `computer::Result<T>`. The variants of `computer::Error`:
+All methods return `holm::Result<T>`. The variants of `holm::Error`:
 
 | Variant | Meaning |
 | --- | --- |

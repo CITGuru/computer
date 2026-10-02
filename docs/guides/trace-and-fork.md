@@ -1,6 +1,6 @@
 # Trace and fork
 
-`computerd` records what is done to each box in a trace. You can read the trace to see what happened, and fork a box to make a new box that does the same steps again.
+`holmd` records what is done to each box in a trace. You can read the trace to see what happened, and fork a box to make a new box that does the same steps again.
 
 Traces and forks need a server. The Rust library with no server has no trace. See [The server](../concepts/server.md).
 
@@ -35,7 +35,7 @@ Each entry has a sequence number (`seq`), a time (`at_ms`), an actor, an event, 
 ### What is not recorded
 
 - **A person's input.** It goes to the box over VNC, so the server does not see it. The trace records only the period when the person had the screen. The frames in that period show what changed.
-- **Page actions outside a batch.** `computer browser` commands and the MCP page tools (`click_element`, `fill_field`, `dropdown`, and others) are not in the trace. Page actions inside an action batch are. See [Make a run that you can fork](#make-a-run-that-you-can-fork).
+- **Page actions outside a batch.** `holm browser` commands and the MCP page tools (`click_element`, `fill_field`, `dropdown`, and others) are not in the trace. Page actions inside an action batch are. See [Make a run that you can fork](#make-a-run-that-you-can-fork).
 - **Reads.** `read`, `snapshot`, `find`, and `evaluate` through their own endpoints are not recorded.
 
 The actor of a `frame` entry is the one that had the screen when the frame was captured, not the one that changed it. A frame is recorded only when the screen changed, so a still screen adds no entries. No `frame` entry between `takeover_started` and `takeover_ended` means that nothing visible changed during the takeover.
@@ -43,8 +43,8 @@ The actor of a `frame` entry is the one that had the screen when the frame was c
 ## Read the trace
 
 ```bash
-computer trace "$BOX"
-computer trace "$BOX" --after 40
+holm trace "$BOX"
+holm trace "$BOX" --after 40
 ```
 
 ```text
@@ -89,7 +89,7 @@ cat > steps.json <<'JSON'
   { "type": "on_page", "what": { "op": "wait_for", "query": "Details" } }
 ]
 JSON
-computer batch "$BOX" steps.json
+holm batch "$BOX" steps.json
 ```
 
 MCP: the `batch` tool, with steps such as `fill_field` and `click_element`.
@@ -99,8 +99,8 @@ Each step of a batch becomes its own `acted` entry.
 ## Fork a box
 
 ```bash
-NEW=$(computer fork "$BOX")
-NEW=$(computer fork "$BOX" --up-to 40)
+NEW=$(holm fork "$BOX")
+NEW=$(holm fork "$BOX" --up-to 40)
 ```
 
 REST:
@@ -185,13 +185,13 @@ After a restart with the memory store, the server takes its boxes back, but each
 Use a durable store to keep traces:
 
 ```bash
-COMPUTER_STORAGE_BACKEND=local COMPUTER_STATE_DIR=/var/lib/computer computerd
+HOLM_STORAGE_BACKEND=local HOLM_STATE_DIR=/var/lib/holm holmd
 ```
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `COMPUTER_KEEP_FRAMES_SECS` | 2 hours | How long to keep frames. |
-| `COMPUTER_KEEP_ENTRIES_SECS` | 7 days | How long to keep trace entries. |
-| `COMPUTER_PRUNE_SECS` | 1 hour | How often to remove old data. |
+| `HOLM_KEEP_FRAMES_SECS` | 2 hours | How long to keep frames. |
+| `HOLM_KEEP_ENTRIES_SECS` | 7 days | How long to keep trace entries. |
+| `HOLM_PRUNE_SECS` | 1 hour | How often to remove old data. |
 
 A fork needs the frames only for comparison, not to replay, so old frames can go before the entries. See [Storage](../concepts/server.md#storage).

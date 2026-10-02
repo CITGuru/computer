@@ -1,6 +1,5 @@
-# Computer
-
-`computer` provides isolated desktop boxes that agents can use to complete and drive real tasks. Each computer runs a Linux desktop inside a container or microVM, where an agent can open web pages, drive native apps, take screenshots, move the pointer, type text, run commands, and transfer files. You can also watch the agent work or take control through a browser when it needs help.
+# holm
+`holm` provides isolated desktop boxes that agents can use to complete and drive real tasks. Each box runs a Linux desktop inside a container or microVM, where an agent can open web pages, drive native apps, take screenshots, move the pointer, type text, run commands, and transfer files. You can also watch the agent work or take control through a browser when it needs help.
 
 ![Nine frames of a desktop being driven from Rust: a page opening, a URL typed, text selected by a drag, a context menu, a paste, and a second screen](./media/demo.gif)
 
@@ -25,13 +24,13 @@ For the commands, take a build rather than compiling one:
 curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
 ```
 
-macOS and Linux, on x86-64 and arm64. You get two: `computer`, which drives a box from a shell and serves MCP to an agent, and `computerd`, the server that keeps running. `COMPUTER_INSTALL_DIR` moves them and `COMPUTER_VERSION` pins a tag.
+macOS and Linux, on x86-64 and arm64. You get two: `holm`, which drives a box from a shell and serves MCP to an agent, and `holmd`, the server that keeps running. `HOLM_INSTALL_DIR` moves them and `HOLM_VERSION` pins a tag.
 
 To drive a desktop from your own program, take the API:
 
 ```toml
 [dependencies]
-computer = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/CITGuru/computer", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -46,10 +45,10 @@ cargo run --example quickstart
 The basic API is:
 
 ```rust
-use computer::{Button, Computer, Point};
+use holm::{Button, Computer, Point};
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
 let computer = Computer::launch().await?;
 
 let viewer_url = computer.viewer_url().unwrap_or_default();
@@ -109,10 +108,10 @@ Common key names work as expected. For example, the crate converts `enter` to `R
 From the command line the same gesture has a shorter spelling, and the point is optional:
 
 ```bash
-computer mouse <box> scroll down            # three notches, at the middle of the screen
-computer mouse <box> scroll right 6
-computer mouse <box> scroll 640 400 up 2    # at a point
-computer mouse <box> scroll 640 400 -2 -2   # both axes at once
+holm mouse <box> scroll down            # three notches, at the middle of the screen
+holm mouse <box> scroll right 6
+holm mouse <box> scroll 640 400 up 2    # at a point
+holm mouse <box> scroll 640 400 -2 -2   # both axes at once
 ```
 
 ### Important coordinate rules
@@ -164,7 +163,7 @@ Every command is bounded. `exec` gives up after two minutes, as does each call t
 Every pointer action jumps unless told otherwise. `Motion::Smooth` eases it along a line; `Motion::Human` eases it along a curve a person might draw, over 100 to 700 ms by distance, bent to one side by up to 36 px, with the side and the size drawn from a seed so the same seed draws the same path:
 
 ```rust
-use computer::{Motion, motion::path};
+use holm::{Motion, motion::path};
 
 let steps = path(from, to, Motion::Human, 42);   // every step and its pause
 computer.move_along(&steps).await?;
@@ -283,14 +282,14 @@ This API wraps CDP browser contexts, not Chrome's visual tab groups. Visual tab 
 
 ### Drive the browser with another library
 
-Anything that speaks CDP can drive the box's browser: agent-browser, Playwright, browser-use, Puppeteer. `computer cdp` prints an address that goes through the server, so it works against a server on another machine, and the DevTools port itself never leaves loopback:
+Anything that speaks CDP can drive the box's browser: agent-browser, Playwright, browser-use, Puppeteer. `holm cdp` prints an address that goes through the server, so it works against a server on another machine, and the DevTools port itself never leaves loopback:
 
 ```bash
-agent-browser --cdp "$(computer cdp <box> --ws)" snapshot -i
+agent-browser --cdp "$(holm cdp <box> --ws)" snapshot -i
 ```
 
 ```js
-const browser = await chromium.connectOverCDP(process.env.CDP);    // CDP=$(computer cdp <box>)
+const browser = await chromium.connectOverCDP(process.env.CDP);    // CDP=$(holm cdp <box>)
 ```
 
 ```python
@@ -299,7 +298,7 @@ session = BrowserSession(cdp_url=os.environ["CDP"])
 
 The address carries a short-lived token in its path, which is all that admits a client: CDP has no authentication of its own, and these libraries send no bearer. Minting one takes the server's bearer. It lasts an hour, or `--ttl MINUTES`, and dies with the box. Treat it as you would the box's cookies, since whoever holds it can read them.
 
-- `computer cdp <box>` is an `http://` address for a library that reads `/json/version` under it: Playwright, browser-use. Every socket the browser names comes back pointed through the server.
+- `holm cdp <box>` is an `http://` address for a library that reads `/json/version` under it: Playwright, browser-use. Every socket the browser names comes back pointed through the server.
 - `--ws` is the browser's socket. agent-browser needs this form: given an `http://` address it keeps the host and port and drops the path.
 - `--direct` is the box's own port, `http://127.0.0.1:<port>`. Nothing guards it and only this machine reaches it.
 
@@ -345,10 +344,10 @@ The action name belongs to the toolkit, not to us: GTK spells it `click` where Q
 From the command line:
 
 ```bash
-computer new --accessibility
-computer widget <box> find "Street" --role text
-computer widget <box> fill "Street" "12 Bishop Street"
-computer widget <box> press "OK"
+holm new --accessibility
+holm widget <box> find "Street" --role text
+holm widget <box> fill "Street" "12 Bishop Street"
+holm widget <box> press "OK"
 ```
 
 ## Configure a desktop
@@ -375,13 +374,13 @@ let computer = Computer::builder()
 From the command line the same settings are flags on `new`:
 
 ```bash
-computer new --size 1920x1080 --app gimp --package jq --video --no-network --memory 2g --ttl 60
+holm new --size 1920x1080 --app gimp --package jq --video --no-network --memory 2g --ttl 60
 ```
 
 What has no flag goes in a file shaped like the body of `POST /v1/boxes`, and a flag goes over it:
 
 ```bash
-computer new --spec box.json --size 1280x720
+holm new --spec box.json --size 1280x720
 ```
 
 ### Change the wallpaper
@@ -499,15 +498,15 @@ A profile also supplies `screen_env()` — the variables one screen's commands r
 A local directory can supply the Docker build context:
 
 ```rust
-Computer::builder().image_dir("crates/computer-core/images/ubuntu")
+Computer::builder().image_dir("crates/holm-core/images/ubuntu")
 ```
 
-`examples/custom_image.rs` builds one and drives a box in it, and `examples/images/acme/` is the whole Dockerfile: an image that keeps the X11 contract adds to the base rather than reimplementing it, which is why that file is a dozen lines. `crates/computer-core/images/ubuntu/` is the other way round — a contract built from a bare distribution, which is what a genuinely different base needs.
+`examples/custom_image.rs` builds one and drives a box in it, and `examples/images/acme/` is the whole Dockerfile: an image that keeps the X11 contract adds to the base rather than reimplementing it, which is why that file is a dozen lines. `crates/holm-core/images/ubuntu/` is the other way round — a contract built from a bare distribution, which is what a genuinely different base needs.
 
-`crates/computer-core/images/tiny/` is a lightweight desktop image you can take for a run:
+`crates/holm-core/images/tiny/` is a lightweight desktop image you can take for a run:
 
 ```rust
-Computer::builder().image_dir("crates/computer-core/images/tiny")
+Computer::builder().image_dir("crates/holm-core/images/tiny")
 ```
 
 The directory can be anywhere and must contain a `Dockerfile` that implements the selected profile. Its tag follows the context contents, extra packages and host architecture, so an edit builds a new image instead of reusing stale bytes. Extra packages are passed as the `EXTRA_PACKAGES` build argument.
@@ -693,8 +692,8 @@ A window is looked up when the capture is taken, not when it was listed — a wi
 `scaled` is a percentage of full size. It is what stops an agent paying for a megabyte on every step: a 1280×800 desktop halves to about two thirds of the bytes with the text still readable, and quarters to a third of them. On X11 the reduction averages pixels rather than interpolating, because blurring flat colours into gradients makes a *larger* PNG than the full-size picture it was meant to save.
 
 ```bash
-computer screenshot <box> out.png --window 42 --scale 50
-computer screenshot <box> out.png --at 100,80 --size 400x300
+holm screenshot <box> out.png --window 42 --scale 50
+holm screenshot <box> out.png --at 100,80 --size 400x300
 ```
 
 ## Hold a modifier, and wait for the drawing to stop
@@ -715,8 +714,8 @@ screen.wait_until_still(Duration::from_millis(400), Duration::from_secs(10)).awa
 The watch runs inside the box, so it costs one round trip however long it waits. A screen with something animating on it never settles and reaches the deadline instead, which is why one is asked for.
 
 ```bash
-computer mouse <box> click 640 400 left --held shift,ctrl
-computer wait <box> --settle 400 --within 10000
+holm mouse <box> click 640 400 left --held shift,ctrl
+holm wait <box> --settle 400 --within 10000
 ```
 
 Modifiers are held on both. X11 chains the press, the click and the release in one `xdotool` run; on Wayland the pointer that stays holds the keys through the gesture and lets them go after it, also when the gesture is refused.
@@ -782,16 +781,16 @@ The image enforces the same rule. While a person has the screen, `xdotool` refus
 
 ### Show the screen inside Claude or ChatGPT
 
-`computerd` serves MCP over Streamable HTTP at `/mcp` beside its REST routes. A host that renders [MCP Apps](https://github.com/modelcontextprotocol/ext-apps), such as Claude, ChatGPT, VS Code or Goose, shows the person the live screen beside the results of `launch_box`, `open_screen` and `hand_over`, with buttons to take the screen over, hand it back, and record it. The page reaches the screen through one WebSocket back to `computerd`, so a box stays on loopback and a browser never needs its ports.
+`holmd` serves MCP over Streamable HTTP at `/mcp` beside its REST routes. A host that renders [MCP Apps](https://github.com/modelcontextprotocol/ext-apps), such as Claude, ChatGPT, VS Code or Goose, shows the person the live screen beside the results of `launch_box`, `open_screen` and `hand_over`, with buttons to take the screen over, hand it back, and record it. The page reaches the screen through one WebSocket back to `holmd`, so a box stays on loopback and a browser never needs its ports.
 
 ```bash
-COMPUTER_SERVER_ADDR=0.0.0.0:8080 \
-COMPUTER_SERVER_TOKEN=... \
-COMPUTER_PUBLIC_URL=https://boxes.example.com \
-computerd
+HOLM_SERVER_ADDR=0.0.0.0:8080 \
+HOLM_SERVER_TOKEN=... \
+HOLM_PUBLIC_URL=https://boxes.example.com \
+holmd
 ```
 
-Put a proxy that terminates TLS in front, because the hosts serve the page from an HTTPS origin and a plain `ws://` socket is refused as mixed content. `COMPUTER_PUBLIC_URL` is the origin the page connects back to; without it `computerd` reads `X-Forwarded-Proto` and `X-Forwarded-Host`, and failing those the `Host` of the request. The page is a single file built by `crates/computer-mcp/ui/build.sh` and committed, so the crate compiles without node.
+Put a proxy that terminates TLS in front, because the hosts serve the page from an HTTPS origin and a plain `ws://` socket is refused as mixed content. `HOLM_PUBLIC_URL` is the origin the page connects back to; without it `holmd` reads `X-Forwarded-Proto` and `X-Forwarded-Host`, and failing those the `Host` of the request. The page is a single file built by `crates/holm-mcp/ui/build.sh` and committed, so the crate compiles without node.
 
 Each screen tool answers with `structuredContent` the page reads and, under `_meta`, a socket URL carrying a ticket that opens that one screen for fifteen minutes. Hosts keep `_meta` from the model, so a ticket never lands in a transcript.
 
@@ -804,8 +803,8 @@ Install microsandbox. No crate feature is needed: the machine drives the `msb` c
 Hand the image over once, then launch:
 
 ```rust
-use computer::microvm::import_image;
-use computer::sandboxes::microsandbox::msb;
+use holm::microvm::import_image;
+use holm::sandboxes::microsandbox::msb;
 
 import_image(&SystemDocker::default(), &msb::Msb::found(), &bundle::tag()).await?;
 
@@ -840,17 +839,17 @@ The included integration lives in `sandboxes::microsandbox`, targets `microsandb
 A container and a microVM both put the desktop on this host. E2B does not, so a service on a small machine can hand out desktops with no container runtime and no `/dev/kvm` of its own. The boundary is still a kernel the box does not share.
 
 ```toml
-computer = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
+holm = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
 ```
 
 ```bash
 export E2B_API_KEY=...
 ```
 
-E2B runs templates, not container images, and builds them itself. Its builder is a Docker subset, so `crates/computer-core/images/desktop/Dockerfile` does not go over unchanged — it rejects `LABEL`, ignores `CMD`, keeps the quotes on an `ARG X=""` default, and needs the image writable by uid 1000. `crates/computer-core/images/context.py` writes a context with those things handled, from a rule set named per vendor:
+E2B runs templates, not container images, and builds them itself. Its builder is a Docker subset, so `crates/holm-core/images/desktop/Dockerfile` does not go over unchanged — it rejects `LABEL`, ignores `CMD`, keeps the quotes on an `ARG X=""` default, and needs the image writable by uid 1000. `crates/holm-core/images/context.py` writes a context with those things handled, from a rule set named per vendor:
 
 ```bash
-python3 crates/computer-core/images/context.py crates/computer-core/images/desktop /tmp/e2b-ctx --for e2b
+python3 crates/holm-core/images/context.py crates/holm-core/images/desktop /tmp/e2b-ctx --for e2b
 
 e2b template create computer-desktop -p /tmp/e2b-ctx -d Dockerfile \
   -c "/usr/local/bin/computer-desktop" --ready-cmd "true" \
@@ -860,7 +859,7 @@ e2b template create computer-desktop -p /tmp/e2b-ctx -d Dockerfile \
 A template with apps in it takes their values on the command line, since E2B has no `--build-arg`: the script writes them into files the build reads.
 
 ```bash
-python3 crates/computer-core/images/context.py crates/computer-core/images/desktop /tmp/e2b-ctx --for e2b \
+python3 crates/holm-core/images/context.py crates/holm-core/images/desktop /tmp/e2b-ctx --for e2b \
   --packages "gimp mousepad" \
   --apps "$(printf 'text-editor\tMousepad\tmousepad')"
 ```
@@ -868,7 +867,7 @@ python3 crates/computer-core/images/context.py crates/computer-core/images/deskt
 Then launch:
 
 ```rust
-use computer::sandboxes::e2b::{self, cloud::Cloud};
+use holm::sandboxes::e2b::{self, cloud::Cloud};
 
 let (machine, profile) = e2b::pair(Arc::new(Cloud::from_env()?), Arc::new(X11Profile));
 
@@ -911,7 +910,7 @@ DevTools does not travel. An endpoint out here would be `wss` on a public host a
 E2B is one vendor. Modal, Daytona and the rest have the same shape: create a sandbox, run a command in it, move a file, kill it, and publish its ports at an address of the vendor's own. `sandboxes::remote` is that shape as a trait, so a new vendor is eight calls and no crate feature:
 
 ```rust
-use computer::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
+use holm::sandboxes::remote::{self, RemoteApi, Sandbox, SandboxPlan};
 
 #[async_trait]
 impl RemoteApi for Daytona {
@@ -944,7 +943,7 @@ Ports are the part to get right. These vendors do not forward a port to a host p
 cargo run --example custom_sandbox
 ```
 
-That example is a whole vendor in one file, backed by `docker` on this host so every call can be watched working before you write the same one against an API you cannot see. `computer::testing::ScriptedRemote` tests an adapter with no account and no network.
+That example is a whole vendor in one file, backed by `docker` on this host so every call can be watched working before you write the same one against an API you cannot see. `holm::testing::ScriptedRemote` tests an adapter with no account and no network.
 
 Modal is the awkward one worth naming: its sandbox control plane is gRPC behind a Python API, so the calls go to a small Modal web endpoint of your own that creates the sandbox and returns its ID and tunnel URLs. The `RemoteApi` above it is then ordinary HTTP.
 
@@ -955,14 +954,14 @@ Modal is the awkward one worth naming: its sandbox control plane is gRPC behind 
 A desktop given a deadline records it on itself as a label, so a sweeper can find one whose program stopped before it could clean up:
 
 ```rust
-let removed = computer::sweep_expired(&DockerMachine::default(), SystemTime::now()).await?;
+let removed = holm::sweep_expired(&DockerMachine::default(), SystemTime::now()).await?;
 ```
 
 ```bash
-computer sweep
+holm sweep
 ```
 
-The `computer` command lives in [`crates/computer-cli`](crates/computer-cli).
+The `holm` command lives in [`crates/holm-cli`](crates/holm-cli).
 
 `expires_when_idle(duration)` is the other half. It removes a desktop that nothing has asked anything of for that long, and every command, screenshot, and file copy through the handle counts as activity. Use `touch()` when work reaches the box some other way.
 
@@ -971,7 +970,7 @@ The `computer` command lives in [`crates/computer-cli`](crates/computer-cli).
 `DesktopSupport` states what a box provides. `audit` tests each claim against the running box and reports the ones that do not work:
 
 ```rust
-let audit = computer::audit(&computer).await;
+let audit = holm::audit(&computer).await;
 println!("{audit}");        // 6 met; max_screens not checked (…)
 assert!(audit.ok());
 ```
@@ -980,7 +979,7 @@ It captures a frame and compares the size, moves the pointer and reads it back, 
 
 ## Test code that uses the desktop
 
-`computer::testing` supplies test doubles. You can test pointer decisions without a container or image:
+`holm::testing` supplies test doubles. You can test pointer decisions without a container or image:
 
 ```rust
 let host = Arc::new(ScriptedHost::new().saying("X=42\nY=99\n"));
@@ -1068,7 +1067,7 @@ let pair = computer.credentials();     // the password, under Auth::Password
 
 An open viewer beyond loopback is refused at launch rather than published. The two doors carry separate credentials, so a watch link does not become a control link by changing the port.
 
-DevTools is withdrawn rather than published, because CDP has no authentication and cannot be given one. Reach it through the server, which admits a short-lived token it minted (`computer cdp`), or from inside the box.
+DevTools is withdrawn rather than published, because CDP has no authentication and cannot be given one. Reach it through the server, which admits a short-lived token it minted (`holm cdp`), or from inside the box.
 
 `network(false)` blocks network access from the desktop. It does not gate the viewer.
 
@@ -1083,7 +1082,7 @@ A control port exists only while somebody has been handed the screen, and it clo
 - [ ] Filesystem
 - [ ] Full Audio Support
 - [ ] MacOS Desktop Box and Quartz Display Server
-- [x] Computer Rest API & MCP - Manage instances of computer boxes
+- [x] holm REST API & MCP - Manage instances of boxes
 - [x] Custom Image Builder - ImageRecipe
 - [x] Accessibility Tree - drive native windows by widget name, not by pixels
 

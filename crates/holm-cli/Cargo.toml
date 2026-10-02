@@ -1,0 +1,40 @@
+[package]
+name = "holm-cli"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "The computer command"
+license = "MIT"
+
+[features]
+default = []
+e2b = ["holm-server/e2b"]
+vercel = ["holm-server/vercel"]
+daytona = ["holm-server/daytona"]
+modal = ["holm-server/modal"]
+sqlite = ["holm-server/sqlite"]
+postgres = ["holm-server/postgres"]
+s3 = ["holm-server/s3"]
+
+[dependencies]
+axum = "0.8"
+holm = { package = "holm-core", path = "../holm-core", version = "0.1.0" }
+holm-api = { path = "../holm-api", version = "0.1.0" }
+holm-client = { path = "../holm-client", version = "0.1.0" }
+holm-mcp = { path = "../holm-mcp", version = "0.1.0" }
+holm-server = { path = "../holm-server", version = "0.1.0" }
+holm-types = { path = "../holm-types", version = "0.1.0" }
+serde_json = "1"
+tokio = { version = "1", features = [
+    "macros",
+    "rt-multi-thread",
+    "fs",
+    "net",
+    "signal",
+    "io-std",
+] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints.clippy]
+string_slice = "deny"

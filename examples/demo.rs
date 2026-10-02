@@ -1,6 +1,6 @@
 //! cargo run --example demo -- media/demo.gif
 
-use computer::{Button, Computer, Delta, Point};
+use holm::{Button, Computer, Delta, Point};
 use std::time::Duration;
 
 const FRAMES: &str = "/tmp/demo";
@@ -11,7 +11,7 @@ struct Step {
 }
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let out = std::env::args().nth(1).unwrap_or_else(|| "demo.gif".into());
 
     println!("opening a box …");
@@ -22,52 +22,51 @@ async fn main() -> computer::Result<()> {
     computer.exec(["mkdir", "-p", FRAMES]).await?;
 
     let mut frame = 0usize;
-    let shot =
-        async |step: Step, from: &computer::Screen, frame: &mut usize| -> computer::Result<()> {
-            tokio::time::sleep(Duration::from_millis(step.settle)).await;
+    let shot = async |step: Step, from: &holm::Screen, frame: &mut usize| -> holm::Result<()> {
+        tokio::time::sleep(Duration::from_millis(step.settle)).await;
 
-            let image = from.screenshot().await?;
-            let raw = format!("{FRAMES}/{:02}-raw.png", *frame);
-            computer.write_file(&raw, &image).await?;
+        let image = from.screenshot().await?;
+        let raw = format!("{FRAMES}/{:02}-raw.png", *frame);
+        computer.write_file(&raw, &image).await?;
 
-            // Two passes, so the caption sits on new canvas under the frame.
-            let captioned = format!("{FRAMES}/{:02}.png", *frame);
-            let annotate = computer
-                .exec([
-                    "convert",
-                    &raw,
-                    "-resize",
-                    "900",
-                    "-background",
-                    "#111113",
-                    "-fill",
-                    "#e8e8ea",
-                    "-font",
-                    "DejaVu-Sans-Mono",
-                    "-pointsize",
-                    "17",
-                    "-gravity",
-                    "south",
-                    "-splice",
-                    "0x40",
-                    "-annotate",
-                    "+0+11",
-                    step.caption,
-                    &captioned,
-                ])
-                .await?;
+        // Two passes, so the caption sits on new canvas under the frame.
+        let captioned = format!("{FRAMES}/{:02}.png", *frame);
+        let annotate = computer
+            .exec([
+                "convert",
+                &raw,
+                "-resize",
+                "900",
+                "-background",
+                "#111113",
+                "-fill",
+                "#e8e8ea",
+                "-font",
+                "DejaVu-Sans-Mono",
+                "-pointsize",
+                "17",
+                "-gravity",
+                "south",
+                "-splice",
+                "0x40",
+                "-annotate",
+                "+0+11",
+                step.caption,
+                &captioned,
+            ])
+            .await?;
 
-            if !annotate.ok() {
-                return Err(computer::Error::denied(format!(
-                    "convert failed: {}",
-                    annotate.stderr_utf8().trim()
-                )));
-            }
+        if !annotate.ok() {
+            return Err(holm::Error::denied(format!(
+                "convert failed: {}",
+                annotate.stderr_utf8().trim()
+            )));
+        }
 
-            println!("  {:>2}  {}", *frame, step.caption);
-            *frame += 1;
-            Ok(())
-        };
+        println!("  {:>2}  {}", *frame, step.caption);
+        *frame += 1;
+        Ok(())
+    };
 
     shot(
         Step {
@@ -166,7 +165,7 @@ async fn main() -> computer::Result<()> {
     )
     .await?;
 
-    let second = computer.screen(computer::ScreenId(1)).await?;
+    let second = computer.screen(holm::ScreenId(1)).await?;
     second.open_url("https://doc.rust-lang.org/book/").await?;
     shot(
         Step {
@@ -199,7 +198,7 @@ async fn main() -> computer::Result<()> {
         .await?;
 
     if !gif.ok() {
-        return Err(computer::Error::denied(format!(
+        return Err(holm::Error::denied(format!(
             "convert failed: {}",
             gif.stderr_utf8().trim()
         )));

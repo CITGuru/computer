@@ -1,6 +1,6 @@
 //! cargo run --example live_desktop
 
-use computer::{Button, Computer, Error, Point};
+use holm::{Button, Computer, Error, Point};
 
 #[tokio::main]
 async fn main() {
@@ -33,7 +33,7 @@ async fn main() {
     }
 }
 
-async fn drive(computer: &Computer) -> computer::Result<()> {
+async fn drive(computer: &Computer) -> holm::Result<()> {
     let presence = computer.probe().await;
     println!(
         "  probe: display={} browser={}",

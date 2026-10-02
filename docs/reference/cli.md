@@ -1,39 +1,39 @@
 # CLI reference
 
-`computer` creates and drives boxes. Run `computer --help` for the same list in the terminal.
+`holm` creates and drives boxes. Run `holm --help` for the same list in the terminal.
 
 ```text
-computer [--server URL] [--local] <command> [args…]
+holm [--server URL] [--local] <command> [args…]
 ```
 
 ## Global options
 
 | Option | Effect |
 | --- | --- |
-| `--server URL` | Use this server. It overrides `COMPUTER_SERVER_URL`. |
+| `--server URL` | Use this server. It overrides `HOLM_SERVER_URL`. |
 | `--local` | Drive the local runtime from the CLI process, with no server. See [`--local`](#--local). |
 
 ## Server selection
 
-Most commands go through the REST server. `computer` selects the server in this order:
+Most commands go through the REST server. `holm` selects the server in this order:
 
 1. `--server URL`
-2. `COMPUTER_SERVER_URL`
-3. A `computerd` on `http://127.0.0.1:8080`
+2. `HOLM_SERVER_URL`
+3. A `holmd` on `http://127.0.0.1:8080`
 4. A server that starts for the command and stops when it exits
 
-The CLI checks that the service on port 8080 is `computerd`. It does not use an unrelated process on that port.
+The CLI checks that the service on port 8080 is `holmd`. It does not use an unrelated process on that port.
 
-`COMPUTER_SERVER_TOKEN` is sent as a bearer token.
+`HOLM_SERVER_TOKEN` is sent as a bearer token.
 
-Run `computerd` when you need state across commands: traces for `trace` and `fork`, box expiry, and access from other hosts.
+Run `holmd` when you need state across commands: traces for `trace` and `fork`, box expiry, and access from other hosts.
 
 ## Output
 
 Primary values, such as a box ID, a tab ID, or a URL, go to standard output. Status text goes to standard error. You can use a command inside another:
 
 ```bash
-computer screenshot "$(computer new)" out.png
+holm screenshot "$(holm new)" out.png
 ```
 
 ## Boxes
@@ -203,7 +203,7 @@ Most commands take `--tab ID` to act on a tab that is not at the front. A tab th
 | `browser <box> console [--errors] [--clear] [--limit N]` | Show what the page logged since it loaded. `--clear` empties the log after it is read. |
 | `browser <box> errors` | The same as `console --errors`. |
 
-Add `--content-boundaries` to `read`, `snapshot`, `find`, or `eval` to put page text between two markers with a nonce that the page cannot know. Set `COMPUTER_CONTENT_BOUNDARIES=1` to do this for every call.
+Add `--content-boundaries` to `read`, `snapshot`, `find`, or `eval` to put page text between two markers with a nonce that the page cannot know. Set `HOLM_CONTENT_BOUNDARIES=1` to do this for every call.
 
 ### Act
 
@@ -309,7 +309,7 @@ A batch holds the screen for the full run, which separate commands cannot do. Ea
 
 A fork does the actions again. It does not copy the box, so the two boxes are similar but not always identical.
 
-`trace` and `fork` need a server that keeps traces, such as `computerd`.
+`trace` and `fork` need a server that keeps traces, such as `holmd`.
 
 ## MCP
 
@@ -329,6 +329,6 @@ The other commands need a server and refuse `--local`. `mouse down` and `mouse u
 
 | Variable | Effect |
 | --- | --- |
-| `COMPUTER_SERVER_URL` | The server to use. |
-| `COMPUTER_SERVER_TOKEN` | The bearer token for the server. |
-| `COMPUTER_CONTENT_BOUNDARIES` | `1` puts page text between nonce markers in `read`, `snapshot`, `find`, and `eval`. |
+| `HOLM_SERVER_URL` | The server to use. |
+| `HOLM_SERVER_TOKEN` | The bearer token for the server. |
+| `HOLM_CONTENT_BOUNDARIES` | `1` puts page text between nonce markers in `read`, `snapshot`, `find`, and `eval`. |

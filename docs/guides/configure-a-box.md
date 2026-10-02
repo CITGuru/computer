@@ -18,13 +18,13 @@ You cannot add a feature to a running box. To add an application to a running bo
 To build an image before a box needs it:
 
 ```bash
-computer image build docker --app vscode --package jq
+holm image build docker --app vscode --package jq
 ```
 
 ## Screens
 
 ```bash
-BOX=$(computer new --size 1920x1080 --screens 2)
+BOX=$(holm new --size 1920x1080 --screens 2)
 ```
 
 Each screen has its own display, browser, and viewer. Screen 0 is the primary screen.
@@ -32,7 +32,7 @@ Each screen has its own display, browser, and viewer. Screen 0 is the primary sc
 For Wayland instead of X11:
 
 ```bash
-BOX=$(computer new --wayland)
+BOX=$(holm new --wayland)
 ```
 
 A Wayland box has XWayland by default, so X11 applications also run on it. `--minimal` leaves it out.
@@ -49,16 +49,16 @@ The catalog has these applications:
 | `text-editor` | Mousepad |
 | `vscode` | Visual Studio Code |
 
-List them with `computer apps`, `GET /v1/catalog`, or the MCP tool `list_apps`.
+List them with `holm apps`, `GET /v1/catalog`, or the MCP tool `list_apps`.
 
 Install applications when you create the box, then open one by name:
 
 ```bash
-BOX=$(computer new --app gimp,vscode)
-computer app "$BOX" gimp
+BOX=$(holm new --app gimp,vscode)
+holm app "$BOX" gimp
 ```
 
-`computer app` returns when the application's window has appeared and stopped changing. MCP: `launch_box` with `apps`, then `open_app`.
+`holm app` returns when the application's window has appeared and stopped changing. MCP: `launch_box` with `apps`, then `open_app`.
 
 ### Your own applications
 
@@ -88,8 +88,8 @@ Define an application in the spec under `apps`. Give it a name, the packages to 
 | `source` | An extra apt repository: `{"key_url": "…", "list": "…"}`. |
 
 ```bash
-BOX=$(computer new --spec app.json)
-computer app "$BOX" inkscape
+BOX=$(holm new --spec app.json)
+holm app "$BOX" inkscape
 ```
 
 An application with its own `source` makes the image build download and trust that repository's key. The server refuses it unless the spec also sets `"policy": {"custom_sources": true}`. The catalog's own sources, such as the one for `vscode`, need no policy.
@@ -99,8 +99,8 @@ An application with its own `source` makes the image build download and trust th
 The server can install a catalog application, or an application from the box's spec, into a running box:
 
 ```bash
-computer app "$BOX" install gimp
-computer app "$BOX" gimp
+holm app "$BOX" install gimp
+holm app "$BOX" gimp
 ```
 
 MCP: `install_app` with `apps: ["gimp"]`, then `open_app`. REST:
@@ -117,10 +117,10 @@ The box installs it with apt, so the box needs network access, and each install 
 
 ## Packages
 
-Add apt packages for commands that the agent runs with `run_command` or `computer exec`:
+Add apt packages for commands that the agent runs with `run_command` or `holm exec`:
 
 ```bash
-BOX=$(computer new --package jq --package ripgrep)
+BOX=$(holm new --package jq --package ripgrep)
 ```
 
 ```rust
@@ -134,15 +134,15 @@ A box is one of two desktops. `--base` is the default, so the tools that need th
 | Feature | Adds | Without it | `--base` | `--minimal` |
 | --- | --- | --- | --- | --- |
 | Wide fonts | Noto CJK and color emoji fonts | Chinese, Japanese, Korean, and emoji show as empty boxes, and the screenshot still looks correct at a glance. | Yes | No |
-| Video | ffmpeg | `computer record` and the MCP `record` tool fail. | Yes | No |
+| Video | ffmpeg | `holm record` and the MCP `record` tool fail. | Yes | No |
 | Dock | A tint2 dock | A person has no launcher. | Yes | No |
 | Accessibility | AT-SPI | Native windows cannot be driven by widget name. See [Control modes](../concepts/control-modes.md#accessibility). | Yes | No |
 | X11 apps | XWayland | X11 applications do not open on Wayland. | On Wayland | No |
 | Audio | PulseAudio | A page or application that needs a sound server does not work. | Add with `--audio` | Add with `--audio` |
 
 ```bash
-BOX=$(computer new --minimal)
-BOX=$(computer new --minimal --audio)
+BOX=$(holm new --minimal)
+BOX=$(holm new --minimal --audio)
 ```
 
 For any other set of features, list them in a `--spec` file.
@@ -150,7 +150,7 @@ For any other set of features, list them in a `--spec` file.
 ## Network
 
 ```bash
-BOX=$(computer new --no-network)
+BOX=$(holm new --no-network)
 ```
 
 The box has no network access. This does not affect the viewer, which the host serves.
@@ -170,7 +170,7 @@ There are two ways to keep a login.
 ### Profile
 
 ```bash
-BOX=$(computer new --profile work)
+BOX=$(holm new --profile work)
 ```
 
 The volume is `computer-profile-work`. The next box with `--profile work` starts with the same browser data. The server refuses a second box that asks for a profile that another box holds, running or stopped, and names that box.
@@ -180,9 +180,9 @@ Before the server stops or removes a box with a profile, it closes the browser c
 ### Saved state
 
 ```bash
-computer browser "$BOX" state save login.json --origin https://mail.example.com
-NEW=$(computer new)
-computer browser "$NEW" state load login.json
+holm browser "$BOX" state save login.json --origin https://mail.example.com
+NEW=$(holm new)
+holm browser "$NEW" state load login.json
 ```
 
 `--name NAME` keeps the state on the server instead of in a file, until the server restarts. A state file contains live logins, and the CLI writes it with mode `0600`.
@@ -191,7 +191,7 @@ MCP: `save_state` and `load_state`.
 
 ## Start from a spec file
 
-Put a full spec and placement in a file, and pass it to `computer new`:
+Put a full spec and placement in a file, and pass it to `holm new`:
 
 ```json
 {
@@ -214,9 +214,9 @@ Put a full spec and placement in a file, and pass it to `computer new`:
 ```
 
 ```bash
-BOX=$(computer new --spec box.json)
-BOX=$(computer new --spec box.json --size 1920x1080)
-cat box.json | computer new --spec -
+BOX=$(holm new --spec box.json)
+BOX=$(holm new --spec box.json --size 1920x1080)
+cat box.json | holm new --spec -
 ```
 
 A flag overrides the same value in the file. The server refuses unknown keys, so a misspelled key gives an error.

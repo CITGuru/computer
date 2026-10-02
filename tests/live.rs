@@ -1,6 +1,6 @@
 //! Against a real container: `cargo test --test live -- --ignored`.
 
-use computer::{
+use holm::{
     Arrange, Button, Computer, Delta, Held, Point, ProfileBuilder, Rect, ScreenId, Shot, X11Profile,
 };
 use std::path::Path;
@@ -23,7 +23,7 @@ async fn a_real_box_does_everything_the_readme_claims() {
 #[tokio::test]
 #[ignore = "needs a container runtime and builds the Ubuntu image"]
 async fn a_local_image_directory_can_be_driven() {
-    let directory = Path::new(computer::bundle::IMAGES).join("ubuntu");
+    let directory = Path::new(holm::bundle::IMAGES).join("ubuntu");
     let profile = ProfileBuilder::new(X11Profile)
         .image_dir(&directory)
         .build();
@@ -62,7 +62,7 @@ async fn a_window_knows_what_it_is_and_where() {
     outcome.expect("every step");
 }
 
-async fn window_facts(computer: &Computer) -> computer::Result<()> {
+async fn window_facts(computer: &Computer) -> holm::Result<()> {
     let screen = computer.primary();
     let (width, height) = screen.geometry().await?;
 
@@ -102,7 +102,7 @@ async fn a_capture_can_be_cropped_and_shrunk() {
     outcome.expect("every step");
 }
 
-async fn captures(computer: &Computer) -> computer::Result<()> {
+async fn captures(computer: &Computer) -> holm::Result<()> {
     let screen = computer.primary();
     let (width, height) = screen.geometry().await?;
 
@@ -198,7 +198,7 @@ const WATCH: &str = r#"
     "installed"
 "#;
 
-async fn held_and_still(computer: &Computer) -> computer::Result<()> {
+async fn held_and_still(computer: &Computer) -> holm::Result<()> {
     let screen = computer.primary();
     let devtools = computer.browser().expect("a published DevTools port");
 
@@ -255,7 +255,7 @@ const BUTTONS: &str = r#"
     "installed"
 "#;
 
-async fn buttons_on_an_element(computer: &Computer) -> computer::Result<()> {
+async fn buttons_on_an_element(computer: &Computer) -> holm::Result<()> {
     let devtools = computer.browser().expect("a published DevTools port");
 
     let mut page = devtools.open_page(WITNESS, Duration::from_secs(30)).await?;
@@ -300,7 +300,7 @@ const LABELLED_FORM: &str = r#"
     "ready"
 "#;
 
-async fn labelled_controls(computer: &Computer) -> computer::Result<()> {
+async fn labelled_controls(computer: &Computer) -> holm::Result<()> {
     let devtools = computer.browser().expect("a published DevTools port");
     let mut page = devtools
         .open_page(
@@ -371,7 +371,7 @@ async fn the_wheel_turns_on_both_axes() {
     outcome.expect("every step");
 }
 
-async fn wheel(computer: &Computer) -> computer::Result<()> {
+async fn wheel(computer: &Computer) -> holm::Result<()> {
     let devtools = computer.browser().expect("a published DevTools port");
     let mut page = devtools.open_page(WIDE, Duration::from_secs(30)).await?;
     page.wait_for_load(Duration::from_secs(20)).await?;
@@ -413,7 +413,7 @@ async fn wheel(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn scrolled(page: &mut computer::Page) -> computer::Result<(f64, f64)> {
+async fn scrolled(page: &mut holm::Page) -> holm::Result<(f64, f64)> {
     let x = page
         .evaluate("window.scrollX")
         .await?
@@ -437,7 +437,7 @@ async fn a_window_goes_where_it_is_put() {
     outcome.expect("every step");
 }
 
-async fn window_control(computer: &Computer) -> computer::Result<()> {
+async fn window_control(computer: &Computer) -> holm::Result<()> {
     let screen = computer.primary();
 
     let browser = screen
@@ -509,7 +509,7 @@ fn near(got: u32, wanted: u32) -> bool {
     got.abs_diff(wanted) <= 64
 }
 
-async fn exercise(computer: &Computer) -> computer::Result<()> {
+async fn exercise(computer: &Computer) -> holm::Result<()> {
     let presence = computer.probe().await;
     assert!(presence.ready(), "the box said it was ready: {presence:?}");
 
@@ -563,18 +563,18 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     // Last, because the descriptor's flags only mean anything against a real box.
     leases(computer).await?;
 
-    let audit = computer::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
+    let audit = holm::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
     println!("  audit: {audit}");
 
     Ok(())
 }
 
-async fn leases(computer: &Computer) -> computer::Result<()> {
+async fn leases(computer: &Computer) -> holm::Result<()> {
     let screen = computer.screen(ScreenId(2)).await?;
     assert_eq!(screen.display(), ":3");
 
     let other = computer
-        .claim(&computer::HolderId::new("somebody-else"), 1)
+        .claim(&holm::HolderId::new("somebody-else"), 1)
         .await?;
     assert_ne!(
         other.id(),
@@ -594,7 +594,7 @@ async fn leases(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn clipboard(computer: &Computer) -> computer::Result<()> {
+async fn clipboard(computer: &Computer) -> holm::Result<()> {
     let text = "clipboard \"round trip\", with a newline\nand a $dollar";
 
     computer.set_clipboard(text).await?;
@@ -602,11 +602,11 @@ async fn clipboard(computer: &Computer) -> computer::Result<()> {
 
     let selected = "what the mouse dragged over";
     computer
-        .set_selection(computer::Selection::Primary, selected)
+        .set_selection(holm::Selection::Primary, selected)
         .await?;
 
     assert_eq!(
-        computer.selection(computer::Selection::Primary).await?,
+        computer.selection(holm::Selection::Primary).await?,
         selected
     );
     assert_eq!(
@@ -617,11 +617,11 @@ async fn clipboard(computer: &Computer) -> computer::Result<()> {
 
     let picture = computer.screenshot().await?;
     computer
-        .set_clipboard_bytes(computer::Selection::Clipboard, "image/png", &picture)
+        .set_clipboard_bytes(holm::Selection::Clipboard, "image/png", &picture)
         .await?;
 
     let offered = computer
-        .clipboard_targets(computer::Selection::Clipboard)
+        .clipboard_targets(holm::Selection::Clipboard)
         .await?;
     assert!(
         offered.iter().any(|target| target == "image/png"),
@@ -629,7 +629,7 @@ async fn clipboard(computer: &Computer) -> computer::Result<()> {
     );
 
     let back = computer
-        .clipboard_bytes(computer::Selection::Clipboard, "image/png")
+        .clipboard_bytes(holm::Selection::Clipboard, "image/png")
         .await?;
     assert_eq!(back, picture, "the picture changed on the clipboard");
 
@@ -637,7 +637,7 @@ async fn clipboard(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn the_last_screen(computer: &Computer) -> computer::Result<()> {
+async fn the_last_screen(computer: &Computer) -> holm::Result<()> {
     let last = computer.screen(ScreenId(7)).await?;
     assert_eq!(last.display(), ":8");
     assert_eq!(last.ports().view, 6094);
@@ -663,7 +663,7 @@ async fn the_last_screen(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn files(computer: &Computer) -> computer::Result<()> {
+async fn files(computer: &Computer) -> holm::Result<()> {
     let frame = computer.screenshot().await?;
     computer.write_file("/tmp/live/frame.png", &frame).await?;
 
@@ -678,7 +678,7 @@ async fn files(computer: &Computer) -> computer::Result<()> {
 }
 
 /// Chromium binds DevTools to loopback, so a bare forward accepts and closes.
-async fn devtools(computer: &Computer) -> computer::Result<()> {
+async fn devtools(computer: &Computer) -> holm::Result<()> {
     let endpoint = computer.devtools().expect("a published endpoint");
     let port: u16 = endpoint
         .http_url
@@ -722,8 +722,8 @@ async fn devtools(computer: &Computer) -> computer::Result<()> {
 
 async fn which_page_the_pixels_belong_to(
     computer: &Computer,
-    page: &mut computer::Page,
-) -> computer::Result<()> {
+    page: &mut holm::Page,
+) -> holm::Result<()> {
     page.bring_to_front().await?;
     assert!(
         page.visible().await?,
@@ -761,7 +761,7 @@ async fn which_page_the_pixels_belong_to(
     Ok(())
 }
 
-async fn browser(computer: &Computer) -> computer::Result<()> {
+async fn browser(computer: &Computer) -> holm::Result<()> {
     let browser = computer.browser().expect("a published DevTools port");
 
     // `open_page`: a new tab's about:blank is already complete and would answer a wait.
@@ -801,7 +801,7 @@ async fn browser(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn browser_groups(computer: &Computer) -> computer::Result<()> {
+async fn browser_groups(computer: &Computer) -> holm::Result<()> {
     let browser = computer.browser().expect("a published DevTools port");
     let mut default = browser
         .open_page("https://example.com", Duration::from_secs(20))
@@ -900,7 +900,7 @@ async fn browser_groups(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn takeover(computer: &Computer) -> computer::Result<()> {
+async fn takeover(computer: &Computer) -> holm::Result<()> {
     let takeover = computer.hand_over().await?;
     println!("  handed over: {:?}", takeover.url());
 
@@ -1007,7 +1007,7 @@ async fn takeover_ends_stale(computer: &Computer) -> bool {
     matches!(refused, Ok(result) if result.code == 3)
 }
 
-async fn second_screen(computer: &Computer) -> computer::Result<()> {
+async fn second_screen(computer: &Computer) -> holm::Result<()> {
     let second = computer.screen(ScreenId(1)).await?;
     assert_eq!(second.display(), ":2");
 

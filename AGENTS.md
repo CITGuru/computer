@@ -19,16 +19,16 @@ Nothing above turns an optional feature on, so an unused backend can stop
 compiling without any of it going red:
 
 ```bash
-cargo clippy -p computer --no-default-features -- -D warnings
-cargo test -p computer-storage --features sqlite,postgres,s3
-cargo test -p computer-server --features sqlite,s3
-cargo clippy -p computer-core --features microsandbox --all-targets -- -D warnings
-cargo clippy -p computer-core --features vercel --all-targets -- -D warnings
-cargo test -p computer-core --features vercel vercel
-cargo clippy -p computer-core --features daytona --all-targets -- -D warnings
-cargo test -p computer-core --features daytona daytona
-cargo clippy -p computer-core --features modal --all-targets -- -D warnings
-cargo test -p computer-core --features modal modal
+cargo clippy -p holm --no-default-features -- -D warnings
+cargo test -p holm-storage --features sqlite,postgres,s3
+cargo test -p holm-server --features sqlite,s3
+cargo clippy -p holm-core --features microsandbox --all-targets -- -D warnings
+cargo clippy -p holm-core --features vercel --all-targets -- -D warnings
+cargo test -p holm-core --features vercel vercel
+cargo clippy -p holm-core --features daytona --all-targets -- -D warnings
+cargo test -p holm-core --features daytona daytona
+cargo clippy -p holm-core --features modal --all-targets -- -D warnings
+cargo test -p holm-core --features modal modal
 ```
 
 The scripts this crate evaluates inside a page are Rust strings that nothing
@@ -39,18 +39,18 @@ python3 scripts/check-page-scripts.py
 ```
 
 The page an MCP Apps host renders is bundled and committed, so a change under
-`crates/computer-mcp/ui/src` is not a change until it is built, and CI fails
+`crates/holm-mcp/ui/src` is not a change until it is built, and CI fails
 when the committed page is not what the source builds:
 
 ```bash
-crates/computer-mcp/ui/build.sh
-git diff --exit-code -- crates/computer-mcp/ui/screen.html
+crates/holm-mcp/ui/build.sh
+git diff --exit-code -- crates/holm-mcp/ui/screen.html
 ```
 
 The shell that goes inside an image is not compiled either:
 
 ```bash
-for script in crates/computer-core/images/*/*.sh; do bash -n "$script"; done
+for script in crates/holm-core/images/*/*.sh; do bash -n "$script"; done
 ```
 
 `.github/workflows/ci.yml` runs this list, with `--locked` added: the lock is

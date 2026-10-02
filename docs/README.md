@@ -1,6 +1,6 @@
-# Computer documentation
+# holm documentation
 
-`computer` gives agents isolated Linux desktops. Each box runs in a container, a microVM, or a cloud sandbox, and you drive it from the CLI, from Rust, over REST, or over MCP.
+`holm` gives agents isolated Linux desktops. Each box runs in a container, a microVM, or a cloud sandbox, and you drive it from the CLI, from Rust, over REST, or over MCP.
 
 ## Getting started
 
@@ -13,7 +13,7 @@
 
 - [Boxes](concepts/boxes.md) — the spec, screens, states, lifetime, traces, forks, and what is inside a box
 - [Control modes](concepts/control-modes.md) — screen coordinates, accessibility, or the browser, and when to use each
-- [The server](concepts/server.md) — `computer` and `computerd`, how a client finds a server, access control, and storage
+- [The server](concepts/server.md) — `holm` and `holmd`, how a client finds a server, access control, and storage
 - [Human control](concepts/human-control.md) — viewers, handing control to a person, taking it back, and viewer access
 - [Runtimes](concepts/runtimes.md) — where a box runs: containers, microVMs, and cloud sandboxes
 
@@ -31,11 +31,11 @@
 - [Daytona](guides/daytona.md) — run boxes on Daytona, with the image built there
 - [Modal](guides/modal.md) — run boxes on Modal, with the image built there
 - [Trace and fork](guides/trace-and-fork.md) — read what happened to a box, and make a new box from it
-- [Deploy computerd](guides/deploy-computerd.md) — run the server as a service behind TLS, and connect clients to it
+- [Deploy holmd](guides/deploy-holmd.md) — run the server as a service behind TLS, and connect clients to it
 
 ## Reference
 
-- [CLI](reference/cli.md) — every `computer` command, flag, and environment variable
+- [CLI](reference/cli.md) — every `holm` command, flag, and environment variable
 - [REST API](reference/rest-api.md) — every `/v1` endpoint, the box spec, and the action types
 - [MCP tools](reference/mcp-tools.md) — every MCP tool and its parameters
 - [Rust API](reference/rust-api.md) — the main types, methods, errors, extension points, and examples

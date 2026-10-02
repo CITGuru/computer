@@ -1,7 +1,7 @@
 //! cargo run --example custom_image
 
-use computer::bundle::{DESKTOP, Extras};
-use computer::{Computer, ImageSource, ProfileBuilder, X11Profile};
+use holm::bundle::{DESKTOP, Extras};
+use holm::{Computer, ImageSource, ProfileBuilder, X11Profile};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;

@@ -1,6 +1,6 @@
 //! cargo run --example from_spec -- examples/box.json
 
-use computer::{Builder, Placement, ScreenId, Spec};
+use holm::{Builder, Placement, ScreenId, Spec};
 
 #[derive(Default, serde::Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -10,14 +10,14 @@ struct File {
 }
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let path = std::env::args()
         .nth(1)
         .expect("usage: from_spec <spec.json>");
     let text = std::fs::read_to_string(&path).expect("a readable spec file");
     let file: File = serde_json::from_str(&text).expect("a spec this version understands");
 
-    let resolved = computer::spec::resolve(&file.spec)?;
+    let resolved = holm::spec::resolve(&file.spec)?;
     println!(
         "{path}: {}x{}, {} screen(s), digest {}",
         resolved.width,

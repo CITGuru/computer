@@ -1,13 +1,13 @@
 # MCP quick start
 
-This page gives an MCP host, such as Claude Code or Cursor, a desktop. You need `computer` [installed](install.md) and a container runtime running.
+This page gives an MCP host, such as Claude Code or Cursor, a desktop. You need `holm` [installed](install.md) and a container runtime running.
 
 There are two transports. Both give the same boxes and tools.
 
 | Transport | Use it when |
 | --- | --- |
-| stdio: `computer mcp --stdio` | The host starts a local process |
-| Streamable HTTP: `computerd` at `/mcp` | The host connects to a URL, or the server is on a different machine |
+| stdio: `holm mcp --stdio` | The host starts a local process |
+| Streamable HTTP: `holmd` at `/mcp` | The host connects to a URL, or the server is on a different machine |
 
 ## Local host (stdio)
 
@@ -16,41 +16,41 @@ Add the server to the host's MCP configuration:
 ```json
 {
   "mcpServers": {
-    "computer": {
-      "command": "computer",
+    "holm": {
+      "command": "holm",
       "args": ["mcp", "--stdio"]
     }
   }
 }
 ```
 
-With no server running, `computer mcp` starts its own. Traces, forks, and box expiry then stop when the host stops the process. To keep them, run `computerd` and point the host at it:
+With no server running, `holm mcp` starts its own. Traces, forks, and box expiry then stop when the host stops the process. To keep them, run `holmd` and point the host at it:
 
 ```json
 {
   "mcpServers": {
-    "computer": {
-      "command": "computer",
+    "holm": {
+      "command": "holm",
       "args": ["mcp", "--stdio"],
       "env": {
-        "COMPUTER_SERVER_URL": "http://127.0.0.1:8080"
+        "HOLM_SERVER_URL": "http://127.0.0.1:8080"
       }
     }
   }
 }
 ```
 
-Add `COMPUTER_SERVER_TOKEN` to `env` when the server needs a token.
+Add `HOLM_SERVER_TOKEN` to `env` when the server needs a token.
 
 ## Remote host (Streamable HTTP)
 
-Start `computerd` with a token. The server refuses a non-loopback address without one:
+Start `holmd` with a token. The server refuses a non-loopback address without one:
 
 ```bash
-COMPUTER_SERVER_ADDR=0.0.0.0:8080 \
-COMPUTER_SERVER_TOKEN="$(openssl rand -hex 32)" \
-COMPUTER_PUBLIC_URL=https://boxes.example.com \
-computerd
+HOLM_SERVER_ADDR=0.0.0.0:8080 \
+HOLM_SERVER_TOKEN="$(openssl rand -hex 32)" \
+HOLM_PUBLIC_URL=https://boxes.example.com \
+holmd
 ```
 
 Configure the host:
@@ -58,10 +58,10 @@ Configure the host:
 ```text
 URL:           https://boxes.example.com/mcp
 Transport:     Streamable HTTP
-Authorization: Bearer <COMPUTER_SERVER_TOKEN>
+Authorization: Bearer <HOLM_SERVER_TOKEN>
 ```
 
-Put TLS in a reverse proxy in front of `computerd`, and forward WebSocket upgrades. Set `COMPUTER_PUBLIC_URL` to the public origin when the proxy hides it.
+Put TLS in a reverse proxy in front of `holmd`, and forward WebSocket upgrades. Set `HOLM_PUBLIC_URL` to the public origin when the proxy hides it.
 
 ## Try it
 

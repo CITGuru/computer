@@ -6,8 +6,8 @@ import re
 import subprocess
 import sys
 
-SOURCE = "crates/computer-core/src/cdp.rs"
-READER = "crates/computer-core/images/desktop/a11y.py"
+SOURCE = "crates/holm-core/src/cdp.rs"
+READER = "crates/holm-core/images/desktop/a11y.py"
 # Files of their own, so node reads them as they are. `demos/` is not in the
 # repository, so a checkout that has them checks them and one that does not
 # says so rather than failing.

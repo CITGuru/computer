@@ -18,7 +18,7 @@ Cloud sandboxes such as E2B, Vercel, Daytona, and Modal need no local runtime, o
 
 ## Install script
 
-The script downloads a release build of `computer` and `computerd` for macOS or Linux on x86_64 or aarch64, and verifies its checksum:
+The script downloads a release build of `holm` and `holmd` for macOS or Linux on x86_64 or aarch64, and verifies its checksum:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
@@ -26,8 +26,8 @@ curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/insta
 
 | Setting | Flag | Default |
 | --- | --- | --- |
-| `COMPUTER_VERSION` | `--version <tag>` | The latest release |
-| `COMPUTER_INSTALL_DIR` | `--dir <path>` | `~/.local/bin` |
+| `HOLM_VERSION` | `--version <tag>` | The latest release |
+| `HOLM_INSTALL_DIR` | `--dir <path>` | `~/.local/bin` |
 
 Make sure that the install directory is on your `PATH`.
 
@@ -54,24 +54,24 @@ cargo install --path . --locked --features e2b,vercel,daytona,modal,microsandbox
 | `daytona` | Daytona sandboxes |
 | `modal` | Modal sandboxes |
 | `microsandbox` | The microsandbox Rust library, for the library API. The server uses the `msb` CLI with no feature. |
-| `sqlite`, `postgres`, `s3` | Durable storage for `computerd` |
+| `sqlite`, `postgres`, `s3` | Durable storage for `holmd` |
 
 ## The two binaries
 
-- `computer` controls boxes from a shell and serves MCP over stdio.
-- `computerd` is the long-running server. It serves REST under `/v1` and MCP over HTTP at `/mcp`, and keeps traces, forks, and box expiry across commands.
+- `holm` controls boxes from a shell and serves MCP over stdio.
+- `holmd` is the long-running server. It serves REST under `/v1` and MCP over HTTP at `/mcp`, and keeps traces, forks, and box expiry across commands.
 
-You do not need `computerd` to start. When no server is running, `computer` starts one for the life of the command.
+You do not need `holmd` to start. When no server is running, `holm` starts one for the life of the command.
 
 ## Check the install
 
 ```bash
-BOX=$(computer new)
-computer screenshot "$BOX" screen.png
-computer rm "$BOX"
+BOX=$(holm new)
+holm screenshot "$BOX" screen.png
+holm rm "$BOX"
 ```
 
-The first `computer new` builds the image. When `screen.png` shows a desktop, the install is correct.
+The first `holm new` builds the image. When `screen.png` shows a desktop, the install is correct.
 
 ## Next
 

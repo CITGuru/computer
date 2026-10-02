@@ -12,7 +12,7 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 | Windows, applications, and native widgets | Browser profiles (`--profile`) |
 | Files, commands, and clipboard | |
 | Applications and packages at launch (`--app`), and applications installed into a running box | |
-| Page tools and `computer cdp`, also after a server restart | |
+| Page tools and `holm cdp`, also after a server restart | |
 | Viewer and takeover URLs in a browser | |
 | CPUs and memory for each box | |
 | Network policy (`--no-network`) | |
@@ -25,7 +25,7 @@ Daytona limits internet access on lower account tiers. On such an account, a san
 
 Create an API key in the Daytona dashboard, under Keys. Keep it out of shell history and out of files that go into git.
 
-Release builds of `computer` and `computerd` include Daytona. For a source build, add the `daytona` feature:
+Release builds of `holm` and `holmd` include Daytona. For a source build, add the `daytona` feature:
 
 ```bash
 cargo install --path . --locked --features daytona
@@ -36,14 +36,14 @@ cargo install --path . --locked --features daytona
 **From the environment.** The runtime is named `daytona`:
 
 ```bash
-DAYTONA_API_KEY=... COMPUTER_SERVER_SANDBOXES=daytona computerd
+DAYTONA_API_KEY=... HOLM_SERVER_SANDBOXES=daytona holmd
 ```
 
 **At run time, with the CLI:**
 
 ```bash
-computer runtime add cloud --provider daytona --api-key-env DAYTONA_API_KEY
-computer runtime ls
+holm runtime add cloud --provider daytona --api-key-env DAYTONA_API_KEY
+holm runtime ls
 ```
 
 | Variable or field | Effect |
@@ -55,7 +55,7 @@ computer runtime ls
 ## 3. Create a box
 
 ```bash
-BOX=$(computer new --runtime daytona)
+BOX=$(holm new --runtime daytona)
 ```
 
 MCP: `launch_box` with `runtime: "daytona"`. REST: `"placement": {"runtime": "daytona"}`.
@@ -103,8 +103,8 @@ max_lifetime = "8h"
 Build with the `daytona` feature, and set `DAYTONA_API_KEY`.
 
 ```rust
-use computer::sandboxes::{daytona::cloud::Cloud, remote};
-use computer::{Auth, Computer, X11Profile};
+use holm::sandboxes::{daytona::cloud::Cloud, remote};
+use holm::{Auth, Computer, X11Profile};
 
 let (machine, profile) = remote::pair(Arc::new(Cloud::from_env()?), Arc::new(X11Profile));
 

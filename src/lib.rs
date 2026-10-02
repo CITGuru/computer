@@ -1,9 +1,9 @@
 //! A computer in a box.
 //!
 //! ```no_run
-//! use computer::{Button, Computer, Point};
+//! use holm::{Button, Computer, Point};
 //!
-//! # async fn run() -> computer::Result<()> {
+//! # async fn run() -> holm::Result<()> {
 //! let box_ = Computer::launch().await?;
 //!
 //! println!("watch it at {}", box_.viewer_url().unwrap_or_default());
@@ -17,4 +17,4 @@
 //! # Ok(()) }
 //! ```
 
-pub use computer_core::*;
+pub use holm_core::*;

@@ -51,37 +51,37 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: The API with nothing behind it
-        run: cargo clippy -p computer --no-default-features --locked -- -D warnings
+        run: cargo clippy -p holm --no-default-features --locked -- -D warnings
 
       - name: Every storage backend
         run: |
-          cargo clippy -p computer-storage --all-targets --locked \
+          cargo clippy -p holm-storage --all-targets --locked \
             --features sqlite,postgres,s3,conformance -- -D warnings
-          cargo test -p computer-storage --locked --features sqlite,postgres,s3
+          cargo test -p holm-storage --locked --features sqlite,postgres,s3
 
       - name: The commands, with everything a daemon can be built with
         run: |
-          cargo clippy -p computer --all-targets --locked \
+          cargo clippy -p holm --all-targets --locked \
             --features sqlite,postgres,s3,e2b,vercel,daytona,modal -- -D warnings
-          cargo test -p computer-server --locked --features sqlite,s3
+          cargo test -p holm-server --locked --features sqlite,s3
 
       - name: A box in a microVM
-        run: cargo clippy -p computer-core --all-targets --locked --features microsandbox -- -D warnings
+        run: cargo clippy -p holm-core --all-targets --locked --features microsandbox -- -D warnings
 
       - name: A box on Vercel
         run: |
-          cargo clippy -p computer-core --all-targets --locked --features vercel -- -D warnings
-          cargo test -p computer-core --locked --features vercel vercel
+          cargo clippy -p holm-core --all-targets --locked --features vercel -- -D warnings
+          cargo test -p holm-core --locked --features vercel vercel
 
       - name: A box on Daytona
         run: |
-          cargo clippy -p computer-core --all-targets --locked --features daytona -- -D warnings
-          cargo test -p computer-core --locked --features daytona daytona
+          cargo clippy -p holm-core --all-targets --locked --features daytona -- -D warnings
+          cargo test -p holm-core --locked --features daytona daytona
 
       - name: A box on Modal
         run: |
-          cargo clippy -p computer-core --all-targets --locked --features modal -- -D warnings
-          cargo test -p computer-core --locked --features modal modal
+          cargo clippy -p holm-core --all-targets --locked --features modal -- -D warnings
+          cargo test -p holm-core --locked --features modal modal
 
   docs:
     runs-on: ubuntu-22.04
@@ -101,11 +101,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: crates/computer-mcp/ui/package-lock.json
+          cache-dependency-path: crates/holm-mcp/ui/package-lock.json
       - name: The committed page is what its source builds
         run: |
-          crates/computer-mcp/ui/build.sh
-          git diff --exit-code -- crates/computer-mcp/ui/screen.html
+          crates/holm-mcp/ui/build.sh
+          git diff --exit-code -- crates/holm-mcp/ui/screen.html
 
   deny:
     runs-on: ubuntu-22.04
@@ -122,7 +122,7 @@ jobs:
       - run: bash -n scripts/release.sh
       - name: The scripts that go inside an image
         run: |
-          for script in crates/computer-core/images/*/*.sh; do
+          for script in crates/holm-core/images/*/*.sh; do
             bash -n "$script"
           done
       - name: The scripts this crate evaluates inside a page

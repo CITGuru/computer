@@ -3,7 +3,7 @@
 //! cargo run --example tour -- <box-name>       # drive one that is already up
 //! ```
 
-use computer::{Button, Computer, Delta, Point, ScreenId};
+use holm::{Button, Computer, Delta, Point, ScreenId};
 use std::time::{Duration, Instant};
 
 const FRAMES: &str = "/tmp/tour";
@@ -11,7 +11,7 @@ const GIF: &str = "/tmp/tour.gif";
 const SIDE_BY_SIDE: &str = "/tmp/tour-screens.png";
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let started = Instant::now();
 
     let computer = match std::env::args().nth(1) {
@@ -48,7 +48,7 @@ async fn main() -> computer::Result<()> {
     Ok(())
 }
 
-async fn tour(computer: &Computer, film: &mut Film<'_>) -> computer::Result<()> {
+async fn tour(computer: &Computer, film: &mut Film<'_>) -> holm::Result<()> {
     let screen = computer.primary();
 
     screen.press("ctrl+t").await?;
@@ -108,7 +108,7 @@ async fn tour(computer: &Computer, film: &mut Film<'_>) -> computer::Result<()> 
 async fn second_screen(
     computer: &Computer,
     film: &mut Film<'_>,
-) -> computer::Result<computer::LeasedScreen> {
+) -> holm::Result<holm::LeasedScreen> {
     println!("  starting screen 1 …");
     let second = computer.screen(ScreenId(1)).await?;
     println!("  screen 1 is on {}", second.display());
@@ -138,7 +138,7 @@ async fn second_screen(
     Ok(second)
 }
 
-async fn assemble(computer: &Computer, second: &computer::LeasedScreen) -> computer::Result<()> {
+async fn assemble(computer: &Computer, second: &holm::LeasedScreen) -> holm::Result<()> {
     println!("  stitching inside the box …");
 
     let gif = computer
@@ -153,7 +153,7 @@ async fn assemble(computer: &Computer, second: &computer::LeasedScreen) -> compu
         ])
         .await?;
     if !gif.ok() {
-        return Err(computer::Error::denied(format!(
+        return Err(holm::Error::denied(format!(
             "convert failed: {}",
             gif.stderr_utf8().trim()
         )));
@@ -180,7 +180,7 @@ async fn assemble(computer: &Computer, second: &computer::LeasedScreen) -> compu
         ])
         .await?;
     if !joined.ok() {
-        return Err(computer::Error::denied(format!(
+        return Err(holm::Error::denied(format!(
             "append failed: {}",
             joined.stderr_utf8().trim()
         )));
@@ -204,12 +204,12 @@ impl<'a> Film<'a> {
         Self { computer, count: 0 }
     }
 
-    async fn take(&mut self, label: &str) -> computer::Result<()> {
+    async fn take(&mut self, label: &str) -> holm::Result<()> {
         let frame = self.computer.screenshot().await?;
         self.write(frame, label).await
     }
 
-    async fn write(&mut self, frame: Vec<u8>, label: &str) -> computer::Result<()> {
+    async fn write(&mut self, frame: Vec<u8>, label: &str) -> holm::Result<()> {
         let path = format!("{FRAMES}/{:03}.png", self.count);
         self.computer.write_file(&path, &frame).await?;
         println!("  {:>3}  {label:<24} {} bytes", self.count, frame.len());

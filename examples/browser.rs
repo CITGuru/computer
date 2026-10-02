@@ -3,11 +3,11 @@
 //! cargo run --example browser -- <box-name>  # one that is already up
 //! ```
 
-use computer::Computer;
+use holm::Computer;
 use std::time::Duration;
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let computer = match std::env::args().nth(1) {
         Some(name) => Computer::attach(name).await?,
         None => Computer::builder().keep_on_drop(true).launch().await?,

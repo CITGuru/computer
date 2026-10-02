@@ -1,7 +1,7 @@
-use computer::machine::Machine;
-use computer::microvm::{MicroVm, MicroVmApi, free_port, plan_for, port_pairs};
-use computer::testing::ScriptedMicroVm;
-use computer::{Computer, Config, Error, image};
+use holm::machine::Machine;
+use holm::microvm::{MicroVm, MicroVmApi, free_port, plan_for, port_pairs};
+use holm::testing::ScriptedMicroVm;
+use holm::{Computer, Config, Error, image};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

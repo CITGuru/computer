@@ -1,14 +1,14 @@
 {
   "mcpServers": {
-    "computer": {
+    "holm": {
       "type": "stdio",
-      "command": "computer",
+      "command": "holm",
       "args": [
         "mcp",
         "--stdio"
       ],
       "env": {
-        "COMPUTER_SERVER_URL": "http://127.0.0.1:8181"
+        "HOLM_SERVER_URL": "http://127.0.0.1:8181"
       }
     }
   }

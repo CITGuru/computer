@@ -1,7 +1,7 @@
 //! Packages the base image leaves out: `cargo test --test live_extras -- --ignored`.
 
-use computer::bundle::Extras;
-use computer::{Computer, ScreenId};
+use holm::bundle::Extras;
+use holm::{Computer, ScreenId};
 use std::time::{Duration, SystemTime};
 
 #[tokio::test]
@@ -21,7 +21,7 @@ async fn a_box_can_be_given_fonts_a_sound_card_and_a_recorder() {
     outcome.expect("every step");
 }
 
-async fn exercise(computer: &Computer) -> computer::Result<()> {
+async fn exercise(computer: &Computer) -> holm::Result<()> {
     let installed = computer
         .exec(["fc-list", ":lang=ja", "family"])
         .await?
@@ -102,7 +102,7 @@ const FORM: &str = "setsid zenity --forms --title=Order --text=Delivery \
                     --add-entry=Street --add-entry=City \
                     >/tmp/zenity.out 2>&1 </dev/null &";
 
-async fn widgets(computer: &Computer) -> computer::Result<()> {
+async fn widgets(computer: &Computer) -> holm::Result<()> {
     let screen = computer.primary();
     computer.exec_on(ScreenId(0), ["bash", "-lc", FORM]).await?;
     screen
@@ -110,9 +110,9 @@ async fn widgets(computer: &Computer) -> computer::Result<()> {
         .await?;
 
     // The field's own name is empty; "Street" is a separate label beside it.
-    let street = computer::NodeQuery {
+    let street = holm::NodeQuery {
         query: "Street".to_string(),
-        ..computer::NodeQuery::default()
+        ..holm::NodeQuery::default()
     };
     let found = screen.find_nodes(&street, None).await?;
 
@@ -137,17 +137,17 @@ async fn widgets(computer: &Computer) -> computer::Result<()> {
     );
 
     screen.set_node(&street, "12 Bishop Street").await?;
-    let city = computer::NodeQuery {
+    let city = holm::NodeQuery {
         query: "City".to_string(),
-        ..computer::NodeQuery::default()
+        ..holm::NodeQuery::default()
     };
     let filled = screen.set_node(&city, "Lagos").await?;
     assert_eq!(filled.value.as_deref(), Some("Lagos"));
 
-    let ok = computer::NodeQuery {
+    let ok = holm::NodeQuery {
         query: "OK".to_string(),
         role: Some("push button".to_string()),
-        ..computer::NodeQuery::default()
+        ..holm::NodeQuery::default()
     };
     let pressed = screen.invoke_node(&ok, None).await?;
     assert_eq!(pressed.actions, vec!["click".to_string()]);

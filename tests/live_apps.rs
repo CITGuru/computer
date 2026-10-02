@@ -1,16 +1,16 @@
-use computer::{Arrange, Computer, Launch, Point, WaylandProfile};
+use holm::{Arrange, Computer, Launch, Point, WaylandProfile};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[tokio::test]
 #[ignore = "needs a container runtime and installs GIMP and VS Code"]
 async fn a_launch_waits_for_the_app_to_have_drawn() {
-    let spec: computer_types::Spec = serde_json::from_str(
+    let spec: holm_types::Spec = serde_json::from_str(
         r#"{"apps":{"gimp":{},"vscode":{}},"desktop":{"width":1280,"height":800}}"#,
     )
     .expect("a spec");
 
-    let computer = computer::Builder::from_spec(&spec)
+    let computer = holm::Builder::from_spec(&spec)
         .expect("a builder")
         .launch()
         .await
@@ -21,7 +21,7 @@ async fn a_launch_waits_for_the_app_to_have_drawn() {
     outcome.expect("every step");
 }
 
-async fn exercise(computer: &Computer) -> computer::Result<()> {
+async fn exercise(computer: &Computer) -> holm::Result<()> {
     let screen = computer.primary();
 
     for (name, class, command) in [
@@ -84,7 +84,7 @@ async fn a_wayland_launch_waits_for_the_app_too() {
     outcome.expect("every step");
 }
 
-async fn wayland_exercise(computer: &Computer) -> computer::Result<()> {
+async fn wayland_exercise(computer: &Computer) -> holm::Result<()> {
     let screen = computer.primary();
     let at = Instant::now();
 
@@ -164,12 +164,12 @@ async fn wayland_exercise(computer: &Computer) -> computer::Result<()> {
 #[tokio::test]
 #[ignore = "needs a container runtime and builds a wayland image with Xwayland"]
 async fn an_x11_app_runs_on_wayland_when_the_feature_is_asked_for() {
-    let spec: computer_types::Spec = serde_json::from_str(
+    let spec: holm_types::Spec = serde_json::from_str(
         r#"{"desktop":{"server":"wayland","features":["x11_apps"]},"apps":{"gimp":{}}}"#,
     )
     .expect("a spec");
 
-    let computer = computer::Builder::from_spec(&spec)
+    let computer = holm::Builder::from_spec(&spec)
         .expect("a builder")
         .launch()
         .await
@@ -180,7 +180,7 @@ async fn an_x11_app_runs_on_wayland_when_the_feature_is_asked_for() {
     outcome.expect("every step");
 }
 
-async fn x11_on_wayland(computer: &Computer) -> computer::Result<()> {
+async fn x11_on_wayland(computer: &Computer) -> holm::Result<()> {
     let at = Instant::now();
     let window = computer
         .primary()
@@ -210,17 +210,17 @@ async fn x11_on_wayland(computer: &Computer) -> computer::Result<()> {
 #[tokio::test]
 #[ignore = "needs a container runtime and installs the whole catalog"]
 async fn every_app_in_the_catalog_starts_and_draws() {
-    let named: Vec<String> = computer::apps::builtin().into_keys().collect();
+    let named: Vec<String> = holm::apps::builtin().into_keys().collect();
     let apps = named
         .iter()
         .map(|name| format!(r#""{name}":{{}}"#))
         .collect::<Vec<_>>()
         .join(",");
 
-    let spec: computer_types::Spec =
+    let spec: holm_types::Spec =
         serde_json::from_str(&format!(r#"{{"apps":{{{apps}}}}}"#)).expect("a spec");
 
-    let computer = computer::Builder::from_spec(&spec)
+    let computer = holm::Builder::from_spec(&spec)
         .expect("a builder")
         .launch()
         .await
@@ -231,12 +231,12 @@ async fn every_app_in_the_catalog_starts_and_draws() {
     outcome.expect("every app");
 }
 
-async fn whole_catalog(computer: &Computer, named: &[String]) -> computer::Result<()> {
+async fn whole_catalog(computer: &Computer, named: &[String]) -> holm::Result<()> {
     let screen = computer.primary();
 
     for name in named {
-        let app = computer::apps::resolve(&computer_types::Spec::default(), name)?;
-        let Some(computer_types::WindowMatch::Class(class)) = app.window else {
+        let app = holm::apps::resolve(&holm_types::Spec::default(), name)?;
+        let Some(holm_types::WindowMatch::Class(class)) = app.window else {
             panic!("{name} names no window class");
         };
 

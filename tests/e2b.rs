@@ -1,11 +1,11 @@
-use computer::machine::Machine;
-use computer::sandboxes::e2b::{self, E2bApi, Sandbox, SandboxPlan};
-use computer::testing::ScriptedE2b;
-use computer::{Auth, Button, Computer, Config, Delta, Point, ScreenId, X11Profile};
+use holm::machine::Machine;
+use holm::sandboxes::e2b::{self, E2bApi, Sandbox, SandboxPlan};
+use holm::testing::ScriptedE2b;
+use holm::{Auth, Button, Computer, Config, Delta, Point, ScreenId, X11Profile};
 use std::sync::Arc;
 use std::time::Duration;
 
-fn bundled(profile: Arc<dyn computer::Profile>) -> Config {
+fn bundled(profile: Arc<dyn holm::Profile>) -> Config {
     Computer::builder()
         .profile(profile)
         .config()
@@ -328,10 +328,7 @@ async fn an_expiry_is_swept_by_the_name_this_crate_gave_the_box() {
         .expect("a sandbox");
 
     assert!(machine.sweepable());
-    let found = machine
-        .labelled(computer::EXPIRY_LABEL)
-        .await
-        .expect("a sweep");
+    let found = machine.labelled(holm::EXPIRY_LABEL).await.expect("a sweep");
 
     assert_eq!(
         found.first().map(|(name, _)| name.as_str()),

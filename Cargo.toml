@@ -1,5 +1,5 @@
 [package]
-name = "computer"
+name = "holm"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
@@ -12,27 +12,27 @@ categories = ["api-bindings", "development-tools"]
 
 [features]
 default = ["cli"]
-cli = ["dep:computer-cli", "dep:tokio", "dep:libc"]
-microsandbox = ["computer-core/microsandbox"]
-e2b = ["computer-core/e2b", "computer-cli?/e2b"]
-vercel = ["computer-core/vercel", "computer-cli?/vercel"]
-daytona = ["computer-core/daytona", "computer-cli?/daytona"]
-modal = ["computer-core/modal", "computer-cli?/modal"]
-sqlite = ["computer-cli?/sqlite"]
-postgres = ["computer-cli?/postgres"]
-s3 = ["computer-cli?/s3"]
+cli = ["dep:holm-cli", "dep:tokio", "dep:libc"]
+microsandbox = ["holm-core/microsandbox"]
+e2b = ["holm-core/e2b", "holm-cli?/e2b"]
+vercel = ["holm-core/vercel", "holm-cli?/vercel"]
+daytona = ["holm-core/daytona", "holm-cli?/daytona"]
+modal = ["holm-core/modal", "holm-cli?/modal"]
+sqlite = ["holm-cli?/sqlite"]
+postgres = ["holm-cli?/postgres"]
+s3 = ["holm-cli?/s3"]
 
 [dependencies]
-computer-core = { path = "crates/computer-core", version = "0.1.0" }
-computer-cli = { path = "crates/computer-cli", version = "0.1.0", optional = true }
+holm-core = { path = "crates/holm-core", version = "0.1.0" }
+holm-cli = { path = "crates/holm-cli", version = "0.1.0", optional = true }
 tokio = { version = "1", features = [
     "macros",
     "rt-multi-thread",
 ], optional = true }
 libc = { version = "0.2", optional = true }
 
-[dev-dependencies.computer-types]
-path = "crates/computer-types"
+[dev-dependencies.holm-types]
+path = "crates/holm-types"
 version = "0.1.0"
 
 [dev-dependencies]
@@ -51,13 +51,13 @@ tokio = { version = "1", features = [
 string_slice = "deny"
 
 [[bin]]
-name = "computer"
-path = "src/bin/computer.rs"
+name = "holm"
+path = "src/bin/holm.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "computerd"
-path = "src/bin/computerd.rs"
+name = "holmd"
+path = "src/bin/holmd.rs"
 required-features = ["cli"]
 
 [[example]]
@@ -88,14 +88,14 @@ required-features = ["e2b"]
 # Listed, not globbed: `crates/macos-vm` is an empty directory a glob would fail on.
 [workspace]
 members = [
-    "crates/computer-core",
-    "crates/computer-types",
-    "crates/computer-cli",
-    "crates/computer-api",
-    "crates/computer-client",
-    "crates/computer-server",
-    "crates/computer-mcp",
-    "crates/computer-storage",
+    "crates/holm-core",
+    "crates/holm-types",
+    "crates/holm-cli",
+    "crates/holm-api",
+    "crates/holm-client",
+    "crates/holm-server",
+    "crates/holm-mcp",
+    "crates/holm-storage",
 ]
 # Kept out of the workspace, not just out of git: a member nothing checks out
 # fails `cargo metadata` for everyone but the machine that has it.

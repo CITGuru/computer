@@ -88,7 +88,7 @@ LABEL computer.profile="computer-desktop"
 The built-in image tag changes when the crate's image source changes, so the example passes it in as `BASE`. Get the current tag in Rust:
 
 ```rust
-use computer::bundle::{DESKTOP, Extras};
+use holm::bundle::{DESKTOP, Extras};
 
 let base_tag = DESKTOP.tag_with(&Extras::none());
 ```
@@ -118,13 +118,13 @@ cargo run --example custom_image
 
 The first box with a new image waits for a build of several minutes. To avoid this, build the image in CI and push it to a registry.
 
-The built-in Dockerfile and its scripts are in `crates/computer-core/images/desktop`. The directory is a complete Docker context:
+The built-in Dockerfile and its scripts are in `crates/holm-core/images/desktop`. The directory is a complete Docker context:
 
 ```bash
 docker build \
   --build-arg EXTRA_PACKAGES="jq ripgrep" \
   --tag registry.example.com/desktop:1 \
-  crates/computer-core/images/desktop
+  crates/holm-core/images/desktop
 docker push registry.example.com/desktop:1
 ```
 
@@ -139,13 +139,13 @@ let computer = Computer::builder()
     .await?;
 ```
 
-Build the image again for each release of the crate that changes `crates/computer-core/images/`, so the scripts in the image match the driver.
+Build the image again for each release of the crate that changes `crates/holm-core/images/`, so the scripts in the image match the driver.
 
-For a server, `computer image build` builds the image that a runtime needs on the server's host. See [Deploy computerd](deploy-computerd.md#8-build-images-in-advance).
+For a server, `holm image build` builds the image that a runtime needs on the server's host. See [Deploy holmd](deploy-holmd.md#8-build-images-in-advance).
 
 ### Other contexts in the repository
 
-`crates/computer-core/images` has other contexts that implement the same `computer-desktop` contract. Tests keep their scripts the same as the built-in ones.
+`crates/holm-core/images` has other contexts that implement the same `computer-desktop` contract. Tests keep their scripts the same as the built-in ones.
 
 | Directory | Base |
 | --- | --- |
@@ -158,7 +158,7 @@ Use one with `image_dir`:
 
 ```rust
 let computer = Computer::builder()
-    .image_dir("crates/computer-core/images/ubuntu")
+    .image_dir("crates/holm-core/images/ubuntu")
     .launch()
     .await?;
 ```
@@ -168,7 +168,7 @@ let computer = Computer::builder()
 A profile tells the driver how to use an image: its contract name, its image, its ports, its commands, its screen size, and what it supports. Use `ProfileBuilder` to change part of a built-in profile and keep the rest:
 
 ```rust
-use computer::{CommandScreen, CommandWallpaperRuntime, ProfileBuilder, X11Profile};
+use holm::{CommandScreen, CommandWallpaperRuntime, ProfileBuilder, X11Profile};
 
 let profile = ProfileBuilder::new(X11Profile)
     .name("my-desktop")
@@ -202,7 +202,7 @@ The base can be `X11Profile` or `WaylandProfile`. A new display server needs its
 A profile claims what it supports in its `DesktopSupport`. An audit tests those claims against a running box: the screen, the pointer, the DevTools connection, the clipboard, the viewer, and the takeover, where the profile claims them.
 
 ```rust
-let audit = computer::audit(&computer).await;
+let audit = holm::audit(&computer).await;
 println!("{audit}");
 assert!(audit.ok());
 ```
@@ -212,7 +212,7 @@ assert!(audit.ok());
 To fail on a gap, with a time limit:
 
 ```rust
-let audit = computer::audit::audit_strictly(&computer, Duration::from_secs(120)).await?;
+let audit = holm::audit::audit_strictly(&computer, Duration::from_secs(120)).await?;
 ```
 
 `audit_strictly` returns `Denied` with the report when a claim does not work, and `Timeout` when the audit does not finish in time.

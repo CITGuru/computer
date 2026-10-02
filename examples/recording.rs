@@ -1,6 +1,6 @@
 //! cargo run --example recording -- out.gif
 
-use computer::{Button, Computer, Error, Point};
+use holm::{Button, Computer, Error, Point};
 use std::time::Duration;
 
 const FRAMES: &str = "/tmp/computer-frames";
@@ -40,14 +40,14 @@ async fn main() {
     }
 }
 
-async fn record(computer: &Computer, out: &str) -> computer::Result<usize> {
+async fn record(computer: &Computer, out: &str) -> holm::Result<usize> {
     computer.exec(["mkdir", "-p", FRAMES]).await?;
 
     let screen = computer.primary();
     let mut frame = 0usize;
 
     // A screenshot in the same millisecond catches the state before it is drawn.
-    let capture = async |label: &str, frame: &mut usize| -> computer::Result<()> {
+    let capture = async |label: &str, frame: &mut usize| -> holm::Result<()> {
         let image = screen.screenshot().await?;
         let path = format!("{FRAMES}/{:03}.png", *frame);
         computer.write_file(&path, &image).await?;

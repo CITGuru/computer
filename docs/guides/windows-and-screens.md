@@ -7,8 +7,8 @@ This guide works with the windows on a desktop, opens applications, uses more th
 ### List windows
 
 ```bash
-computer window "$BOX" list
-computer window "$BOX" active
+holm window "$BOX" list
+holm window "$BOX" active
 ```
 
 Each window has an `id`, `title`, `class`, position (`at`), `width`, and `height`. Use the `id` in later commands. `active` returns the window that receives keyboard input.
@@ -16,13 +16,13 @@ Each window has an `id`, `title`, `class`, position (`at`), `width`, and `height
 ### Focus, close, and arrange
 
 ```bash
-computer window "$BOX" "$WIN" focus
-computer window "$BOX" "$WIN" move 120 90
-computer window "$BOX" "$WIN" size 800 600
-computer window "$BOX" "$WIN" max
-computer window "$BOX" "$WIN" min
-computer window "$BOX" "$WIN" restore
-computer window "$BOX" "$WIN" close
+holm window "$BOX" "$WIN" focus
+holm window "$BOX" "$WIN" move 120 90
+holm window "$BOX" "$WIN" size 800 600
+holm window "$BOX" "$WIN" max
+holm window "$BOX" "$WIN" min
+holm window "$BOX" "$WIN" restore
+holm window "$BOX" "$WIN" close
 ```
 
 Use an `id` from `list`. `close` asks the application to close the window, and the application can ask a question first.
@@ -34,7 +34,7 @@ Move, size, and state changes return the final geometry. The window manager can 
 After an action that opens a window, wait for it. Do not use a fixed delay.
 
 ```bash
-computer window "$BOX" wait Mousepad --within 10
+holm window "$BOX" wait Mousepad --within 10
 ```
 
 The command returns when a window of that class appears and stops moving. Use the class, not the title: a title often changes with the open document.
@@ -69,16 +69,16 @@ screen.focus(&window.id).await?;
 Open an application that the box was launched with:
 
 ```bash
-BOX=$(computer new --app text-editor)
-computer app "$BOX" text-editor
-computer app "$BOX" text-editor /tmp/notes.txt
+BOX=$(holm new --app text-editor)
+holm app "$BOX" text-editor
+holm app "$BOX" text-editor /tmp/notes.txt
 ```
 
 `app` returns when the application's window has appeared and stopped changing, so the next screenshot shows it ready. Arguments after the name go to the application, such as a file to open.
 
 | Interface | How |
 | --- | --- |
-| CLI | `computer app <box> <name> [args…]`, and `computer apps` for the names |
+| CLI | `holm app <box> <name> [args…]`, and `holm apps` for the names |
 | MCP | `open_app` with `app` and `args`, and `list_apps` for the names |
 | REST | The `launch` action in a batch: `{"type": "launch", "app": "text-editor", "args": []}` |
 | Rust | `screen.launch(&Launch { command, class, settle, within })` with the command and window class |
@@ -90,7 +90,7 @@ To install applications, see [Configure a box](configure-a-box.md#applications).
 A box can have up to eight screens. Ask for them when you create the box:
 
 ```bash
-BOX=$(computer new --screens 2)
+BOX=$(holm new --screens 2)
 ```
 
 Each screen has its own display, browser, clipboard, and viewer. Screen 0 is the primary screen.
@@ -135,10 +135,10 @@ Give the bytes of an image file. An empty image is refused.
 Recording needs the `video` feature, which adds ffmpeg. A box has it by default. The recording is an MP4 file in the box, so the frames do not go over the network while it records.
 
 ```bash
-BOX=$(computer new)
-computer record "$BOX" start --fps 12
-computer record "$BOX" status
-computer record "$BOX" stop screen.mp4
+BOX=$(holm new)
+holm record "$BOX" start --fps 12
+holm record "$BOX" status
+holm record "$BOX" stop screen.mp4
 ```
 
 - `start` fails if the screen is already recording.

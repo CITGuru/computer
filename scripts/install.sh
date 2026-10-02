@@ -1,24 +1,24 @@
 #!/bin/sh
-# Install `computer` and `computerd` from a GitHub release.
+# Install `holm` and `holmd` from a GitHub release.
 #
 #   curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
 #
 # Reads:
-#   COMPUTER_VERSION      a tag such as v0.1.0. Default: the latest release.
-#   COMPUTER_INSTALL_DIR  where the binaries go. Default: ~/.local/bin.
+#   HOLM_VERSION      a tag such as v0.1.0. Default: the latest release.
+#   HOLM_INSTALL_DIR  where the binaries go. Default: ~/.local/bin.
 #
 # Flags:
 #   --print-target        say which build this machine wants, and stop.
-#   --version <tag>       same as COMPUTER_VERSION.
-#   --dir <path>          same as COMPUTER_INSTALL_DIR.
+#   --version <tag>       same as HOLM_VERSION.
+#   --dir <path>          same as HOLM_INSTALL_DIR.
 #
 # POSIX sh on purpose: this is piped into whatever /bin/sh happens to be.
 
 set -eu
 
 REPO="CITGuru/computer"
-VERSION="${COMPUTER_VERSION:-}"
-INSTALL_DIR="${COMPUTER_INSTALL_DIR:-$HOME/.local/bin}"
+VERSION="${HOLM_VERSION:-}"
+INSTALL_DIR="${HOLM_INSTALL_DIR:-$HOME/.local/bin}"
 PRINT_TARGET=""
 
 die() {
@@ -39,18 +39,18 @@ detect() {
         case "$machine" in
         arm64 | aarch64) echo "aarch64-apple-darwin" ;;
         x86_64) echo "x86_64-apple-darwin" ;;
-        *) die "no build for macOS on $machine; try: cargo install computer" ;;
+        *) die "no build for macOS on $machine; try: cargo install holm" ;;
         esac
         ;;
     Linux)
         case "$machine" in
         x86_64 | amd64) echo "x86_64-unknown-linux-gnu" ;;
         aarch64 | arm64) echo "aarch64-unknown-linux-gnu" ;;
-        *) die "no build for Linux on $machine; try: cargo install computer" ;;
+        *) die "no build for Linux on $machine; try: cargo install holm" ;;
         esac
         ;;
     *)
-        die "no build for $kernel; try: cargo install computer"
+        die "no build for $kernel; try: cargo install holm"
         ;;
     esac
 }
@@ -62,7 +62,7 @@ latest() {
 
     case "$url" in
     */releases/tag/*) echo "${url##*/}" ;;
-    *) die "$REPO has published no release yet; try: cargo install computer" ;;
+    *) die "$REPO has published no release yet; try: cargo install holm" ;;
     esac
 }
 
@@ -117,13 +117,13 @@ need tar
 
 [ -n "$VERSION" ] || VERSION="$(latest)"
 
-ARCHIVE="computer-$VERSION-$TARGET.tar.gz"
+ARCHIVE="holm-$VERSION-$TARGET.tar.gz"
 BASE="https://github.com/$REPO/releases/download/$VERSION"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-echo "install: fetching computer $VERSION for $TARGET"
+echo "install: fetching holm $VERSION for $TARGET"
 curl -fsSL "$BASE/$ARCHIVE" -o "$WORK/$ARCHIVE" 2>/dev/null ||
     die "no $ARCHIVE in $VERSION; see https://github.com/$REPO/releases"
 curl -fsSL "$BASE/SHA256SUMS" -o "$WORK/SHA256SUMS" 2>/dev/null ||
@@ -135,7 +135,7 @@ curl -fsSL "$BASE/SHA256SUMS" -o "$WORK/SHA256SUMS" 2>/dev/null ||
 tar -xzf "$WORK/$ARCHIVE" -C "$WORK"
 
 mkdir -p "$INSTALL_DIR"
-for binary in computer computerd; do
+for binary in holm holmd; do
     [ -f "$WORK/$binary" ] || die "$ARCHIVE holds no $binary"
     cp "$WORK/$binary" "$INSTALL_DIR/$binary.new"
     chmod +x "$INSTALL_DIR/$binary.new"
@@ -151,4 +151,4 @@ case ":${PATH}:" in
     ;;
 esac
 
-echo "install: done. Try: computer new"
+echo "install: done. Try: holm new"

@@ -1,10 +1,10 @@
-use computer::sandboxes::{daytona::cloud::Cloud, remote};
-use computer::{Auth, Button, Computer, Point, X11Profile};
+use holm::sandboxes::{daytona::cloud::Cloud, remote};
+use holm::{Auth, Button, Computer, Point, X11Profile};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let keep = args.iter().any(|arg| arg == "--keep");
 
@@ -51,7 +51,7 @@ async fn main() -> computer::Result<()> {
                 .iter()
                 .find(|page| page.url.contains("example.com"))
                 .or(pages.first())
-                .ok_or_else(|| computer::Error::denied("the browser has no page"))?;
+                .ok_or_else(|| holm::Error::denied("the browser has no page"))?;
             let mut page = devtools.attach(target).await?;
             let snapshot = page.snapshot(None, Some(20)).await?;
             println!(

@@ -8,7 +8,7 @@ Every box has accessibility unless it is launched without it. It starts the AT-S
 
 | Interface | Default | To leave it out |
 | --- | --- | --- |
-| CLI | `computer new` | `--minimal` |
+| CLI | `holm new` | `--minimal` |
 | MCP | `launch_box` | `accessibility: false` |
 | REST | No `features` in `spec.desktop` | A `features` list without `accessibility` |
 | Rust | `Computer::builder()` | `minimal()` or `without(Feature::Accessibility)` |
@@ -20,8 +20,8 @@ Accessibility works on the X11 and Wayland images.
 ## 2. Read the tree
 
 ```bash
-computer widget "$BOX" tree --depth 4
-computer widget "$BOX" tree --app gimp --depth 6
+holm widget "$BOX" tree --depth 4
+holm widget "$BOX" tree --app gimp --depth 6
 ```
 
 Each node has:
@@ -42,9 +42,9 @@ A tree read stops at depth 4 unless you give `--depth`. A full tree can have tho
 ## 3. Find a widget
 
 ```bash
-computer widget "$BOX" find "Street"
-computer widget "$BOX" find "Street" --role text
-computer widget "$BOX" find "OK" --role "push button" --exact
+holm widget "$BOX" find "Street"
+holm widget "$BOX" find "Street" --role text
+holm widget "$BOX" find "OK" --role "push button" --exact
 ```
 
 A query matches:
@@ -64,14 +64,14 @@ The best match is first. An exact match ranks above a partial match, and a field
 ## 4. Fill a field
 
 ```bash
-computer widget "$BOX" fill "Street" "12 Bishop Street" --role text
+holm widget "$BOX" fill "Street" "12 Bishop Street" --role text
 ```
 
 `fill` writes the value into the widget's text directly. It does not send key presses. If an application acts on each key press, focus the widget and type instead:
 
 ```bash
-computer widget "$BOX" focus "Street" --role text
-computer keyboard "$BOX" type "12 Bishop Street"
+holm widget "$BOX" focus "Street" --role text
+holm keyboard "$BOX" type "12 Bishop Street"
 ```
 
 A widget that is not editable refuses `fill`, and the error names its role.
@@ -79,14 +79,14 @@ A widget that is not editable refuses `fill`, and the error names its role.
 ## 5. Press a button
 
 ```bash
-computer widget "$BOX" press "OK" --role "push button"
+holm widget "$BOX" press "OK" --role "push button"
 ```
 
 `press` runs the widget's first action. Give `--action` to run a different one:
 
 ```bash
-computer widget "$BOX" find "Remember me"
-computer widget "$BOX" press "Remember me" --action NAME
+holm widget "$BOX" find "Remember me"
+holm widget "$BOX" press "Remember me" --action NAME
 ```
 
 Use a name from the `actions` list that `find` returns.
@@ -103,8 +103,8 @@ Toolkits name actions differently. GTK calls the main action of a button `click`
 When the application must see a real click, use the widget's `at` point with a screen click:
 
 ```bash
-computer widget "$BOX" find "Upload" --role "push button"
-computer mouse "$BOX" click 640 412 left
+holm widget "$BOX" find "Upload" --role "push button"
+holm mouse "$BOX" click 640 412 left
 ```
 
 A widget with no actions cannot be pressed. The error says so and tells you to click its `at` point.

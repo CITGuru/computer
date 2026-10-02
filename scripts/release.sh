@@ -133,7 +133,7 @@ FILES_TO_BUMP="Cargo.toml $(ls -d crates/*/Cargo.toml 2>/dev/null | tr '\n' ' ')
 
 bump() {
   sed_inplace "s/^version = \"$CURRENT\"\$/version = \"$VERSION\"/" "$1"
-  sed_inplace "/computer/ s/version = \"$CURRENT\"/version = \"$VERSION\"/g" "$1"
+  sed_inplace "/holm/ s/version = \"$CURRENT\"/version = \"$VERSION\"/g" "$1"
 }
 
 KEPT=""
@@ -181,7 +181,7 @@ trap - EXIT INT TERM
 info "committing and tagging $TAG"
 run git add Cargo.lock $FILES_TO_BUMP
 run git commit -m "chore(release): $TAG"
-run git tag -a "$TAG" -m "Computer $TAG"
+run git tag -a "$TAG" -m "holm $TAG"
 
 
 if [ "$NO_PUSH" = "1" ]; then

@@ -1,9 +1,9 @@
 //! On a hypervisor, with smolvm installed: `cargo test --test live_smolvm -- --ignored`.
 
-use computer::SystemEngine;
-use computer::microvm::{MicroVm, MicroVmApi, import_image};
-use computer::sandboxes::smolvm::SmolVm;
-use computer::{Button, Computer, Delta, Engine, Point, bundle};
+use holm::SystemEngine;
+use holm::microvm::{MicroVm, MicroVmApi, import_image};
+use holm::sandboxes::smolvm::SmolVm;
+use holm::{Button, Computer, Delta, Engine, Point, bundle};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -47,7 +47,7 @@ async fn a_real_smolvm_runs_the_same_desktop() {
     outcome.expect("every step");
 }
 
-async fn exercise(computer: &Computer) -> computer::Result<()> {
+async fn exercise(computer: &Computer) -> holm::Result<()> {
     assert_eq!(computer.provider(), "smolvm");
     assert!(
         computer.probe().await.ready(),

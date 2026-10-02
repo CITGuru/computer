@@ -1,18 +1,18 @@
-use computer::bundle::{
+use holm::bundle::{
     BROWSER_DESKTOP, BROWSER_SH, DOCKERFILE, FLUXBOX_INIT, FLUXBOX_MENU, FLUXBOX_STYLE,
     INPUT_GUARD, LAUNCH_SH, SCREEN_SH, START_SH, TERMINAL_DESKTOP, TINT2RC, WALLPAPER_SH,
 };
-use computer::image::{
+use holm::image::{
     BROWSER_COMMAND, DESKTOP_COMMAND, DEVTOOLS_BRIDGE_PORT, DEVTOOLS_PORT, HEIGHT, HEIGHT_ENV,
     MAX_SCREENS, SCREEN_COMMAND, ScreenAction, WIDTH, WIDTH_ENV, support,
 };
-use computer::{AUTH_ENV, CONTROL_SECRET_ENV, VIEW_SECRET_ENV, VIEWER_USER};
-use computer::{Profile, ScreenId, X11Profile};
+use holm::{AUTH_ENV, CONTROL_SECRET_ENV, VIEW_SECRET_ENV, VIEWER_USER};
+use holm::{Profile, ScreenId, X11Profile};
 
 #[test]
 fn every_image_starts_what_it_starts_in_a_locale_that_reads_utf8() {
     for image in ["desktop", "ubuntu", "tiny", "wayland"] {
-        let path = std::path::Path::new(computer::bundle::IMAGES)
+        let path = std::path::Path::new(holm::bundle::IMAGES)
             .join(image)
             .join("Dockerfile");
         let dockerfile = std::fs::read_to_string(&path)
@@ -421,7 +421,7 @@ fn the_window_manager_is_configured_rather_than_left_to_its_defaults() {
 /// `materialize` writes only the bundle's list, so an unlisted `COPY` source fails the build.
 #[test]
 fn every_file_the_dockerfile_copies_is_one_the_bundle_carries() {
-    let carried: Vec<&str> = computer::bundle::DESKTOP
+    let carried: Vec<&str> = holm::bundle::DESKTOP
         .files
         .iter()
         .map(|(name, _)| *name)
@@ -509,7 +509,7 @@ fn the_dock_is_started_only_where_one_was_installed() {
          not, so installing tint2 is the only thing the extra has to do"
     );
     assert!(
-        computer::bundle::Extras::dock()
+        holm::bundle::Extras::dock()
             .packages
             .contains(&"hsetroot".to_string()),
         "tint2 finds what is behind its rounded corners through _XROOTPMAP_ID, \
@@ -618,7 +618,7 @@ fn the_image_declares_the_contract_it_implements() {
     assert!(
         DOCKERFILE.contains(&format!(
             "LABEL {}=\"{}\"",
-            computer::PROFILE_LABEL,
+            holm::PROFILE_LABEL,
             X11Profile.name()
         )),
         "an image that declares nothing is one a box can be driven at with \

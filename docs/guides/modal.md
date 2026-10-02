@@ -14,7 +14,7 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 | Windows, applications, and native widgets | Browser profiles (`--profile`) |
 | Files, commands, and clipboard | |
 | Applications and packages at launch (`--app`), and applications installed into a running box | |
-| Page tools and `computer cdp`, also after a server restart | A box that lives more than 24 hours |
+| Page tools and `holm cdp`, also after a server restart | A box that lives more than 24 hours |
 | Viewer and takeover URLs in a browser | |
 | CPUs and memory for each box | |
 | Network policy (`--no-network`) | |
@@ -23,7 +23,7 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 
 Run `modal token new`, or create a token in the Modal dashboard under Settings, API Tokens. A token is a pair: an ID that starts with `ak-`, and a secret that starts with `as-`. Keep them out of shell history and out of files that go into git.
 
-Release builds of `computer` and `computerd` include Modal. For a source build, add the `modal` feature:
+Release builds of `holm` and `holmd` include Modal. For a source build, add the `modal` feature:
 
 ```bash
 cargo install --path . --locked --features modal
@@ -34,14 +34,14 @@ cargo install --path . --locked --features modal
 **From the environment.** The runtime is named `modal`:
 
 ```bash
-MODAL_TOKEN_ID=ak-... MODAL_TOKEN_SECRET=as-... COMPUTER_SERVER_SANDBOXES=modal computerd
+MODAL_TOKEN_ID=ak-... MODAL_TOKEN_SECRET=as-... HOLM_SERVER_SANDBOXES=modal holmd
 ```
 
 **At run time, with the CLI.** The secret goes in as the runtime's key, and the ID as a field:
 
 ```bash
-computer runtime add cloud --provider modal --field token_id=ak-... --api-key-env MODAL_TOKEN_SECRET
-computer runtime ls
+holm runtime add cloud --provider modal --field token_id=ak-... --api-key-env MODAL_TOKEN_SECRET
+holm runtime ls
 ```
 
 | Variable or field | Effect |
@@ -49,13 +49,13 @@ computer runtime ls
 | `MODAL_TOKEN_ID`, or the `token_id` field | The token ID. Necessary. |
 | `MODAL_TOKEN_SECRET`, or `api_key` | The token secret. Necessary. |
 | `MODAL_ENVIRONMENT`, or the `environment` field | The Modal environment. Default: the workspace's default environment. |
-| `MODAL_APP`, or the `app` field | The Modal app that holds the images and sandboxes. Default `computer`. The server creates it if it does not exist. |
+| `MODAL_APP`, or the `app` field | The Modal app that holds the images and sandboxes. Default `holm`. The server creates it if it does not exist. |
 | `MODAL_SERVER_URL`, or the `endpoint` field | The API address. Default `https://api.modal.com:443`. |
 
 ## 3. Create a box
 
 ```bash
-BOX=$(computer new --runtime modal)
+BOX=$(holm new --runtime modal)
 ```
 
 MCP: `launch_box` with `runtime: "modal"`. REST: `"placement": {"runtime": "modal"}`.
@@ -95,8 +95,8 @@ A sandbox stops when it has no activity for the runtime's TTL, and it never live
 Build with the `modal` feature, and set `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`.
 
 ```rust
-use computer::sandboxes::{modal::cloud::Cloud, remote};
-use computer::{Auth, Computer, X11Profile};
+use holm::sandboxes::{modal::cloud::Cloud, remote};
+use holm::{Auth, Computer, X11Profile};
 
 let (machine, profile) = remote::pair(Arc::new(Cloud::from_env()?), Arc::new(X11Profile));
 
