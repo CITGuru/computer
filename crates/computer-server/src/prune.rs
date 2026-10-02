@@ -1,5 +1,4 @@
 use crate::AppState;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const EVERY: Duration = Duration::from_secs(60 * 60);
@@ -38,28 +37,35 @@ fn seconds(name: &str) -> Option<Duration> {
         .map(Duration::from_secs)
 }
 
-pub fn spawn(state: Arc<AppState>, every: Duration) {
+pub async fn sweep(state: &AppState) -> Swept {
     let (frames, entries) = windows();
+    let swept = once(state, cutoff(frames), cutoff(entries)).await;
 
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(every).await;
-
-            let swept = once(&state, cutoff(frames), cutoff(entries)).await;
-            if !swept.nothing() {
-                tracing::info!(
-                    frames = swept.frames,
-                    entries = swept.entries,
-                    boxes = swept.boxes,
-                    "pruned what had aged out"
-                );
-            }
-        }
-    });
+    if !swept.nothing() {
+        tracing::info!(
+            frames = swept.frames,
+            entries = swept.entries,
+            boxes = swept.boxes,
+            "pruned what had aged out"
+        );
+    }
+    swept
 }
 
 pub async fn once(state: &AppState, frames_before: u64, entries_before: u64) -> Swept {
     let mut swept = Swept::default();
+
+    if let Err(why) = state
+        .store
+        .prune_notes(crate::routes::ms_of(std::time::SystemTime::now()))
+        .await
+    {
+        tracing::warn!(%why, "old notes would not go");
+    }
+
+    if let Err(why) = state.store.prune_events(entries_before).await {
+        tracing::warn!(%why, "old events would not go");
+    }
 
     let listed = match state.store.list_boxes().await {
         Ok(listed) => listed,
@@ -105,7 +111,9 @@ pub async fn once(state: &AppState, frames_before: u64, entries_before: u64) -> 
 }
 
 async fn forgettable(state: &AppState, id: &str) -> bool {
-    if state.registry.get(id).await.is_ok() {
+    if state.registry.get(id).await.is_ok()
+        || crate::jobs::phase(state.store.as_ref(), id).await.is_some()
+    {
         return false;
     }
 
@@ -134,6 +142,7 @@ mod tests {
 
     fn record(id: &str) -> BoxRecord {
         BoxRecord {
+            owner: None,
             runtime: "docker".to_string(),
             id: id.to_string(),
             spec: Spec::default(),
@@ -143,6 +152,7 @@ mod tests {
             screens: 1,
             created_at_ms: 0,
             expires_at_ms: None,
+            deleted_at_ms: None,
         }
     }
 

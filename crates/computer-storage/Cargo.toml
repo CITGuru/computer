@@ -8,11 +8,11 @@ license = "MIT"
 
 [features]
 default = ["local"]
-local = ["dep:tokio"]
-sql = ["dep:sqlx", "dep:tokio"]
+local = []
+sql = ["dep:sqlx"]
 sqlite = ["sql", "sqlx/sqlite"]
 postgres = ["sql", "sqlx/postgres", "sqlx/tls-rustls-ring"]
-s3 = ["dep:reqwest", "dep:hmac", "dep:sha2", "dep:hex", "dep:chrono", "dep:tokio"]
+s3 = ["dep:reqwest", "dep:hmac", "dep:sha2", "dep:hex", "dep:chrono"]
 conformance = []
 
 [dependencies]
@@ -21,7 +21,7 @@ computer-api = { path = "../computer-api", version = "0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["fs"], optional = true }
+tokio = { version = "1", features = ["fs", "rt", "sync", "time"] }
 chrono = { version = "0.4", default-features = false, features = [
     "clock",
 ], optional = true }

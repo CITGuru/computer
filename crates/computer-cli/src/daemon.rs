@@ -19,11 +19,15 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => None,
     };
 
-    if let Err(why) = computer_server::auth::allowed(&address, token.as_ref()) {
+    let console = computer_server::console::Console::configured();
+    if let Err(why) = computer_server::auth::allowed(&address, token.as_ref(), console) {
         return Err(why.into());
     }
 
     let state = Arc::new(AppState::from_env().await?.gated(token));
+    if let Some(console) = &state.console {
+        console.follow();
+    }
 
     let taken = computer_server::recover::adopt(&state).await;
     if taken > 0 {
@@ -36,8 +40,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         .map(std::time::Duration::from_secs)
         .unwrap_or(computer_server::reap::EVERY);
 
-    computer_server::reap::spawn(Arc::clone(&state), every);
-    computer_server::prune::spawn(Arc::clone(&state), computer_server::prune::every());
+    computer_server::schedule::spawn(Arc::clone(&state), every, computer_server::prune::every());
 
     let listener = tokio::net::TcpListener::bind(address).await?;
     let api = format!("http://{}", own(listener.local_addr()?));
@@ -45,7 +48,7 @@ pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!(
         %address,
-        gated = state.token.is_some(),
+        gated = state.token.is_some() || state.console.is_some(),
         mcp = "/mcp",
         runtimes = %state.runtimes.names(),
         "computerd is listening"

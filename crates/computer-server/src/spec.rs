@@ -11,6 +11,7 @@ pub fn plan(
     placement: &Placement,
     name: &str,
     runtime: &Runtime,
+    owner: Option<&str>,
 ) -> Result<(Builder, Resolved), ApiError> {
     let resolved = resolve(spec)?;
 
@@ -31,6 +32,7 @@ pub fn plan(
         width: resolved.width,
         height: resolved.height,
         screens: resolved.screens,
+        owner: owner.map(str::to_string),
     };
     if let Some(value) = label.encode() {
         builder = builder.label(BOX_LABEL, value);
@@ -58,7 +60,7 @@ mod tests {
     fn test_a_spec_the_engine_refuses_is_a_bad_request() {
         let spec: Spec = serde_json::from_str(r#"{"desktop":{"screens":99}}"#).unwrap();
 
-        let Err(error) = plan(&spec, &Placement::default(), "box", &on_docker()) else {
+        let Err(error) = plan(&spec, &Placement::default(), "box", &on_docker(), None) else {
             panic!("a spec asking for more screens than the image runs was accepted");
         };
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
@@ -71,7 +73,7 @@ mod tests {
             ..Placement::default()
         };
 
-        let Err(error) = plan(&Spec::default(), &placement, "box", &on_docker()) else {
+        let Err(error) = plan(&Spec::default(), &placement, "box", &on_docker(), None) else {
             panic!("a box was accepted that would be removed while starting");
         };
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
@@ -83,7 +85,7 @@ mod tests {
         tuned.tuning.memory = Some("4g".to_string());
 
         let (builder, _) =
-            plan(&Spec::default(), &Placement::default(), "box", &tuned).expect("a box");
+            plan(&Spec::default(), &Placement::default(), "box", &tuned, None).expect("a box");
         assert_eq!(
             builder.config().expect("a config").memory.as_deref(),
             Some("4g")
@@ -93,7 +95,7 @@ mod tests {
             memory: Some("8g".to_string()),
             ..Placement::default()
         };
-        let (builder, _) = plan(&Spec::default(), &placement, "box", &tuned).expect("a box");
+        let (builder, _) = plan(&Spec::default(), &placement, "box", &tuned, None).expect("a box");
         assert_eq!(
             builder.config().expect("a config").memory.as_deref(),
             Some("8g"),
@@ -106,8 +108,14 @@ mod tests {
         let mut hardened = on_docker();
         hardened.tuning.isolation = Some("runsc".to_string());
 
-        let (builder, _) =
-            plan(&Spec::default(), &Placement::default(), "box", &hardened).expect("a box");
+        let (builder, _) = plan(
+            &Spec::default(),
+            &Placement::default(),
+            "box",
+            &hardened,
+            None,
+        )
+        .expect("a box");
         let args = builder.preview().expect("the command it would run");
 
         assert!(
@@ -119,8 +127,14 @@ mod tests {
 
     #[test]
     fn test_a_plan_carries_the_spec_back_in_a_label() {
-        let (_, resolved) = plan(&Spec::default(), &Placement::default(), "box", &on_docker())
-            .expect("a default spec launches");
+        let (_, resolved) = plan(
+            &Spec::default(),
+            &Placement::default(),
+            "box",
+            &on_docker(),
+            None,
+        )
+        .expect("a default spec launches");
 
         assert_eq!(resolved.screens, 1);
     }

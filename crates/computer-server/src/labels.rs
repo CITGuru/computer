@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
+use computer_storage::Store;
 
-#[derive(Default)]
-pub struct Labels(Mutex<HashMap<(String, String), String>>);
+const KIND: &str = "labels";
+
+pub struct Labels;
 
 impl Labels {
     pub fn valid(label: &str) -> Result<(), String> {
@@ -19,84 +19,115 @@ impl Labels {
             _ => Ok(()),
         }
     }
+}
 
-    pub fn set(&self, box_id: &str, label: &str, target: &str) {
-        if let Ok(mut labels) = self.0.lock() {
-            labels.insert((box_id.to_string(), label.to_string()), target.to_string());
+fn key(box_id: &str, label: &str) -> String {
+    format!("{box_id}/{label}")
+}
+
+pub async fn set(store: &dyn Store, box_id: &str, label: &str, target: &str) {
+    if let Err(why) = store
+        .put_note(KIND, &key(box_id, label), target, None)
+        .await
+    {
+        tracing::warn!(box_ = %box_id, %why, "a label was not kept");
+    }
+}
+
+pub async fn target(store: &dyn Store, box_id: &str, word: &str) -> Option<String> {
+    store
+        .get_note(KIND, &key(box_id, word))
+        .await
+        .ok()
+        .flatten()
+}
+
+pub async fn live(store: &dyn Store, box_id: &str, live: &[String]) -> Vec<(String, String)> {
+    let prefix = key(box_id, "");
+    let held = store.list_notes(KIND, &prefix).await.unwrap_or_default();
+    let mut kept = Vec::new();
+
+    for (at, target) in held {
+        match live.contains(&target) {
+            true => kept.push((at.trim_start_matches(&prefix).to_string(), target)),
+            false => {
+                let _ = store.forget_note(KIND, &at).await;
+            }
         }
     }
 
-    pub fn target(&self, box_id: &str, word: &str) -> Option<String> {
-        self.0
-            .lock()
-            .ok()?
-            .get(&(box_id.to_string(), word.to_string()))
-            .cloned()
-    }
+    kept
+}
 
-    pub fn of(&self, box_id: &str, target: &str) -> Option<String> {
-        let labels = self.0.lock().ok()?;
-        let mut named: Vec<&String> = labels
-            .iter()
-            .filter(|((owner, _), held)| owner == box_id && held.as_str() == target)
-            .map(|((_, label), _)| label)
-            .collect();
-        named.sort();
-        named.first().map(|label| (*label).clone())
-    }
-
-    pub fn keep(&self, box_id: &str, live: &[String]) {
-        if let Ok(mut labels) = self.0.lock() {
-            labels.retain(|(owner, _), target| owner != box_id || live.contains(target));
-        }
-    }
-
-    pub fn forget(&self, box_id: &str) {
-        if let Ok(mut labels) = self.0.lock() {
-            labels.retain(|(owner, _), _| owner != box_id);
-        }
+pub async fn forget(store: &dyn Store, box_id: &str) {
+    if let Err(why) = store.forget_notes(KIND, &key(box_id, "")).await {
+        tracing::warn!(box_ = %box_id, %why, "the labels of a box were not forgotten");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use computer_storage::memory::Memory;
 
-    #[test]
-    fn test_a_label_names_a_tab_of_one_box_until_the_tab_is_gone() {
-        let labels = Labels::default();
-        labels.set("box-1", "docs", "AAAA");
-        labels.set("box-2", "docs", "BBBB");
+    #[tokio::test]
+    async fn test_a_label_names_a_tab_of_one_box_until_the_tab_is_gone() {
+        let store = Memory::default();
+        set(&store, "box-1", "docs", "AAAA").await;
+        set(&store, "box-2", "docs", "BBBB").await;
 
-        assert_eq!(labels.target("box-1", "docs").as_deref(), Some("AAAA"));
-        assert_eq!(labels.target("box-2", "docs").as_deref(), Some("BBBB"));
-        assert_eq!(labels.of("box-1", "AAAA").as_deref(), Some("docs"));
         assert_eq!(
-            labels.target("box-1", "AAAA"),
+            target(&store, "box-1", "docs").await.as_deref(),
+            Some("AAAA")
+        );
+        assert_eq!(
+            target(&store, "box-2", "docs").await.as_deref(),
+            Some("BBBB")
+        );
+        assert_eq!(
+            target(&store, "box-1", "AAAA").await,
             None,
             "a word that is no label is left to be read as an id"
         );
-
-        labels.keep("box-1", &["CCCC".to_string()]);
         assert_eq!(
-            labels.target("box-1", "docs"),
+            live(&store, "box-1", &["AAAA".to_string()]).await,
+            [("docs".to_string(), "AAAA".to_string())]
+        );
+
+        assert!(
+            live(&store, "box-1", &["CCCC".to_string()])
+                .await
+                .is_empty()
+        );
+        assert_eq!(
+            target(&store, "box-1", "docs").await,
             None,
             "a label that outlived its tab would send the next action to a tab that is not there"
         );
-        assert_eq!(labels.target("box-2", "docs").as_deref(), Some("BBBB"));
+        assert_eq!(
+            target(&store, "box-2", "docs").await.as_deref(),
+            Some("BBBB")
+        );
 
-        labels.forget("box-2");
-        assert_eq!(labels.target("box-2", "docs"), None);
+        forget(&store, "box-2").await;
+        assert_eq!(target(&store, "box-2", "docs").await, None);
     }
 
-    #[test]
-    fn test_a_label_moves_to_the_tab_it_was_last_given() {
-        let labels = Labels::default();
-        labels.set("box-1", "docs", "AAAA");
-        labels.set("box-1", "docs", "BBBB");
+    #[tokio::test]
+    async fn test_a_label_moves_to_the_tab_it_was_last_given() {
+        let store = Memory::default();
+        set(&store, "box-1", "docs", "AAAA").await;
+        set(&store, "box-1", "docs", "BBBB").await;
 
-        assert_eq!(labels.target("box-1", "docs").as_deref(), Some("BBBB"));
-        assert_eq!(labels.of("box-1", "AAAA"), None);
+        assert_eq!(
+            target(&store, "box-1", "docs").await.as_deref(),
+            Some("BBBB")
+        );
+        assert!(
+            live(&store, "box-1", &["AAAA".to_string()])
+                .await
+                .is_empty()
+        );
     }
 
     #[test]

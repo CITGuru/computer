@@ -209,6 +209,28 @@ impl Desktop for ScriptedDesktop {
         Ok(())
     }
 
+    async fn let_go_later(
+        &self,
+        held: &crate::StillDown,
+        after: Duration,
+        turn: &str,
+    ) -> Result<()> {
+        if let Ok(mut acted) = self.acted.lock() {
+            acted.push(format!(
+                "let_go_later {held:?} {} {turn}",
+                after.as_millis()
+            ));
+        }
+        Ok(())
+    }
+
+    async fn keep_held(&self, held: &crate::StillDown) -> Result<()> {
+        if let Ok(mut acted) = self.acted.lock() {
+            acted.push(format!("keep_held {held:?}"));
+        }
+        Ok(())
+    }
+
     async fn move_along(&self, steps: &[crate::motion::Step]) -> Result<()> {
         let last = steps.last().map(|step| step.at).unwrap_or_default();
         self.act(format!("move_along {} {} {}", steps.len(), last.x, last.y))
@@ -611,6 +633,7 @@ pub struct ScriptedE2b {
     refreshed: Mutex<Vec<String>>,
     found: Mutex<Vec<String>>,
     next: AtomicU64,
+    broken: bool,
 }
 
 impl Default for ScriptedE2b {
@@ -655,7 +678,13 @@ impl ScriptedE2b {
             refreshed: Mutex::new(Vec::new()),
             found: Mutex::new(Vec::new()),
             next: AtomicU64::new(0),
+            broken: false,
         }
+    }
+
+    pub fn breaking_builds(mut self) -> Self {
+        self.broken = true;
+        self
     }
 
     pub fn replying(mut self, result: ExecResult) -> Self {
@@ -794,7 +823,10 @@ impl E2bApi for ScriptedE2b {
         &self,
         _built: &crate::sandboxes::e2b::api::Built,
     ) -> Result<serde_json::Value> {
-        Ok(serde_json::json!({ "status": "ready" }))
+        match self.broken {
+            true => Ok(serde_json::json!({ "status": "error" })),
+            false => Ok(serde_json::json!({ "status": "ready" })),
+        }
     }
 
     async fn create(&self, plan: &SandboxPlan) -> Result<Sandbox> {
@@ -910,6 +942,8 @@ pub struct ScriptedRemote {
     missing: Mutex<Vec<String>>,
     listable: bool,
     builds: bool,
+    persists: bool,
+    stops: Mutex<Vec<String>>,
     next: AtomicU64,
     templates: AtomicU64,
 }
@@ -938,6 +972,8 @@ impl ScriptedRemote {
             missing: Mutex::new(Vec::new()),
             listable: true,
             builds: false,
+            persists: false,
+            stops: Mutex::new(Vec::new()),
             next: AtomicU64::new(0),
             templates: AtomicU64::new(0),
         }
@@ -961,6 +997,15 @@ impl ScriptedRemote {
     pub fn building(mut self) -> Self {
         self.builds = true;
         self
+    }
+
+    pub fn persisting(mut self) -> Self {
+        self.persists = true;
+        self
+    }
+
+    pub fn stops(&self) -> Vec<String> {
+        self.stops.lock().map(|ids| ids.clone()).unwrap_or_default()
     }
 
     pub fn missing(self, reference: impl Into<String>) -> Self {
@@ -1159,6 +1204,21 @@ impl RemoteApi for ScriptedRemote {
             killed.push(id.to_string());
         }
         Ok(())
+    }
+
+    fn persists(&self) -> bool {
+        self.persists
+    }
+
+    async fn stop(&self, id: &str) -> Result<()> {
+        if let Ok(mut stops) = self.stops.lock() {
+            stops.push(id.to_string());
+        }
+        Ok(())
+    }
+
+    async fn start(&self, id: &str) -> Result<RemoteSandbox> {
+        Ok(RemoteSandbox::new(id).with_token("scripted"))
     }
 
     async fn keep_alive(&self, id: &str, _ttl: Duration) -> Result<()> {

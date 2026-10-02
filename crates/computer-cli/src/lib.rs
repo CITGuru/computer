@@ -14,7 +14,8 @@ computer — a desktop in a box
   new [--size WxH] [--screens N] [--wayland] [--url URL]
       [--app NAME]… [--package PKG]… [--base | --minimal] [--audio]
       [--no-network] [--memory SIZE] [--cpus N] [--runtime NAME]
-      [--ttl MINUTES] [--idle MINUTES] [--profile NAME] [--spec FILE]
+      [--ttl MINUTES] [--idle MINUTES] [--persistent] [--profile NAME]
+      [--spec FILE]
                               open a box and print where to watch it. --app
                               installs one from the catalog, such as gimp or
                               vscode, for the app command below; it and
@@ -26,7 +27,9 @@ computer — a desktop in a box
                               --wayland runs sway in place of X11.
                               none of those can be turned on afterwards. --ttl
                               removes the box that long after it opens, --idle
-                              that long after it was last used. --spec is a
+                              that long after it was last used. --persistent
+                              keeps the files of a stopped box, on a runtime
+                              that can, so resume brings it back. --spec is a
                               file of what POST /v1/boxes takes, or - for
                               stdin, for what has no flag: an app of your own,
                               or who may watch. a flag goes over the file.

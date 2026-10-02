@@ -15,10 +15,16 @@ pub struct Memory {
     boxes: Mutex<BTreeMap<String, BoxRecord>>,
     runtimes: Mutex<BTreeMap<String, RuntimeRecord>>,
     images: Mutex<BTreeMap<(String, String), ImageRecord>>,
+    notes: Mutex<Notes>,
+    locks: crate::Locks,
+    jobs: Mutex<Vec<crate::JobRecord>>,
+    events: Mutex<Vec<crate::EventRecord>>,
     traces: Mutex<HashMap<String, Arc<Trace>>>,
     order: Mutex<VecDeque<String>>,
     frames: Mutex<HashMap<String, Held>>,
 }
+
+type Notes = BTreeMap<(String, String), (String, Option<u64>)>;
 
 #[derive(Default)]
 struct Trace {
@@ -158,6 +164,158 @@ impl Store for Memory {
             .remove(&(runtime.to_string(), spec_digest.to_string()));
 
         Ok(())
+    }
+
+    async fn lock(&self, name: &str) -> Result<crate::Lock> {
+        Ok(crate::Lock::of(self.locks.hold(name).await))
+    }
+
+    async fn push_job(&self, job: &crate::JobRecord) -> Result<()> {
+        self.jobs.lock().map_err(poisoned)?.push(job.clone());
+
+        Ok(())
+    }
+
+    async fn claim_job(&self, worker: &str, lease_ms: u64) -> Result<Option<crate::JobRecord>> {
+        let now = now_ms();
+        let mut jobs = self.jobs.lock().map_err(poisoned)?;
+
+        Ok(jobs
+            .iter_mut()
+            .filter(|job| job.free(now))
+            .min_by(|one, other| {
+                (one.created_at_ms, &one.id).cmp(&(other.created_at_ms, &other.id))
+            })
+            .map(|job| {
+                job.attempts += 1;
+                job.claimed_by = Some(worker.to_string());
+                job.claimed_until_ms = Some(now + lease_ms);
+                job.clone()
+            }))
+    }
+
+    async fn renew_job(&self, id: &str, worker: &str, lease_ms: u64) -> Result<bool> {
+        let mut jobs = self.jobs.lock().map_err(poisoned)?;
+
+        Ok(jobs
+            .iter_mut()
+            .find(|job| job.id == id && job.claimed_by.as_deref() == Some(worker))
+            .map(|job| job.claimed_until_ms = Some(now_ms() + lease_ms))
+            .is_some())
+    }
+
+    async fn finish_job(&self, id: &str) -> Result<()> {
+        self.jobs
+            .lock()
+            .map_err(poisoned)?
+            .retain(|job| job.id != id);
+
+        Ok(())
+    }
+
+    async fn append_event(&self, event: &crate::EventRecord) -> Result<u64> {
+        let mut events = self.events.lock().map_err(poisoned)?;
+        let seq = events.last().map(|last| last.seq).unwrap_or(0) + 1;
+        events.push(crate::EventRecord {
+            seq,
+            ..event.clone()
+        });
+
+        Ok(seq)
+    }
+
+    async fn events_after(
+        &self,
+        after: u64,
+        until_ms: u64,
+        limit: usize,
+    ) -> Result<Vec<crate::EventRecord>> {
+        Ok(self
+            .events
+            .lock()
+            .map_err(poisoned)?
+            .iter()
+            .filter(|event| event.seq > after)
+            .take_while(|event| event.at_ms <= until_ms)
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    async fn prune_events(&self, before_ms: u64) -> Result<u64> {
+        let mut events = self.events.lock().map_err(poisoned)?;
+        let had = events.len();
+        events.retain(|event| event.at_ms >= before_ms);
+
+        Ok((had - events.len()) as u64)
+    }
+
+    async fn put_note(
+        &self,
+        kind: &str,
+        key: &str,
+        value: &str,
+        until_ms: Option<u64>,
+    ) -> Result<()> {
+        self.notes.lock().map_err(poisoned)?.insert(
+            (kind.to_string(), key.to_string()),
+            (value.to_string(), until_ms),
+        );
+
+        Ok(())
+    }
+
+    async fn get_note(&self, kind: &str, key: &str) -> Result<Option<String>> {
+        let now = now_ms();
+
+        Ok(self
+            .notes
+            .lock()
+            .map_err(poisoned)?
+            .get(&(kind.to_string(), key.to_string()))
+            .filter(|(_, until)| until.is_none_or(|until| until > now))
+            .map(|(value, _)| value.clone()))
+    }
+
+    async fn list_notes(&self, kind: &str, prefix: &str) -> Result<Vec<(String, String)>> {
+        let now = now_ms();
+
+        Ok(self
+            .notes
+            .lock()
+            .map_err(poisoned)?
+            .iter()
+            .filter(|((held, key), (_, until))| {
+                held == kind && key.starts_with(prefix) && until.is_none_or(|until| until > now)
+            })
+            .map(|((_, key), (value, _))| (key.clone(), value.clone()))
+            .collect())
+    }
+
+    async fn forget_note(&self, kind: &str, key: &str) -> Result<()> {
+        self.notes
+            .lock()
+            .map_err(poisoned)?
+            .remove(&(kind.to_string(), key.to_string()));
+
+        Ok(())
+    }
+
+    async fn forget_notes(&self, kind: &str, prefix: &str) -> Result<()> {
+        self.notes
+            .lock()
+            .map_err(poisoned)?
+            .retain(|(held, key), _| !(held == kind && key.starts_with(prefix)));
+
+        Ok(())
+    }
+
+    async fn prune_notes(&self, now_ms: u64) -> Result<u64> {
+        let mut notes = self.notes.lock().map_err(poisoned)?;
+        let before = notes.len();
+        notes.retain(|_, (_, until)| until.is_none_or(|until| until > now_ms));
+
+        Ok((before - notes.len()) as u64)
     }
 
     async fn append(
@@ -333,10 +491,18 @@ mod tests {
     use crate::conformance;
 
     #[tokio::test]
+    async fn test_memory_locks_one_name_for_one_holder() {
+        conformance::locks(Arc::new(Memory::default())).await;
+    }
+
+    #[tokio::test]
     async fn test_memory_behaves_like_a_store() {
         conformance::store(&Memory::default()).await;
         conformance::runtimes(&Memory::default()).await;
         conformance::images(&Memory::default()).await;
+        conformance::notes(&Memory::default()).await;
+        conformance::jobs(&Memory::default()).await;
+        conformance::events(&Memory::default()).await;
     }
 
     #[tokio::test]

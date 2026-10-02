@@ -454,6 +454,33 @@ impl Desktop for WaylandDesktop {
             .map(|_| ())
     }
 
+    async fn let_go_later(
+        &self,
+        held: &crate::desktop::StillDown,
+        after: Duration,
+        turn: &str,
+    ) -> Result<()> {
+        let release = match held {
+            crate::desktop::StillDown::Button(button) => vec![
+                POINTER_COMMAND.to_string(),
+                "up".to_string(),
+                button_name(*button).to_string(),
+            ],
+            crate::desktop::StillDown::Key(key) => {
+                let mut args = vec![POINTER_COMMAND.to_string(), "press".to_string()];
+                args.extend(key_parts(key, false)?);
+                args
+            }
+        };
+        self.run(crate::desktop::later(held, after, turn, release))
+            .await
+            .map(|_| ())
+    }
+
+    async fn keep_held(&self, held: &crate::desktop::StillDown) -> Result<()> {
+        self.run(crate::desktop::kept(held)).await.map(|_| ())
+    }
+
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()> {
         match delay {
             Some(delay) => {

@@ -75,6 +75,36 @@ Clients send `Authorization: Bearer <token>`. The CLI and `computer mcp` read th
 - `/v1/health` needs no token, so a load balancer can use it.
 - Viewer and CDP URLs have their own short-lived tokens. They do not contain the server token.
 
+### Workspaces
+
+One server can serve many workspaces. A console (such as the holm console) signs a short-lived token for each call it makes, and issues API keys that SDKs, the CLI, and MCP clients send. Both name a workspace and a role. Link the server to the console:
+
+```bash
+COMPUTER_CONSOLE_URL=https://console.example.com \
+COMPUTER_CONSOLE_SECRET="<the console's computerd secret>" \
+computerd
+```
+
+The server reads the console's public keys from `<COMPUTER_CONSOLE_URL>/api/computerd/keys.json`, again every five minutes and when a token names a key it does not know, so the console can rotate its key. Every 30 seconds it reads the revoked API keys and deleted workspaces from `/api/computerd/revoked`, and every minute it reports which keys were used to `/api/computerd/usage`. Both send `COMPUTER_CONSOLE_SECRET`. `COMPUTER_CONSOLE_PUBLIC_KEY` pins one key instead, with no fetching; without `COMPUTER_CONSOLE_URL` there are then no API keys, only console tokens.
+
+The roles:
+
+| Role | Can |
+| --- | --- |
+| `viewer` | Read boxes, runtimes, and templates, and watch a screen. It cannot drive a screen. |
+| `member` | Everything a viewer can, and launch, drive, fork, and remove boxes, and build images. |
+| `admin` | Everything a member can, and add, change, and remove the workspace's runtimes. |
+
+- A box belongs to the workspace that launched it. Another workspace gets `404` for it, as if it were not there.
+- A runtime added by a workspace is that workspace's own. A runtime from the server's environment or runtimes file is shared by every workspace, and only the operator changes it.
+- `COMPUTER_SERVER_TOKEN` is the operator. It sees and changes everything, as before.
+- An `Idempotency-Key` belongs to one workspace.
+
+- An API key is refused until the server has read the revoked list once. If the console cannot be reached later, the last list stays in force.
+- A revoked key stops working within 30 seconds.
+
+A call token is a JWT signed with Ed25519 (`alg: EdDSA`, `kid` naming the key), with `iss: "console"`, `aud: "computerd"`, `ws` (the workspace), `role`, and `exp`. An API key is `holm_sk_` followed by a JWT with `kind: "key"`, `sub` (the key id), `ws`, and `role`; its `exp` is optional.
+
 ### Behind a reverse proxy
 
 Put TLS in a reverse proxy in front of `computerd`. Forward `/v1`, `/mcp`, and WebSocket upgrades. The viewers use WebSockets.
@@ -133,7 +163,10 @@ All API errors have the same shape:
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `COMPUTER_SERVER_ADDR` | `127.0.0.1:8080` | The listen address |
-| `COMPUTER_SERVER_TOKEN` | None | The bearer token. Necessary on a non-loopback address. |
+| `COMPUTER_SERVER_TOKEN` | None | The bearer token. Necessary on a non-loopback address, unless a console key is set. |
+| `COMPUTER_CONSOLE_URL` | None | The console's base URL. The server reads its keys and revocations from it. See [Workspaces](#workspaces). |
+| `COMPUTER_CONSOLE_SECRET` | None | The secret the server sends to the console |
+| `COMPUTER_CONSOLE_PUBLIC_KEY` | None | One console public key to trust, in base64 or PEM, instead of reading them from the console |
 | `COMPUTER_PUBLIC_URL` | None | The public origin behind a reverse proxy |
 | `COMPUTER_SERVER_CONFIG` | None | The path to the [runtimes file](runtimes.md#the-runtimes-file) |
 | `COMPUTER_SERVER_RUNTIMES` | All that answer | The host runtimes to offer, separated by commas |
@@ -141,6 +174,9 @@ All API errors have the same shape:
 | `COMPUTER_SERVER_SECRET_KEY` | None | 32 bytes, base64 or hex, that encrypt stored vendor keys. With no key, `computer runtime add` is refused. |
 | `COMPUTER_SERVER_SECRET_FILE` | None | A file that holds the secret key. If the file does not exist, the server makes it with mode `0600`. |
 | `COMPUTER_SERVER_REAP_SECS` | 30 | How often to remove expired boxes |
+| `COMPUTER_SERVER_JOBS` | `inline` | `inline` launches, forks and builds in the request. `queue` answers `202` and does the work from a queue in the store. |
+| `COMPUTER_SERVER_SCHEDULE` | `internal` | `internal` runs the periodic work in the server. `external` waits for a scheduler to call the `/v1/jobs` routes. |
+| `CRON_SECRET` | None | A bearer token that opens the `/v1/jobs` routes and nothing else. |
 | `COMPUTER_CONTENT_BOUNDARIES` | Off | `1` puts page text between nonce markers in MCP results |
 
 Storage variables are in [Storage](#storage).

@@ -188,11 +188,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_a_store_on_a_directory_locks_one_name_for_one_holder() {
+        let scratch = Scratch::new();
+        conformance::locks(std::sync::Arc::new(Files::over(LocalDir::at(&scratch.0)))).await;
+    }
+
+    #[tokio::test]
     async fn test_a_store_on_a_directory_behaves_like_a_store() {
         let scratch = Scratch::new();
         conformance::store(&Files::over(LocalDir::at(&scratch.0))).await;
         conformance::runtimes(&Files::over(LocalDir::at(&scratch.0))).await;
         conformance::images(&Files::over(LocalDir::at(&scratch.0))).await;
+        conformance::notes(&Files::over(LocalDir::at(&scratch.0))).await;
+        conformance::jobs(&Files::over(LocalDir::at(&scratch.0))).await;
+        conformance::events(&Files::over(LocalDir::at(&scratch.0))).await;
     }
 
     #[tokio::test]

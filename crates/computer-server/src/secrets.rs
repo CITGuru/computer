@@ -14,6 +14,7 @@ const LENGTH: usize = 32;
 #[derive(Default)]
 pub struct Keeper {
     key: Option<LessSafeKey>,
+    deriving: Option<ring::hmac::Key>,
 }
 
 impl Keeper {
@@ -38,16 +39,26 @@ impl Keeper {
             ));
         }
 
+        let deriving = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
         let key = UnboundKey::new(&CHACHA20_POLY1305, key)
             .map_err(|_| "this key cannot seal anything".to_string())?;
 
         Ok(Self {
+            deriving: Some(deriving),
             key: Some(LessSafeKey::new(key)),
         })
     }
 
     pub fn holds_a_key(&self) -> bool {
         self.key.is_some()
+    }
+
+    pub fn derive(&self, purpose: &str) -> Option<[u8; 32]> {
+        let tag = ring::hmac::sign(
+            self.deriving.as_ref()?,
+            format!("computerd {purpose}").as_bytes(),
+        );
+        tag.as_ref().try_into().ok()
     }
 
     pub fn seal(&self, whose: &Whose, secret: &Secret) -> Result<Sealed, String> {

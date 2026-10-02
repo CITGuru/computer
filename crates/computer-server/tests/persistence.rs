@@ -37,6 +37,7 @@ fn served_from(root: &PathBuf) -> AppState {
 
 fn record() -> BoxRecord {
     BoxRecord {
+        owner: None,
         runtime: "docker".to_string(),
         id: "box_1".to_string(),
         spec: Spec::default(),
@@ -46,6 +47,7 @@ fn record() -> BoxRecord {
         screens: 1,
         created_at_ms: 1_700_000_000_000,
         expires_at_ms: None,
+        deleted_at_ms: None,
     }
 }
 

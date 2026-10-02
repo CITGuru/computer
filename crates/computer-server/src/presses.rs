@@ -1,13 +1,14 @@
 use computer_api::Action;
+use computer_storage::Store;
 use computer_types::Button;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub const HOLD: Duration = Duration::from_secs(10);
 pub const LONGEST_HOLD: Duration = Duration::from_secs(60);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Pressed {
     Button(Button),
     Key(String),
@@ -16,6 +17,20 @@ pub enum Pressed {
 impl Pressed {
     pub fn key(named: &str) -> Self {
         Self::Key(computer::servers::x11::keysym(named.trim()))
+    }
+
+    pub fn still_down(&self) -> computer::StillDown {
+        match self {
+            Self::Button(button) => computer::StillDown::Button(*button),
+            Self::Key(key) => computer::StillDown::Key(key.clone()),
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Self::Button(button) => format!("b:{button:?}"),
+            Self::Key(key) => format!("k:{key}"),
+        }
     }
 
     pub fn release(&self) -> Action {
@@ -29,140 +44,171 @@ impl Pressed {
     }
 }
 
-#[derive(Default)]
-pub struct Presses {
-    open: Mutex<Vec<Press>>,
-    next: AtomicU64,
-}
+const KIND: &str = "holds";
+const SLACK_MS: u64 = 5_000;
 
-struct Press {
-    box_id: String,
+#[derive(Serialize, Deserialize)]
+struct Open {
+    turn: String,
     screen: u32,
     pressed: Pressed,
-    turn: u64,
 }
 
-impl Presses {
-    pub fn open(&self, box_id: &str, screen: u32, pressed: &Pressed) -> u64 {
-        let turn = self.next.fetch_add(1, Ordering::Relaxed);
-
-        if let Ok(mut open) = self.open.lock() {
-            open.retain(|press| !press.is(box_id, screen, pressed));
-            open.push(Press {
-                box_id: box_id.to_string(),
-                screen,
-                pressed: pressed.clone(),
-                turn,
-            });
-        }
-
-        turn
-    }
-
-    pub fn close(&self, box_id: &str, screen: u32, pressed: &Pressed) -> bool {
-        self.drop_where(|press| press.is(box_id, screen, pressed)) > 0
-    }
-
-    pub fn close_turn(&self, box_id: &str, screen: u32, pressed: &Pressed, turn: u64) -> bool {
-        self.drop_where(|press| press.is(box_id, screen, pressed) && press.turn == turn) > 0
-    }
-
-    pub fn take_screen(&self, box_id: &str, screen: u32) -> Vec<Pressed> {
-        self.take_where(|press| press.box_id == box_id && press.screen == screen)
-            .into_iter()
-            .map(|(_, pressed)| pressed)
-            .collect()
-    }
-
-    pub fn take_box(&self, box_id: &str) -> Vec<(u32, Pressed)> {
-        self.take_where(|press| press.box_id == box_id)
-    }
-
-    fn drop_where(&self, gone: impl Fn(&Press) -> bool) -> usize {
-        self.take_where(gone).len()
-    }
-
-    fn take_where(&self, gone: impl Fn(&Press) -> bool) -> Vec<(u32, Pressed)> {
-        let Ok(mut open) = self.open.lock() else {
-            return Vec::new();
-        };
-
-        let taken = open
-            .iter()
-            .filter(|press| gone(press))
-            .map(|press| (press.screen, press.pressed.clone()))
-            .collect();
-        open.retain(|press| !gone(press));
-        taken
-    }
+fn at(box_id: &str, screen: u32, pressed: &Pressed) -> String {
+    format!("{box_id}/{screen}/{}", pressed.name())
 }
 
-impl Press {
-    fn is(&self, box_id: &str, screen: u32, pressed: &Pressed) -> bool {
-        self.box_id == box_id && self.screen == screen && &self.pressed == pressed
+fn turn() -> String {
+    let mut bytes = [0u8; 8];
+    let _ = getrandom::fill(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub async fn open(
+    store: &dyn Store,
+    box_id: &str,
+    screen: u32,
+    pressed: &Pressed,
+    until_ms: u64,
+) -> String {
+    let open = Open {
+        turn: turn(),
+        screen,
+        pressed: pressed.clone(),
+    };
+    let value = serde_json::to_string(&open).unwrap_or_default();
+
+    if let Err(why) = store
+        .put_note(
+            KIND,
+            &at(box_id, screen, pressed),
+            &value,
+            Some(until_ms + SLACK_MS),
+        )
+        .await
+    {
+        tracing::warn!(box_ = %box_id, %why, "a held press was not recorded");
     }
+    open.turn
+}
+
+async fn held(store: &dyn Store, key: &str) -> Option<Open> {
+    let value = store.get_note(KIND, key).await.ok()??;
+    serde_json::from_str(&value).ok()
+}
+
+pub async fn close(store: &dyn Store, box_id: &str, screen: u32, pressed: &Pressed) -> bool {
+    let key = at(box_id, screen, pressed);
+    let was = held(store, &key).await.is_some();
+    if was {
+        let _ = store.forget_note(KIND, &key).await;
+    }
+    was
+}
+
+pub async fn close_turn(
+    store: &dyn Store,
+    box_id: &str,
+    screen: u32,
+    pressed: &Pressed,
+    turn: &str,
+) -> bool {
+    let key = at(box_id, screen, pressed);
+    let mine = held(store, &key)
+        .await
+        .is_some_and(|open| open.turn == turn);
+    if mine {
+        let _ = store.forget_note(KIND, &key).await;
+    }
+    mine
+}
+
+pub async fn take_screen(store: &dyn Store, box_id: &str, screen: u32) -> Vec<Pressed> {
+    take(store, &format!("{box_id}/{screen}/"))
+        .await
+        .into_iter()
+        .map(|(_, pressed)| pressed)
+        .collect()
+}
+
+pub async fn take_box(store: &dyn Store, box_id: &str) -> Vec<(u32, Pressed)> {
+    take(store, &format!("{box_id}/")).await
+}
+
+async fn take(store: &dyn Store, prefix: &str) -> Vec<(u32, Pressed)> {
+    let found = store.list_notes(KIND, prefix).await.unwrap_or_default();
+    let _ = store.forget_notes(KIND, prefix).await;
+
+    found
+        .into_iter()
+        .filter_map(|(_, value)| serde_json::from_str::<Open>(&value).ok())
+        .map(|open| (open.screen, open.pressed))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use computer_storage::memory::Memory;
 
-    #[test]
-    fn test_a_release_closes_the_press_so_the_deadline_finds_nothing() {
-        let presses = Presses::default();
+    const LATER: u64 = u64::MAX / 2;
+
+    #[tokio::test]
+    async fn test_a_release_closes_the_press_so_the_deadline_finds_nothing() {
+        let store = Memory::default();
         let left = Pressed::Button(Button::Left);
-        let turn = presses.open("box-1", 0, &left);
+        let turn = open(&store, "box-1", 0, &left, LATER).await;
 
-        assert!(presses.close("box-1", 0, &left));
+        assert!(close(&store, "box-1", 0, &left).await);
         assert!(
-            !presses.close_turn("box-1", 0, &left, turn),
+            !close_turn(&store, "box-1", 0, &left, &turn).await,
             "a button let go by hand must not be let go again when its time runs out"
         );
     }
 
-    #[test]
-    fn test_a_second_press_outlives_the_deadline_of_the_first() {
-        let presses = Presses::default();
+    #[tokio::test]
+    async fn test_a_second_press_outlives_the_deadline_of_the_first() {
+        let store = Memory::default();
         let left = Pressed::Button(Button::Left);
-        let first = presses.open("box-1", 0, &left);
-        let second = presses.open("box-1", 0, &left);
+        let first = open(&store, "box-1", 0, &left, LATER).await;
+        let second = open(&store, "box-1", 0, &left, LATER).await;
 
         assert!(
-            !presses.close_turn("box-1", 0, &left, first),
+            !close_turn(&store, "box-1", 0, &left, &first).await,
             "the first deadline would cut the second press short"
         );
-        assert!(presses.close_turn("box-1", 0, &left, second));
+        assert!(close_turn(&store, "box-1", 0, &left, &second).await);
     }
 
-    #[test]
-    fn test_a_takeover_takes_the_presses_of_its_screen_only() {
-        let presses = Presses::default();
+    #[tokio::test]
+    async fn test_a_takeover_takes_the_presses_of_its_screen_only() {
+        let store = Memory::default();
         let (left, right) = (
             Pressed::Button(Button::Left),
             Pressed::Button(Button::Right),
         );
-        presses.open("box-1", 0, &left);
-        presses.open("box-1", 0, &right);
-        presses.open("box-1", 1, &left);
-        presses.open("box-2", 0, &left);
+        open(&store, "box-1", 0, &left, LATER).await;
+        open(&store, "box-1", 0, &right, LATER).await;
+        open(&store, "box-1", 1, &left, LATER).await;
+        open(&store, "box-2", 0, &left, LATER).await;
 
         assert_eq!(
-            presses.take_screen("box-1", 0),
+            take_screen(&store, "box-1", 0).await,
             [left.clone(), right.clone()]
         );
-        assert!(presses.take_screen("box-1", 0).is_empty());
+        assert!(take_screen(&store, "box-1", 0).await.is_empty());
 
-        assert_eq!(presses.take_box("box-1"), [(1, left.clone())]);
-        assert_eq!(presses.take_box("box-2"), [(0, left)]);
+        assert_eq!(take_box(&store, "box-1").await, [(1, left.clone())]);
+        assert_eq!(take_box(&store, "box-2").await, [(0, left)]);
     }
 
-    #[test]
-    fn test_a_key_is_one_key_under_each_of_its_names() {
-        let presses = Presses::default();
-        presses.open("box-1", 0, &Pressed::key("Control"));
+    #[tokio::test]
+    async fn test_a_key_is_one_key_under_each_of_its_names() {
+        let store = Memory::default();
+        open(&store, "box-1", 0, &Pressed::key("Control"), LATER).await;
 
         assert!(
-            presses.close("box-1", 0, &Pressed::key(" ctrl ")),
+            close(&store, "box-1", 0, &Pressed::key(" ctrl ")).await,
             "a key_up that spells the key another way must still close the press"
         );
         assert_ne!(
@@ -172,14 +218,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_a_takeover_takes_the_keys_with_the_buttons() {
-        let presses = Presses::default();
-        presses.open("box-1", 0, &Pressed::Button(Button::Left));
-        presses.open("box-1", 0, &Pressed::key("shift"));
+    #[tokio::test]
+    async fn test_a_takeover_takes_the_keys_with_the_buttons() {
+        let store = Memory::default();
+        open(&store, "box-1", 0, &Pressed::Button(Button::Left), LATER).await;
+        open(&store, "box-1", 0, &Pressed::key("shift"), LATER).await;
 
         assert_eq!(
-            presses.take_screen("box-1", 0),
+            take_screen(&store, "box-1", 0).await,
             [Pressed::Button(Button::Left), Pressed::key("shift")]
         );
     }

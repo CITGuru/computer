@@ -26,6 +26,9 @@ impl Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+const STARTING_WAIT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+const STARTING_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
 pub struct Client {
     base: String,
     token: Option<String>,
@@ -71,13 +74,43 @@ impl Client {
         idempotency: Option<&str>,
     ) -> Result<BoxView> {
         let body = serde_json::json!({ "spec": spec, "placement": placement });
-        self.send(
-            reqwest::Method::POST,
-            "/v1/boxes",
-            Some(body),
-            &idempotency_header(idempotency),
-        )
-        .await
+        let made: BoxView = self
+            .send(
+                reqwest::Method::POST,
+                "/v1/boxes",
+                Some(body),
+                &idempotency_header(idempotency),
+            )
+            .await?;
+
+        self.started(made).await
+    }
+
+    async fn started(&self, mut view: BoxView) -> Result<BoxView> {
+        let deadline = std::time::Instant::now() + STARTING_WAIT;
+
+        while view.state == BoxState::Starting {
+            if std::time::Instant::now() >= deadline {
+                return Err(Error::Refused(ErrorBody {
+                    code: ErrorCode::Timeout,
+                    message: format!("box {} was still starting after {STARTING_WAIT:?}", view.id),
+                    retryable: false,
+                }));
+            }
+            tokio::time::sleep(STARTING_POLL).await;
+            view = self.get(&view.id).await?;
+        }
+
+        match view.state {
+            BoxState::Failed => Err(Error::Refused(ErrorBody {
+                code: ErrorCode::Failed,
+                message: view
+                    .reason
+                    .unwrap_or_else(|| format!("box {} did not start", view.id)),
+                retryable: false,
+            })),
+            _ => Ok(view),
+        }
     }
 
     pub async fn list(&self) -> Result<Vec<BoxView>> {
@@ -94,14 +127,43 @@ impl Client {
 
     pub async fn prepare_image(&self, runtime: &str, spec: &Spec) -> Result<PreparedImage> {
         let body = serde_json::json!({ "spec": spec });
+        let mut prepared: PreparedImage = self
+            .send(
+                reqwest::Method::POST,
+                &format!("/v1/runtimes/{runtime}/image"),
+                Some(body),
+                &[],
+            )
+            .await?;
 
-        self.send(
-            reqwest::Method::POST,
-            &format!("/v1/runtimes/{runtime}/image"),
-            Some(body),
-            &[],
-        )
-        .await
+        let deadline = std::time::Instant::now() + STARTING_WAIT;
+        while prepared.state == ImageState::Building && std::time::Instant::now() < deadline {
+            tokio::time::sleep(STARTING_POLL).await;
+            prepared = self
+                .send(
+                    reqwest::Method::GET,
+                    &format!("/v1/runtimes/{runtime}/images/{}", spec.digest()),
+                    None,
+                    &[],
+                )
+                .await?;
+        }
+
+        match prepared.state {
+            ImageState::Ready => Ok(prepared),
+            ImageState::Building => Err(Error::Refused(ErrorBody {
+                code: ErrorCode::Timeout,
+                message: format!("the image was still building after {STARTING_WAIT:?}"),
+                retryable: false,
+            })),
+            ImageState::Failed => Err(Error::Refused(ErrorBody {
+                code: ErrorCode::Failed,
+                message: prepared
+                    .reason
+                    .unwrap_or_else(|| "the image did not build".to_string()),
+                retryable: false,
+            })),
+        }
     }
 
     pub async fn images(&self, runtime: Option<&str>) -> Result<Vec<ImageView>> {
@@ -849,16 +911,20 @@ impl Client {
         request: &ForkRequest,
         idempotency: Option<&str>,
     ) -> Result<ForkResult> {
-        self.send(
-            reqwest::Method::POST,
-            &format!("/v1/boxes/{id}/fork"),
-            Some(
-                serde_json::to_value(request)
-                    .map_err(|error| Error::Transport(error.to_string()))?,
-            ),
-            &idempotency_header(idempotency),
-        )
-        .await
+        let mut forked: ForkResult = self
+            .send(
+                reqwest::Method::POST,
+                &format!("/v1/boxes/{id}/fork"),
+                Some(
+                    serde_json::to_value(request)
+                        .map_err(|error| Error::Transport(error.to_string()))?,
+                ),
+                &idempotency_header(idempotency),
+            )
+            .await?;
+
+        forked.created = self.started(forked.created).await?;
+        Ok(forked)
     }
 
     pub async fn trace(

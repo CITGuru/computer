@@ -31,6 +31,12 @@ pub struct BoxView {
     pub devtools_url: Option<String>,
     pub created_at_ms: u64,
     pub expires_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<Spec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +49,8 @@ pub enum BoxState {
     Stopped,
     Unreachable,
     Gone,
+    Starting,
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +78,8 @@ pub struct RuntimeView {
     pub secrets: Vec<String>,
     pub can: Capabilities,
     pub boxes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +98,27 @@ pub struct PrepareImage {
 pub struct PreparedImage {
     pub runtime: String,
     pub image: String,
+    #[serde(default, skip_serializing_if = "ImageState::is_ready")]
+    pub state: ImageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageState {
+    #[default]
+    Ready,
+    Building,
+    Failed,
+}
+
+impl ImageState {
+    pub fn is_ready(&self) -> bool {
+        *self == Self::Ready
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1326,6 +1357,10 @@ pub struct ViewersView {
 pub struct ViewerTicket {
     pub ticket: String,
     pub expires_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view_socket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_socket: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

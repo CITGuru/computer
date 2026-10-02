@@ -43,6 +43,18 @@ build_gate() {
 
   if [ "$viewer_auth" = "open" ]; then return 0; fi
 
+  if [ "$viewer_auth" = "signed" ]; then
+    if [ -z "${COMPUTER_VIEWER_KEY:-}" ]; then
+      echo "viewer auth is signed but COMPUTER_VIEWER_KEY is unset" >&2
+      return 1
+    fi
+    mkdir -p "$gate_dir"
+    file="${gate_dir}/viewer-key"
+    (umask 077; printf '%s' "$COMPUTER_VIEWER_KEY" >"$file")
+    gate_args=(--token-plugin JWTTokenApi --token-source "$file")
+    return 0
+  fi
+
   case "$door" in
     view) secret="${COMPUTER_VIEW_SECRET:-}" ;;
     control) secret="${COMPUTER_CONTROL_SECRET:-}" ;;

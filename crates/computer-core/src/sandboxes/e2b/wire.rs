@@ -80,7 +80,9 @@ pub fn template_of(listing: &Value, name: &str) -> Option<String> {
             .filter_map(Value::as_str)
             .any(|held| held == name);
 
-        carried || aliased
+        let failed = template.get("buildStatus").and_then(Value::as_str) == Some("error");
+
+        (carried || aliased) && !failed
     };
 
     listing
@@ -413,6 +415,17 @@ pub fn base64_decode(text: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn test_a_template_whose_build_failed_is_not_one_to_start_from() {
+        let listing = serde_json::json!([
+            { "templateID": "bad", "aliases": ["desk"], "buildStatus": "error" },
+            { "templateID": "good", "aliases": ["other"], "buildStatus": "ready" },
+        ]);
+
+        assert_eq!(template_of(&listing, "desk"), None);
+        assert_eq!(template_of(&listing, "other"), Some("good".to_string()));
+    }
 
     fn framed(flags: u8, payload: &str) -> Vec<u8> {
         let mut frame = vec![flags];

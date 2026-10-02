@@ -40,6 +40,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 toml = "1.1.6"
 ring = "0.17"
 async-trait = "0.1.92"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 [dev-dependencies]
 computer-types = { path = "../computer-types", version = "0.1.0" }

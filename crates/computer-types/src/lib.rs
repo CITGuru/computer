@@ -190,6 +190,8 @@ pub struct Placement {
     pub idle_timeout_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub persistent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

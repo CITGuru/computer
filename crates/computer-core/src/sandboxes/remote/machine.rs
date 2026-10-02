@@ -14,9 +14,21 @@ use std::time::{Duration, SystemTime};
 struct Held {
     sandbox: Sandbox,
     env: BTreeMap<String, String>,
-    ttl: Duration,
+    rolling: Option<Duration>,
     refreshed_at: SystemTime,
+    persistent: bool,
+    stopped: bool,
 }
+
+const WAKING: &str = "/var/tmp/computer-wake.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Waking {
+    boot: Vec<String>,
+    env: BTreeMap<String, String>,
+}
+
+const SHORTEST: Duration = Duration::from_secs(60);
 
 pub struct RemoteMachine {
     api: Arc<dyn RemoteApi>,
@@ -63,6 +75,23 @@ impl RemoteMachine {
         &self.api
     }
 
+    fn deadline(&self, labels: &BTreeMap<String, String>) -> (Duration, Option<Duration>) {
+        let secs = |key: &str| labels.get(key).and_then(|held| held.parse::<u64>().ok());
+
+        if let Some(idle) = secs(crate::IDLE_LABEL) {
+            let idle = Duration::from_secs(idle);
+            return (idle, Some(idle));
+        }
+        if let Some(ends) = secs(crate::EXPIRY_LABEL) {
+            let left = (SystemTime::UNIX_EPOCH + Duration::from_secs(ends))
+                .duration_since(SystemTime::now())
+                .unwrap_or_default();
+            return (left.max(SHORTEST), None);
+        }
+
+        (self.ttl, Some(self.ttl))
+    }
+
     fn plan_for(&self, name: &str, config: &Config) -> SandboxPlan {
         let mut metadata = config.labels.clone();
         metadata.insert(NAME_KEY.to_string(), name.to_string());
@@ -82,21 +111,30 @@ impl RemoteMachine {
             metadata,
             network: config.network,
             public: self.public_traffic,
-            ttl: self.ttl,
+            ttl: self.deadline(&config.labels).0,
             cpus: config.cpus.clone(),
             memory: config.memory.clone(),
         }
     }
 
-    fn remember(&self, name: &str, sandbox: &Sandbox, env: BTreeMap<String, String>) {
+    fn remember(
+        &self,
+        name: &str,
+        sandbox: &Sandbox,
+        env: BTreeMap<String, String>,
+        rolling: Option<Duration>,
+        persistent: bool,
+    ) {
         if let Ok(mut held) = self.held.lock() {
             held.insert(
                 name.to_string(),
                 Held {
                     sandbox: sandbox.clone(),
                     env,
-                    ttl: self.ttl,
+                    rolling,
                     refreshed_at: SystemTime::now(),
+                    persistent,
+                    stopped: false,
                 },
             );
         }
@@ -106,9 +144,24 @@ impl RemoteMachine {
         self.held.lock().ok()?.get(name).cloned()
     }
 
+    async fn carried(&self, id: &str, label: &str) -> Option<String> {
+        self.api
+            .carrying(label)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|(held, _)| held == id)
+            .map(|(_, value)| value)
+    }
+
     async fn sandbox(&self, name: &str) -> Result<Sandbox> {
         if let Some(held) = self.recall(name) {
-            return Ok(held.sandbox);
+            return match held.stopped {
+                true => Err(Error::denied(format!(
+                    "{name} is stopped: resume it before it is used"
+                ))),
+                false => Ok(held.sandbox),
+            };
         }
 
         let found = self
@@ -118,7 +171,16 @@ impl RemoteMachine {
             .ok_or_else(|| Error::Gone(name.to_string()))?;
 
         self.remote.set(found.clone());
-        self.remember(name, &found, BTreeMap::new());
+        let idle = self
+            .carried(&found.id, crate::IDLE_LABEL)
+            .await
+            .and_then(|held| held.parse().ok())
+            .map(Duration::from_secs);
+        let persistent = self
+            .carried(&found.id, crate::PERSISTENT_LABEL)
+            .await
+            .is_some();
+        self.remember(name, &found, BTreeMap::new(), idle, persistent);
         Ok(found)
     }
 
@@ -127,11 +189,14 @@ impl RemoteMachine {
         let Some(held) = self.recall(name) else {
             return;
         };
+        let Some(rolling) = held.rolling else {
+            return;
+        };
 
         let due = held
             .refreshed_at
             .elapsed()
-            .map(|since| since * 2 >= held.ttl)
+            .map(|since| since * 2 >= rolling)
             .unwrap_or(true);
 
         if !due {
@@ -139,11 +204,7 @@ impl RemoteMachine {
         }
 
         // Best effort: a failed refresh must not fail a command that works.
-        if self
-            .api
-            .keep_alive(&held.sandbox.id, held.ttl)
-            .await
-            .is_ok()
+        if self.api.keep_alive(&held.sandbox.id, rolling).await.is_ok()
             && let Ok(mut all) = self.held.lock()
             && let Some(entry) = all.get_mut(name)
         {
@@ -222,8 +283,27 @@ impl Machine for RemoteMachine {
 
         let sandbox = self.api.create(&self.plan_for(name, config)).await?;
 
-        self.remember(name, &sandbox, config.env.clone());
+        let persistent = config.labels.contains_key(crate::PERSISTENT_LABEL);
+        self.remember(
+            name,
+            &sandbox,
+            config.env.clone(),
+            self.deadline(&config.labels).1,
+            persistent,
+        );
         self.remote.set(sandbox.clone());
+
+        if persistent {
+            let waking = serde_json::to_vec(&Waking {
+                boot: config.boot.clone(),
+                env: config.env.clone(),
+            })
+            .unwrap_or_default();
+            if let Err(error) = self.api.write(&sandbox, WAKING, &waking).await {
+                let _ = self.api.kill(&sandbox.id).await;
+                return Err(error);
+            }
+        }
 
         let booted = match self
             .api
@@ -250,6 +330,10 @@ impl Machine for RemoteMachine {
 
     /// Resolves and keeps a box this process did not start, for `ports`.
     async fn running(&self, name: &str) -> Result<bool> {
+        if self.recall(name).is_some_and(|held| held.stopped) {
+            return Ok(false);
+        }
+
         match self.sandbox(name).await {
             Ok(_) => Ok(true),
             Err(Error::Gone(_)) => Ok(false),
@@ -311,6 +395,54 @@ impl Machine for RemoteMachine {
             .and_then(|held| held.get(&config.image).cloned())
     }
 
+    fn persists(&self) -> bool {
+        self.api.persists()
+    }
+
+    async fn halt(&self, name: &str) -> Result<()> {
+        let sandbox = self.sandbox(name).await?;
+        if !self.recall(name).is_some_and(|held| held.persistent) {
+            return Err(Error::denied(format!(
+                "{name} was not created as a persistent box, so stopping it would lose it:                  remove it, or create the next one with persistent set"
+            )));
+        }
+
+        self.api.stop(&sandbox.id).await?;
+        if let Ok(mut all) = self.held.lock()
+            && let Some(held) = all.get_mut(name)
+        {
+            held.stopped = true;
+        }
+        Ok(())
+    }
+
+    async fn wake(&self, name: &str) -> Result<PortMap> {
+        let sandbox = self.api.start(name).await?;
+        self.remote.set(sandbox.clone());
+
+        let waking: Waking = serde_json::from_slice(&self.api.read(&sandbox, WAKING).await?)
+            .map_err(|error| {
+                Error::denied(format!(
+                    "{name} does not say how to start its desktop: {error}"
+                ))
+            })?;
+        let rolling = self.recall(name).and_then(|held| held.rolling);
+        self.remember(name, &sandbox, waking.env, rolling, true);
+
+        let booted = self
+            .api
+            .exec(&sandbox, &waking.boot, &BTreeMap::new())
+            .await?;
+        if booted.code != 0 {
+            return Err(Error::Failed {
+                code: booted.code,
+                stderr: booted.stderr_utf8().trim().to_string(),
+            });
+        }
+
+        Ok(self.published(&sandbox))
+    }
+
     async fn pause(&self, name: &str) -> Result<()> {
         let sandbox = self.sandbox(name).await?;
 
@@ -363,6 +495,10 @@ impl Machine for RemoteMachine {
 
     fn sweepable(&self) -> bool {
         self.api.sweepable()
+    }
+
+    fn stops_when_idle(&self) -> bool {
+        true
     }
 
     fn reaper(&self, name: &str) -> Option<(String, Vec<String>)> {
@@ -590,6 +726,128 @@ mod tests {
             .expect("ran");
 
         assert_eq!(api.refreshes(), vec!["sbx-0".to_string()]);
+    }
+
+    fn labelled_config(labels: &[(&str, String)]) -> Config {
+        Config {
+            labels: labels
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.clone()))
+                .collect(),
+            ..config()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_a_box_with_a_lifetime_lives_to_it_with_nobody_driving_it() {
+        let api = Arc::new(ScriptedRemote::new());
+        let machine = machine(Arc::clone(&api)).expiring_after(Duration::from_millis(20));
+        let ends = SystemTime::now() + Duration::from_secs(3600);
+        let ends = ends
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("a clock")
+            .as_secs();
+
+        machine
+            .start(
+                "desk-1",
+                &labelled_config(&[(crate::EXPIRY_LABEL, ends.to_string())]),
+            )
+            .await
+            .expect("started");
+
+        let asked = api.plans().pop().expect("a plan").ttl;
+        assert!(
+            asked > Duration::from_secs(3500) && asked <= Duration::from_secs(3600),
+            "the vendor is asked for the whole lifetime, not for a few minutes: {asked:?}"
+        );
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        machine
+            .exec("desk-1", &["true".to_string()], &BTreeMap::new())
+            .await
+            .expect("ran");
+        assert!(
+            api.refreshes().is_empty(),
+            "a deadline that is the lifetime is not moved by work"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_box_with_an_idle_timeout_stops_that_long_after_its_last_work() {
+        let api = Arc::new(ScriptedRemote::new());
+        let machine = machine(Arc::clone(&api));
+        let ends = SystemTime::now() + Duration::from_secs(3600);
+        let ends = ends
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("a clock")
+            .as_secs();
+
+        machine
+            .start(
+                "desk-1",
+                &labelled_config(&[
+                    (crate::EXPIRY_LABEL, ends.to_string()),
+                    (crate::IDLE_LABEL, "120".to_string()),
+                ]),
+            )
+            .await
+            .expect("started");
+
+        assert_eq!(
+            api.plans().pop().expect("a plan").ttl,
+            Duration::from_secs(120),
+            "the vendor ends it when nothing has moved the deadline for the idle time"
+        );
+        assert!(Machine::stops_when_idle(&machine));
+    }
+
+    #[tokio::test]
+    async fn test_a_persistent_box_stops_and_comes_back_with_its_desktop_started_again() {
+        let api = Arc::new(ScriptedRemote::new().persisting());
+        let machine = machine(Arc::clone(&api));
+        let persistent = labelled_config(&[(crate::PERSISTENT_LABEL, "1".to_string())]);
+
+        machine.start("desk-1", &persistent).await.expect("started");
+        assert!(machine.running("desk-1").await.expect("asked"));
+
+        machine.halt("desk-1").await.expect("stopped");
+        assert_eq!(api.stops(), ["sbx-0"]);
+        assert!(
+            !machine.running("desk-1").await.expect("asked"),
+            "a stopped box is not running, and it is not removed"
+        );
+        assert!(api.killed().is_empty());
+
+        let boots = |api: &ScriptedRemote| {
+            api.commands()
+                .iter()
+                .filter(|argv| argv.first().map(String::as_str) == Some("computer-desktop"))
+                .count()
+        };
+        assert_eq!(boots(&api), 1);
+
+        machine.wake("desk-1").await.expect("woken");
+        assert_eq!(
+            boots(&api),
+            2,
+            "a resume restores the files and no process, so the desktop is started again"
+        );
+        assert!(machine.running("desk-1").await.expect("asked"));
+    }
+
+    #[tokio::test]
+    async fn test_a_box_that_is_not_persistent_is_not_stopped() {
+        let api = Arc::new(ScriptedRemote::new().persisting());
+        let machine = machine(Arc::clone(&api));
+        machine.start("desk-1", &config()).await.expect("started");
+
+        assert!(
+            machine.halt("desk-1").await.is_err(),
+            "the vendor would discard it, so the stop is refused"
+        );
+        assert!(api.stops().is_empty());
+        assert!(machine.running("desk-1").await.expect("asked"));
     }
 
     #[tokio::test]

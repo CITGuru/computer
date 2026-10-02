@@ -21,6 +21,8 @@ pub const TIMEOUT: Duration = Duration::from_secs(150);
 
 pub const IMAGE_WAIT: Duration = Duration::from_secs(10 * 60);
 
+pub const STOP_WAIT: Duration = Duration::from_secs(120);
+
 enum Credential {
     Token {
         token: String,
@@ -218,6 +220,17 @@ impl Cloud {
         }
     }
 
+    async fn snapshots(&self, name: &str) -> Result<Vec<String>> {
+        let listing = self
+            .json(
+                self.request(Method::GET, "/v2/sandboxes/snapshots")?
+                    .query(&[("project", self.project()?.as_str()), ("name", name)]),
+            )
+            .await?;
+
+        Ok(wire::snapshot_ids(&listing))
+    }
+
     async fn described(&self, name: &str) -> Result<Option<Value>> {
         let response = self.send(self.named(Method::GET, name)?).await?;
 
@@ -343,6 +356,7 @@ impl RemoteApi for Cloud {
             resources: Resources::AtCreate,
             ports: Some(super::MOST_PORTS as u32),
             arch: vec![Arch::Amd64],
+            stop: true,
             ..Capabilities::default()
         }
     }
@@ -450,13 +464,89 @@ impl RemoteApi for Cloud {
     }
 
     async fn kill(&self, id: &str) -> Result<()> {
+        let snapshots = self.snapshots(id).await.unwrap_or_default();
         let response = self.send(self.named(Method::DELETE, id)?).await?;
         self.forget(id);
 
         match response.status() {
-            status if status.is_success() => Ok(()),
-            StatusCode::NOT_FOUND => Ok(()),
-            status => Err(from_status(status, "")),
+            status if status.is_success() || status == StatusCode::NOT_FOUND => {}
+            status => return Err(from_status(status, "")),
+        }
+
+        for snapshot in snapshots {
+            let deleted = self
+                .send(self.request(
+                    Method::DELETE,
+                    &format!("/v2/sandboxes/snapshots/{}", escape(&snapshot)),
+                )?)
+                .await;
+            if let Err(error) = deleted {
+                tracing::warn!(sandbox = %id, %snapshot, %error, "a snapshot was not removed, and it is still paid for");
+            }
+        }
+        Ok(())
+    }
+
+    fn persists(&self) -> bool {
+        true
+    }
+
+    async fn stop(&self, id: &str) -> Result<()> {
+        let session = self.session(id).await?;
+        self.json(
+            self.in_session(Method::POST, &session, "/stop")?
+                .header(CONTENT_TYPE, "application/json")
+                .body("{}"),
+        )
+        .await?;
+        self.forget(id);
+
+        let deadline = Instant::now() + STOP_WAIT;
+        loop {
+            let answer = self.json(self.named(Method::GET, id)?).await?;
+            let status = answer
+                .pointer("/sandbox/status")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if status == "stopped" {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    after: STOP_WAIT,
+                    detail: format!("{id} was still {status}"),
+                });
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
+    async fn start(&self, id: &str) -> Result<Sandbox> {
+        let deadline = Instant::now() + STOP_WAIT;
+
+        loop {
+            let answer = self
+                .json(self.named(Method::GET, id)?.query(&[("resume", "true")]))
+                .await?;
+            let status = answer
+                .pointer("/session/status")
+                .or_else(|| answer.pointer("/sandbox/status"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+
+            if status == "running" {
+                let (sandbox, session) = wire::sandbox_from(&answer)?;
+                self.remember(id, session);
+                return Ok(sandbox);
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::Timeout {
+                    after: STOP_WAIT,
+                    detail: format!("{id} was still {status}"),
+                });
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
 

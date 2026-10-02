@@ -22,6 +22,18 @@ Get the watch URL:
 | MCP | `launch_box` and `inspect_box` return it. |
 | REST | `viewer_url` in `GET /v1/boxes/{id}` |
 
+### Signed viewers
+
+A box on a cloud runtime is reached through a public vendor URL. When the server has a secret key (`COMPUTER_SERVER_SECRET_KEY` or `COMPUTER_SERVER_SECRET_FILE`), the server gives each such box its own viewer key, and the box accepts only short-lived tokens signed with that key.
+
+- `viewer_url` is a new link in each reply, and it must be opened in 15 minutes. Read the box again to get a new one. A box that the vendor does not open to the public has no `viewer_url`.
+- `POST /v1/boxes/{id}/screens/{screen}/viewer/ticket` returns a short-lived token for the server's viewer socket, and direct socket URLs in `view_socket` and `control_socket`. A direct URL must be opened before the token expires.
+- A takeover returns a control URL that can be opened for half of the lifetime of the box. For a box with no end time, that is half of the default lifetime.
+- A token names the viewer that it opens. A token for the watch viewer reaches only the watch viewer, on each of the two ports, so it does not give control.
+- The server keeps no token in memory. Any server with the same secret key accepts it.
+
+Without a secret key, such a box gets a fixed token in its URL, as before.
+
 ## Take control
 
 A takeover gives a person the control viewer. There are two kinds.

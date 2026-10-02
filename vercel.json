@@ -1,0 +1,7 @@
+{
+  "crons": [
+    { "path": "/v1/jobs/run", "schedule": "* * * * *" },
+    { "path": "/v1/jobs/reap", "schedule": "* * * * *" },
+    { "path": "/v1/jobs/prune", "schedule": "0 * * * *" }
+  ]
+}

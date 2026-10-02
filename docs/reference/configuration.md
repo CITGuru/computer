@@ -19,9 +19,15 @@ This page lists all settings in one place. The linked pages explain them.
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `COMPUTER_SERVER_ADDR` | `127.0.0.1:8080` | The listen address. |
-| `COMPUTER_SERVER_TOKEN` | None | The bearer token. Necessary on a non-loopback address. At least 16 characters. |
+| `COMPUTER_SERVER_TOKEN` | None | The bearer token. Necessary on a non-loopback address, unless a console is linked. At least 16 characters. |
+| `COMPUTER_CONSOLE_URL` | None | A console's base URL. The server accepts the tokens and API keys that console signs for a workspace. See [Workspaces](../concepts/server.md#workspaces). |
+| `COMPUTER_CONSOLE_SECRET` | None | The secret the server sends when it reads revoked keys from the console and reports key use to it. |
+| `COMPUTER_CONSOLE_PUBLIC_KEY` | None | One console public key to trust, in base64 or PEM, instead of reading the keys from the console. `COMPUTER_CONSOLE_PUBLIC_KEY_FILE` reads it from a file. |
 | `COMPUTER_PUBLIC_URL` | None | The public origin behind a reverse proxy. |
 | `COMPUTER_SERVER_REAP_SECS` | `30` | How often to remove expired boxes, in seconds. |
+| `COMPUTER_SERVER_JOBS` | `inline` | `inline` launches, forks and builds in the request. `queue` puts the work in the store, answers `202`, and the server's workers do it. |
+| `COMPUTER_SERVER_SCHEDULE` | `internal` | `internal` runs the periodic work and the job workers in the server. With more than one server on one database, one of them runs the periodic work. `external` runs nothing by itself: a scheduler calls the `/v1/jobs` routes. |
+| `CRON_SECRET` | None | A bearer token that opens the `/v1/jobs` routes and nothing else. Vercel Cron sends it. |
 | `COMPUTER_CONTENT_BOUNDARIES` | Off | `1` applies content boundaries to `/mcp`. |
 
 ### Runtimes
@@ -205,6 +211,7 @@ Each box setting is available from each interface.
 | CPUs | `--cpus N` | `cpus` | `placement.cpus` | `cpus(n)` |
 | Lifetime | `--ttl MINUTES` | `ttl_minutes` | `placement.expires_after_secs` | `expires_after(duration)` |
 | Idle timeout | `--idle MINUTES` | `idle_minutes` | `placement.idle_timeout_secs` | `expires_when_idle(duration)` |
+| Keep files when stopped | `--persistent` | `persistent` | `placement.persistent` | `persistent(true)` |
 | Browser profile | `--profile NAME` | `profile` | `placement.profile` | `profiles(volume)` |
 | Viewer access | `--spec FILE` | | `spec.policy.auth`, `bind`, `advertise` | `auth(…)`, `publish_on(…)`, `advertise(…)` |
 | Full spec | `--spec FILE` | | The request body | |

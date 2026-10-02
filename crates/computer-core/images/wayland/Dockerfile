@@ -26,6 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       wl-clipboard \
       novnc \
       websockify \
+      python3-jwcrypto \
       python3 \
       chromium \
       fonts-liberation \

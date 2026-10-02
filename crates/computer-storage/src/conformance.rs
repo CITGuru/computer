@@ -4,6 +4,7 @@ use computer_api::{Actor, Placement, Spec, TraceEvent};
 
 fn record(id: &str, width: u32) -> BoxRecord {
     BoxRecord {
+        owner: None,
         runtime: "docker".to_string(),
         id: id.to_string(),
         spec: Spec::default(),
@@ -13,11 +14,13 @@ fn record(id: &str, width: u32) -> BoxRecord {
         screens: 1,
         created_at_ms: 1_700_000_000_000,
         expires_at_ms: None,
+        deleted_at_ms: None,
     }
 }
 
 fn runtime(name: &str, key: &str) -> RuntimeRecord {
     RuntimeRecord {
+        owner: None,
         name: name.to_string(),
         provider: "e2b".to_string(),
         fields: serde_json::json!({ "region": "eu" }),
@@ -101,6 +104,265 @@ pub async fn images(store: &dyn Store) {
             .is_none()
     );
     assert_eq!(store.list_images().await.expect("listed").len(), 1);
+}
+
+pub async fn locks(store: std::sync::Arc<dyn Store>) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let first = store.lock("box_1/take").await.expect("locked");
+    let other = store
+        .lock("box_2/take")
+        .await
+        .expect("another name is free");
+    drop(other);
+
+    let entered = std::sync::Arc::new(AtomicBool::new(false));
+    let waiting = {
+        let (store, entered) = (
+            std::sync::Arc::clone(&store),
+            std::sync::Arc::clone(&entered),
+        );
+        tokio::spawn(async move {
+            let _held = store.lock("box_1/take").await.expect("locked");
+            entered.store(true, Ordering::SeqCst);
+        })
+    };
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !entered.load(Ordering::SeqCst),
+        "a second holder waits while the first holds the name"
+    );
+
+    drop(first);
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+        .await
+        .expect("the second holder gets the lock once the first lets go")
+        .expect("joined");
+    assert!(entered.load(Ordering::SeqCst));
+}
+
+pub async fn jobs(store: &dyn Store) {
+    use crate::JobRecord;
+
+    assert_eq!(store.claim_job("w1", 60_000).await.expect("asked"), None);
+
+    let made = |id: &str, at: u64| JobRecord {
+        created_at_ms: at,
+        ..JobRecord::new(id, "launch", format!("{{\"box\":\"{id}\"}}"))
+    };
+    store.push_job(&made("job_b", 2_000)).await.expect("pushed");
+    store.push_job(&made("job_a", 1_000)).await.expect("pushed");
+
+    let first = store
+        .claim_job("w1", 60_000)
+        .await
+        .expect("asked")
+        .expect("a job");
+    assert_eq!(first.id, "job_a", "the oldest job goes first");
+    assert_eq!(first.kind, "launch");
+    assert_eq!(first.body, r#"{"box":"job_a"}"#);
+    assert_eq!(first.attempts, 1);
+
+    let second = store
+        .claim_job("w2", 60_000)
+        .await
+        .expect("asked")
+        .expect("a job");
+    assert_eq!(
+        second.id, "job_b",
+        "a claimed job is not given to a second worker"
+    );
+    assert_eq!(store.claim_job("w3", 60_000).await.expect("asked"), None);
+
+    assert!(
+        store
+            .renew_job("job_a", "w1", 60_000)
+            .await
+            .expect("renewed")
+    );
+    assert!(
+        !store.renew_job("job_a", "w2", 60_000).await.expect("asked"),
+        "only the worker that holds a job can keep it"
+    );
+
+    store.finish_job("job_a").await.expect("finished");
+    assert!(!store.renew_job("job_a", "w1", 60_000).await.expect("asked"));
+
+    assert!(store.renew_job("job_b", "w2", 0).await.expect("renewed"));
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let again = store
+        .claim_job("w3", 60_000)
+        .await
+        .expect("asked")
+        .expect("a job whose worker went away is given to another");
+    assert_eq!((again.id.as_str(), again.attempts), ("job_b", 2));
+
+    store.finish_job("job_b").await.expect("finished");
+    assert_eq!(store.claim_job("w1", 60_000).await.expect("asked"), None);
+}
+
+pub async fn events(store: &dyn Store) {
+    use crate::EventRecord;
+
+    let made = |kind: &str, at: u64, owner: Option<&str>| EventRecord {
+        seq: 0,
+        at_ms: at,
+        kind: kind.to_string(),
+        owner: owner.map(str::to_string),
+        box_id: Some("box_1".to_string()),
+        runtime: Some("docker".to_string()),
+        data: serde_json::json!({ "state": "ready" }),
+    };
+
+    assert!(
+        store
+            .events_after(0, u64::MAX / 2, 10)
+            .await
+            .expect("asked")
+            .is_empty()
+    );
+
+    let first = store
+        .append_event(&made("box.created", 1_000, Some("ws_a")))
+        .await
+        .expect("kept");
+    let second = store
+        .append_event(&made("box.ready", 2_000, Some("ws_a")))
+        .await
+        .expect("kept");
+    let third = store
+        .append_event(&made("box.removed", 3_000, None))
+        .await
+        .expect("kept");
+    assert!(
+        first < second && second < third,
+        "each event has the next number"
+    );
+
+    let all = store.events_after(0, u64::MAX / 2, 10).await.expect("read");
+    assert_eq!(
+        all.iter()
+            .map(|event| event.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["box.created", "box.ready", "box.removed"]
+    );
+    assert_eq!(all[0].seq, first);
+    assert_eq!(all[0].owner.as_deref(), Some("ws_a"));
+    assert_eq!(all[2].owner, None);
+    assert_eq!(all[1].data["state"], "ready");
+
+    let later = store
+        .events_after(first, u64::MAX / 2, 1)
+        .await
+        .expect("read");
+    assert_eq!(later.len(), 1, "a page holds at most the limit");
+    assert_eq!(later[0].seq, second, "and starts after the cursor");
+
+    assert_eq!(
+        store.events_after(0, 2_000, 10).await.expect("read").len(),
+        2,
+        "an event newer than the cut is left for the next read"
+    );
+
+    assert_eq!(store.prune_events(2_500).await.expect("pruned"), 2);
+    let left = store.events_after(0, u64::MAX / 2, 10).await.expect("read");
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].seq, third, "what is left keeps its number");
+}
+
+pub async fn notes(store: &dyn Store) {
+    let far = now_ms() + 3_600_000;
+
+    assert_eq!(
+        store.get_note("states", "ws_a/login").await.expect("asked"),
+        None
+    );
+
+    store
+        .put_note("states", "ws_a/login", "one", None)
+        .await
+        .expect("kept");
+    store
+        .put_note("states", "ws_a/shop cart", "two", Some(far))
+        .await
+        .expect("kept");
+    store
+        .put_note("states", "ws_b/login", "three", None)
+        .await
+        .expect("kept");
+    store
+        .put_note("labels", "ws_a/login", "another kind", None)
+        .await
+        .expect("kept");
+    store
+        .put_note("states", "ws_a/old", "gone", Some(1))
+        .await
+        .expect("kept");
+
+    assert_eq!(
+        store.get_note("states", "ws_a/login").await.expect("asked"),
+        Some("one".to_string())
+    );
+    assert_eq!(
+        store.get_note("states", "ws_a/old").await.expect("asked"),
+        None,
+        "a note past its time reads as absent before anything prunes it"
+    );
+
+    store
+        .put_note("states", "ws_a/login", "one again", None)
+        .await
+        .expect("replaced");
+    assert_eq!(
+        store.list_notes("states", "ws_a/").await.expect("listed"),
+        vec![
+            ("ws_a/login".to_string(), "one again".to_string()),
+            ("ws_a/shop cart".to_string(), "two".to_string()),
+        ],
+        "one kind, one prefix, in key order, and only what is still live"
+    );
+    assert_eq!(
+        store.list_notes("states", "").await.expect("listed").len(),
+        3
+    );
+
+    assert_eq!(
+        store.prune_notes(now_ms()).await.expect("pruned"),
+        1,
+        "only the note past its time goes"
+    );
+
+    store
+        .put_note("states", "ws_a/login2", "a longer key", None)
+        .await
+        .expect("kept");
+    store
+        .forget_note("states", "ws_a/login")
+        .await
+        .expect("forgotten");
+    assert_eq!(
+        store
+            .get_note("states", "ws_a/login2")
+            .await
+            .expect("asked"),
+        Some("a longer key".to_string()),
+        "forgetting one key leaves a key that starts with it"
+    );
+
+    store
+        .forget_notes("states", "ws_a/")
+        .await
+        .expect("forgotten");
+    assert_eq!(
+        store.list_notes("states", "").await.expect("listed"),
+        vec![("ws_b/login".to_string(), "three".to_string())]
+    );
+    assert_eq!(
+        store.get_note("labels", "ws_a/login").await.expect("asked"),
+        Some("another kind".to_string()),
+        "forgetting one kind leaves the others"
+    );
 }
 
 pub async fn runtimes(store: &dyn Store) {

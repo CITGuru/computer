@@ -126,6 +126,14 @@ pub trait Machine: Send + Sync {
         false
     }
 
+    fn stops_when_idle(&self) -> bool {
+        false
+    }
+
+    fn persists(&self) -> bool {
+        false
+    }
+
     /// `Drop` cannot await. `None` means a dropped handle leaks the box.
     fn reaper(&self, name: &str) -> Option<(String, Vec<String>)>;
 }
@@ -706,6 +714,10 @@ impl Machine for EngineMachine {
     }
 
     fn sweepable(&self) -> bool {
+        true
+    }
+
+    fn persists(&self) -> bool {
         true
     }
 

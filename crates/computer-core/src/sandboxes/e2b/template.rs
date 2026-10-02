@@ -192,10 +192,18 @@ fn carrying(command: &str, extras: &Extras) -> Option<String> {
 
         written = written
             .replace(&format!("\"${name}\""), &quoted(&value))
-            .replace(&format!("${name}"), &quoted(&value));
+            .replace(&format!("${name}"), &words(&value));
     }
 
     Some(written)
+}
+
+fn words(value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(quoted)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn quoted(value: &str) -> String {
@@ -304,7 +312,7 @@ mod tests {
     #[test]
     fn test_a_run_that_needs_a_value_no_argument_can_carry_is_written_in() {
         let extras = Extras {
-            packages: vec!["gimp".to_string()],
+            packages: vec!["gimp".to_string(), "mousepad".to_string()],
             sources: vec![AptSource {
                 name: "vscode".to_string(),
                 key_url: "https://packages.microsoft.com/keys/microsoft.asc".to_string(),
@@ -325,8 +333,8 @@ mod tests {
             .join("\n");
 
         assert!(
-            ran.contains("'gimp'"),
-            "the packages are in the command: {ran}"
+            ran.contains("install -y --no-install-recommends 'gimp' 'mousepad'"),
+            "each package is its own word: {ran}"
         );
         assert!(
             ran.contains("packages.microsoft.com"),

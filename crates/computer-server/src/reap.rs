@@ -1,18 +1,11 @@
 use crate::AppState;
 use computer_api::{Actor, TraceEvent};
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 pub const EVERY: Duration = Duration::from_secs(30);
 
-pub fn spawn(state: Arc<AppState>, every: Duration) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(every).await;
-            once(&state).await;
-        }
-    });
-}
+pub const EXPIRED: &str = "its deadline passed";
+pub const LOST: &str = "the runtime no longer has it";
 
 pub async fn once(state: &AppState) -> usize {
     let mut gone = 0;
@@ -29,7 +22,10 @@ pub async fn once(state: &AppState) -> usize {
             Ok(swept) => {
                 for box_ in swept {
                     tracing::info!(box_ = %box_, runtime = %name, "a box outlived its deadline");
-                    forget(state, &box_, "its deadline passed").await;
+                    forget(state, &box_, EXPIRED).await;
+                    if let Err(why) = state.mark_deleted(&box_).await {
+                        tracing::warn!(box_ = %box_, why = %why.body.message, "an expired box was not marked removed");
+                    }
                     gone += 1;
                 }
             }
@@ -47,7 +43,7 @@ async fn reconcile(state: &AppState) -> usize {
         // Only a definite no: forgetting a box on a runtime hiccup loses a live desktop.
         if matches!(entry.computer.machine().running(&entry.id).await, Ok(false)) {
             tracing::info!(box_ = %entry.id, "the runtime no longer holds this box");
-            forget(state, &entry.id, "the runtime no longer has it").await;
+            forget(state, &entry.id, LOST).await;
             gone += 1;
         }
     }

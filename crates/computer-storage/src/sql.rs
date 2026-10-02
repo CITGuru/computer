@@ -16,6 +16,60 @@ enum Dialect {
 pub struct Sql {
     pool: AnyPool,
     dialect: Dialect,
+    locks: crate::Locks,
+    leasing: bool,
+}
+
+const LOCKS: &str = "locks";
+const LEASE_MS: u64 = 30_000;
+const LEASE_RENEW: std::time::Duration = std::time::Duration::from_secs(10);
+const LEASE_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+const CLAIM: &str = "INSERT INTO notes (kind, key, value, until_ms)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (kind, key) DO UPDATE SET
+         value = excluded.value,
+         until_ms = excluded.until_ms
+     WHERE notes.until_ms <= ?";
+
+struct Lease {
+    pool: AnyPool,
+    dialect: Dialect,
+    name: String,
+    token: String,
+    renewing: tokio::task::JoinHandle<()>,
+    _local: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        self.renewing.abort();
+
+        let (pool, name, token) = (self.pool.clone(), self.name.clone(), self.token.clone());
+        let written = numbered(
+            self.dialect,
+            "DELETE FROM notes WHERE kind = ? AND key = ? AND value = ?",
+        );
+        tokio::spawn(async move {
+            let _ = sqlx::query(AssertSqlSafe(written))
+                .bind(LOCKS)
+                .bind(name)
+                .bind(token)
+                .execute(&pool)
+                .await;
+        });
+    }
+}
+
+fn token() -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let turn = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or_default();
+
+    format!("{}-{nanos}-{turn}", std::process::id())
 }
 
 impl Sql {
@@ -39,16 +93,46 @@ impl Sql {
             .await
             .map_err(|error| Error::Unavailable(format!("{url}: {error}")))?;
 
-        let store = Self { pool, dialect };
+        let store = Self {
+            pool,
+            dialect,
+            locks: crate::Locks::default(),
+            leasing: dialect == Dialect::Postgres,
+        };
         store.migrate().await?;
 
         Ok(store)
+    }
+
+    pub fn leasing(mut self) -> Self {
+        self.leasing = true;
+        self
+    }
+
+    async fn claim(&self, name: &str, token: &str) -> Result<bool> {
+        let now = now_ms();
+        let done = sqlx::query(self.q(CLAIM))
+            .bind(LOCKS)
+            .bind(name)
+            .bind(token)
+            .bind((now + LEASE_MS) as i64)
+            .bind(now as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| failed("a lock would not be taken", error))?;
+
+        Ok(done.rows_affected() == 1)
     }
 
     async fn migrate(&self) -> Result<()> {
         let blob = match self.dialect {
             Dialect::Sqlite => "BLOB",
             Dialect::Postgres => "BYTEA",
+        };
+
+        let serial = match self.dialect {
+            Dialect::Sqlite => "INTEGER PRIMARY KEY AUTOINCREMENT",
+            Dialect::Postgres => "BIGSERIAL PRIMARY KEY",
         };
 
         let schema = [
@@ -91,6 +175,35 @@ impl Sql {
                  PRIMARY KEY (runtime, spec_digest)
              )"
             .to_string(),
+            "CREATE TABLE IF NOT EXISTS notes (
+                 kind TEXT NOT NULL,
+                 key TEXT NOT NULL,
+                 value TEXT NOT NULL,
+                 until_ms BIGINT,
+                 PRIMARY KEY (kind, key)
+             )"
+            .to_string(),
+            "CREATE TABLE IF NOT EXISTS jobs (
+                 id TEXT PRIMARY KEY,
+                 kind TEXT NOT NULL,
+                 body TEXT NOT NULL,
+                 created_at_ms BIGINT NOT NULL,
+                 attempts BIGINT NOT NULL,
+                 claimed_by TEXT,
+                 claimed_until_ms BIGINT
+             )"
+            .to_string(),
+            format!(
+                "CREATE TABLE IF NOT EXISTS events (
+                     seq {serial},
+                     at_ms BIGINT NOT NULL,
+                     kind TEXT NOT NULL,
+                     owner TEXT,
+                     box_id TEXT,
+                     runtime TEXT,
+                     data TEXT NOT NULL
+                 )"
+            ),
             "CREATE TABLE IF NOT EXISTS sequences (
                  box_id TEXT PRIMARY KEY,
                  next BIGINT NOT NULL
@@ -330,6 +443,285 @@ impl Store for Sql {
             .map_err(|error| failed("an image would not go away", error))?;
 
         Ok(())
+    }
+
+    async fn lock(&self, name: &str) -> Result<crate::Lock> {
+        let local = self.locks.hold(name).await;
+        if !self.leasing {
+            return Ok(crate::Lock::of(local));
+        }
+
+        let token = token();
+        while !self.claim(name, &token).await? {
+            tokio::time::sleep(LEASE_POLL).await;
+        }
+
+        let (pool, held, mine) = (self.pool.clone(), name.to_string(), token.clone());
+        let written = numbered(
+            self.dialect,
+            "UPDATE notes SET until_ms = ? WHERE kind = ? AND key = ? AND value = ?",
+        );
+        let renewing = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(LEASE_RENEW).await;
+                let _ = sqlx::query(AssertSqlSafe(written.clone()))
+                    .bind((now_ms() + LEASE_MS) as i64)
+                    .bind(LOCKS)
+                    .bind(&held)
+                    .bind(&mine)
+                    .execute(&pool)
+                    .await;
+            }
+        });
+
+        Ok(crate::Lock::of(Lease {
+            pool: self.pool.clone(),
+            dialect: self.dialect,
+            name: name.to_string(),
+            token,
+            renewing,
+            _local: local,
+        }))
+    }
+
+    async fn push_job(&self, job: &crate::JobRecord) -> Result<()> {
+        sqlx::query(self.q(
+            "INSERT INTO jobs (id, kind, body, created_at_ms, attempts) VALUES (?, ?, ?, ?, ?)",
+        ))
+        .bind(&job.id)
+        .bind(&job.kind)
+        .bind(&job.body)
+        .bind(job.created_at_ms as i64)
+        .bind(i64::from(job.attempts))
+        .execute(&self.pool)
+        .await
+        .map_err(|error| failed("a job would not go down", error))?;
+
+        Ok(())
+    }
+
+    async fn claim_job(&self, worker: &str, lease_ms: u64) -> Result<Option<crate::JobRecord>> {
+        let skipping = match self.dialect {
+            Dialect::Sqlite => "",
+            Dialect::Postgres => "FOR UPDATE SKIP LOCKED",
+        };
+        let now = now_ms();
+        let until = now + lease_ms;
+
+        let row = sqlx::query(self.q(&format!(
+            "UPDATE jobs SET claimed_by = ?, claimed_until_ms = ?, attempts = attempts + 1
+             WHERE (claimed_until_ms IS NULL OR claimed_until_ms < ?) AND id = (
+                 SELECT id FROM jobs
+                 WHERE claimed_until_ms IS NULL OR claimed_until_ms < ?
+                 ORDER BY created_at_ms, id LIMIT 1 {skipping}
+             )
+             RETURNING id, kind, body, created_at_ms, attempts"
+        )))
+        .bind(worker)
+        .bind(until as i64)
+        .bind(now as i64)
+        .bind(now as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| failed("a job would not be claimed", error))?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let read = |error| failed("a job would not be read", error);
+        let created: i64 = row.try_get(3).map_err(read)?;
+        let attempts: i64 = row.try_get(4).map_err(read)?;
+
+        Ok(Some(crate::JobRecord {
+            id: row.try_get(0).map_err(read)?,
+            kind: row.try_get(1).map_err(read)?,
+            body: row.try_get(2).map_err(read)?,
+            created_at_ms: created as u64,
+            attempts: attempts as u32,
+            claimed_by: Some(worker.to_string()),
+            claimed_until_ms: Some(until),
+        }))
+    }
+
+    async fn renew_job(&self, id: &str, worker: &str, lease_ms: u64) -> Result<bool> {
+        let done = sqlx::query(
+            self.q("UPDATE jobs SET claimed_until_ms = ? WHERE id = ? AND claimed_by = ?"),
+        )
+        .bind((now_ms() + lease_ms) as i64)
+        .bind(id)
+        .bind(worker)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| failed("a job would not be renewed", error))?;
+
+        Ok(done.rows_affected() == 1)
+    }
+
+    async fn finish_job(&self, id: &str) -> Result<()> {
+        sqlx::query(self.q("DELETE FROM jobs WHERE id = ?"))
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| failed("a job would not go away", error))?;
+
+        Ok(())
+    }
+
+    async fn append_event(&self, event: &crate::EventRecord) -> Result<u64> {
+        let seq: i64 = sqlx::query_scalar(self.q(
+            "INSERT INTO events (at_ms, kind, owner, box_id, runtime, data)
+             VALUES (?, ?, ?, ?, ?, ?) RETURNING seq",
+        ))
+        .bind(event.at_ms as i64)
+        .bind(&event.kind)
+        .bind(&event.owner)
+        .bind(&event.box_id)
+        .bind(&event.runtime)
+        .bind(event.data.to_string())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| failed("an event would not go down", error))?;
+
+        Ok(seq as u64)
+    }
+
+    async fn events_after(
+        &self,
+        after: u64,
+        until_ms: u64,
+        limit: usize,
+    ) -> Result<Vec<crate::EventRecord>> {
+        let rows = sqlx::query(self.q(
+            "SELECT seq, at_ms, kind, owner, box_id, runtime, data FROM events
+             WHERE seq > ? AND at_ms <= ? ORDER BY seq LIMIT ?",
+        ))
+        .bind(after as i64)
+        .bind(until_ms as i64)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| failed("the events would not be read", error))?;
+
+        rows.iter()
+            .map(|row| {
+                let read = |error| failed("an event would not be read", error);
+                let seq: i64 = row.try_get(0).map_err(read)?;
+                let at_ms: i64 = row.try_get(1).map_err(read)?;
+                let data: String = row.try_get(6).map_err(read)?;
+
+                Ok(crate::EventRecord {
+                    seq: seq as u64,
+                    at_ms: at_ms as u64,
+                    kind: row.try_get(2).map_err(read)?,
+                    owner: row.try_get(3).map_err(read)?,
+                    box_id: row.try_get(4).map_err(read)?,
+                    runtime: row.try_get(5).map_err(read)?,
+                    data: serde_json::from_str(&data).unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
+    async fn prune_events(&self, before_ms: u64) -> Result<u64> {
+        let done = sqlx::query(self.q("DELETE FROM events WHERE at_ms < ?"))
+            .bind(before_ms as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| failed("old events would not go away", error))?;
+
+        Ok(done.rows_affected())
+    }
+
+    async fn put_note(
+        &self,
+        kind: &str,
+        key: &str,
+        value: &str,
+        until_ms: Option<u64>,
+    ) -> Result<()> {
+        sqlx::query(self.q("INSERT INTO notes (kind, key, value, until_ms)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (kind, key) DO UPDATE SET
+                 value = excluded.value,
+                 until_ms = excluded.until_ms"))
+        .bind(kind)
+        .bind(key)
+        .bind(value)
+        .bind(until_ms.map(|at| at as i64))
+        .execute(&self.pool)
+        .await
+        .map_err(|error| failed("a note would not go down", error))?;
+
+        Ok(())
+    }
+
+    async fn get_note(&self, kind: &str, key: &str) -> Result<Option<String>> {
+        sqlx::query_scalar(self.q("SELECT value FROM notes
+             WHERE kind = ? AND key = ? AND (until_ms IS NULL OR until_ms > ?)"))
+        .bind(kind)
+        .bind(key)
+        .bind(now_ms() as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| failed("a note would not be read", error))
+    }
+
+    async fn list_notes(&self, kind: &str, prefix: &str) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query(self.q("SELECT key, value FROM notes
+             WHERE kind = ? AND substr(key, 1, ?) = ? AND (until_ms IS NULL OR until_ms > ?)
+             ORDER BY key"))
+        .bind(kind)
+        .bind(prefix.chars().count() as i64)
+        .bind(prefix)
+        .bind(now_ms() as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| failed("the notes would not be read", error))?;
+
+        rows.iter()
+            .map(|row| {
+                let key: String = row
+                    .try_get(0)
+                    .map_err(|error| failed("a note would not be read", error))?;
+                let value: String = row
+                    .try_get(1)
+                    .map_err(|error| failed("a note would not be read", error))?;
+                Ok((key, value))
+            })
+            .collect()
+    }
+
+    async fn forget_note(&self, kind: &str, key: &str) -> Result<()> {
+        sqlx::query(self.q("DELETE FROM notes WHERE kind = ? AND key = ?"))
+            .bind(kind)
+            .bind(key)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| failed("a note would not go away", error))?;
+
+        Ok(())
+    }
+
+    async fn forget_notes(&self, kind: &str, prefix: &str) -> Result<()> {
+        sqlx::query(self.q("DELETE FROM notes WHERE kind = ? AND substr(key, 1, ?) = ?"))
+            .bind(kind)
+            .bind(prefix.chars().count() as i64)
+            .bind(prefix)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| failed("the notes would not go away", error))?;
+
+        Ok(())
+    }
+
+    async fn prune_notes(&self, now_ms: u64) -> Result<u64> {
+        let done = sqlx::query(self.q("DELETE FROM notes WHERE until_ms <= ?"))
+            .bind(now_ms as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| failed("old notes would not go away", error))?;
+
+        Ok(done.rows_affected())
     }
 
     async fn append(
@@ -588,6 +980,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sqlite_locks_one_name_for_one_holder() {
+        let scratch = Scratch::new();
+        let store = Sql::open(&scratch.url()).await.expect("opened");
+        conformance::locks(Arc::new(store)).await;
+    }
+
+    #[tokio::test]
+    async fn test_a_lease_holds_a_name_across_two_processes_on_one_database() {
+        let scratch = Scratch::new();
+        let one = Sql::open(&scratch.url()).await.expect("opened").leasing();
+        let two = Sql::open(&scratch.url()).await.expect("opened").leasing();
+
+        let held = one.lock("box_1/take").await.expect("locked");
+        assert!(
+            !two.claim("box_1/take", "another").await.expect("asked"),
+            "another process does not get a name that is held"
+        );
+        assert!(
+            two.claim("box_2/take", "another").await.expect("asked"),
+            "but it gets another name"
+        );
+
+        drop(held);
+        let waited =
+            tokio::time::timeout(std::time::Duration::from_secs(5), two.lock("box_1/take"))
+                .await
+                .expect("the name is free once the holder lets go");
+        assert!(waited.is_ok());
+    }
+
+    #[tokio::test]
     async fn test_sqlite_behaves_like_a_store() {
         let scratch = Scratch::new();
         let store = Sql::open(&scratch.url()).await.expect("opened");
@@ -595,6 +1018,9 @@ mod tests {
         conformance::store(&store).await;
         conformance::runtimes(&store).await;
         conformance::images(&store).await;
+        conformance::notes(&store).await;
+        conformance::jobs(&store).await;
+        conformance::events(&store).await;
     }
 
     #[tokio::test]
@@ -714,6 +1140,9 @@ mod tests {
         conformance::store(&store).await;
         conformance::runtimes(&store).await;
         conformance::images(&store).await;
+        conformance::notes(&store).await;
+        conformance::jobs(&store).await;
+        conformance::events(&store).await;
         conformance::frames(&store).await;
     }
 }
