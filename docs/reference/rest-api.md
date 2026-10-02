@@ -1,14 +1,14 @@
 # REST API reference
 
-`computerd` serves the REST API under `/v1`. The wire types are in the [`computer-api`](../../crates/computer-api) crate, and [`computer-client`](../../crates/computer-client) is a Rust client for it.
+`holmd` serves the REST API under `/v1`. The wire types are in the [`holm-api`](../../crates/holm-api) crate, and [`holm-client`](../../crates/holm-client) is a Rust client for it.
 
 To start the server and set a token, see [The server](../concepts/server.md).
 
 ## Conventions
 
-**Base URL.** `http://127.0.0.1:8080` unless `COMPUTER_SERVER_ADDR` changes it.
+**Base URL.** `http://127.0.0.1:8080` unless `HOLM_SERVER_ADDR` changes it.
 
-**Authentication.** When the server has a token, send `Authorization: Bearer <COMPUTER_SERVER_TOKEN>` on each request, or a workspace token or API key (`holm_sk_…`) from a console. See [Workspaces](../concepts/server.md#workspaces). These endpoints need no bearer token:
+**Authentication.** When the server has a token, send `Authorization: Bearer <HOLM_SERVER_TOKEN>` on each request, or a workspace token or API key (`holm_sk_…`) from a console. See [Workspaces](../concepts/server.md#workspaces). These endpoints need no bearer token:
 
 - `GET /v1/health`
 - The viewer socket, which takes a short-lived token in the query
@@ -54,7 +54,7 @@ All errors have this body:
 
 | Method | Path | Effect |
 | --- | --- | --- |
-| `GET` | `/v1/health` | Returns `{"ok": true, "service": "computer-server"}`. No token. |
+| `GET` | `/v1/health` | Returns `{"ok": true, "service": "holm-server"}`. No token. |
 
 ### Boxes
 
@@ -63,7 +63,7 @@ All errors have this body:
 | `GET` | `/v1/boxes` | List boxes. |
 | `POST` | `/v1/boxes` | Create a box. See [Create a box](#create-a-box). |
 | `GET` | `/v1/boxes/{id}` | Get one box. |
-| `DELETE` | `/v1/boxes/{id}` | Remove a box. Needs the header `x-computer-confirm-delete: true`. The server keeps the record of a removed box for its history: the box leaves the list, and each later call to it answers `410`. |
+| `DELETE` | `/v1/boxes/{id}` | Remove a box. Needs the header `x-holm-confirm-delete: true`. The server keeps the record of a removed box for its history: the box leaves the list, and each later call to it answers `410`. |
 | `POST` | `/v1/boxes/{id}/pause` | Pause the box. |
 | `POST` | `/v1/boxes/{id}/resume` | Resume a paused or stopped box. |
 | `POST` | `/v1/boxes/{id}/stop` | Stop the box and keep its files. |
@@ -92,7 +92,7 @@ A box in a response:
 }
 ```
 
-`state` is `ready`, `paused`, `stopped`, `unreachable`, `gone`, `starting`, or `failed`. `reason` is present when the state needs an explanation. When the server queues its jobs (`COMPUTER_SERVER_JOBS=queue`), `POST /v1/boxes` answers `202` with a box in the `starting` state. Read the box until it is `ready` or `failed`. `POST /v1/boxes/{id}/fork` answers `202` in the same way, with an empty replay report. A box that is `starting` or `failed` refuses other calls with `409`, and a `failed` box stays until it is deleted. `owner` is the workspace that launched the box, and is absent for a box launched with the server token. `spec` and `placement` are what the box was launched with, so the same box can be launched again.
+`state` is `ready`, `paused`, `stopped`, `unreachable`, `gone`, `starting`, or `failed`. `reason` is present when the state needs an explanation. When the server queues its jobs (`HOLM_SERVER_JOBS=queue`), `POST /v1/boxes` answers `202` with a box in the `starting` state. Read the box until it is `ready` or `failed`. `POST /v1/boxes/{id}/fork` answers `202` in the same way, with an empty replay report. A box that is `starting` or `failed` refuses other calls with `409`, and a `failed` box stays until it is deleted. `owner` is the workspace that launched the box, and is absent for a box launched with the server token. `spec` and `placement` are what the box was launched with, so the same box can be launched again.
 
 ### Screen
 
@@ -275,7 +275,7 @@ Each event has `seq`, `at_ms`, `kind`, and, when they apply, `owner`, `box_id`, 
 
 ### Scheduled work
 
-For a server that cannot keep a loop alive, such as a serverless function. Set `COMPUTER_SERVER_SCHEDULE=external`, and call these routes from a scheduler. Each accepts `GET` and `POST`, with the server token or `CRON_SECRET` as the bearer token.
+For a server that cannot keep a loop alive, such as a serverless function. Set `HOLM_SERVER_SCHEDULE=external`, and call these routes from a scheduler. Each accepts `GET` and `POST`, with the server token or `CRON_SECRET` as the bearer token.
 
 | Method | Path | Effect |
 | --- | --- | --- |
@@ -283,7 +283,7 @@ For a server that cannot keep a loop alive, such as a serverless function. Set `
 | `GET`, `POST` | `/v1/jobs/prune` | Remove old frames, trace entries and expired notes. Returns `{frames, entries, boxes}`. Call it each hour. |
 | `GET`, `POST` | `/v1/jobs/run` | Do the queued launches, forks and builds. It stops taking new jobs after 50 seconds. Returns `{ran}`. Call it each minute. |
 
-When `COMPUTER_PUBLIC_URL` and `CRON_SECRET` are set, the server calls its own `/v1/jobs/run` when it queues a job, so a job does not wait for the scheduler. On Vercel, the schedule goes in `vercel.json`:
+When `HOLM_PUBLIC_URL` and `CRON_SECRET` are set, the server calls its own `/v1/jobs/run` when it queues a job, so a job does not wait for the scheduler. On Vercel, the schedule goes in `vercel.json`:
 
 ```json
 {
@@ -556,5 +556,5 @@ curl -fsS "$BASE/v1/boxes/$BOX/screens/0/actions" \
     "want": ["frame"]
   }'
 
-curl -fsS -X DELETE "$BASE/v1/boxes/$BOX" -H 'x-computer-confirm-delete: true'
+curl -fsS -X DELETE "$BASE/v1/boxes/$BOX" -H 'x-holm-confirm-delete: true'
 ```

@@ -17,14 +17,14 @@ Get the watch URL:
 
 | Interface | How |
 | --- | --- |
-| CLI | `computer new` prints it on standard error. `computer box` shows it. |
+| CLI | `holm new` prints it on standard error. `holm box` shows it. |
 | Rust | `computer.viewer_url()` |
 | MCP | `launch_box` and `inspect_box` return it. |
 | REST | `viewer_url` in `GET /v1/boxes/{id}` |
 
 ### Signed viewers
 
-A box on a cloud runtime is reached through a public vendor URL. When the server has a secret key (`COMPUTER_SERVER_SECRET_KEY` or `COMPUTER_SERVER_SECRET_FILE`), the server gives each such box its own viewer key, and the box accepts only short-lived tokens signed with that key.
+A box on a cloud runtime is reached through a public vendor URL. When the server has a secret key (`HOLM_SERVER_SECRET_KEY` or `HOLM_SERVER_SECRET_FILE`), the server gives each such box its own viewer key, and the box accepts only short-lived tokens signed with that key.
 
 - `viewer_url` is a new link in each reply, and it must be opened in 15 minutes. Read the box again to get a new one. A box that the vendor does not open to the public has no `viewer_url`.
 - `POST /v1/boxes/{id}/screens/{screen}/viewer/ticket` returns a short-lived token for the server's viewer socket, and direct socket URLs in `view_socket` and `control_socket`. A direct URL must be opened before the token expires.
@@ -50,8 +50,8 @@ During an exclusive takeover, the agent can still read the screen, take screensh
 ### CLI
 
 ```bash
-computer takeover "$BOX"
-computer release "$BOX"
+holm takeover "$BOX"
+holm release "$BOX"
 ```
 
 `takeover` prints the control URL. `release` ends the takeover and shows how many people watch and drive.
@@ -109,15 +109,15 @@ if computer.person_driving().await {
 }
 ```
 
-With a server, `computer release` or `reclaim_screen` ends it from any client.
+With a server, `holm release` or `reclaim_screen` ends it from any client.
 
 ## The live screen in an MCP host
 
 Hosts that support [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) show the live screen next to the results of `launch_box`, `open_screen`, and `hand_over`. A person can watch, take control, give control back, and record.
 
-The page connects to the box through `computerd`, not to the box's own ports, so the box can stay on loopback. Each tool result gives the page a short-lived token for one screen. The token is valid for 15 minutes and goes to the page only. The model does not get it.
+The page connects to the box through `holmd`, not to the box's own ports, so the box can stay on loopback. Each tool result gives the page a short-lived token for one screen. The token is valid for 15 minutes and goes to the page only. The model does not get it.
 
-When `computerd` is behind a reverse proxy, set `COMPUTER_PUBLIC_URL` and forward WebSocket upgrades. See [The server](server.md#behind-a-reverse-proxy).
+When `holmd` is behind a reverse proxy, set `HOLM_PUBLIC_URL` and forward WebSocket upgrades. See [The server](server.md#behind-a-reverse-proxy).
 
 ## Viewer access
 
@@ -146,4 +146,4 @@ Choose `Password` when a link can be copied to other places, such as chat or log
 
 Treat viewer URLs as credentials. A control URL gives full control of the desktop.
 
-Chrome DevTools has no authentication of its own. On host runtimes its port stays on loopback. On E2B and Vercel, the bridge in the box refuses requests without the box's secret. Use `computer cdp` for an address with a short-lived token through the server.
+Chrome DevTools has no authentication of its own. On host runtimes its port stays on loopback. On E2B and Vercel, the bridge in the box refuses requests without the box's secret. Use `holm cdp` for an address with a short-lived token through the server.

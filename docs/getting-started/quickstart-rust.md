@@ -15,7 +15,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ## Launch a desktop
 
 ```rust
-use computer::{Button, Computer, Point};
+use holm::{Button, Computer, Point};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

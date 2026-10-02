@@ -1,20 +1,20 @@
 //! cargo run --example microvm
 
-use computer::SystemEngine;
-use computer::microvm::import_image;
-use computer::sandboxes::microsandbox::msb;
-use computer::{Button, Computer, Engine, Point, bundle};
+use holm::SystemEngine;
+use holm::microvm::import_image;
+use holm::sandboxes::microsandbox::msb;
+use holm::{Button, Computer, Engine, Point, bundle};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let hypervisor = msb::Msb::found();
     let docker: Arc<dyn Engine> = Arc::new(SystemEngine::default());
     let tag = bundle::DESKTOP.tag();
 
     // Once per image: about a gigabyte moves through the disk.
-    if !computer::microvm::MicroVmApi::has_image(&hypervisor, &tag).await? {
+    if !holm::microvm::MicroVmApi::has_image(&hypervisor, &tag).await? {
         println!("building the image and handing it to the hypervisor …");
         bundle::ensure(docker.as_ref(), &tag).await?;
         import_image(docker.as_ref(), &hypervisor, &tag).await?;

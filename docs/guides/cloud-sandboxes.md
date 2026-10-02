@@ -11,7 +11,7 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 | Screenshots, mouse, keyboard, and waits | Browser profiles (`--profile`) |
 | Windows, applications, and native widgets | Stop. Pause works. |
 | Files, commands, and clipboard | Memory and CPUs for each box. They are set when the template is built. |
-| Page tools and `computer cdp`, with a template built from the current image, also after a server restart. See [Control modes](../concepts/control-modes.md#browser-mode-on-remote-runtimes). | |
+| Page tools and `holm cdp`, with a template built from the current image, also after a server restart. See [Control modes](../concepts/control-modes.md#browser-mode-on-remote-runtimes). | |
 | Human control, through the MCP Apps live screen. Viewer and takeover URLs open in a browser only when the runtime sets `public_traffic`. | |
 | Pause and resume | |
 | Network policy (`--no-network`) | |
@@ -20,7 +20,7 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 
 Make an account at E2B and create an API key. Keep it out of shell history and out of files that go into git.
 
-Release builds of `computer` and `computerd` include E2B. For a source build, add the `e2b` feature:
+Release builds of `holm` and `holmd` include E2B. For a source build, add the `e2b` feature:
 
 ```bash
 cargo install --path . --locked --features e2b
@@ -33,17 +33,17 @@ There are two ways. Use one.
 **From the environment.** The runtime is named `e2b`:
 
 ```bash
-E2B_API_KEY=... COMPUTER_SERVER_SANDBOXES=e2b computerd
+E2B_API_KEY=... HOLM_SERVER_SANDBOXES=e2b holmd
 ```
 
 **At run time, with the CLI.** You choose the name. The server keeps the runtime in its store:
 
 ```bash
-printf '%s' "$E2B_API_KEY" | computer runtime add cloud --provider e2b --api-key
-computer runtime ls
+printf '%s' "$E2B_API_KEY" | holm runtime add cloud --provider e2b --api-key
+holm runtime ls
 ```
 
-The CLI reads the key from standard input, or from a variable with `--api-key-env E2B_API_KEY`. The key does not go on the command line. To keep the key, the server needs `COMPUTER_SERVER_SECRET_KEY` or `COMPUTER_SERVER_SECRET_FILE`, and durable storage to keep the runtime after a restart. See [Remote runtimes](../concepts/runtimes.md#remote-runtimes).
+The CLI reads the key from standard input, or from a variable with `--api-key-env E2B_API_KEY`. The key does not go on the command line. To keep the key, the server needs `HOLM_SERVER_SECRET_KEY` or `HOLM_SERVER_SECRET_FILE`, and durable storage to keep the runtime after a restart. See [Remote runtimes](../concepts/runtimes.md#remote-runtimes).
 
 | | Environment | CLI or API |
 | --- | --- | --- |
@@ -51,12 +51,12 @@ The CLI reads the key from standard input, or from a variable with `--api-key-en
 | More than one account | No | Yes |
 | Fields such as `image` and `public_traffic` | No | Yes |
 | Lifetimes | In the runtimes file | `--field` |
-| Change the key | Restart the server | `computer runtime set NAME --api-key` |
+| Change the key | Restart the server | `holm runtime set NAME --api-key` |
 
 ## 3. Create a box
 
 ```bash
-BOX=$(computer new --runtime cloud)
+BOX=$(holm new --runtime cloud)
 ```
 
 MCP: `launch_box` with `runtime: "cloud"`. REST: `"placement": {"runtime": "cloud"}`.
@@ -81,8 +81,8 @@ When a box needs a template that does not exist, the server makes one:
 Each different set of applications and packages is a different template. The first box with a new set waits for the build. To build it before a box needs it:
 
 ```bash
-computer image build cloud --app vscode
-computer image ls cloud
+holm image build cloud --app vscode
+holm image ls cloud
 ```
 
 ### A template that you build
@@ -90,8 +90,8 @@ computer image ls cloud
 Build a template yourself when you want to keep it, change its size, or see what E2B receives. Write the build context, then use the E2B CLI:
 
 ```bash
-python3 crates/computer-core/images/context.py \
-  crates/computer-core/images/desktop \
+python3 crates/holm-core/images/context.py \
+  crates/holm-core/images/desktop \
   /tmp/e2b-ctx \
   --for e2b
 
@@ -109,7 +109,7 @@ The conversion removes the Dockerfile instructions that E2B refuses or replaces.
 Then tell the runtime to use your template for all boxes:
 
 ```bash
-computer runtime set cloud --field image=<template-id>
+holm runtime set cloud --field image=<template-id>
 ```
 
 ## Lifetimes
@@ -132,16 +132,16 @@ E2B publishes each port of a sandbox at its own URL. The server creates each san
 
 | Viewer | Works |
 | --- | --- |
-| MCP Apps live screen | Yes. It goes through `computerd`, which sends the traffic token. |
+| MCP Apps live screen | Yes. It goes through `holmd`, which sends the traffic token. |
 | Viewer and takeover URLs in a browser | Only when the runtime has `public_traffic=true` |
 
 With `public_traffic=true`, anyone who has a port's URL can reach that port without the traffic token. The viewers still need their own token: the server always sets token access on a remote box with no other viewer access.
 
 ```bash
-computer runtime set cloud --field public_traffic=true
+holm runtime set cloud --field public_traffic=true
 ```
 
-The environment runtime (`COMPUTER_SERVER_SANDBOXES=e2b`) takes no fields, so it cannot set `public_traffic`. Add the runtime with the CLI instead.
+The environment runtime (`HOLM_SERVER_SANDBOXES=e2b`) takes no fields, so it cannot set `public_traffic`. Add the runtime with the CLI instead.
 
 ## Self-hosted E2B
 
@@ -151,7 +151,7 @@ For E2B that runs on your own infrastructure:
 - **CLI or API runtime:** set the `endpoint` field. Through the API, it must be `https` and a public address.
 
 ```bash
-printf '%s' "$E2B_API_KEY" | computer runtime add onprem --provider e2b --field endpoint=https://e2b.example.com --api-key
+printf '%s' "$E2B_API_KEY" | holm runtime add onprem --provider e2b --field endpoint=https://e2b.example.com --api-key
 ```
 
 ## Use E2B from Rust
@@ -159,8 +159,8 @@ printf '%s' "$E2B_API_KEY" | computer runtime add onprem --provider e2b --field 
 The library uses E2B with no server. Build with the `e2b` feature, and set `E2B_API_KEY`.
 
 ```rust
-use computer::sandboxes::e2b::{self, cloud::Cloud};
-use computer::{Auth, Computer, X11Profile};
+use holm::sandboxes::e2b::{self, cloud::Cloud};
+use holm::{Auth, Computer, X11Profile};
 
 let (machine, profile) = e2b::pair(Arc::new(Cloud::from_env()?), Arc::new(X11Profile));
 
@@ -199,8 +199,8 @@ A vendor adapter implements the `RemoteApi` trait. Its required methods create, 
 `RemoteMachine` adds the lifetime, naming, and keep-alive behavior that all vendors share. `RemoteProfile` maps the vendor's port URLs and removes what a remote sandbox cannot expose.
 
 ```rust
-use computer::sandboxes::remote::{self, RemoteApi};
-use computer::{Computer, X11Profile};
+use holm::sandboxes::remote::{self, RemoteApi};
+use holm::{Computer, X11Profile};
 
 let (machine, profile) = remote::pair(Arc::new(MyVendor::new()), Arc::new(X11Profile));
 let computer = Computer::builder()
@@ -216,6 +216,6 @@ let computer = Computer::builder()
 cargo run --example custom_sandbox
 ```
 
-For tests with no account or network, use `computer::testing::ScriptedRemote`.
+For tests with no account or network, use `holm::testing::ScriptedRemote`.
 
-`computerd` builds only the vendors that it knows. To offer your own vendor from a server, build a server with your own implementation of the `computer_server::runtimes::Vendors` trait, and pass it to `AppState::serving`.
+`holmd` builds only the vendors that it knows. To offer your own vendor from a server, build a server with your own implementation of the `holm_server::runtimes::Vendors` trait, and pass it to `AppState::serving`.

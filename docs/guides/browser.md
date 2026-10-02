@@ -8,7 +8,7 @@ On remote runtimes such as E2B and Vercel, page tools are slower. On E2B, they a
 
 | Interface | Where the browser commands are |
 | --- | --- |
-| CLI | `computer open` and `computer browser <box> …` |
+| CLI | `holm open` and `holm browser <box> …` |
 | MCP | `open_url`, `snapshot`, `click_element`, and the other page tools |
 | Rust | `computer.browser()` returns a `Devtools`, and `open_page` returns a `Page` |
 | REST | `/v1/boxes/{id}/page/…` and the `on_page` action |
@@ -18,18 +18,18 @@ For all flags and parameters, see the [CLI reference](../reference/cli.md#browse
 ## Open pages and tabs
 
 ```bash
-TAB=$(computer open "$BOX" https://example.com)
-computer open "$BOX" https://example.org --target current
-computer open "$BOX" https://mail.example.com --label mail
+TAB=$(holm open "$BOX" https://example.com)
+holm open "$BOX" https://example.org --target current
+holm open "$BOX" https://mail.example.com --label mail
 ```
 
 `open` opens a new tab, brings it to the front, and prints the tab ID. `--target current` navigates the tab at the front instead. `--label` gives the tab a name. Every `--tab` option then accepts the name as well as the ID.
 
 ```bash
-computer browser "$BOX" tabs
-computer browser "$BOX" switch mail
-computer browser "$BOX" close "$TAB"
-computer browser "$BOX" back
+holm browser "$BOX" tabs
+holm browser "$BOX" switch mail
+holm browser "$BOX" close "$TAB"
+holm browser "$BOX" back
 ```
 
 Give `--tab` to each command when more than one tab is open. Without it, the command acts on the tab at the front, and that can change.
@@ -51,9 +51,9 @@ Use `open_page`, not `open` and then a load wait. A new tab shows `about:blank` 
 A snapshot lists the controls on the page in document order. Each control has a reference, such as `@e12`, that you can use as a query.
 
 ```bash
-computer browser "$BOX" snapshot --urls --quiet 400
-computer browser "$BOX" click @e4
-computer browser "$BOX" snapshot --delta
+holm browser "$BOX" snapshot --urls --quiet 400
+holm browser "$BOX" click @e4
+holm browser "$BOX" snapshot --delta
 ```
 
 | Option | Effect |
@@ -68,8 +68,8 @@ A reference stays with its element while the page stays loaded. A navigation cle
 `find` searches for elements and gives their role, state, and position:
 
 ```bash
-computer browser "$BOX" find "Submit" --role button
-computer browser "$BOX" find --role textbox --limit 20
+holm browser "$BOX" find "Submit" --role button
+holm browser "$BOX" find --role textbox --limit 20
 ```
 
 Each match ends with a selector that names exactly one element. Use that selector in the next command.
@@ -86,11 +86,11 @@ A query also reaches into frames from the same origin as the page. Frames from o
 ## Act on controls
 
 ```bash
-computer browser "$BOX" fill "Email" "agent@example.com"
-computer browser "$BOX" select "Country" "United Kingdom"
-computer browser "$BOX" check "I agree"
-computer browser "$BOX" upload "Attachment" ./report.pdf
-computer browser "$BOX" click "Submit"
+holm browser "$BOX" fill "Email" "agent@example.com"
+holm browser "$BOX" select "Country" "United Kingdom"
+holm browser "$BOX" check "I agree"
+holm browser "$BOX" upload "Attachment" ./report.pdf
+holm browser "$BOX" click "Submit"
 ```
 
 | Control | Command | MCP |
@@ -123,13 +123,13 @@ page.click_on("Submit", Button::Left).await?;
 After an action that loads a page or fetches data, wait for what you expect. Do not use a fixed delay.
 
 ```bash
-computer browser "$BOX" wait "Order confirmed" --within 10000
-computer browser "$BOX" wait ".spinner" --gone
-computer browser "$BOX" wait "Pay now" --enabled
-computer browser "$BOX" wait --load
-computer browser "$BOX" wait --quiet 500
-computer browser "$BOX" wait "Success" --or "Payment failed,Try again"
-computer browser "$BOX" wait --fn "location.pathname === '/done'"
+holm browser "$BOX" wait "Order confirmed" --within 10000
+holm browser "$BOX" wait ".spinner" --gone
+holm browser "$BOX" wait "Pay now" --enabled
+holm browser "$BOX" wait --load
+holm browser "$BOX" wait --quiet 500
+holm browser "$BOX" wait "Success" --or "Payment failed,Try again"
+holm browser "$BOX" wait --fn "location.pathname === '/done'"
 ```
 
 | Option | Waits for |
@@ -154,8 +154,8 @@ page.wait_until_true("location.pathname === '/done'", Duration::from_secs(10)).a
 ## Read a page
 
 ```bash
-computer browser "$BOX" read --limit 4000
-computer browser "$BOX" read --format raw
+holm browser "$BOX" read --limit 4000
+holm browser "$BOX" read --format raw
 ```
 
 `read` returns the page as Markdown (default), plain text, or raw HTML. It includes text below the visible area and the address behind each link. Use `read` to learn what a page says, and a screenshot to learn where something is.
@@ -170,10 +170,10 @@ println!("{}\n{}", text.title, text.text);
 ## Capture a page
 
 ```bash
-computer browser "$BOX" screenshot page.png
-computer browser "$BOX" screenshot full.jpg --full --format jpeg --quality 70
-computer browser "$BOX" screenshot labeled.png --annotate
-computer browser "$BOX" pdf page.pdf --landscape
+holm browser "$BOX" screenshot page.png
+holm browser "$BOX" screenshot full.jpg --full --format jpeg --quality 70
+holm browser "$BOX" screenshot labeled.png --annotate
+holm browser "$BOX" pdf page.pdf --landscape
 ```
 
 A page screenshot shows only the page: no window frame, address bar, or pointer. `--full` captures the full scrollable page, as JPEG unless you set `--format`. `--annotate` draws each control's reference from the last snapshot on the image.
@@ -183,8 +183,8 @@ A page screenshot shows only the page: no window frame, address bar, or pointer.
 ## Run JavaScript
 
 ```bash
-computer browser "$BOX" eval "document.title"
-computer browser "$BOX" eval "Array.from(document.links).map(a => a.href)"
+holm browser "$BOX" eval "document.title"
+holm browser "$BOX" eval "Array.from(document.links).map(a => a.href)"
 ```
 
 `await` works. Return plain values: a DOM node returns `{}`. MCP: `evaluate`. Rust: `page.evaluate(js)`.
@@ -194,8 +194,8 @@ computer browser "$BOX" eval "Array.from(document.links).map(a => a.href)"
 ## Console and errors
 
 ```bash
-computer browser "$BOX" console --limit 50
-computer browser "$BOX" errors --clear
+holm browser "$BOX" console --limit 50
+holm browser "$BOX" errors --clear
 ```
 
 The console log has the page's console calls, uncaught errors, and problems that the browser reported, such as failed requests. `errors` shows only failures. `--clear` empties the log after it is read, so the next read shows only new lines. MCP: `console`.
@@ -212,9 +212,9 @@ While a page has a dialog open, no page command works.
 Answer it:
 
 ```bash
-computer browser "$BOX" dialog accept
-computer browser "$BOX" dialog accept "text for a prompt"
-computer browser "$BOX" dialog dismiss
+holm browser "$BOX" dialog accept
+holm browser "$BOX" dialog accept "text for a prompt"
+holm browser "$BOX" dialog dismiss
 ```
 
 MCP: `dialog`.
@@ -224,8 +224,8 @@ MCP: `dialog`.
 The screen shows only the tab at the front. Before you mix page commands with screen coordinates, bring the correct tab to the front:
 
 ```bash
-computer browser "$BOX" switch "$TAB"
-computer screenshot "$BOX" screen.png --tab "$TAB"
+holm browser "$BOX" switch "$TAB"
+holm screenshot "$BOX" screen.png --tab "$TAB"
 ```
 
 ```rust
@@ -256,17 +256,17 @@ A group does not make a new screen. Only one page is at the front, so call `brin
 Save the cookies and storage of some origins, then load them into another box:
 
 ```bash
-computer browser "$BOX" state save login.json --origin https://mail.example.com
-computer browser "$OTHER" state load login.json
+holm browser "$BOX" state save login.json --origin https://mail.example.com
+holm browser "$OTHER" state load login.json
 ```
 
 Keep the state on the server, not in a file:
 
 ```bash
-computer browser "$BOX" state save --name work
-computer browser "$OTHER" state load --name work
-computer browser state list
-computer browser state rm work
+holm browser "$BOX" state save --name work
+holm browser "$OTHER" state load --name work
+holm browser state list
+holm browser state rm work
 ```
 
 | Option | Effect |
@@ -293,34 +293,34 @@ To keep the full browser profile on one host, use a profile instead. See [Browse
 ### Cookies
 
 ```bash
-computer browser "$BOX" cookies --url https://example.com
-computer browser "$BOX" cookies set theme=dark --url https://example.com
-computer browser "$BOX" cookies set --curl "$(pbpaste)"
-computer browser "$BOX" cookies clear --url https://example.com
-computer browser "$BOX" cookies clear --all
+holm browser "$BOX" cookies --url https://example.com
+holm browser "$BOX" cookies set theme=dark --url https://example.com
+holm browser "$BOX" cookies set --curl "$(pbpaste)"
+holm browser "$BOX" cookies clear --url https://example.com
+holm browser "$BOX" cookies clear --all
 ```
 
 `--curl` takes the text from a browser's "Copy as cURL" and sets its cookies. MCP: `cookies`, which shows values only when you set `values: true`.
 
 ## Connect Playwright or browser-use
 
-`computer cdp` gives a CDP address through the server, with a short-lived token:
+`holm cdp` gives a CDP address through the server, with a short-lived token:
 
 ```bash
-export CDP=$(computer cdp "$BOX")
-computer cdp "$BOX" --ws
-computer cdp "$BOX" --ttl 10
+export CDP=$(holm cdp "$BOX")
+holm cdp "$BOX" --ws
+holm cdp "$BOX" --ttl 10
 ```
 
 | Library | Use |
 | --- | --- |
 | Playwright | `chromium.connectOverCDP(process.env.CDP)` |
 | browser-use | `cdp_url=CDP` |
-| agent-browser | `agent-browser --cdp "$(computer cdp "$BOX" --ws)" snapshot -i` |
+| agent-browser | `agent-browser --cdp "$(holm cdp "$BOX" --ws)" snapshot -i` |
 
 The token is valid for one hour, or for `--ttl` minutes, and ends when the box is removed. Treat the address as a credential.
 
-`--direct` gives the box's own DevTools port. That port has no protection, and only the box's host can reach it. Use the address through the server for anything remote. `computer cdp` needs a server, so it does not work with `--local`.
+`--direct` gives the box's own DevTools port. That port has no protection, and only the box's host can reach it. Use the address through the server for anything remote. `holm cdp` needs a server, so it does not work with `--local`.
 
 REST: `POST /v1/boxes/{id}/cdp?ttl_secs=…`.
 
@@ -329,9 +329,9 @@ REST: `POST /v1/boxes/{id}/cdp?ttl_secs=…`.
 A page can contain text that tries to give instructions to a model. To make page text easy to separate from tool text, add `--content-boundaries`:
 
 ```bash
-computer browser "$BOX" read --content-boundaries
+holm browser "$BOX" read --content-boundaries
 ```
 
 The command puts the page text between two markers. The markers contain a nonce that the page cannot know. It works on `read`, `snapshot`, `find`, `eval`, `console`, and `errors`.
 
-Set `COMPUTER_CONTENT_BOUNDARIES=1` to do this for every call, and for the MCP tools `read_page`, `snapshot`, `find`, `evaluate`, and `console`. On `computerd`, it applies to `/mcp`.
+Set `HOLM_CONTENT_BOUNDARIES=1` to do this for every call, and for the MCP tools `read_page`, `snapshot`, `find`, `evaluate`, and `console`. On `holmd`, it applies to `/mcp`.

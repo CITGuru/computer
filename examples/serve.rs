@@ -6,11 +6,11 @@
 //! cargo run --example serve -- --image-dir images/ubuntu https://news.ycombinator.com
 //! ```
 
-use computer::{Computer, Profile, WaylandProfile, X11Profile};
+use holm::{Computer, Profile, WaylandProfile, X11Profile};
 use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     let profile: Arc<dyn Profile> = match args.iter().any(|arg| arg == "--wayland") {

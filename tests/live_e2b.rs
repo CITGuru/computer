@@ -5,12 +5,12 @@
 //! cargo test --features e2b --test live_e2b -- --ignored --nocapture
 //! ```
 //!
-//! Without `COMPUTER_E2B_TEMPLATE`, the template is built from the bundled desktop image.
+//! Without `HOLM_E2B_TEMPLATE`, the template is built from the bundled desktop image.
 
 #![cfg(feature = "e2b")]
 
-use computer::sandboxes::e2b::{self, E2bApi, cloud::Cloud};
-use computer::{
+use holm::sandboxes::e2b::{self, E2bApi, cloud::Cloud};
+use holm::{
     Auth, BrowserEndpoint, Button, Computer, Delta, Devtools, Point, ScreenId, Selection,
     X11Profile,
 };
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const TEMPLATE_ENV: &str = "COMPUTER_E2B_TEMPLATE";
+const TEMPLATE_ENV: &str = "HOLM_E2B_TEMPLATE";
 
 #[tokio::test]
 #[ignore = "needs an E2B account and a built template"]
@@ -63,7 +63,7 @@ async fn a_real_sandbox_runs_the_same_desktop() {
 async fn upgrade(url: &str, headers: &[(String, String)]) -> String {
     let rest = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     let (host, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-    let Ok(mut wire) = computer::cdp::dial(url).await else {
+    let Ok(mut wire) = holm::cdp::dial(url).await else {
         return "no connection".to_string();
     };
 
@@ -145,7 +145,7 @@ async fn gates(computer: &Computer) -> Result<(), String> {
     }
 }
 
-async fn browser(computer: &Computer) -> computer::Result<()> {
+async fn browser(computer: &Computer) -> holm::Result<()> {
     let browser = computer.browser().expect("a DevTools endpoint");
 
     let started = std::time::Instant::now();
@@ -180,7 +180,7 @@ async fn browser(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn exercise(computer: &Computer) -> computer::Result<()> {
+async fn exercise(computer: &Computer) -> holm::Result<()> {
     assert_eq!(computer.provider(), "e2b");
     assert!(
         computer.probe().await.ready(),
@@ -252,7 +252,7 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     computer.close_screen(ScreenId(1)).await?;
     println!("  screen 1 is its own display");
 
-    let audit = computer::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
+    let audit = holm::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
     println!("  audit: {audit}");
     assert!(
         audit.met.contains(&"browser"),

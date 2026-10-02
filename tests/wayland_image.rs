@@ -1,11 +1,11 @@
-use computer::bundle::{
+use holm::bundle::{
     POINTER_C, SWAY_CONFIG, VIRTUAL_KEYBOARD_XML, VIRTUAL_POINTER_XML, WAYLAND_BROWSER_SH,
     WAYLAND_DOCKERFILE, WAYLAND_INPUT_SH, WAYLAND_SCREEN_SH, WAYLAND_START_SH,
 };
-use computer::image::{DEVTOOLS_BRIDGE_PORT, DEVTOOLS_PORT, HEIGHT_ENV, WIDTH_ENV};
-use computer::servers::wayland::{DISPLAY_NAME, INPUT_COMMAND};
-use computer::{AUTH_ENV, CONTROL_SECRET_ENV, VIEW_SECRET_ENV, VIEWER_USER};
-use computer::{Profile, ScreenAction, ScreenId, WaylandProfile};
+use holm::image::{DEVTOOLS_BRIDGE_PORT, DEVTOOLS_PORT, HEIGHT_ENV, WIDTH_ENV};
+use holm::servers::wayland::{DISPLAY_NAME, INPUT_COMMAND};
+use holm::{AUTH_ENV, CONTROL_SECRET_ENV, VIEW_SECRET_ENV, VIEWER_USER};
+use holm::{Profile, ScreenAction, ScreenId, WaylandProfile};
 
 fn exposed() -> Vec<u16> {
     let mut ports: Vec<u16> = WAYLAND_DOCKERFILE
@@ -277,7 +277,7 @@ fn the_script_tells_screens_apart_the_way_the_driver_does() {
          screen 1 stopped none"
     );
 
-    let second = computer::servers::wayland::runtime_dir(ScreenId(1));
+    let second = holm::servers::wayland::runtime_dir(ScreenId(1));
     assert_eq!(second, "/tmp/computer/run-2");
     assert!(
         WAYLAND_SCREEN_SH.contains(r#"runtime="/tmp/computer/run-${number}""#),
@@ -708,7 +708,7 @@ fn the_image_declares_the_contract_it_implements() {
     assert!(
         WAYLAND_DOCKERFILE.contains(&format!(
             "LABEL {}=\"{}\"",
-            computer::PROFILE_LABEL,
+            holm::PROFILE_LABEL,
             WaylandProfile.name()
         )),
         "a Wayland image left undeclared can be driven by the X11 profile, \
@@ -809,7 +809,7 @@ fn the_second_display_server_is_started_only_where_it_exists() {
         "the script decides it by presence and fills the template in"
     );
     assert!(
-        !computer::bundle::Extras::x11_apps().packages.is_empty(),
+        !holm::bundle::Extras::x11_apps().packages.is_empty(),
         "the feature installs something for that check to find"
     );
 }

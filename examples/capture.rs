@@ -1,6 +1,6 @@
 //! cargo run --example capture -- <box>
 
-use computer::{Computer, Of, Point, Rect, Shot};
+use holm::{Computer, Of, Point, Rect, Shot};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

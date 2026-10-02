@@ -4,31 +4,31 @@ This page lists all settings in one place. The linked pages explain them.
 
 ## Client
 
-`computer` and `computer mcp --stdio` read these.
+`holm` and `holm mcp --stdio` read these.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `COMPUTER_SERVER_URL` | None | The server to use. `--server` overrides it. See [How a client finds a server](../concepts/server.md#how-a-client-finds-a-server). |
-| `COMPUTER_SERVER_TOKEN` | None | The bearer token for the server. |
-| `COMPUTER_CONTENT_BOUNDARIES` | Off | `1` puts page text between nonce markers in `read`, `snapshot`, `find`, `eval`, and `console`. |
+| `HOLM_SERVER_URL` | None | The server to use. `--server` overrides it. See [How a client finds a server](../concepts/server.md#how-a-client-finds-a-server). |
+| `HOLM_SERVER_TOKEN` | None | The bearer token for the server. |
+| `HOLM_CONTENT_BOUNDARIES` | Off | `1` puts page text between nonce markers in `read`, `snapshot`, `find`, `eval`, and `console`. |
 
 ## Server
 
-`computerd` reads these. See [The server](../concepts/server.md).
+`holmd` reads these. See [The server](../concepts/server.md).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `COMPUTER_SERVER_ADDR` | `127.0.0.1:8080` | The listen address. |
-| `COMPUTER_SERVER_TOKEN` | None | The bearer token. Necessary on a non-loopback address, unless a console is linked. At least 16 characters. |
-| `COMPUTER_CONSOLE_URL` | None | A console's base URL. The server accepts the tokens and API keys that console signs for a workspace. See [Workspaces](../concepts/server.md#workspaces). |
-| `COMPUTER_CONSOLE_SECRET` | None | The secret the server sends when it reads revoked keys from the console and reports key use to it. |
-| `COMPUTER_CONSOLE_PUBLIC_KEY` | None | One console public key to trust, in base64 or PEM, instead of reading the keys from the console. `COMPUTER_CONSOLE_PUBLIC_KEY_FILE` reads it from a file. |
-| `COMPUTER_PUBLIC_URL` | None | The public origin behind a reverse proxy. |
-| `COMPUTER_SERVER_REAP_SECS` | `30` | How often to remove expired boxes, in seconds. |
-| `COMPUTER_SERVER_JOBS` | `inline` | `inline` launches, forks and builds in the request. `queue` puts the work in the store, answers `202`, and the server's workers do it. |
-| `COMPUTER_SERVER_SCHEDULE` | `internal` | `internal` runs the periodic work and the job workers in the server. With more than one server on one database, one of them runs the periodic work. `external` runs nothing by itself: a scheduler calls the `/v1/jobs` routes. |
+| `HOLM_SERVER_ADDR` | `127.0.0.1:8080` | The listen address. |
+| `HOLM_SERVER_TOKEN` | None | The bearer token. Necessary on a non-loopback address, unless a console is linked. At least 16 characters. |
+| `HOLM_CONSOLE_URL` | None | A console's base URL. The server accepts the tokens and API keys that console signs for a workspace. See [Workspaces](../concepts/server.md#workspaces). |
+| `HOLM_CONSOLE_SECRET` | None | The secret the server sends when it reads revoked keys from the console and reports key use to it. |
+| `HOLM_CONSOLE_PUBLIC_KEY` | None | One console public key to trust, in base64 or PEM, instead of reading the keys from the console. `HOLM_CONSOLE_PUBLIC_KEY_FILE` reads it from a file. |
+| `HOLM_PUBLIC_URL` | None | The public origin behind a reverse proxy. |
+| `HOLM_SERVER_REAP_SECS` | `30` | How often to remove expired boxes, in seconds. |
+| `HOLM_SERVER_JOBS` | `inline` | `inline` launches, forks and builds in the request. `queue` puts the work in the store, answers `202`, and the server's workers do it. |
+| `HOLM_SERVER_SCHEDULE` | `internal` | `internal` runs the periodic work and the job workers in the server. With more than one server on one database, one of them runs the periodic work. `external` runs nothing by itself: a scheduler calls the `/v1/jobs` routes. |
 | `CRON_SECRET` | None | A bearer token that opens the `/v1/jobs` routes and nothing else. Vercel Cron sends it. |
-| `COMPUTER_CONTENT_BOUNDARIES` | Off | `1` applies content boundaries to `/mcp`. |
+| `HOLM_CONTENT_BOUNDARIES` | Off | `1` applies content boundaries to `/mcp`. |
 
 ### Runtimes
 
@@ -36,11 +36,11 @@ See [Runtimes](../concepts/runtimes.md).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `COMPUTER_SERVER_CONFIG` | None | The path to the [runtimes file](#runtimes-file). Read at start. |
-| `COMPUTER_SERVER_RUNTIMES` | All that answer | Host runtimes to offer, separated by commas: `docker`, `podman`, `nerdctl`, `smolvm`, `microsandbox`. |
-| `COMPUTER_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, separated by commas, such as `e2b`, `vercel`, `daytona`, or `modal`. |
-| `COMPUTER_SERVER_SECRET_KEY` | None | 32 bytes, base64 or hex. Encrypts vendor keys that the server stores. |
-| `COMPUTER_SERVER_SECRET_FILE` | None | A file that holds the secret key. The server makes it, with mode `0600`, if it does not exist. |
+| `HOLM_SERVER_CONFIG` | None | The path to the [runtimes file](#runtimes-file). Read at start. |
+| `HOLM_SERVER_RUNTIMES` | All that answer | Host runtimes to offer, separated by commas: `docker`, `podman`, `nerdctl`, `smolvm`, `microsandbox`. |
+| `HOLM_SERVER_SANDBOXES` | None | Remote vendors to add from the environment, separated by commas, such as `e2b`, `vercel`, `daytona`, or `modal`. |
+| `HOLM_SERVER_SECRET_KEY` | None | 32 bytes, base64 or hex. Encrypts vendor keys that the server stores. |
+| `HOLM_SERVER_SECRET_FILE` | None | A file that holds the secret key. The server makes it, with mode `0600`, if it does not exist. |
 
 ### Storage
 
@@ -48,17 +48,17 @@ See [Storage](../concepts/server.md#storage).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `COMPUTER_STORAGE_BACKEND` | `memory` | `memory`, `local`, `sqlite`, `postgres`, or `s3`. |
-| `COMPUTER_STATE_DIR` | None | The directory for `local`. |
-| `COMPUTER_STATE_URL` | None | The database URL for `sqlite` and `postgres`. |
-| `COMPUTER_S3_ENDPOINT` | None | The S3 endpoint for `s3`. |
-| `COMPUTER_S3_BUCKET` | None | The bucket for `s3`. |
-| `COMPUTER_S3_REGION` | None | The region for `s3`. |
-| `COMPUTER_S3_PREFIX` | None | A key prefix for `s3`. |
+| `HOLM_STORAGE_BACKEND` | `memory` | `memory`, `local`, `sqlite`, `postgres`, or `s3`. |
+| `HOLM_STATE_DIR` | None | The directory for `local`. |
+| `HOLM_STATE_URL` | None | The database URL for `sqlite` and `postgres`. |
+| `HOLM_S3_ENDPOINT` | None | The S3 endpoint for `s3`. |
+| `HOLM_S3_BUCKET` | None | The bucket for `s3`. |
+| `HOLM_S3_REGION` | None | The region for `s3`. |
+| `HOLM_S3_PREFIX` | None | A key prefix for `s3`. |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | None | Credentials for `s3`. |
-| `COMPUTER_KEEP_FRAMES_SECS` | 2 hours | How long to keep frames. |
-| `COMPUTER_KEEP_ENTRIES_SECS` | 7 days | How long to keep trace entries. |
-| `COMPUTER_PRUNE_SECS` | 1 hour | How often to remove old data. |
+| `HOLM_KEEP_FRAMES_SECS` | 2 hours | How long to keep frames. |
+| `HOLM_KEEP_ENTRIES_SECS` | 7 days | How long to keep trace entries. |
+| `HOLM_PRUNE_SECS` | 1 hour | How often to remove old data. |
 
 ## E2B
 
@@ -99,7 +99,7 @@ The Modal client reads these, in the library and in the server.
 | `MODAL_TOKEN_ID` | None | The token ID. Necessary. |
 | `MODAL_TOKEN_SECRET` | None | The token secret. Necessary. |
 | `MODAL_ENVIRONMENT` | The workspace default | The Modal environment. |
-| `MODAL_APP` | `computer` | The Modal app that holds the images and sandboxes. |
+| `MODAL_APP` | `holm` | The Modal app that holds the images and sandboxes. |
 | `MODAL_SERVER_URL` | `https://api.modal.com:443` | The API address. |
 
 ## Container engines
@@ -113,7 +113,7 @@ The engines read their own settings. The server does not change them.
 
 ## Runtimes file
 
-A TOML file at `COMPUTER_SERVER_CONFIG`. See [The runtimes file](../concepts/runtimes.md#the-runtimes-file).
+A TOML file at `HOLM_SERVER_CONFIG`. See [The runtimes file](../concepts/runtimes.md#the-runtimes-file).
 
 ```toml
 default = "docker"
@@ -156,7 +156,7 @@ Times are `24h`, `90m`, `3600s`, or a number of seconds. The server refuses unkn
 
 ## Vendor fields
 
-Fields for a remote runtime added with `computer runtime add --field name=value` or `POST /v1/runtimes`.
+Fields for a remote runtime added with `holm runtime add --field name=value` or `POST /v1/runtimes`.
 
 | Field | Effect |
 | --- | --- |
@@ -177,11 +177,11 @@ Secrets, such as `api_key`, go in with `--api-key` or `--api-key-env`, or under 
 
 ## Cargo features
 
-For the root `computer` package. See [Install](../getting-started/install.md#build-from-source).
+For the root `holm` package. See [Install](../getting-started/install.md#build-from-source).
 
 | Feature | Default | Effect |
 | --- | --- | --- |
-| `cli` | On | The `computer` and `computerd` binaries. Turn it off for a library-only dependency. |
+| `cli` | On | The `holm` and `holmd` binaries. Turn it off for a library-only dependency. |
 | `e2b` | Off | The E2B client. |
 | `vercel` | Off | The Vercel Sandbox client. |
 | `daytona` | Off | The Daytona client. |
@@ -197,7 +197,7 @@ Release builds turn on `e2b`, `vercel`, `daytona`, `modal`, `sqlite`, `postgres`
 
 Each box setting is available from each interface.
 
-| Setting | CLI (`computer new`) | MCP (`launch_box`) | REST (`POST /v1/boxes`) | Rust builder |
+| Setting | CLI (`holm new`) | MCP (`launch_box`) | REST (`POST /v1/boxes`) | Rust builder |
 | --- | --- | --- | --- | --- |
 | Screen size | `--size WxH` | `width`, `height` | `spec.desktop.width`, `height` | `size(w, h)` |
 | Screens | `--screens N` | `screens` | `spec.desktop.screens` | `Builder::from_spec` |

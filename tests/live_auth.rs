@@ -1,6 +1,6 @@
 //! The viewer gate, against a real box: `cargo test --test live_auth -- --ignored`.
 
-use computer::{Auth, Computer, WaylandProfile};
+use holm::{Auth, Computer, WaylandProfile};
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -172,8 +172,8 @@ async fn a_password_gate_covers_the_page_as_well_as_the_socket() {
 
 async fn password_checks(computer: &Computer) -> Result<(), String> {
     let credentials = computer.credentials().expect("a gated box holds a pair");
-    let right = format!("{}:{}", computer::VIEWER_USER, credentials.view.expose());
-    let wrong = format!("{}:not-the-password", computer::VIEWER_USER);
+    let right = format!("{}:{}", holm::VIEWER_USER, credentials.view.expose());
+    let wrong = format!("{}:not-the-password", holm::VIEWER_USER);
 
     let viewer = computer.viewer_url().expect("a viewer");
     let at = authority(&viewer);
@@ -240,7 +240,7 @@ async fn the_wayland_image_gates_its_viewer_the_same_way() {
 #[tokio::test]
 #[ignore = "needs a container runtime, and builds the Ubuntu image"]
 async fn the_ubuntu_image_gates_its_viewer_the_same_way() {
-    let directory = Path::new(computer::bundle::IMAGES).join("ubuntu");
+    let directory = Path::new(holm::bundle::IMAGES).join("ubuntu");
     let computer = Computer::builder()
         .image_dir(directory)
         .auth(Auth::Token)

@@ -1,6 +1,6 @@
 //! cargo run --example elements -- <box>
 
-use computer::{Button, Computer, Reading};
+use holm::{Button, Computer, Reading};
 use std::time::Duration;
 
 #[tokio::main]

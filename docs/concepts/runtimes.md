@@ -37,7 +37,7 @@ The two properties are independent. For example, Docker gives a container on run
 To see the runtimes a server has, and what each can do:
 
 ```bash
-computer runtime ls
+holm runtime ls
 curl -s localhost:8080/v1/runtimes
 ```
 
@@ -48,7 +48,7 @@ An MCP agent calls `list_runtimes`.
 Name the runtime when you create a box. With no name, the box goes on the server's default, which is `docker` unless you change it.
 
 ```bash
-computer new --runtime smolvm
+holm new --runtime smolvm
 ```
 
 ```json
@@ -69,10 +69,10 @@ For a microVM or a cloud sandbox, give the builder a `machine()`. See `examples/
 
 ## Host runtimes
 
-At start, `computerd` offers each host runtime whose program answers. To offer fewer, set `COMPUTER_SERVER_RUNTIMES`:
+At start, `holmd` offers each host runtime whose program answers. To offer fewer, set `HOLM_SERVER_RUNTIMES`:
 
 ```bash
-COMPUTER_SERVER_RUNTIMES=docker,smolvm computerd
+HOLM_SERVER_RUNTIMES=docker,smolvm holmd
 ```
 
 Configure an engine with its own settings where you can:
@@ -82,7 +82,7 @@ Configure an engine with its own settings where you can:
 
 ### The runtimes file
 
-Other settings go in a TOML file. Set `COMPUTER_SERVER_CONFIG` to its path. The server reads it at start, so a change needs a restart.
+Other settings go in a TOML file. Set `HOLM_SERVER_CONFIG` to its path. The server reads it at start, so a change needs a restart.
 
 ```toml
 default = "hardened"
@@ -132,7 +132,7 @@ There are three ways to add one.
 **Environment**, for a runtime named after the vendor:
 
 ```bash
-COMPUTER_SERVER_SANDBOXES=e2b E2B_API_KEY=... computerd
+HOLM_SERVER_SANDBOXES=e2b E2B_API_KEY=... holmd
 ```
 
 **Runtimes file**, to set its lifetimes:
@@ -146,16 +146,16 @@ max_lifetime = "24h"
 **CLI or API**, while the server runs:
 
 ```bash
-printf '%s' "$E2B_API_KEY" | computer runtime add cloud --provider e2b --api-key
-computer runtime set cloud --field max_lifetime_secs=86400
-computer runtime rm cloud
+printf '%s' "$E2B_API_KEY" | holm runtime add cloud --provider e2b --api-key
+holm runtime set cloud --field max_lifetime_secs=86400
+holm runtime rm cloud
 ```
 
 The CLI reads the key from standard input, or from a variable with `--api-key-env`. The key does not go on the command line, where `ps` and the shell history can show it.
 
 A key added through the CLI or API:
 
-- Is encrypted before the server stores it. The server key comes from `COMPUTER_SERVER_SECRET_KEY`, or from the file at `COMPUTER_SERVER_SECRET_FILE`, which the server makes if it does not exist. With neither, the server refuses to store a key.
+- Is encrypted before the server stores it. The server key comes from `HOLM_SERVER_SECRET_KEY`, or from the file at `HOLM_SERVER_SECRET_FILE`, which the server makes if it does not exist. With neither, the server refuses to store a key.
 - Is never returned. `GET /v1/runtimes` gives only the names of the secrets, such as `["api_key"]`.
 - Moves to the running boxes when you replace it, so they continue to work.
 
@@ -182,7 +182,7 @@ A browser profile needs a Docker volume, so only container runtimes support `--p
 
 On E2B, memory and CPUs are set when the template is built, not when the box is created.
 
-On E2B, every port of a box refuses a request without the sandbox's traffic token, so a browser cannot open the viewer URL directly: watch and take over through `computerd`. Add a runtime with `--field public_traffic=true` to open the ports and get direct viewer and takeover URLs back.
+On E2B, every port of a box refuses a request without the sandbox's traffic token, so a browser cannot open the viewer URL directly: watch and take over through `holmd`. Add a runtime with `--field public_traffic=true` to open the ports and get direct viewer and takeover URLs back.
 
 On E2B and Vercel, page tools reach Chromium through a bridge in the box. See [Control modes](control-modes.md#browser-mode-on-remote-runtimes).
 
@@ -204,8 +204,8 @@ Each runtime gets its image in a different way:
 Each set of applications and packages is a different image. The first box with a new set waits for a build. To build before a box needs it:
 
 ```bash
-computer image build smolvm --app vscode
-computer image ls
+holm image build smolvm --app vscode
+holm image ls
 ```
 
 ## Lifetime
@@ -222,14 +222,14 @@ On a cloud runtime, the vendor ends the box at its deadline, so no server has to
 
 ## Restart
 
-When `computerd` restarts, it takes back each box that it recorded, through the runtime in the record. Then it scans each runtime for boxes that an earlier server labeled. A box whose runtime is missing shows `unreachable` with the reason, and its record stays.
+When `holmd` restarts, it takes back each box that it recorded, through the runtime in the record. Then it scans each runtime for boxes that an earlier server labeled. A box whose runtime is missing shows `unreachable` with the reason, and its record stays.
 
 ## Display servers
 
 Separate from the runtime, a box runs X11 (the default) or Wayland:
 
 ```bash
-computer new --wayland
+holm new --wayland
 ```
 
 | Display | Components |

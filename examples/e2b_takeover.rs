@@ -3,13 +3,13 @@
 //! cargo run --features e2b --example e2b_takeover -- <template-id> [query]
 //! ```
 
-use computer::sandboxes::e2b::{self, cloud::Cloud};
-use computer::{Auth, Button, Computer, Point, X11Profile};
+use holm::sandboxes::e2b::{self, cloud::Cloud};
+use holm::{Auth, Button, Computer, Point, X11Profile};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(template) = args.first().cloned() else {
         eprintln!("usage: e2b_takeover <template-id> [query]");
@@ -67,7 +67,7 @@ async fn main() -> computer::Result<()> {
     Ok(())
 }
 
-async fn save(computer: &Computer, name: &str) -> computer::Result<()> {
+async fn save(computer: &Computer, name: &str) -> holm::Result<()> {
     let frame = computer.screenshot().await?;
     std::fs::write(name, &frame).ok();
     println!("  {name}: {} bytes", frame.len());

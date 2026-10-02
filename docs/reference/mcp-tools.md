@@ -1,6 +1,6 @@
 # MCP tools reference
 
-`computer mcp --stdio` and `computerd` at `/mcp` serve the same 63 tools. To connect a host, see the [MCP quick start](../getting-started/quickstart-mcp.md).
+`holm mcp --stdio` and `holmd` at `/mcp` serve the same 63 tools. To connect a host, see the [MCP quick start](../getting-started/quickstart-mcp.md).
 
 A parameter with `*` is necessary. All other parameters are optional.
 
@@ -301,7 +301,7 @@ To keep a login after the server restarts, launch boxes with `profile`.
 | `hand_over` | Give the screen to a person. Returns a URL. The agent's input is refused until `reclaim_screen`. |
 | `reclaim_screen` | Take the screen back. |
 
-Hosts that support [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) render `ui://computer/screen.html` beside the results of `launch_box`, `open_screen`, and `hand_over`. The page gets a short-lived token under `_meta`. The model does not get it.
+Hosts that support [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) render `ui://holm/screen.html` beside the results of `launch_box`, `open_screen`, and `hand_over`. The page gets a short-lived token under `_meta`. The model does not get it.
 
 ## Batches
 
@@ -343,4 +343,4 @@ Example:
 
 ## Content boundaries
 
-Set `COMPUTER_CONTENT_BOUNDARIES=1` on the process that serves MCP. Then `read_page`, `snapshot`, `find`, `evaluate`, and `console` put page text between two markers with a nonce that the page cannot know. The model can then tell page text from tool text.
+Set `HOLM_CONTENT_BOUNDARIES=1` on the process that serves MCP. Then `read_page`, `snapshot`, `find`, `evaluate`, and `console` put page text between two markers with a nonce that the page cannot know. The model can then tell page text from tool text.

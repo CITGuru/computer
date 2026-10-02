@@ -1,10 +1,10 @@
-use computer::servers::x11::{X11Desktop, port_listening};
-use computer::testing::{ScriptedDesktop, ScriptedHost};
-use computer::{
+use holm::servers::x11::{X11Desktop, port_listening};
+use holm::testing::{ScriptedDesktop, ScriptedHost};
+use holm::{
     Button, ControlGate, Delta, Desktop, ExecResult, Held, Point, ScreenHost, ScreenId, Selection,
 };
 
-fn clipboard(screen: &X11Desktop) -> &dyn computer::Clipboard {
+fn clipboard(screen: &X11Desktop) -> &dyn holm::Clipboard {
     screen
         .as_clipboard()
         .expect("the X11 driver has a clipboard")
@@ -367,8 +367,7 @@ async fn text_is_paced_at_the_speed_that_was_asked_for() {
     );
 
     let host = Arc::new(ScriptedHost::new());
-    let wayland =
-        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
+    let wayland = holm::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
     wayland
         .type_text("abc", pause)
         .await
@@ -386,14 +385,11 @@ async fn text_is_paced_at_the_speed_that_was_asked_for() {
 
 #[test]
 fn every_command_a_driver_runs_is_run_in_a_locale_that_reads_utf8() {
-    use computer::ScreenEnvironment;
+    use holm::ScreenEnvironment;
 
     for (named, environment) in [
-        ("X11", computer::X11Environment.environment(ScreenId(0))),
-        (
-            "Wayland",
-            computer::WaylandEnvironment.environment(ScreenId(0)),
-        ),
+        ("X11", holm::X11Environment.environment(ScreenId(0))),
+        ("Wayland", holm::WaylandEnvironment.environment(ScreenId(0))),
     ] {
         assert_eq!(
             environment.get("LANG").map(String::as_str),
@@ -407,9 +403,8 @@ fn every_command_a_driver_runs_is_run_in_a_locale_that_reads_utf8() {
 #[tokio::test]
 async fn wayland_holds_a_modifier_through_a_pointer_gesture() {
     let host = Arc::new(ScriptedHost::new());
-    let wayland =
-        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
-    let held = [computer::Held::Ctrl, computer::Held::Shift];
+    let wayland = holm::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
+    let held = [holm::Held::Ctrl, holm::Held::Shift];
 
     wayland
         .click_with(Point::new(10, 20), Button::Left, &held)
@@ -445,8 +440,7 @@ async fn wayland_holds_a_modifier_through_a_pointer_gesture() {
 #[tokio::test]
 async fn wayland_holds_a_button_through_the_pointer_that_stays() {
     let host = Arc::new(ScriptedHost::new());
-    let wayland =
-        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
+    let wayland = holm::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
 
     wayland
         .button_down(Some(Point::new(10, 20)), Button::Left)
@@ -465,9 +459,8 @@ async fn wayland_holds_a_button_through_the_pointer_that_stays() {
 async fn wayland_lets_a_button_go_past_both_of_its_gates() {
     let host = Arc::new(ScriptedHost::new());
     let gate = Arc::new(ControlGate::new());
-    let wayland =
-        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0))
-            .with_control(Arc::clone(&gate));
+    let wayland = holm::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0))
+        .with_control(Arc::clone(&gate));
 
     wayland
         .button_down(None, Button::Left)
@@ -492,8 +485,7 @@ async fn wayland_lets_a_button_go_past_both_of_its_gates() {
 #[tokio::test]
 async fn wayland_holds_a_key_through_the_keyboard_that_stays() {
     let host = Arc::new(ScriptedHost::new());
-    let wayland =
-        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
+    let wayland = holm::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0));
 
     wayland.key_down("Shift").await.expect("a modifier");
     assert_eq!(
@@ -528,9 +520,8 @@ async fn wayland_holds_a_key_through_the_keyboard_that_stays() {
 async fn wayland_lets_a_key_go_past_both_of_its_gates() {
     let host = Arc::new(ScriptedHost::new());
     let gate = Arc::new(ControlGate::new());
-    let wayland =
-        computer::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0))
-            .with_control(Arc::clone(&gate));
+    let wayland = holm::WaylandDesktop::new(Arc::clone(&host) as Arc<dyn ScreenHost>, ScreenId(0))
+        .with_control(Arc::clone(&gate));
 
     wayland.key_down("space").await.expect("a press");
     gate.hand_over("a person", SystemTime::now());
@@ -553,37 +544,37 @@ async fn a_driver_that_cannot_hold_a_button_says_so() {
 
     #[async_trait::async_trait]
     impl Desktop for Bare {
-        async fn screenshot(&self) -> computer::Result<Vec<u8>> {
+        async fn screenshot(&self) -> holm::Result<Vec<u8>> {
             Ok(Vec::new())
         }
-        async fn move_to(&self, _: Point) -> computer::Result<()> {
+        async fn move_to(&self, _: Point) -> holm::Result<()> {
             Ok(())
         }
-        async fn click(&self, _: Point, _: Button) -> computer::Result<()> {
+        async fn click(&self, _: Point, _: Button) -> holm::Result<()> {
             Ok(())
         }
-        async fn double_click(&self, _: Point, _: Button) -> computer::Result<()> {
+        async fn double_click(&self, _: Point, _: Button) -> holm::Result<()> {
             Ok(())
         }
-        async fn drag(&self, _: Point, _: Point, _: Button) -> computer::Result<()> {
+        async fn drag(&self, _: Point, _: Point, _: Button) -> holm::Result<()> {
             Ok(())
         }
-        async fn type_text(&self, _: &str, _: Option<std::time::Duration>) -> computer::Result<()> {
+        async fn type_text(&self, _: &str, _: Option<std::time::Duration>) -> holm::Result<()> {
             Ok(())
         }
-        async fn press(&self, _: &[String], _: &[computer::Held]) -> computer::Result<()> {
+        async fn press(&self, _: &[String], _: &[holm::Held]) -> holm::Result<()> {
             Ok(())
         }
-        async fn scroll(&self, _: Point, _: Delta) -> computer::Result<()> {
+        async fn scroll(&self, _: Point, _: Delta) -> holm::Result<()> {
             Ok(())
         }
-        async fn cursor(&self) -> computer::Result<Point> {
+        async fn cursor(&self) -> holm::Result<Point> {
             Ok(Point::new(0, 0))
         }
-        async fn geometry(&self) -> computer::Result<(u32, u32)> {
+        async fn geometry(&self) -> holm::Result<(u32, u32)> {
             Ok((1, 1))
         }
-        async fn alive(&self) -> computer::Result<()> {
+        async fn alive(&self) -> holm::Result<()> {
             Ok(())
         }
         fn control(&self) -> &Arc<ControlGate> {
@@ -816,7 +807,7 @@ async fn the_descriptor_and_the_driver_agree_about_the_clipboard() {
     let screen = driver(Arc::new(ScriptedHost::new()));
 
     assert_eq!(
-        computer::image::support().clipboard,
+        holm::image::support().clipboard,
         screen.as_clipboard().is_some(),
         "the claim and the capability drift apart silently, and the caller \
          only finds out at the paste"

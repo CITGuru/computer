@@ -1,6 +1,6 @@
 //! cargo run --example research -- <box> "a subject"
 
-use computer::{Computer, Reading, SearchProvider};
+use holm::{Computer, Reading, SearchProvider};
 use std::time::Duration;
 
 #[tokio::main]

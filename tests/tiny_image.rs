@@ -1,17 +1,17 @@
-use computer::bundle::{
+use holm::bundle::{
     BROWSER_DESKTOP, BROWSER_SH, DEVTOOLS_BRIDGE_PY, DOCKERFILE, EMBED_HTML, FLUXBOX_APPS,
     FLUXBOX_INIT, FLUXBOX_MENU, FLUXBOX_STYLE, INPUT_GUARD, LAUNCH_SH, SCREEN_SH, START_SH,
     TERMINAL_DESKTOP, TINT2RC, WALLPAPER_SH,
 };
-use computer::image::{
+use holm::image::{
     BROWSER_COMMAND, DESKTOP_COMMAND, DEVTOOLS_BRIDGE_PORT, HEIGHT, HEIGHT_ENV, SCREEN_COMMAND,
     WIDTH, WIDTH_ENV,
 };
-use computer::{Profile, X11Profile};
+use holm::{Profile, X11Profile};
 use std::path::PathBuf;
 
 fn directory() -> PathBuf {
-    PathBuf::from(computer::bundle::IMAGES).join("tiny")
+    PathBuf::from(holm::bundle::IMAGES).join("tiny")
 }
 
 fn read(name: &str) -> String {
@@ -187,7 +187,7 @@ fn this_image_declares_the_contract_it_implements() {
     assert!(
         read("Dockerfile").contains(&format!(
             "LABEL {}=\"{}\"",
-            computer::PROFILE_LABEL,
+            holm::PROFILE_LABEL,
             X11Profile.name()
         )),
         "this is a directory a caller points --image-dir at, so the label is \

@@ -13,9 +13,9 @@
 !media/demo.gif
 !media/bird_drawing.png
 .DS_Store
-# The page is built by crates/computer-mcp/ui/build.sh and committed as screen.html.
+# The page is built by crates/holm-mcp/ui/build.sh and committed as screen.html.
 node_modules/
-crates/computer-mcp/ui/dist/
+crates/holm-mcp/ui/dist/
 demos/
 .vercel
 .env*

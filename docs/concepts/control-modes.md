@@ -21,9 +21,9 @@ Browser chrome (the address bar and tabs), permission prompts, and native file c
 Take a screenshot, find a point, and send mouse or keyboard input to it.
 
 ```bash
-computer screenshot "$BOX" screen.png
-computer mouse "$BOX" click 640 400 left
-computer keyboard "$BOX" type "hello"
+holm screenshot "$BOX" screen.png
+holm mouse "$BOX" click 640 400 left
+holm keyboard "$BOX" type "hello"
 ```
 
 ```rust
@@ -50,10 +50,10 @@ Native applications publish a tree of widgets through AT-SPI. Each widget has a 
 A box has accessibility by default. You cannot add it later to a box launched with `--minimal`.
 
 ```bash
-BOX=$(computer new)
-computer widget "$BOX" find "Street" --role text
-computer widget "$BOX" fill "Street" "12 Bishop Street"
-computer widget "$BOX" press "OK"
+BOX=$(holm new)
+holm widget "$BOX" find "Street" --role text
+holm widget "$BOX" fill "Street" "12 Bishop Street"
+holm widget "$BOX" press "OK"
 ```
 
 ```rust
@@ -83,18 +83,18 @@ Rules:
 The browser mode controls Chromium through the Chrome DevTools Protocol (CDP). It acts on page elements, so it continues to work when the window moves or another window covers it.
 
 ```bash
-TAB=$(computer open "$BOX" https://www.selenium.dev/selenium/web/web-form.html)
-computer browser "$BOX" snapshot --tab "$TAB"
+TAB=$(holm open "$BOX" https://www.selenium.dev/selenium/web/web-form.html)
+holm browser "$BOX" snapshot --tab "$TAB"
 # @e2 textbox "Text input"
 # @e8 combobox "Dropdown (select)"
 # @e12 checkbox "Default checkbox"
 # @e15 button "Submit"
 
-computer browser "$BOX" fill @e2 "agent"
-computer browser "$BOX" select @e8 "Two"
-computer browser "$BOX" check @e12
-computer browser "$BOX" click @e15
-computer browser "$BOX" wait "Received!" --within 10000
+holm browser "$BOX" fill @e2 "agent"
+holm browser "$BOX" select @e8 "Two"
+holm browser "$BOX" check @e12
+holm browser "$BOX" click @e15
+holm browser "$BOX" wait "Received!" --within 10000
 ```
 
 MCP: `open_url`, `snapshot`, then `fill_field`, `dropdown`, `check`, `click_element`, and `wait_for`.
@@ -143,26 +143,26 @@ After an action that loads a page or fetches data, use `wait` (`wait_for` in MCP
 `open` opens a new tab and brings it to the front. The screen then shows that tab. Before you mix page actions and screen coordinates, make sure that the correct tab is at the front:
 
 ```bash
-computer browser "$BOX" switch "$TAB"
-computer screenshot "$BOX" --tab "$TAB"
+holm browser "$BOX" switch "$TAB"
+holm screenshot "$BOX" --tab "$TAB"
 ```
 
 ### Other CDP libraries
 
-`computer cdp` gives an address for Playwright, browser-use, agent-browser, or another CDP library:
+`holm cdp` gives an address for Playwright, browser-use, agent-browser, or another CDP library:
 
 ```bash
-export CDP=$(computer cdp "$BOX")
-agent-browser --cdp "$(computer cdp "$BOX" --ws)" snapshot -i
+export CDP=$(holm cdp "$BOX")
+agent-browser --cdp "$(holm cdp "$BOX" --ws)" snapshot -i
 ```
 
 The address goes through the server and contains a short-lived token, valid for one hour or for `--ttl`.
 
 ### Browser mode on remote runtimes
 
-On Vercel, page tools and `computer cdp` reach Chromium at the address that Vercel publishes for port 9223, through the same bridge. The server builds the image, so it is current. Daytona and Modal work the same way.
+On Vercel, page tools and `holm cdp` reach Chromium at the address that Vercel publishes for port 9223, through the same bridge. The server builds the image, so it is current. Daytona and Modal work the same way.
 
-On E2B, page tools and `computer cdp` reach Chromium at the address that E2B publishes for port 9223. A bridge in the box answers only requests that carry a secret made for that box, so the address alone does not open the browser. Build the template from the current image: an older template does not have the bridge, and Chromium refuses the requests.
+On E2B, page tools and `holm cdp` reach Chromium at the address that E2B publishes for port 9223. A bridge in the box answers only requests that carry a secret made for that box, so the address alone does not open the browser. Build the template from the current image: an older template does not have the bridge, and Chromium refuses the requests.
 
 Each CDP call goes to the vendor and back, so a page tool takes longer than on a host runtime.
 

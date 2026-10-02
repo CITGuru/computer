@@ -1,6 +1,6 @@
 //! A login carried between boxes: `cargo test --test live_session -- --ignored`.
 
-use computer::{Carry, Computer, Reading, Session};
+use holm::{Carry, Computer, Reading, Session};
 use std::time::Duration;
 
 #[tokio::test]
@@ -37,7 +37,7 @@ async fn a_session_outlives_the_box_it_was_made_in() {
 
 const ORIGIN: &str = "http://127.0.0.1:8000";
 
-async fn sign_in_and_export(computer: &Computer) -> computer::Result<Session> {
+async fn sign_in_and_export(computer: &Computer) -> holm::Result<Session> {
     serve(computer).await?;
     let browser = computer.browser().expect("a published DevTools port");
 
@@ -73,7 +73,7 @@ async fn sign_in_and_export(computer: &Computer) -> computer::Result<Session> {
     taken
 }
 
-async fn restored(computer: &Computer, session: &Session) -> computer::Result<()> {
+async fn restored(computer: &Computer, session: &Session) -> holm::Result<()> {
     serve(computer).await?;
     let browser = computer.browser().expect("a published DevTools port");
 
@@ -146,7 +146,7 @@ async fn restored(computer: &Computer, session: &Session) -> computer::Result<()
 }
 
 /// A cookie needs a real origin, and `file://` has none.
-async fn serve(computer: &Computer) -> computer::Result<()> {
+async fn serve(computer: &Computer) -> holm::Result<()> {
     computer
         .write_file(
             "/tmp/site/index.html",
@@ -195,7 +195,7 @@ async fn a_volume_keeps_the_browser_between_boxes() {
     outcome.expect("it was still signed in");
 }
 
-async fn sign_in(computer: &Computer) -> computer::Result<()> {
+async fn sign_in(computer: &Computer) -> holm::Result<()> {
     serve(computer).await?;
     let browser = computer.browser().expect("a published DevTools port");
 
@@ -218,7 +218,7 @@ async fn sign_in(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn still_signed_in(computer: &Computer) -> computer::Result<()> {
+async fn still_signed_in(computer: &Computer) -> holm::Result<()> {
     serve(computer).await?;
     let browser = computer.browser().expect("a published DevTools port");
 

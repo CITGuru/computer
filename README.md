@@ -1,6 +1,5 @@
-# Computer
-
-`computer` provides isolated desktop boxes that agents can use to complete and drive real tasks. Each computer runs a Linux desktop inside a container or microVM, where an agent can open web pages, drive native apps, take screenshots, move the pointer, type text, run commands, and transfer files. You can also watch the agent work or take control through a browser when it needs help.
+# holm
+`holm` provides isolated desktop boxes that agents can use to complete and drive real tasks. Each box runs a Linux desktop inside a container or microVM, where an agent can open web pages, drive native apps, take screenshots, move the pointer, type text, run commands, and transfer files. You can also watch the agent work or take control through a browser when it needs help.
 
 ![Nine frames of a desktop being driven from Rust: a page opening, a URL typed, text selected by a drag, a context menu, a paste, and a second screen](./media/demo.gif)
 
@@ -48,7 +47,7 @@ curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/insta
 
 #### Build from source
 
-Build and install `computer` and `computerd` from the current source:
+Build and install `holm` and `holmd` from the current source:
 
 ```bash
 git clone https://github.com/CITGuru/computer.git
@@ -56,18 +55,18 @@ cd computer
 cargo install --path . --locked
 ```
 
-`computer` controls desktops from a shell and serves MCP over stdio. `computerd` keeps the REST and HTTP MCP service running.
+`holm` controls desktops from a shell and serves MCP over stdio. `holmd` keeps the REST and HTTP MCP service running.
 
 Start and control a desktop:
 
 ```bash
-BOX=$(computer new)
-computer open "$BOX" https://example.com
-computer screenshot "$BOX" screen.png
-computer rm "$BOX"
+BOX=$(holm new)
+holm open "$BOX" https://example.com
+holm screenshot "$BOX" screen.png
+holm rm "$BOX"
 ```
 
-See the [CLI guide](crates/computer-cli/README.md) for server and remote-fleet use.
+See the [CLI guide](crates/holm-cli/README.md) for server and remote-fleet use.
 
 ### Use the Rust API
 
@@ -75,17 +74,17 @@ Add the API without the command dependencies:
 
 ```toml
 [dependencies]
-computer = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/CITGuru/computer", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 Launch a desktop, open a page, send input, and take a screenshot:
 
 ```rust
-use computer::{Button, Computer, Point};
+use holm::{Button, Computer, Point};
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let computer = Computer::launch().await?;
 
     computer.open_url("https://example.com").await?;
@@ -101,11 +100,11 @@ async fn main() -> computer::Result<()> {
 CLI:
 
 ```bash
-BOX=$(computer new --url https://example.com)
-computer mouse "$BOX" click 640 81 left
-computer keyboard "$BOX" type "driven from the CLI"
-computer screenshot "$BOX" screen.png
-computer rm "$BOX"
+BOX=$(holm new --url https://example.com)
+holm mouse "$BOX" click 640 81 left
+holm keyboard "$BOX" type "driven from the CLI"
+holm screenshot "$BOX" screen.png
+holm rm "$BOX"
 ```
 
 `Computer::launch()` starts one 1280x800 screen. `viewer_url()` returns a browser URL where you can watch it. `shutdown()` stops and removes the container.
@@ -120,41 +119,41 @@ cargo run --example quickstart
 
 ### CLI
 
-The `computer` command starts an ephemeral local server when no daemon is available. Start `computerd` when you need persistent traces, forks, remote access, or a fleet that survives command exits.
+The `holm` command starts an ephemeral local server when no daemon is available. Start `holmd` when you need persistent traces, forks, remote access, or a fleet that survives command exits.
 
 ```bash
-computerd
+holmd
 
-computer new --url https://example.com
-computer ls
+holm new --url https://example.com
+holm ls
 ```
 
-Set `COMPUTER_SERVER_URL` and, when required, `COMPUTER_SERVER_TOKEN` to use a remote server. Add `--local` to bypass the server for the smaller set of direct local commands.
+Set `HOLM_SERVER_URL` and, when required, `HOLM_SERVER_TOKEN` to use a remote server. Add `--local` to bypass the server for the smaller set of direct local commands.
 
-See the [CLI guide](crates/computer-cli/README.md).
+See the [CLI guide](crates/holm-cli/README.md).
 
 ### Rust
 
-The root `computer` package exports the desktop API. Disable its default `cli` feature when an application needs only the library:
+The root `holm` package exports the desktop API. Disable its default `cli` feature when an application needs only the library:
 
 ```toml
-computer = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/CITGuru/computer", default-features = false }
 ```
 
 Optional features add the E2B, Vercel Sandbox, Daytona, and Modal clients, microsandbox library binding, and daemon storage backends: `e2b`, `vercel`, `daytona`, `modal`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
 
 ### REST and Rust client
 
-`computerd` exposes the complete remote API under `/v1`. The API supports box creation and lifecycle, action batches, frames, pages, windows, files, commands, takeovers, CDP access, traces, and forks.
+`holmd` exposes the complete remote API under `/v1`. The API supports box creation and lifecycle, action batches, frames, pages, windows, files, commands, takeovers, CDP access, traces, and forks.
 
-Use [`computer-client`](crates/computer-client) from Rust or use HTTP directly. The wire types are in [`computer-api`](crates/computer-api).
+Use [`holm-client`](crates/holm-client) from Rust or use HTTP directly. The wire types are in [`holm-api`](crates/holm-api).
 
 ### MCP
 
 Use either interface:
 
-- `computer mcp --stdio` for a local stdio MCP server
-- `http://<server>/mcp` for Streamable HTTP served by `computerd`
+- `holm mcp --stdio` for a local stdio MCP server
+- `http://<server>/mcp` for Streamable HTTP served by `holmd`
 
 Both interfaces expose the same boxes and tools. Hosts that support [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) can show the live desktop beside tool results.
 
@@ -194,43 +193,43 @@ let pointer = computer.cursor().await?;
 CLI:
 
 ```bash
-computer screenshot "$BOX" frame.png
-computer mouse "$BOX" move 640 400
-computer mouse "$BOX" click 640 400 left
-computer mouse "$BOX" click 640 400 left --double
-computer mouse "$BOX" drag 100 100 400 300 left
-computer keyboard "$BOX" type "hello"
-computer keyboard "$BOX" press "ctrl+shift+p"
-computer mouse "$BOX" scroll 640 400 down 3
-computer mouse "$BOX" scroll 640 400 right 3
-computer mouse "$BOX" at
+holm screenshot "$BOX" frame.png
+holm mouse "$BOX" move 640 400
+holm mouse "$BOX" click 640 400 left
+holm mouse "$BOX" click 640 400 left --double
+holm mouse "$BOX" drag 100 100 400 300 left
+holm keyboard "$BOX" type "hello"
+holm keyboard "$BOX" press "ctrl+shift+p"
+holm mouse "$BOX" scroll 640 400 down 3
+holm mouse "$BOX" scroll 640 400 right 3
+holm mouse "$BOX" at
 ```
 
 Complete Keyboard and Mouse reference:
 
 ```text
-computer keyboard <box> type <text> [--delay MS]
-computer keyboard <box> press <key>... [--held shift,ctrl,alt,super]
-computer keyboard <box> down <key> [--hold SECONDS]
-computer keyboard <box> up <key>
+holm keyboard <box> type <text> [--delay MS]
+holm keyboard <box> press <key>... [--held shift,ctrl,alt,super]
+holm keyboard <box> down <key> [--hold SECONDS]
+holm keyboard <box> up <key>
 
-computer mouse <box> move <x> <y> [--smooth|--human] [--seed N]
-computer mouse <box> click <x> <y> [left|right|middle] [--double]
+holm mouse <box> move <x> <y> [--smooth|--human] [--seed N]
+holm mouse <box> click <x> <y> [left|right|middle] [--double]
                           [--held shift,ctrl,alt,super]
                           [--smooth|--human] [--seed N]
-computer mouse <box> drag <x1> <y1> <x2> <y2> [left|right|middle]
+holm mouse <box> drag <x1> <y1> <x2> <y2> [left|right|middle]
                          [--held shift,ctrl,alt,super]
                          [--smooth|--human] [--seed N]
-computer mouse <box> path <x1> <y1> <x2> <y2> ... [left|right|middle]
+holm mouse <box> path <x1> <y1> <x2> <y2> ... [left|right|middle]
                          [--held shift,ctrl,alt,super]
                          [--smooth|--human] [--seed N]
-computer mouse <box> down [<x> <y>] [left|right|middle] [--hold SECONDS]
+holm mouse <box> down [<x> <y>] [left|right|middle] [--hold SECONDS]
                          [--smooth|--human] [--seed N]
-computer mouse <box> up [<x> <y>] [left|right|middle]
+holm mouse <box> up [<x> <y>] [left|right|middle]
 
-computer mouse <box> scroll [<x> <y>] up|down|left|right [NOTCHES]
-computer mouse <box> scroll <x> <y> <DY> [DX]
-computer mouse <box> at
+holm mouse <box> scroll [<x> <y>] up|down|left|right [NOTCHES]
+holm mouse <box> scroll <x> <y> <DY> [DX]
+holm mouse <box> at
 ```
 
 The left button is the default. `--held` applies to a single click or a drag, not to `--double`. A scroll without coordinates uses the centre of the screen. In the signed form, positive `DY` moves down and positive `DX` moves right. `down` and `up` need the server and are not available with `--local`.
@@ -261,8 +260,8 @@ screen.drag_with(from, to, Button::Left, &[Held::Ctrl]).await?;
 CLI:
 
 ```bash
-computer mouse "$BOX" click 640 400 left --held shift
-computer mouse "$BOX" drag 100 100 400 300 left --held ctrl
+holm mouse "$BOX" click 640 400 left --held shift
+holm mouse "$BOX" drag 100 100 400 300 left --held ctrl
 ```
 
 Modifier pointer operations are available on X11 and on Wayland.
@@ -270,15 +269,15 @@ Modifier pointer operations are available on X11 and on Wayland.
 Move the pointer with a smooth line or a repeatable human-like curve:
 
 ```bash
-computer mouse "$BOX" move 640 400 --smooth
-computer mouse "$BOX" click 640 400 left --human --seed 42
-computer mouse "$BOX" drag 100 100 400 300 left --human --seed 42
+holm mouse "$BOX" move 640 400 --smooth
+holm mouse "$BOX" click 640 400 left --human --seed 42
+holm mouse "$BOX" drag 100 100 400 300 left --human --seed 42
 ```
 
 The Rust API exposes the generated steps through `motion::path` and sends a full path in one operation:
 
 ```rust
-use computer::{Desktop as _, Motion, Point, motion};
+use holm::{Desktop as _, Motion, Point, motion};
 
 let from = Point::new(100, 100);
 let to = Point::new(400, 300);
@@ -294,18 +293,18 @@ Instant motion stays the default.
 Use separate button operations only when a normal drag cannot express the interaction:
 
 ```bash
-computer mouse "$BOX" down 400 400 left --hold 10
-computer mouse "$BOX" move 900 600 --smooth
-computer mouse "$BOX" up 900 600 left
+holm mouse "$BOX" down 400 400 left --hold 10
+holm mouse "$BOX" move 900 600 --smooth
+holm mouse "$BOX" up 900 600 left
 ```
 
 A key can stay down between commands in the same way. Everything typed or clicked while it is down carries it:
 
 ```bash
-computer keyboard "$BOX" down shift --hold 20
-computer mouse "$BOX" click 300 200
-computer mouse "$BOX" click 300 400
-computer keyboard "$BOX" up shift
+holm keyboard "$BOX" down shift --hold 20
+holm mouse "$BOX" click 300 200
+holm mouse "$BOX" click 300 400
+holm keyboard "$BOX" up shift
 ```
 
 `down` takes one key, not a combination. The server lets a button or a key go after `--hold` (10 seconds unless told, 60 at most), when a person takes the screen over, and before the box is paused.
@@ -313,7 +312,7 @@ computer keyboard "$BOX" up shift
 The Rust API exposes the same low-level operations:
 
 ```rust
-use computer::Desktop as _;
+use holm::Desktop as _;
 
 computer
     .button_down(Some(Point::new(400, 400)), Button::Left)
@@ -342,8 +341,8 @@ computer
 ```
 
 ```bash
-computer keyboard "$BOX" type "typed at a visible pace" --delay 20
-computer keyboard "$BOX" press tab tab tab --held alt
+holm keyboard "$BOX" type "typed at a visible pace" --delay 20
+holm keyboard "$BOX" press tab tab tab --held alt
 ```
 
 `cursor()` reads the pointer without moving it. `find_cursor()` may move the pointer on a display server where probing is the only way to find it:
@@ -369,7 +368,7 @@ computer
 CLI:
 
 ```bash
-computer wait "$BOX" --settle 400 --within 10000
+holm wait "$BOX" --settle 400 --within 10000
 ```
 
 An animated screen can reach the deadline without becoming still.
@@ -394,7 +393,7 @@ let window_id = screen
     .await?
     .into_iter()
     .next()
-    .ok_or_else(|| computer::Error::denied("no window is open"))?
+    .ok_or_else(|| holm::Error::denied("no window is open"))?
     .id;
 let window = screen.capture(&Shot::window(&window_id)).await?;
 let small = screen
@@ -405,11 +404,11 @@ let small = screen
 CLI:
 
 ```bash
-computer screenshot "$BOX" full.png
-computer screenshot "$BOX" region.png --at 100,80 --size 400x300
-computer screenshot "$BOX" window.png --window 42
-computer screenshot "$BOX" small.png --window 42 --scale 50
-computer screenshot "$BOX" pointer.png --pointer
+holm screenshot "$BOX" full.png
+holm screenshot "$BOX" region.png --at 100,80 --size 400x300
+holm screenshot "$BOX" window.png --window 42
+holm screenshot "$BOX" small.png --window 42 --scale 50
+holm screenshot "$BOX" pointer.png --pointer
 ```
 
 A window capture looks up the current window position when it runs. Scaling reduces the bytes sent to an agent, but scaled captures must not be used to calculate input coordinates.
@@ -419,7 +418,7 @@ A window capture looks up the current window position when it runs. Scaling redu
 Run commands and move files between the host and the desktop:
 
 ```rust
-use computer::Search;
+use holm::Search;
 
 let output = computer.exec(["ls", "-la", "/tmp"]).await?;
 let input = std::fs::read("input.png")?;
@@ -446,12 +445,12 @@ let logs = computer.logs().await?;
 CLI:
 
 ```bash
-computer exec "$BOX" -- ls -la /tmp
-computer file "$BOX" put ./input.png /tmp/input.png
-computer file "$BOX" get /tmp/output.gif ./output.gif
-computer file "$BOX" ls /tmp
-computer file "$BOX" grep "needle" /workspace --include "*.rs"
-computer file "$BOX" glob "*.png" /tmp
+holm exec "$BOX" -- ls -la /tmp
+holm file "$BOX" put ./input.png /tmp/input.png
+holm file "$BOX" get /tmp/output.gif ./output.gif
+holm file "$BOX" ls /tmp
+holm file "$BOX" grep "needle" /workspace --include "*.rs"
+holm file "$BOX" glob "*.png" /tmp
 ```
 
 Search results are capped in the box before they cross the wire. Commands in the direct Rust API have a two-minute default limit. Use `exec_within(argv, duration)` when a command needs a different limit.
@@ -475,10 +474,10 @@ let selected = computer.selection(Selection::Primary).await?;
 CLI:
 
 ```bash
-computer clip "$BOX" "ready to paste"
-computer clip "$BOX"
-computer clip "$BOX" "middle-click paste" --primary
-computer clip "$BOX" --primary
+holm clip "$BOX" "ready to paste"
+holm clip "$BOX"
+holm clip "$BOX" "middle-click paste" --primary
+holm clip "$BOX" --primary
 ```
 
 `CLIPBOARD` is used by copy and paste. `PRIMARY` is filled when text is selected and is pasted by a middle click.
@@ -511,7 +510,7 @@ let screen = computer.primary();
 CLI:
 
 ```bash
-BOX=$(computer new)
+BOX=$(holm new)
 ```
 
 `--minimal` or `Computer::builder().minimal()` leaves it out.
@@ -535,8 +534,8 @@ let fields = screen.find_nodes(&street, Some(10)).await?;
 CLI:
 
 ```bash
-computer widget "$BOX" tree --depth 4
-computer widget "$BOX" find "Street" --role text --limit 10
+holm widget "$BOX" tree --depth 4
+holm widget "$BOX" find "Street" --role text --limit 10
 ```
 
 `find_nodes` returns the best match first. A query can match a widget's own name or the label beside it. The `node.labelled` field shows when a nearby label produced the match.
@@ -557,9 +556,9 @@ screen.invoke_node(&ok, None).await?;
 CLI:
 
 ```bash
-computer widget "$BOX" focus "Street" --role text
-computer widget "$BOX" fill "Street" "12 Bishop Street" --role text
-computer widget "$BOX" press "OK"
+holm widget "$BOX" focus "Street" --role text
+holm widget "$BOX" fill "Street" "12 Bishop Street" --role text
+holm widget "$BOX" press "OK"
 ```
 
 `invoke_node` runs a widget action without moving the pointer. The toolkit controls the action names. GTK can call an action `click` while Qt calls it `Press`.
@@ -575,7 +574,7 @@ if let Some(at) = fields.first().and_then(|node| node.at) {
 CLI:
 
 ```bash
-computer mouse "$BOX" click 640 400 left
+holm mouse "$BOX" click 640 400 left
 ```
 
 Applications and custom widgets can publish incomplete trees. Use screenshots and normal input when a useful node is not available.
@@ -598,20 +597,20 @@ Prefer page operations for websites. Use screenshots and desktop input for brows
 Open a page, inspect its controls, act by reference or name, wait for the result, and read only what changed:
 
 ```bash
-BOX=$(computer new --url https://www.selenium.dev/selenium/web/web-form.html)
+BOX=$(holm new --url https://www.selenium.dev/selenium/web/web-form.html)
 
-computer browser "$BOX" snapshot --urls --quiet 400
+holm browser "$BOX" snapshot --urls --quiet 400
 # @e2 textbox "Text input"
 # @e8 combobox "Dropdown (select)"
 # @e12 checkbox "Default checkbox"
 # @e15 button "Submit"
 
-computer browser "$BOX" fill @e2 "agent"
-computer browser "$BOX" select @e8 "Two"
-computer browser "$BOX" check @e12
-computer browser "$BOX" click @e15
-computer browser "$BOX" wait "Received!" --within 10000
-computer browser "$BOX" snapshot --delta
+holm browser "$BOX" fill @e2 "agent"
+holm browser "$BOX" select @e8 "Two"
+holm browser "$BOX" check @e12
+holm browser "$BOX" click @e15
+holm browser "$BOX" wait "Received!" --within 10000
+holm browser "$BOX" snapshot --delta
 ```
 
 A query can be visible text, an accessible name, an element ID, a CSS selector, or an `@eN` reference from `snapshot`. Use a reference after you inspect a page because it identifies one specific element. Use text or a selector when no snapshot exists. Add `--exact` when a partial text match could select the wrong control.
@@ -653,11 +652,11 @@ page.navigate("https://example.org").await?;
 CLI:
 
 ```bash
-TAB=$(computer open "$BOX" https://example.com)
-computer browser "$BOX" eval "document.title" --tab "$TAB"
-computer browser "$BOX" eval "Array.from(document.links).map(a => a.href)" --tab "$TAB"
-computer browser "$BOX" screenshot page.png --tab "$TAB"
-computer open "$BOX" https://example.org --target current
+TAB=$(holm open "$BOX" https://example.com)
+holm browser "$BOX" eval "document.title" --tab "$TAB"
+holm browser "$BOX" eval "Array.from(document.links).map(a => a.href)" --tab "$TAB"
+holm browser "$BOX" screenshot page.png --tab "$TAB"
+holm open "$BOX" https://example.org --target current
 ```
 
 `Page::call` sends any Chrome DevTools Protocol method that the crate does not wrap.
@@ -685,11 +684,11 @@ page.click_on("Submit", Button::Left).await?;
 CLI:
 
 ```bash
-computer browser "$BOX" find input --limit 10
-computer browser "$BOX" fill "Email" "agent@example.com"
-computer browser "$BOX" select "Country" "United Kingdom"
-computer browser "$BOX" upload "Attachment" /tmp/report.pdf
-computer browser "$BOX" click "Submit"
+holm browser "$BOX" find input --limit 10
+holm browser "$BOX" fill "Email" "agent@example.com"
+holm browser "$BOX" select "Country" "United Kingdom"
+holm browser "$BOX" upload "Attachment" /tmp/report.pdf
+holm browser "$BOX" click "Submit"
 ```
 
 These operations use page structure. They do not depend on the position of the Chromium window.
@@ -709,7 +708,7 @@ println!("{}\n{}", read.title, read.text);
 ```
 
 ```bash
-computer browser "$BOX" read --limit 4000
+holm browser "$BOX" read --limit 4000
 ```
 
 A screenshot says where pixels are. A page read returns text beyond the viewport and the destination behind each link.
@@ -727,9 +726,9 @@ let changed = page.snapshot_delta(None, None).await?;
 ```
 
 ```bash
-computer browser "$BOX" snapshot --urls
-computer browser "$BOX" click @e4
-computer browser "$BOX" snapshot --delta
+holm browser "$BOX" snapshot --urls
+holm browser "$BOX" click @e4
+holm browser "$BOX" snapshot --delta
 ```
 
 References stay with an element while the document stays loaded. A navigation clears them. A removed element leaves a hole instead of letting an old reference select a different control.
@@ -751,13 +750,13 @@ page.quiet(
 ```
 
 ```bash
-computer browser "$BOX" wait "Done" --within 10000
-computer browser "$BOX" wait ".spinner" --gone
-computer browser "$BOX" wait "Submit" --enabled
-computer browser "$BOX" wait --load
-computer browser "$BOX" wait --quiet 400
-computer browser "$BOX" wait "Success" --or "Payment failed,Try again"
-computer browser "$BOX" wait --fn "location.pathname === '/done'"
+holm browser "$BOX" wait "Done" --within 10000
+holm browser "$BOX" wait ".spinner" --gone
+holm browser "$BOX" wait "Submit" --enabled
+holm browser "$BOX" wait --load
+holm browser "$BOX" wait --quiet 400
+holm browser "$BOX" wait "Success" --or "Payment failed,Try again"
+holm browser "$BOX" wait --fn "location.pathname === '/done'"
 ```
 
 Use browser waits after an action starts a fetch. `--or` waits for the first of several outcomes. `--fn` waits until a JavaScript expression is truthy. Use screen stillness for desktop drawing that browser state cannot describe.
@@ -767,8 +766,8 @@ Use browser waits after an action starts a fetch. `--or` waits for the first of 
 A page screenshot excludes the desktop window, address bar, and pointer. It can capture the complete scrollable document:
 
 ```bash
-computer browser "$BOX" screenshot page.png
-computer browser "$BOX" screenshot page.jpg --full --format jpeg --quality 70
+holm browser "$BOX" screenshot page.png
+holm browser "$BOX" screenshot page.jpg --full --format jpeg --quality 70
 ```
 
 ### Keep page and screen state aligned
@@ -792,29 +791,29 @@ assert!(page.visible().await?);
 CLI:
 
 ```bash
-TAB=$(computer open "$BOX" https://example.com)
-computer open "$BOX" https://example.net
-computer browser "$BOX" tabs
-computer browser "$BOX" switch "$TAB"
-computer screenshot "$BOX" current-page.png --tab "$TAB"
+TAB=$(holm open "$BOX" https://example.com)
+holm open "$BOX" https://example.net
+holm browser "$BOX" tabs
+holm browser "$BOX" switch "$TAB"
+holm screenshot "$BOX" current-page.png --tab "$TAB"
 ```
 
 `browser.visible_page().await?` returns the page that the screen currently shows.
 
 ### Connect another CDP library
 
-Mint a short-lived CDP address through `computerd`:
+Mint a short-lived CDP address through `holmd`:
 
 ```bash
-export CDP=$(computer cdp "$BOX")
-agent-browser --cdp "$(computer cdp "$BOX" --ws)" snapshot -i
+export CDP=$(holm cdp "$BOX")
+agent-browser --cdp "$(holm cdp "$BOX" --ws)" snapshot -i
 ```
 
 Playwright can pass `$CDP` to `connectOverCDP`, and browser-use can use it as `cdp_url`. The address contains a token in its path. It lasts one hour by default, can be changed with `--ttl`, and expires with the box.
 
-`computer cdp "$BOX" --direct` prints the unguarded loopback port instead. Use it only on the box host. The proxied address is the correct form for remote servers.
+`holm cdp "$BOX" --direct` prints the unguarded loopback port instead. Use it only on the box host. The proxied address is the correct form for remote servers.
 
-`computer cdp` uses the server API and is not available with `--local`.
+`holm cdp` uses the server API and is not available with `--local`.
 
 ### Isolate browser sessions
 
@@ -852,13 +851,13 @@ let tabs = browser.import_session(&session).await?;
 From the CLI, save to a file or leave it with the server under a name:
 
 ```bash
-computer browser "$BOX" state save login.json --origin https://mail.example.com
-computer browser "$OTHER" state load login.json
+holm browser "$BOX" state save login.json --origin https://mail.example.com
+holm browser "$OTHER" state load login.json
 
-computer browser "$BOX" state save --name work
-computer browser "$OTHER" state load --name work
-computer browser state list
-computer browser state rm work
+holm browser "$BOX" state save --name work
+holm browser "$OTHER" state load --name work
+holm browser state list
+holm browser state rm work
 ```
 
 With no `--origin`, the origins of the tabs open now are saved. The file is written readable by its owner only. A named state stays with the server until it restarts; the MCP tools `save_state` and `load_state` use names only, so the login never passes through the model.
@@ -866,72 +865,72 @@ With no `--origin`, the origins of the tabs open now are saved. The file is writ
 Read, set and clear single cookies:
 
 ```bash
-computer browser "$BOX" cookies --url https://example.com
-computer browser "$BOX" cookies set theme=dark --url https://example.com
-computer browser "$BOX" cookies set --curl "$(pbpaste)"      # a browser's "copy as cURL"
-computer browser "$BOX" cookies clear --url https://example.com
+holm browser "$BOX" cookies --url https://example.com
+holm browser "$BOX" cookies set theme=dark --url https://example.com
+holm browser "$BOX" cookies set --curl "$(pbpaste)"      # a browser's "copy as cURL"
+holm browser "$BOX" cookies clear --url https://example.com
 ```
 
 ### CLI command reference
 
-These are all commands under `computer browser`:
+These are all commands under `holm browser`:
 
 ```text
-computer browser <box> read [--format markdown|text|raw] [--limit N] [--tab ID]
-computer browser <box> snapshot [--scope QUERY] [--limit N] [--urls] [--delta]
+holm browser <box> read [--format markdown|text|raw] [--limit N] [--tab ID]
+holm browser <box> snapshot [--scope QUERY] [--limit N] [--urls] [--delta]
                                 [--quiet MS] [--tab ID]
-computer browser <box> find [QUERY] [--role ROLE] [--exact] [--scroll]
+holm browser <box> find [QUERY] [--role ROLE] [--exact] [--scroll]
                             [--limit N] [--tab ID]
 
-computer browser <box> click <query> [--double] [--button left|right|middle]
+holm browser <box> click <query> [--double] [--button left|right|middle]
                              [--new-tab] [--smooth|--human] [--seed N] [--tab ID]
-computer browser <box> drag <from-query> <to-query> [--button left|right|middle]
+holm browser <box> drag <from-query> <to-query> [--button left|right|middle]
                             [--smooth|--human] [--seed N] [--tab ID]
-computer browser <box> hover <query> [--smooth|--human] [--seed N] [--tab ID]
-computer browser <box> highlight <query> [--for SECONDS] [--tab ID]
-computer browser <box> focus <query> [--tab ID]
-computer browser <box> fill <query> <value> [--tab ID]
-computer browser <box> check <query> [--tab ID]
-computer browser <box> uncheck <query> [--tab ID]
+holm browser <box> hover <query> [--smooth|--human] [--seed N] [--tab ID]
+holm browser <box> highlight <query> [--for SECONDS] [--tab ID]
+holm browser <box> focus <query> [--tab ID]
+holm browser <box> fill <query> <value> [--tab ID]
+holm browser <box> check <query> [--tab ID]
+holm browser <box> uncheck <query> [--tab ID]
 
-computer browser <box> options <query> [--tab ID]
-computer browser <box> select <query> <option>... [--tab ID]
-computer browser <box> deselect <query> [<option>...] [--tab ID]
-computer browser <box> upload <query> <file>... [--in-box] [--tab ID]
+holm browser <box> options <query> [--tab ID]
+holm browser <box> select <query> <option>... [--tab ID]
+holm browser <box> deselect <query> [<option>...] [--tab ID]
+holm browser <box> upload <query> <file>... [--in-box] [--tab ID]
 
-computer browser <box> wait [QUERY] [--gone] [--or TEXT,TEXT] [--within MS]
+holm browser <box> wait [QUERY] [--gone] [--or TEXT,TEXT] [--within MS]
                             [--quiet MS] [--enabled] [--load] [--fn JS]
                             [--exact] [--tab ID]
-computer browser <box> back [--tab ID]
-computer browser <box> forward [--tab ID]
-computer browser <box> reload [--tab ID]
+holm browser <box> back [--tab ID]
+holm browser <box> forward [--tab ID]
+holm browser <box> reload [--tab ID]
 
-computer browser <box> eval <expression> [--timeout MS] [--limit N] [--tab ID]
-computer browser <box> console [--errors] [--clear] [--limit N] [--tab ID]
-computer browser <box> errors [--clear] [--limit N] [--tab ID]
-computer browser <box> screenshot [FILE] [--full] [--format png|jpeg]
+holm browser <box> eval <expression> [--timeout MS] [--limit N] [--tab ID]
+holm browser <box> console [--errors] [--clear] [--limit N] [--tab ID]
+holm browser <box> errors [--clear] [--limit N] [--tab ID]
+holm browser <box> screenshot [FILE] [--full] [--format png|jpeg]
                                   [--quality N] [--annotate] [--tab ID]
-computer browser <box> pdf [FILE] [--landscape] [--no-background] [--tab ID]
-computer browser <box> dialog accept [TEXT] | dismiss
-computer browser <box> tabs
-computer browser <box> switch <tab>
-computer browser <box> close <tab>
+holm browser <box> pdf [FILE] [--landscape] [--no-background] [--tab ID]
+holm browser <box> dialog accept [TEXT] | dismiss
+holm browser <box> tabs
+holm browser <box> switch <tab>
+holm browser <box> close <tab>
 
-computer browser <box> state save <file> | --name NAME [--origin URL]...
+holm browser <box> state save <file> | --name NAME [--origin URL]...
                                   [--session-storage] [--indexed-db]
                                   [--no-local-storage]
-computer browser <box> state load <file> | --name NAME
-computer browser state list
-computer browser state rm <name>
-computer browser <box> cookies [--url URL]
-computer browser <box> cookies set NAME=VALUE... --url URL [--domain D]
+holm browser <box> state load <file> | --name NAME
+holm browser state list
+holm browser state rm <name>
+holm browser <box> cookies [--url URL]
+holm browser <box> cookies set NAME=VALUE... --url URL [--domain D]
                                    [--path P] [--secure] [--http-only]
                                    [--expires SECONDS]
-computer browser <box> cookies set --curl '<curl command>'
-computer browser <box> cookies clear --url URL | --all
+holm browser <box> cookies set --curl '<curl command>'
+holm browser <box> cookies clear --url URL | --all
 ```
 
-`--tab` takes a tab id or the label `open --label` gave it. `read`, `snapshot`, `find`, `eval` and `console` take `--content-boundaries`, which puts what the page wrote between two markers that hold a nonce the page cannot know; `COMPUTER_CONTENT_BOUNDARIES=1` does the same for every call and for the MCP tools.
+`--tab` takes a tab id or the label `open --label` gave it. `read`, `snapshot`, `find`, `eval` and `console` take `--content-boundaries`, which puts what the page wrote between two markers that hold a nonce the page cannot know; `HOLM_CONTENT_BOUNDARIES=1` does the same for every call and for the MCP tools.
 
 A query reaches into a frame of the same origin as the page, and a snapshot numbers the controls in it. A frame from another origin is left out.
 
@@ -940,8 +939,8 @@ A page dialog stops every page tool. An alert is accepted by itself, and the act
 Opening a page and exporting a CDP endpoint are top-level commands:
 
 ```text
-computer open <box> <url> [--target blank|current] [--label NAME]
-computer cdp <box> [--ws] [--ttl MINUTES] [--direct]
+holm open <box> <url> [--target blank|current] [--label NAME]
+holm cdp <box> [--ws] [--ttl MINUTES] [--direct]
 ```
 
 ## Display and window operations
@@ -957,7 +956,7 @@ let window = screen
     .active_window()
     .await?
     .or_else(|| windows.into_iter().next())
-    .ok_or_else(|| computer::Error::denied("no window is open"))?;
+    .ok_or_else(|| holm::Error::denied("no window is open"))?;
 
 screen
     .arrange(
@@ -986,15 +985,15 @@ screen.close_window(&window.id).await?;
 CLI:
 
 ```bash
-computer window "$BOX" list
-computer window "$BOX" active
-computer window "$BOX" 42 size 800 600
-computer window "$BOX" 42 move 120 90
-computer window "$BOX" 42 focus
-computer window "$BOX" 42 max
-computer window "$BOX" 42 min
-computer window "$BOX" 42 restore
-computer window "$BOX" 42 close
+holm window "$BOX" list
+holm window "$BOX" active
+holm window "$BOX" 42 size 800 600
+holm window "$BOX" 42 move 120 90
+holm window "$BOX" 42 focus
+holm window "$BOX" 42 max
+holm window "$BOX" 42 min
+holm window "$BOX" 42 restore
+holm window "$BOX" 42 close
 ```
 
 Match a window by class when possible. A title can change with the open document.
@@ -1010,26 +1009,26 @@ let dialog = screen
 CLI:
 
 ```bash
-computer window "$BOX" wait Mousepad --within 10
+holm window "$BOX" wait Mousepad --within 10
 ```
 
 The result reports the final geometry. A window manager can clamp or reject the requested size or position.
 
-`window wait --within` uses seconds. `computer wait --within` and `browser wait --within` use milliseconds.
+`window wait --within` uses seconds. `holm wait --within` and `browser wait --within` use milliseconds.
 
 Complete CLI window reference:
 
 ```text
-computer window <box> list
-computer window <box> active
-computer window <box> wait <class> [--within SECONDS]
-computer window <box> <id> focus
-computer window <box> <id> close
-computer window <box> <id> move <x> <y>
-computer window <box> <id> size <width> <height>
-computer window <box> <id> max
-computer window <box> <id> min
-computer window <box> <id> restore
+holm window <box> list
+holm window <box> active
+holm window <box> wait <class> [--within SECONDS]
+holm window <box> <id> focus
+holm window <box> <id> close
+holm window <box> <id> move <x> <y>
+holm window <box> <id> size <width> <height>
+holm window <box> <id> max
+holm window <box> <id> min
+holm window <box> <id> restore
 ```
 
 `focus` raises a window and then reports the window that actually has keyboard focus. `close` asks the application to close the window. Arrange commands return the final geometry because the window manager can clamp a move, enforce size hints, or refuse a state change.
@@ -1082,10 +1081,10 @@ The duration-based Rust helper uses X11 capture. Use the profile-aware CLI recor
 CLI:
 
 ```bash
-BOX=$(computer new)
-computer record "$BOX" start --fps 20
-computer record "$BOX" status
-computer record "$BOX" stop screen.mp4
+BOX=$(holm new)
+holm record "$BOX" start --fps 20
+holm record "$BOX" status
+holm record "$BOX" stop screen.mp4
 ```
 
 Add `Extras::audio()` when the recording also needs sound.
@@ -1116,8 +1115,8 @@ takeover.end().await?;
 CLI:
 
 ```bash
-computer takeover "$BOX"
-computer release "$BOX"
+holm takeover "$BOX"
+holm release "$BOX"
 ```
 
 The program can continue to read the screen while the person controls it. Its input operations return an error.
@@ -1160,26 +1159,26 @@ if computer.person_driving().await {
 CLI:
 
 ```bash
-computer release "$BOX"
+holm release "$BOX"
 ```
 
 The image also refuses raw synthetic input from inside the box while a person has exclusive control.
 
 ## Configure a desktop
 
-### Create a box with `computer new`
+### Create a box with `holm new`
 
-`computer new` converts command flags into a portable `Spec` and `Placement`, starts the box, and prints its ID to standard output. Status text and the viewer URL go to standard error, so command substitution receives only the ID:
+`holm new` converts command flags into a portable `Spec` and `Placement`, starts the box, and prints its ID to standard output. Status text and the viewer URL go to standard error, so command substitution receives only the ID:
 
 ```bash
-BOX=$(computer new --url https://example.com)
-computer box "$BOX"
+BOX=$(holm new --url https://example.com)
+holm box "$BOX"
 ```
 
 Choose the display and capacity:
 
 ```bash
-BOX=$(computer new \
+BOX=$(holm new \
     --size 1920x1080 \
     --screens 2 \
     --wayland \
@@ -1191,13 +1190,13 @@ BOX=$(computer new \
 Build applications and features into the image:
 
 ```bash
-BOX=$(computer new \
+BOX=$(holm new \
     --app gimp,vscode \
     --package jq \
     --package ripgrep \
     --audio)
 
-MINIMAL_BOX=$(computer new --minimal)
+MINIMAL_BOX=$(holm new --minimal)
 ```
 
 A box is one of two desktops:
@@ -1212,7 +1211,7 @@ Applications, packages, and features are image inputs. They cannot be added to a
 Set network and lifetime policy:
 
 ```bash
-BOX=$(computer new --no-network --ttl 60 --idle 10)
+BOX=$(holm new --no-network --ttl 60 --idle 10)
 ```
 
 `--ttl` removes the box after a fixed number of minutes. `--idle` removes it after that many minutes without server activity. `--no-network` blocks outbound network access from the desktop.
@@ -1220,7 +1219,7 @@ BOX=$(computer new --no-network --ttl 60 --idle 10)
 Complete command reference:
 
 ```text
-computer new [--size WIDTHxHEIGHT] [--screens N] [--wayland] [--url URL]
+holm new [--size WIDTHxHEIGHT] [--screens N] [--wayland] [--url URL]
              [--app NAME]... [--package PACKAGE]... [--audio]
              [--base | --minimal]
              [--no-network] [--memory SIZE] [--cpus N]
@@ -1228,7 +1227,7 @@ computer new [--size WIDTHxHEIGHT] [--screens N] [--wayland] [--url URL]
              [--spec FILE|-]
 ```
 
-Repeat `--app` and `--package`, or give comma-separated names. `--spec -` reads a create request from standard input. Flags override values from the file. `computer --local new --name NAME` can choose a local runtime name; a server always assigns its own box ID and refuses `--name`.
+Repeat `--app` and `--package`, or give comma-separated names. `--spec -` reads a create request from standard input. Flags override values from the file. `holm --local new --name NAME` can choose a local runtime name; a server always assigns its own box ID and refuses `--name`.
 
 
 ### Builder options
@@ -1250,10 +1249,10 @@ let computer = Computer::builder()
 CLI:
 
 ```bash
-BOX=$(computer new --size 1920x1080 --no-network --memory 2g --runtime podman --ttl 60)
+BOX=$(holm new --size 1920x1080 --no-network --memory 2g --runtime podman --ttl 60)
 ```
 
-`computer new` keeps the desktop after the command exits. `--app gimp` and `--package jq` install into the image, and `--spec box.json` takes a file shaped like the body of `POST /v1/boxes` for what has no flag; a flag goes over the file.
+`holm new` keeps the desktop after the command exits. `--app gimp` and `--package jq` install into the image, and `--spec box.json` takes a file shaped like the body of `POST /v1/boxes` for what has no flag; a flag goes over the file.
 
 - `network(false)` blocks outbound network access from the desktop.
 - `runtime()` also accepts `nerdctl`.
@@ -1289,7 +1288,7 @@ A `Spec` describes the desktop, installed applications, and access policy. A `Pl
 ```
 
 ```bash
-BOX=$(computer new --spec box.json)
+BOX=$(holm new --spec box.json)
 ```
 
 The same specification can be placed in a container, microVM, or supported cloud sandbox. Unknown keys are refused instead of ignored. See [examples/box.json](examples/box.json) and [examples/from_spec.rs](examples/from_spec.rs).
@@ -1299,9 +1298,9 @@ The same specification can be placed in a container, microVM, or supported cloud
 List the built-in application catalog, install applications into a new image, and open one by name:
 
 ```bash
-computer apps
-BOX=$(computer new --app gimp --app vscode)
-computer app "$BOX" gimp
+holm apps
+BOX=$(holm new --app gimp --app vscode)
+holm app "$BOX" gimp
 ```
 
 `app` waits until the application's window has drawn. Applications and packages are image inputs. They cannot be added to a running box.
@@ -1323,7 +1322,7 @@ let minimal_desktop = Computer::builder().minimal().launch().await?;
 CLI:
 
 ```bash
-BOX=$(computer new --package vim,curl --audio)
+BOX=$(holm new --package vim,curl --audio)
 ```
 
 `Extras::audio()`, `Extras::video()`, `Extras::accessibility()`, and `Extras::everything()` provide common package sets.
@@ -1346,7 +1345,7 @@ The profile includes logins, history, extensions, and browser storage. It stays 
 From the CLI or MCP, name the profile when the box is made:
 
 ```bash
-computer new --profile work
+holm new --profile work
 ```
 
 The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B, Vercel, Daytona, Modal, and microsandbox boxes refuse a profile, since they have no Docker volume.
@@ -1362,8 +1361,8 @@ let computer = Computer::attach("my-box").await?;
 CLI:
 
 ```bash
-computer ls
-computer screenshot "$BOX" screen.png
+holm ls
+holm screenshot "$BOX" screen.png
 ```
 
 CLI commands attach to the desktop named by their `<box>` argument.
@@ -1377,16 +1376,16 @@ The attached desktop keeps its windows, browser profile, and files. Dropping an 
 List all boxes known to the selected server:
 
 ```bash
-computer ls
+holm ls
 ```
 
 Each row contains the box ID, screen size, screen count, and a non-ready state when applicable. Inspect one box in detail:
 
 ```bash
-computer box "$BOX"
+holm box "$BOX"
 ```
 
-`computer box` reports:
+`holm box` reports:
 
 - ID and state: `Ready`, `Paused`, or `Stopped`
 - configured screen count and size
@@ -1396,18 +1395,18 @@ computer box "$BOX"
 
 The box ID is the value accepted by every command that takes `<box>`. Treat viewer and DevTools URLs as credentials when they contain access tokens.
 
-`computer box` uses the server API and is not available with `--local`. Local `computer ls` asks the default Docker runtime what is still running.
+`holm box` uses the server API and is not available with `--local`. Local `holm ls` asks the default Docker runtime what is still running.
 
 ### Pause, stop, resume, and remove
 
 ```bash
-computer pause "$BOX"
-computer resume "$BOX"
+holm pause "$BOX"
+holm resume "$BOX"
 
-computer stop "$BOX"
-computer resume "$BOX"
+holm stop "$BOX"
+holm resume "$BOX"
 
-computer rm "$BOX"
+holm rm "$BOX"
 ```
 
 A paused box keeps its memory and ports but uses no processor. A stopped box keeps its writable filesystem without keeping its memory. Resuming a stopped box starts a fresh desktop on new viewer ports. Removing a box deletes its files.
@@ -1422,7 +1421,7 @@ computer.stop().await?;
 let computer = computer.start(Duration::from_secs(90)).await?;
 ```
 
-Use `--ttl MINUTES` for a fixed lifetime and `--idle MINUTES` for an inactivity limit. `computerd` also sweeps expired boxes that outlive the process that created them.
+Use `--ttl MINUTES` for a fixed lifetime and `--idle MINUTES` for an inactivity limit. `holmd` also sweeps expired boxes that outlive the process that created them.
 
 ### Run action batches
 
@@ -1447,50 +1446,50 @@ A batch holds one screen across several operations, stops at the first refusal b
 ```
 
 ```bash
-computer batch "$BOX" actions.json --settle 400
+holm batch "$BOX" actions.json --settle 400
 ```
 
 Use `--keep-going` only when later steps do not depend on earlier steps. The REST equivalent is `POST /v1/boxes/{id}/screens/{screen}/actions`.
 
-CLI batches, traces, forks, pause, stop, and resume use the server API. The ephemeral server can run a batch, but a long-lived `computerd` is required to retain useful history across commands.
+CLI batches, traces, forks, pause, stop, and resume use the server API. The ephemeral server can run a batch, but a long-lived `holmd` is required to retain useful history across commands.
 
 ### Trace and fork
 
-`computerd` records actions, frames, commands, lifecycle changes, file transfers, and custody changes:
+`holmd` records actions, frames, commands, lifecycle changes, file transfers, and custody changes:
 
 ```bash
-computer trace "$BOX"
-NEW_BOX=$(computer fork "$BOX")
+holm trace "$BOX"
+NEW_BOX=$(holm fork "$BOX")
 ```
 
 A fork launches the same specification and replays the trace. It reconstructs the work; it does not copy a running machine. Page changes, timing, and unrecorded file or clipboard bytes can make the result differ.
 
 ## Server, REST, and MCP
 
-### Run `computerd`
+### Run `holmd`
 
 The daemon listens on `127.0.0.1:8080` by default:
 
 ```bash
-computerd
+holmd
 curl http://127.0.0.1:8080/v1/health
 ```
 
 Bind outside loopback only with a server token:
 
 ```bash
-COMPUTER_SERVER_ADDR=0.0.0.0:8080 \
-COMPUTER_SERVER_TOKEN="$(openssl rand -hex 32)" \
-computerd
+HOLM_SERVER_ADDR=0.0.0.0:8080 \
+HOLM_SERVER_TOKEN="$(openssl rand -hex 32)" \
+holmd
 ```
 
 Clients send the token as `Authorization: Bearer ...`. The gate protects REST and MCP. Viewer links use separate per-box credentials.
 
-The REST API uses shared request and response types from [`computer-api`](crates/computer-api). Box creation, action batches, and forks accept idempotency keys so a transport retry does not repeat a click or create a second box. See the [server guide](crates/computer-server/README.md) for routes and semantics.
+The REST API uses shared request and response types from [`holm-api`](crates/holm-api). Box creation, action batches, and forks accept idempotency keys so a transport retry does not repeat a click or create a second box. See the [server guide](crates/holm-server/README.md) for routes and semantics.
 
-By default every box the server creates lives an hour unless you change it from the confiuration. `computerd` offers one runtime per host runtime it finds — docker, podman and nerdctl for containers, smolvm for a microVM on libkrun — and `GET /v1/runtimes` says what each one runs a box in and what it can do. A placement names one; a box that names none lands on the default. `COMPUTER_SERVER_CONFIG` points at a file that tunes them, offers an engine twice, or turns one off, and `COMPUTER_SERVER_SANDBOXES=e2b` (or `vercel`) adds a remote vendor when the daemon was built with that vendor's support. A vendor can also be added while the server runs — `computer runtime add cloud --provider e2b --api-key` takes the key on stdin — and is then sealed in the store and offered again after a restart.
+By default every box the server creates lives an hour unless you change it from the confiuration. `holmd` offers one runtime per host runtime it finds — docker, podman and nerdctl for containers, smolvm for a microVM on libkrun — and `GET /v1/runtimes` says what each one runs a box in and what it can do. A placement names one; a box that names none lands on the default. `HOLM_SERVER_CONFIG` points at a file that tunes them, offers an engine twice, or turns one off, and `HOLM_SERVER_SANDBOXES=e2b` (or `vercel`) adds a remote vendor when the daemon was built with that vendor's support. A vendor can also be added while the server runs — `holm runtime add cloud --provider e2b --api-key` takes the key on stdin — and is then sealed in the store and offered again after a restart.
 
-On restart, `computerd` takes back every box it recorded, through the runtime its record names, and then scans each runtime for boxes left labelled by an earlier server.
+On restart, `holmd` takes back every box it recorded, through the runtime its record names, and then scans each runtime for boxes left labelled by an earlier server.
 
 ### REST quick start
 
@@ -1534,19 +1533,19 @@ Inspect and remove it:
 ```bash
 curl -fsS "$BASE/v1/boxes/$BOX"
 curl -fsS -X DELETE "$BASE/v1/boxes/$BOX" \
-  -H 'x-computer-confirm-delete: true'
+  -H 'x-holm-confirm-delete: true'
 ```
 
-Add `Authorization: Bearer <token>` to every request when `COMPUTER_SERVER_TOKEN` is set. API errors have one shape: `code`, `message`, and `retryable`.
+Add `Authorization: Bearer <token>` to every request when `HOLM_SERVER_TOKEN` is set. API errors have one shape: `code`, `message`, and `retryable`.
 
 ### Persist server state
 
-The default in-memory store keeps traces only for the life of `computerd`. Select a durable backend when traces and frames must survive a restart:
+The default in-memory store keeps traces only for the life of `holmd`. Select a durable backend when traces and frames must survive a restart:
 
 ```bash
-COMPUTER_STORAGE_BACKEND=local \
-COMPUTER_STATE_DIR=/var/lib/computer \
-computerd
+HOLM_STORAGE_BACKEND=local \
+HOLM_STATE_DIR=/var/lib/holm \
+holmd
 ```
 
 SQLite, PostgreSQL, and S3 are optional build features:
@@ -1555,9 +1554,9 @@ SQLite, PostgreSQL, and S3 are optional build features:
 cargo install --path . --locked --features sqlite,postgres,s3
 ```
 
-SQL backends use `COMPUTER_STATE_URL`. S3 uses `COMPUTER_S3_ENDPOINT`, `COMPUTER_S3_BUCKET`, credentials from the environment, and optional region and prefix settings.
+SQL backends use `HOLM_STATE_URL`. S3 uses `HOLM_S3_ENDPOINT`, `HOLM_S3_BUCKET`, credentials from the environment, and optional region and prefix settings.
 
-By default, old frames are retained for two hours and trace entries for seven days. `COMPUTER_KEEP_FRAMES_SECS`, `COMPUTER_KEEP_ENTRIES_SECS`, and `COMPUTER_PRUNE_SECS` change those windows.
+By default, old frames are retained for two hours and trace entries for seven days. `HOLM_KEEP_FRAMES_SECS`, `HOLM_KEEP_ENTRIES_SECS`, and `HOLM_PRUNE_SECS` change those windows.
 
 ### Configure MCP
 
@@ -1566,32 +1565,32 @@ For an MCP host that launches a local process:
 ```json
 {
   "mcpServers": {
-    "computer": {
-      "command": "computer",
+    "holm": {
+      "command": "holm",
       "args": ["mcp", "--stdio"],
       "env": {
-        "COMPUTER_SERVER_URL": "http://127.0.0.1:8080"
+        "HOLM_SERVER_URL": "http://127.0.0.1:8080"
       }
     }
   }
 }
 ```
 
-Add `COMPUTER_SERVER_TOKEN` to the stdio environment when the daemon is gated.
+Add `HOLM_SERVER_TOKEN` to the stdio environment when the daemon is gated.
 
 For a remote host:
 
 ```text
 URL:           https://boxes.example.com/mcp
 Transport:     Streamable HTTP
-Authorization: Bearer <COMPUTER_SERVER_TOKEN>
+Authorization: Bearer <HOLM_SERVER_TOKEN>
 ```
 
-Put TLS in front of `computerd` and forward WebSocket upgrades when an MCP Apps host must render the live screen. `COMPUTER_PUBLIC_URL` sets the public origin when a reverse proxy hides it.
+Put TLS in front of `holmd` and forward WebSocket upgrades when an MCP Apps host must render the live screen. `HOLM_PUBLIC_URL` sets the public origin when a reverse proxy hides it.
 
-An MCP Apps host can render `ui://computer/screen.html` beside `launch_box`, `open_screen`, and `hand_over`. The page receives a short-lived screen ticket under `_meta`; the model does not receive it.
+An MCP Apps host can render `ui://holm/screen.html` beside `launch_box`, `open_screen`, and `hand_over`. The page receives a short-lived screen ticket under `_meta`; the model does not receive it.
 
-See the [MCP guide](crates/computer-mcp/README.md).
+See the [MCP guide](crates/holm-mcp/README.md).
 
 ## Runtimes
 
@@ -1623,7 +1622,7 @@ Other hypervisors can implement `MicroVmApi`.
 The included E2B integration runs the desktop away from the local host. Build with the E2B HTTP client and set its API key:
 
 ```toml
-computer = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
+holm = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
 ```
 
 ```bash
@@ -1635,8 +1634,8 @@ E2B uses templates instead of local container images, and this crate builds one 
 To build one by hand instead — for a template you want to keep, or to see what the builder is given — write the context out and use their CLI:
 
 ```bash
-python3 crates/computer-core/images/context.py \
-  crates/computer-core/images/desktop \
+python3 crates/holm-core/images/context.py \
+  crates/holm-core/images/desktop \
   /tmp/e2b-ctx \
   --for e2b
 
@@ -1663,14 +1662,14 @@ cargo run --features e2b --example e2b_takeover -- <template-id> "search text"
 
 The viewer URL is withheld by default. A machine configured with `public_viewer(true)` is internet-reachable and must use `Auth::Password` or `Auth::Token`; launch is refused without that gate.
 
-E2B sandboxes are created with public traffic off by default, so every port refuses a request without the traffic token that E2B issues for the sandbox. A browser cannot send that token, so such a box gives no direct viewer or takeover URL: watch it and take it over through `computerd`, which carries the token. `public_traffic(true)` on the machine, or `--field public_traffic=true` on `computer runtime add`, opens the ports, and the viewer and takeover URLs come back. Every port is then reachable by anyone with the sandbox ID: the viewer keeps its own token and the DevTools bridge its secret, but Chromium's own port 9222 is protected only by its refusal of any host name other than an IP address or `localhost`.
+E2B sandboxes are created with public traffic off by default, so every port refuses a request without the traffic token that E2B issues for the sandbox. A browser cannot send that token, so such a box gives no direct viewer or takeover URL: watch it and take it over through `holmd`, which carries the token. `public_traffic(true)` on the machine, or `--field public_traffic=true` on `holm runtime add`, opens the ports, and the viewer and takeover URLs come back. Every port is then reachable by anyone with the sandbox ID: the viewer keeps its own token and the DevTools bridge its secret, but Chromium's own port 9222 is protected only by its refusal of any host name other than an IP address or `localhost`.
 
 Page tools reach Chrome DevTools at the vendor's address for port 9223. A bridge in the box answers only requests that carry a secret made for that box. A template built from an older image does not have the bridge, so build it again.
 
 The included Vercel Sandbox integration works the same way from the library. Build with the `vercel` feature and set the token, team, and project:
 
 ```toml
-computer = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["vercel"] }
+holm = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["vercel"] }
 ```
 
 ```bash
@@ -1698,7 +1697,7 @@ let computer = Computer::builder()
 CLI:
 
 ```bash
-BOX=$(computer new --wayland)
+BOX=$(holm new --wayland)
 ```
 
 The public desktop API is the same for both profiles.
@@ -1773,14 +1772,14 @@ Run the local reference adapter before you connect an external API:
 cargo run --example custom_sandbox
 ```
 
-See [examples/custom_sandbox.rs](examples/custom_sandbox.rs) for a complete adapter and `computer::testing::ScriptedRemote` for tests without an account or network.
+See [examples/custom_sandbox.rs](examples/custom_sandbox.rs) for a complete adapter and `holm::testing::ScriptedRemote` for tests without an account or network.
 
 ### Audit a desktop
 
 `DesktopSupport` states what a profile provides. `audit` tests those claims against a running desktop:
 
 ```rust
-let audit = computer::audit(&computer).await;
+let audit = holm::audit(&computer).await;
 assert!(audit.ok());
 ```
 
@@ -1789,7 +1788,7 @@ The audit checks the screen, pointer, DevTools connection, clipboard, viewer, an
 ### Clean up expired desktops
 
 ```rust
-let removed = computer::sweep_expired(
+let removed = holm::sweep_expired(
     &EngineMachine::default(),
     SystemTime::now(),
 )
@@ -1799,10 +1798,10 @@ let removed = computer::sweep_expired(
 CLI:
 
 ```bash
-computer sweep
+holm sweep
 ```
 
-`computer sweep` checks the local default Docker runtime, even when a remote server is configured. `computerd` reaps fleet boxes on its own cadence. Use deadlines for services that can stop before normal shutdown.
+`holm sweep` checks the local default Docker runtime, even when a remote server is configured. `holmd` reaps fleet boxes on its own cadence. Use deadlines for services that can stop before normal shutdown.
 
 ## What is inside the box
 
@@ -1823,7 +1822,7 @@ The image tag contains a hash of its source files. A source change creates a new
 
 The local viewer is open by default and is published only on loopback. Anyone who can reach a control port can drive the desktop.
 
-`computerd` also refuses a non-loopback bind without a server token of at least 16 characters. `/v1/health` remains open for health checks.
+`holmd` also refuses a non-loopback bind without a server token of at least 16 characters. `/v1/health` remains open for health checks.
 
 Publishing outside loopback requires authentication:
 
@@ -1840,7 +1839,7 @@ let computer = Computer::builder()
 
 Watch and control viewers use separate credentials. Changing the port on a watch URL does not create control access.
 
-The box's raw Chrome DevTools port stays on loopback because CDP has no authentication. Use `computer cdp` to mint a short-lived address through the authenticated server. Treat that address as a credential.
+The box's raw Chrome DevTools port stays on loopback because CDP has no authentication. Use `holm cdp` to mint a short-lived address through the authenticated server. Treat that address as a credential.
 
 `network(false)` blocks network access from the desktop. It does not protect the viewer.
 
@@ -1877,26 +1876,26 @@ The repository also includes:
 - [vercel](examples/vercel.rs) runs in a Vercel sandbox.
 - [daytona](examples/daytona.rs) runs in a Daytona sandbox.
 - [modal](examples/modal.rs) runs in a Modal sandbox.
-- [client drive](crates/computer-client/examples/drive.rs) exercises the REST client end to end.
+- [client drive](crates/holm-client/examples/drive.rs) exercises the REST client end to end.
 
 Run an example with Cargo:
 
 ```bash
 cargo run --example quickstart
-cargo run -p computer-client --example drive
+cargo run -p holm-client --example drive
 ```
 
 ## Workspace crates
 
-- [`computer`](Cargo.toml) is the root package. It re-exports the Rust desktop API and, by default, builds `computer` and `computerd`.
-- [`computer-core`](crates/computer-core) implements boxes, desktops, profiles, display drivers, images, and runtime adapters.
-- [`computer-types`](crates/computer-types) holds portable specifications and shared values.
-- [`computer-api`](crates/computer-api) defines REST wire types.
-- [`computer-client`](crates/computer-client) is the Rust REST client.
-- [`computer-server`](crates/computer-server) implements `computerd`.
-- [`computer-cli`](crates/computer-cli) implements the commands.
-- [`computer-mcp`](crates/computer-mcp) maps MCP tools and the live screen app to REST.
-- [`computer-storage`](crates/computer-storage) provides memory, local, SQLite, PostgreSQL, and S3 storage.
+- [`holm`](Cargo.toml) is the root package. It re-exports the Rust desktop API and, by default, builds `holm` and `holmd`.
+- [`holm-core`](crates/holm-core) implements boxes, desktops, profiles, display drivers, images, and runtime adapters.
+- [`holm-types`](crates/holm-types) holds portable specifications and shared values.
+- [`holm-api`](crates/holm-api) defines REST wire types.
+- [`holm-client`](crates/holm-client) is the Rust REST client.
+- [`holm-server`](crates/holm-server) implements `holmd`.
+- [`holm-cli`](crates/holm-cli) implements the commands.
+- [`holm-mcp`](crates/holm-mcp) maps MCP tools and the live screen app to REST.
+- [`holm-storage`](crates/holm-storage) provides memory, local, SQLite, PostgreSQL, and S3 storage.
 
 ## Development and testing
 
@@ -1914,14 +1913,14 @@ cargo deny check
 Also check optional backends and code that is not compiled by the normal workspace commands:
 
 ```bash
-cargo clippy -p computer --no-default-features -- -D warnings
-cargo test -p computer-storage --features sqlite,postgres,s3
-cargo test -p computer-server --features sqlite,s3
-cargo clippy -p computer-core --features microsandbox --all-targets -- -D warnings
+cargo clippy -p holm --no-default-features -- -D warnings
+cargo test -p holm-storage --features sqlite,postgres,s3
+cargo test -p holm-server --features sqlite,s3
+cargo clippy -p holm-core --features microsandbox --all-targets -- -D warnings
 python3 scripts/check-page-scripts.py
-crates/computer-mcp/ui/build.sh
-git diff --exit-code -- crates/computer-mcp/ui/screen.html
-for script in crates/computer-core/images/*/*.sh; do bash -n "$script"; done
+crates/holm-mcp/ui/build.sh
+git diff --exit-code -- crates/holm-mcp/ui/screen.html
+for script in crates/holm-core/images/*/*.sh; do bash -n "$script"; done
 ```
 
 The normal test suite does not need a container runtime. Live tests are ignored by default:
@@ -1937,7 +1936,7 @@ cargo test --test live_wayland -- --ignored --nocapture
 cargo test --features e2b --test live_e2b -- --ignored --nocapture
 ```
 
-`computer::testing` provides test doubles for screens, container runtimes, hypervisors, and remote sandboxes.
+`holm::testing` provides test doubles for screens, container runtimes, hypervisors, and remote sandboxes.
 
 ## License
 

@@ -4,7 +4,7 @@ The repository has Rust examples in `examples/` and two larger demos in `demos/`
 
 All examples need a container runtime, such as Docker, unless the table says otherwise. The first box builds the image, which takes a few minutes.
 
-Some examples take the name of a box that is already running. Start one with `cargo run --example serve`, or use a box ID from `computer ls`.
+Some examples take the name of a box that is already running. Start one with `cargo run --example serve`, or use a box ID from `holm ls`.
 
 ## Getting started
 
@@ -17,7 +17,7 @@ Some examples take the name of a box that is already running. Start one with `ca
 | `live_desktop` | Launch a box and check that its screen size and screenshots match what the box reports. | `cargo run --example live_desktop` | Nothing more |
 | `from_spec` | Launch a box from a spec file. | `cargo run --example from_spec -- examples/box.json` | Nothing more |
 
-`examples/box.json` is a sample spec and placement for `from_spec` and for `computer new --spec`.
+`examples/box.json` is a sample spec and placement for `from_spec` and for `holm new --spec`.
 
 ## Browser
 
@@ -28,7 +28,7 @@ Some examples take the name of a box that is already running. Start one with `ca
 | `waiting` | Page waits: an element that arrives late, an element that never comes, and a hover menu. | `cargo run --example waiting -- <box>` | A running box, and a page at `/tmp/wait.html` in the box |
 | `research` | Search the web for a subject and read the result pages. | `cargo run --example research -- <box> "a subject"` | A running box with network access |
 
-`elements` and `waiting` open fixture pages that the examples do not write. Put your own pages at those paths with `computer file "$BOX" put`.
+`elements` and `waiting` open fixture pages that the examples do not write. Put your own pages at those paths with `holm file "$BOX" put`.
 
 ## Desktop
 

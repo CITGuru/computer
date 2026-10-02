@@ -12,7 +12,7 @@ For how remote runtimes compare with host runtimes, see [Runtimes](../concepts/r
 | Windows, applications, and native widgets | Browser profiles (`--profile`) |
 | Files, commands, and clipboard | |
 | Applications and packages at launch (`--app`), and applications installed into a running box | |
-| Page tools and `computer cdp`, also after a server restart | More than 6 screens |
+| Page tools and `holm cdp`, also after a server restart | More than 6 screens |
 | Viewer and takeover URLs in a browser | |
 | CPUs and memory for each box | |
 | Network policy (`--no-network`) | |
@@ -31,7 +31,7 @@ If the token cannot read the team, also set `VERCEL_TEAM_SLUG` to the team's slu
 
 Keep the token out of shell history and out of files that go into git.
 
-Release builds of `computer` and `computerd` include Vercel. For a source build, add the `vercel` feature:
+Release builds of `holm` and `holmd` include Vercel. For a source build, add the `vercel` feature:
 
 ```bash
 cargo install --path . --locked --features vercel
@@ -45,25 +45,25 @@ There are two ways. Use one.
 
 ```bash
 VERCEL_TOKEN=... VERCEL_TEAM_ID=... VERCEL_PROJECT_ID=... \
-COMPUTER_SERVER_SANDBOXES=vercel computerd
+HOLM_SERVER_SANDBOXES=vercel holmd
 ```
 
 **At run time, with the CLI.** You choose the name. The server keeps the runtime in its store:
 
 ```bash
-computer runtime add cloud --provider vercel \
+holm runtime add cloud --provider vercel \
   --field project_id=prj_... \
   --field team_id=team_... \
   --api-key-env VERCEL_TOKEN
-computer runtime ls
+holm runtime ls
 ```
 
-The token goes in as the runtime's `api_key`. To keep it, the server needs `COMPUTER_SERVER_SECRET_KEY` or `COMPUTER_SERVER_SECRET_FILE`. Add `--field team_slug=...` when the token cannot read the team.
+The token goes in as the runtime's `api_key`. To keep it, the server needs `HOLM_SERVER_SECRET_KEY` or `HOLM_SERVER_SECRET_FILE`. Add `--field team_slug=...` when the token cannot read the team.
 
 ## 3. Create a box
 
 ```bash
-BOX=$(computer new --runtime vercel)
+BOX=$(holm new --runtime vercel)
 ```
 
 MCP: `launch_box` with `runtime: "vercel"`. REST: `"placement": {"runtime": "vercel"}`.
@@ -103,7 +103,7 @@ To push an image yourself:
 ```bash
 docker buildx build --platform linux/amd64 \
   -t vcr.vercel.com/<team-slug>/<project>/computer-desktop:mine --push \
-  crates/computer-core/images/desktop
+  crates/holm-core/images/desktop
 ```
 
 `docker login vcr.vercel.com` fails, because the registry answers 404 to Docker's first check. Put the login in Docker's credential store instead. The user name is the team ID, and the password is the token.
@@ -145,9 +145,9 @@ A box is not persistent by default: when its session ends, Vercel discards its f
 Create a box with `--persistent` (`"persistent": true` in the placement) to keep them:
 
 ```bash
-BOX=$(computer new --runtime vercel --persistent)
-computer stop "$BOX"
-computer resume "$BOX"
+BOX=$(holm new --runtime vercel --persistent)
+holm stop "$BOX"
+holm resume "$BOX"
 ```
 
 - A stop takes a snapshot of the files. Vercel bills for snapshot storage. The server keeps only the latest snapshot of a box.
@@ -159,7 +159,7 @@ computer resume "$BOX"
 
 ## Restart
 
-Vercel allows at most 5 tags for each sandbox, with values of at most 256 characters. The server's record of a box is longer. So the box name goes in a tag, and all labels go in `/tmp/computer-labels.json` in the box. When `computerd` restarts, it reads that file to take the box back.
+Vercel allows at most 5 tags for each sandbox, with values of at most 256 characters. The server's record of a box is longer. So the box name goes in a tag, and all labels go in `/tmp/computer-labels.json` in the box. When `holmd` restarts, it reads that file to take the box back.
 
 Each sandbox is created as not persistent. A stop removes it, and Vercel keeps no snapshot.
 
@@ -168,8 +168,8 @@ Each sandbox is created as not persistent. A stop removes it, and Vercel keeps n
 The library uses Vercel with no server. Build with the `vercel` feature, and set the variables from step 1.
 
 ```rust
-use computer::sandboxes::{remote, vercel::cloud::Cloud};
-use computer::{Auth, Computer, X11Profile};
+use holm::sandboxes::{remote, vercel::cloud::Cloud};
+use holm::{Auth, Computer, X11Profile};
 
 let (machine, profile) = remote::pair(Arc::new(Cloud::from_env()?), Arc::new(X11Profile));
 

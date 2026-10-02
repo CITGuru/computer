@@ -1,0 +1,2377 @@
+use super::{ImageSource, Profile, Recording};
+use crate::image;
+use crate::machine::MachineHost;
+use crate::{
+    Address, DesktopFactory, DesktopSupport, Error, ExecResult, Point, PortLayout, Result,
+    ScreenAction, ScreenId, Secret, Viewers,
+};
+use async_trait::async_trait;
+pub use holm_types::{Arrange, Window};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+pub trait ScreenCommands: Send + Sync {
+    fn command(&self, action: ScreenAction, screen: ScreenId, extra: &[String]) -> Vec<String>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandScreen {
+    prefix: Vec<String>,
+}
+
+impl CommandScreen {
+    pub fn new(program: impl Into<String>) -> Self {
+        Self {
+            prefix: vec![program.into()],
+        }
+    }
+
+    pub fn with_args<I, S>(program: impl Into<String>, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut prefix = vec![program.into()];
+        prefix.extend(args.into_iter().map(Into::into));
+        Self { prefix }
+    }
+
+    pub fn prefix(&self) -> &[String] {
+        &self.prefix
+    }
+}
+
+impl ScreenCommands for CommandScreen {
+    fn command(&self, action: ScreenAction, screen: ScreenId, extra: &[String]) -> Vec<String> {
+        let mut command = self.prefix.clone();
+        command.push(action.verb().to_string());
+        command.push(screen.0.to_string());
+        command.extend_from_slice(extra);
+        command
+    }
+}
+
+#[async_trait]
+pub trait BrowserRuntime: Send + Sync {
+    async fn open(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        url: &str,
+    ) -> Result<()>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommandBrowserRuntime;
+
+#[async_trait]
+impl BrowserRuntime for CommandBrowserRuntime {
+    async fn open(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        url: &str,
+    ) -> Result<()> {
+        let result = host.exec(&profile.open_command(screen, url)).await?;
+        match result.code {
+            0 => Ok(()),
+            code => Err(Error::Failed {
+                code,
+                stderr: result.stderr_utf8().trim().to_string(),
+            }),
+        }
+    }
+}
+
+#[async_trait]
+pub trait WallpaperRuntime: Send + Sync {
+    async fn set(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        path: &Path,
+    ) -> Result<()>;
+
+    fn supported(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandWallpaperRuntime {
+    prefix: Vec<String>,
+}
+
+impl CommandWallpaperRuntime {
+    pub fn new(program: impl Into<String>) -> Self {
+        Self {
+            prefix: vec![program.into()],
+        }
+    }
+
+    pub fn with_args<I, S>(program: impl Into<String>, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut prefix = vec![program.into()];
+        prefix.extend(args.into_iter().map(Into::into));
+        Self { prefix }
+    }
+}
+
+#[async_trait]
+impl WallpaperRuntime for CommandWallpaperRuntime {
+    async fn set(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        path: &Path,
+    ) -> Result<()> {
+        let mut command = self.prefix.clone();
+        command.push(path.display().to_string());
+        let result = host
+            .run_within(&command, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        CommandScreenRuntime::succeeded(result)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct X11WallpaperRuntime;
+
+#[async_trait]
+impl WallpaperRuntime for X11WallpaperRuntime {
+    async fn set(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        path: &Path,
+    ) -> Result<()> {
+        CommandWallpaperRuntime::with_args("hsetroot", ["-fill"])
+            .set(host, profile, screen, path)
+            .await
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WaylandWallpaperRuntime;
+
+#[async_trait]
+impl WallpaperRuntime for WaylandWallpaperRuntime {
+    async fn set(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        path: &Path,
+    ) -> Result<()> {
+        let sockfile = format!("/tmp/computer/screen-{}.sway", screen.0);
+        let socket = host
+            .machine()
+            .read_file(host.name(), Path::new(&sockfile))
+            .await?;
+        let socket = String::from_utf8(socket)
+            .map_err(|_| Error::denied(format!("{sockfile} is not text")))?;
+        let socket = socket.trim();
+        if socket.is_empty() {
+            return Err(Error::Gone(format!("no compositor on {screen}")));
+        }
+
+        let command = vec![
+            "swaymsg".to_string(),
+            "-s".to_string(),
+            socket.to_string(),
+            "output".to_string(),
+            "HEADLESS-1".to_string(),
+            "bg".to_string(),
+            path.display().to_string(),
+            "fill".to_string(),
+        ];
+        let result = host
+            .run_within(&command, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        CommandScreenRuntime::succeeded(result)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnsupportedWallpaperRuntime;
+
+#[async_trait]
+impl WallpaperRuntime for UnsupportedWallpaperRuntime {
+    async fn set(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _path: &Path,
+    ) -> Result<()> {
+        self.supported()
+    }
+
+    fn supported(&self) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["wallpaper"],
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub command: Vec<String>,
+    pub class: String,
+    /// How long the window has to hold still before it counts as drawn.
+    pub settle: Duration,
+    pub within: Duration,
+}
+
+#[async_trait]
+pub trait AppRuntime: Send + Sync {
+    async fn launch(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        launch: &Launch,
+    ) -> Result<Window>;
+
+    async fn windows(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Vec<Window>>;
+
+    async fn focus(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()>;
+
+    async fn close(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()>;
+
+    /// The window as it ended up: a window manager may clamp a move or a resize.
+    async fn arrange(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+        how: Arrange,
+    ) -> Result<Window>;
+
+    async fn active(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Option<Window>>;
+
+    /// Waits for the window to stop moving, not drawing: a blinking caret never stops.
+    async fn wait_for_window(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        class: &str,
+        settle: Duration,
+        within: Duration,
+    ) -> Result<Window>;
+
+    fn supported(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UnsupportedAppRuntime;
+
+#[async_trait]
+impl AppRuntime for UnsupportedAppRuntime {
+    async fn launch(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _launch: &Launch,
+    ) -> Result<Window> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn windows(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+    ) -> Result<Vec<Window>> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn focus(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _window: &str,
+    ) -> Result<()> {
+        self.supported()
+    }
+
+    async fn close(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _window: &str,
+    ) -> Result<()> {
+        self.supported()
+    }
+
+    async fn arrange(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _window: &str,
+        _how: Arrange,
+    ) -> Result<Window> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn active(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+    ) -> Result<Option<Window>> {
+        Err(self.supported().unwrap_err())
+    }
+
+    async fn wait_for_window(
+        &self,
+        _host: &MachineHost,
+        _profile: &dyn Profile,
+        _screen: ScreenId,
+        _class: &str,
+        _settle: Duration,
+        _within: Duration,
+    ) -> Result<Window> {
+        Err(self.supported().unwrap_err())
+    }
+
+    fn supported(&self) -> Result<()> {
+        Err(Error::Unsupported { gaps: vec!["apps"] })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct X11AppRuntime;
+
+impl X11AppRuntime {
+    const DRAWN: &'static str =
+        r#"$(import -window $id png:- 2>/dev/null | cksum | cut -d' ' -f1)"#;
+
+    /// A caret blinking in a dialog never lets its picture hold still.
+    const PLACED: &'static str =
+        r#"$(xdotool getwindowgeometry --shell $id 2>/dev/null | tr '\n' ' ')"#;
+
+    /// Polls inside the box to avoid an exec per probe. An untyped window counts
+    /// as ordinary: `xterm` sets no type.
+    fn wait_for(class: &str, settle: Duration, within: Duration, sample: &str) -> Vec<String> {
+        let settle_ms = settle.as_millis();
+        let within_ms = within.as_millis();
+        let window = x11_window("exit 0");
+
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                r#"end=$(( $(date +%s%N) / 1000000 + {within_ms} )); last=""; since=0
+while [ $(( $(date +%s%N) / 1000000 )) -lt $end ]; do
+  id=""
+  for w in $(xdotool search --onlyvisible --class {class} 2>/dev/null); do
+    t=$(xprop -id $w _NET_WM_WINDOW_TYPE 2>/dev/null)
+    case "$t" in *_NET_WM_WINDOW_TYPE_NORMAL*) ;; *_NET_WM_WINDOW_TYPE_*) continue ;; esac
+    id=$w; break
+  done
+  now=$(( $(date +%s%N) / 1000000 ))
+  if [ -n "$id" ]; then
+    h={sample}
+    if [ "$h" = "$last" ] && [ -n "$h" ]; then
+      [ $since -eq 0 ] && since=$now
+      if [ $(( now - since )) -ge {settle_ms} ]; then
+        w=$id
+        line=$({window})
+        [ -n "$line" ] || continue
+        printf 'drawn\t%s\n' "$line"
+        exit 0
+      fi
+    else
+      last="$h"; since=0
+    fi
+  fi
+  sleep 0.1
+done
+echo waited"#
+            ),
+        ]
+    }
+
+    /// The sleep lets fluxbox apply the change before the geometry is read back.
+    fn arranging(window: &str, how: Arrange) -> Vec<String> {
+        // wmctrl for the states: the xdotool in these images has no `windowstate`.
+        const SPREAD: &str = "wmctrl -i -r $w -b add,maximized_vert,maximized_horz";
+        const GATHER: &str = "wmctrl -i -r $w -b remove,maximized_vert,maximized_horz";
+
+        let verbs: Vec<String> = match how {
+            // A maximised window ignores a move or a resize.
+            Arrange::At { to } => vec![
+                GATHER.to_string(),
+                format!("xdotool windowmove $w {} {}", to.x, to.y),
+            ],
+            Arrange::Size { width, height } => vec![
+                GATHER.to_string(),
+                format!("xdotool windowsize $w {width} {height}"),
+            ],
+            Arrange::Maximise => vec![SPREAD.to_string()],
+            Arrange::Minimise => vec!["xdotool windowminimize $w".to_string()],
+            // Mapping, not activating, so keyboard focus stays where it is.
+            Arrange::Restore => vec!["xdotool windowmap $w".to_string(), GATHER.to_string()],
+        };
+
+        let script: Vec<String> = verbs
+            .iter()
+            .map(|verb| format!("{verb} 2>/dev/null"))
+            .collect();
+
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "w={}\n{}\nsleep 0.15\n{}",
+                shell_word(window),
+                script.join("\n"),
+                x11_window(NO_WINDOW)
+            ),
+        ]
+    }
+
+    fn focused() -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                "w=$(xdotool getactivewindow 2>/dev/null) || exit 0\n{}",
+                x11_window("exit 0")
+            ),
+        ]
+    }
+}
+
+#[async_trait]
+impl AppRuntime for X11AppRuntime {
+    async fn launch(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        launch: &Launch,
+    ) -> Result<Window> {
+        let Launch {
+            command,
+            class,
+            settle,
+            within,
+        } = launch;
+        let (settle, within) = (*settle, *within);
+        let env = profile.screen_env(screen);
+
+        let start = start_command(command);
+        let started = host.run_within(&start, &env, host.timeout()).await?;
+
+        if started.code == 127 {
+            return Err(Error::invalid(format!(
+                "{} is not installed in this box: an app has to be named in \
+                 the spec the box was created with",
+                command.first().map(String::as_str).unwrap_or("that app")
+            )));
+        }
+        CommandScreenRuntime::succeeded(started)?;
+
+        let waited = host
+            .run_within(
+                &Self::wait_for(class, settle, within, Self::DRAWN),
+                &env,
+                within + SLACK,
+            )
+            .await?;
+
+        let answer = waited.stdout_utf8();
+        let line = answer.trim().strip_prefix("drawn\t");
+
+        match line.and_then(window_line) {
+            Some(window) => Ok(window),
+            _ => Err(Error::Timeout {
+                after: within,
+                detail: format!(
+                    "{} started, but no window of class {class} settled",
+                    command.first().map(String::as_str).unwrap_or("the app")
+                ),
+            }),
+        }
+    }
+
+    async fn windows(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Vec<Window>> {
+        let argv = vec!["sh".to_string(), "-c".to_string(), x11_windows()];
+        let result = host
+            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        Ok(result
+            .stdout_utf8()
+            .lines()
+            .filter_map(window_line)
+            .collect())
+    }
+
+    async fn focus(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = vec![
+            "xdotool".to_string(),
+            "windowactivate".to_string(),
+            window.to_string(),
+        ];
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+
+    async fn close(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = vec![
+            "xdotool".to_string(),
+            "windowclose".to_string(),
+            window.to_string(),
+        ];
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+
+    async fn arrange(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+        how: Arrange,
+    ) -> Result<Window> {
+        let argv = Self::arranging(window, how);
+        let result = host
+            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        let answer = result.stdout_utf8();
+        CommandScreenRuntime::succeeded(result)?;
+
+        window_line(answer.trim())
+            .ok_or_else(|| Error::invalid(format!("window {window} said nothing back")))
+    }
+
+    async fn active(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Option<Window>> {
+        let result = host
+            .run_within(
+                &Self::focused(),
+                &profile.screen_env(screen),
+                host.timeout(),
+            )
+            .await?;
+
+        Ok(window_line(result.stdout_utf8().trim()))
+    }
+
+    async fn wait_for_window(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        class: &str,
+        settle: Duration,
+        within: Duration,
+    ) -> Result<Window> {
+        let waited = host
+            .run_within(
+                &Self::wait_for(class, settle, within, Self::PLACED),
+                &profile.screen_env(screen),
+                within + SLACK,
+            )
+            .await?;
+
+        let answer = waited.stdout_utf8();
+
+        answer
+            .trim()
+            .strip_prefix("drawn\t")
+            .and_then(window_line)
+            .ok_or_else(|| Error::Timeout {
+                after: within,
+                detail: format!("no window of class {class} came up"),
+            })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WaylandAppRuntime;
+
+impl WaylandAppRuntime {
+    /// Read from the file the image wrote; it cannot be derived from the screen number.
+    fn socket(screen: ScreenId) -> String {
+        format!("\"$(cat /tmp/computer/screen-{}.sway)\"", screen.0)
+    }
+
+    /// No `jq` in the image, and sway has no window type, so the largest match wins.
+    const PICK: &'static str = r#"
+import json,sys
+def walk(n):
+    yield n
+    for k in ('nodes','floating_nodes'):
+        for c in n.get(k) or []:
+            yield from walk(c)
+want=sys.argv[1].lower()
+best=None
+for n in walk(json.load(sys.stdin)):
+    props=n.get('window_properties') or {}
+    if (props.get('window_type') or '').lower()=='splash':
+        continue
+    names={(n.get('app_id') or '').lower(),(props.get('class') or '').lower()}
+    if want not in names or not n.get('id'):
+        continue
+    r=n.get('rect') or {}
+    w,h=r.get('width') or 0,r.get('height') or 0
+    if w<1 or h<1:
+        continue
+    if best is None or w*h>best[0]:
+        cls = n.get('app_id') or props.get('class') or ''
+        best=(w*h,n['id'],r.get('x') or 0,r.get('y') or 0,w,h,cls,n.get('name') or '')
+if best:
+    print('\t'.join(str(f) for f in best[1:]))
+"#;
+
+    const DRAWN: &'static str = r#"$(grim -g "$2,$3 $4x$5" - 2>/dev/null | cksum | cut -d' ' -f1)"#;
+
+    const PLACED: &'static str = r#""$2 $3 $4 $5""#;
+
+    fn wait_for(
+        screen: ScreenId,
+        class: &str,
+        settle: Duration,
+        within: Duration,
+        sample: &str,
+    ) -> Vec<String> {
+        let settle_ms = settle.as_millis();
+        let within_ms = within.as_millis();
+        let socket = Self::socket(screen);
+        let pick = shell_word(Self::PICK);
+        let class = shell_word(class);
+
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!(
+                r#"end=$(( $(date +%s%N) / 1000000 + {within_ms} )); last=""; since=0
+while [ $(( $(date +%s%N) / 1000000 )) -lt $end ]; do
+  found=$(swaymsg -s {socket} -t get_tree 2>/dev/null | python3 -c {pick} {class})
+  now=$(( $(date +%s%N) / 1000000 ))
+  if [ -n "$found" ]; then
+    set -- $found
+    h={sample}
+    if [ "$h" = "$last" ] && [ -n "$h" ]; then
+      [ $since -eq 0 ] && since=$now
+      if [ $(( now - since )) -ge {settle_ms} ]; then
+        printf 'drawn\t%s\n' "$found"
+        exit 0
+      fi
+    else
+      last="$h"; since=0
+    fi
+  fi
+  sleep 0.1
+done
+echo waited"#
+            ),
+        ]
+    }
+
+    /// Containers with no window are skipped, so a workspace is not a window.
+    const NODES: &'static str = r#"
+import json,sys
+def walk(n):
+    yield n
+    for k in ('nodes','floating_nodes'):
+        for c in n.get(k) or []:
+            yield from walk(c)
+want=sys.argv[1]
+for n in walk(json.load(sys.stdin)):
+    props=n.get('window_properties') or {}
+    if not n.get('id') or not (n.get('app_id') or props):
+        continue
+    if want=='focused' and not n.get('focused'):
+        continue
+    if want not in ('all','focused') and str(n['id'])!=want:
+        continue
+    r=n.get('rect') or {}
+    print('\t'.join(str(f) for f in (
+        n['id'], r.get('x') or 0, r.get('y') or 0, r.get('width') or 0, r.get('height') or 0,
+        n.get('app_id') or props.get('class') or '', n.get('name') or '',
+    )))
+    if want!='all':
+        break
+"#;
+
+    fn tell(screen: ScreenId, words: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("swaymsg -s {} {words}", Self::socket(screen)),
+        ]
+    }
+
+    fn reading(screen: ScreenId, want: &str) -> String {
+        format!(
+            "swaymsg -s {} -t get_tree 2>/dev/null | python3 -c {} {}",
+            Self::socket(screen),
+            shell_word(Self::NODES),
+            shell_word(want)
+        )
+    }
+
+    fn read(screen: ScreenId, want: &str) -> Vec<String> {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            Self::reading(screen, want),
+        ]
+    }
+
+    /// A tiled window has no position or size, so a move or resize floats it.
+    fn arranging(screen: ScreenId, window: &str, how: Arrange) -> Vec<String> {
+        let verb: Vec<String> = match how {
+            Arrange::At { to } => vec![format!(
+                "floating enable, move absolute position {} {}",
+                to.x, to.y
+            )],
+            Arrange::Size { width, height } => {
+                vec![format!("floating enable, resize set {width} {height}")]
+            }
+            Arrange::Maximise => vec!["fullscreen enable".to_string()],
+            Arrange::Minimise => vec!["move scratchpad".to_string()],
+            // Only one applies; the other fails quietly.
+            Arrange::Restore => vec![
+                "fullscreen disable".to_string(),
+                "scratchpad show".to_string(),
+            ],
+        };
+
+        let socket = Self::socket(screen);
+        let mut script: Vec<String> = verb
+            .iter()
+            .map(|words| format!("swaymsg -s {socket} '[con_id={window}] {words}' >/dev/null 2>&1"))
+            .collect();
+        script.push(Self::reading(screen, window));
+
+        vec!["sh".to_string(), "-c".to_string(), script.join("\n")]
+    }
+}
+
+#[async_trait]
+impl AppRuntime for WaylandAppRuntime {
+    async fn launch(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        launch: &Launch,
+    ) -> Result<Window> {
+        let Launch {
+            command,
+            class,
+            settle,
+            within,
+        } = launch;
+        let (settle, within) = (*settle, *within);
+        let env = profile.screen_env(screen);
+
+        let started = host
+            .run_within(&start_command(command), &env, host.timeout())
+            .await?;
+
+        if started.code == 127 {
+            return Err(Error::invalid(format!(
+                "{} is not installed in this box: an app has to be named in \
+                 the spec the box was created with",
+                command.first().map(String::as_str).unwrap_or("that app")
+            )));
+        }
+        CommandScreenRuntime::succeeded(started)?;
+
+        let waited = host
+            .run_within(
+                &Self::wait_for(screen, class, settle, within, Self::DRAWN),
+                &env,
+                within + SLACK,
+            )
+            .await?;
+
+        let answer = waited.stdout_utf8();
+        let line = answer.trim().strip_prefix("drawn\t");
+
+        match line.and_then(window_line) {
+            Some(window) => Ok(window),
+            _ => Err(Error::Timeout {
+                after: within,
+                detail: format!(
+                    "{} started, but no window of app id {class} settled",
+                    command.first().map(String::as_str).unwrap_or("the app")
+                ),
+            }),
+        }
+    }
+
+    async fn windows(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Vec<Window>> {
+        let result = host
+            .run_within(
+                &Self::read(screen, "all"),
+                &profile.screen_env(screen),
+                host.timeout(),
+            )
+            .await?;
+
+        Ok(result
+            .stdout_utf8()
+            .lines()
+            .filter_map(window_line)
+            .collect())
+    }
+
+    async fn focus(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = Self::tell(screen, &format!("[con_id={window}] focus"));
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+
+    async fn close(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+    ) -> Result<()> {
+        let argv = Self::tell(screen, &format!("[con_id={window}] kill"));
+
+        CommandScreenRuntime::succeeded(
+            host.run_within(&argv, &profile.screen_env(screen), host.timeout())
+                .await?,
+        )
+    }
+
+    async fn arrange(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        window: &str,
+        how: Arrange,
+    ) -> Result<Window> {
+        let argv = Self::arranging(screen, window, how);
+        let result = host
+            .run_within(&argv, &profile.screen_env(screen), host.timeout())
+            .await?;
+
+        window_line(result.stdout_utf8().trim())
+            .ok_or_else(|| Error::invalid(format!("there is no window {window} on this screen")))
+    }
+
+    async fn active(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Option<Window>> {
+        let result = host
+            .run_within(
+                &Self::read(screen, "focused"),
+                &profile.screen_env(screen),
+                host.timeout(),
+            )
+            .await?;
+
+        Ok(window_line(result.stdout_utf8().trim()))
+    }
+
+    async fn wait_for_window(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        class: &str,
+        settle: Duration,
+        within: Duration,
+    ) -> Result<Window> {
+        let waited = host
+            .run_within(
+                &Self::wait_for(screen, class, settle, within, Self::PLACED),
+                &profile.screen_env(screen),
+                within + SLACK,
+            )
+            .await?;
+
+        let answer = waited.stdout_utf8();
+
+        answer
+            .trim()
+            .strip_prefix("drawn\t")
+            .and_then(window_line)
+            .ok_or_else(|| Error::Timeout {
+                after: within,
+                detail: format!("no window of app id {class} came up"),
+            })
+    }
+}
+
+/// Slack so a slow exec reports the wait, not a transport timeout.
+const SLACK: Duration = Duration::from_secs(5);
+
+/// The title goes last: it is the one field that can hold a tab.
+fn x11_window(missing: &str) -> String {
+    format!(
+        r#"unset X Y WIDTH HEIGHT
+eval "$(xdotool getwindowgeometry --shell $w 2>/dev/null)"
+[ -n "$WIDTH" ] || {missing}
+class=$(xprop -id $w WM_CLASS 2>/dev/null | sed 's/.*, "//; s/"$//')
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  "$w" "$X" "$Y" "$WIDTH" "$HEIGHT" "${{class:-}}" "$(xdotool getwindowname $w 2>/dev/null)""#
+    )
+}
+
+fn x11_windows() -> String {
+    format!(
+        "for w in $(xdotool search --onlyvisible --name . 2>/dev/null); do\n{}\ndone",
+        x11_window("continue")
+    )
+}
+
+const NO_WINDOW: &str = r#"{ echo "there is no window $w on this screen" >&2; exit 1; }"#;
+
+fn window_line(line: &str) -> Option<Window> {
+    let mut fields = line.splitn(7, '\t');
+    let id = fields.next()?.trim();
+    let x = fields.next()?.trim().parse().ok()?;
+    let y = fields.next()?.trim().parse().ok()?;
+    let width = fields.next()?.trim().parse().ok()?;
+    let height = fields.next()?.trim().parse().ok()?;
+    let class = fields.next()?.trim().to_string();
+    let title = fields.next().unwrap_or_default().trim().to_string();
+
+    (!id.is_empty()).then(|| Window {
+        id: id.to_string(),
+        title,
+        class,
+        at: Point::new(x, y),
+        width,
+        height,
+    })
+}
+
+/// Detached, since a GUI program does not exit; hence the `command -v` check first.
+fn start_command(command: &[String]) -> Vec<String> {
+    let words = command
+        .iter()
+        .map(|word| shell_word(word))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "command -v {} >/dev/null 2>&1 || exit 127; setsid {words} >/dev/null 2>&1 </dev/null &",
+            shell_word(command.first().map(String::as_str).unwrap_or(""))
+        ),
+    ]
+}
+
+fn shell_word(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
+#[async_trait]
+pub trait ScreenRuntime: Send + Sync {
+    async fn start(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<()>;
+
+    async fn stop(&self, host: &MachineHost, profile: &dyn Profile, screen: ScreenId)
+    -> Result<()>;
+
+    async fn viewers(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Viewers>;
+
+    async fn control(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        token: &str,
+        shared: bool,
+    ) -> Result<()>;
+
+    async fn release(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        token: &str,
+    ) -> Result<()>;
+
+    async fn reclaim(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<()>;
+
+    /// The recording's path inside the box, or `None` where nothing is recording.
+    async fn record(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        what: Recording,
+        fps: Option<u32>,
+    ) -> Result<Option<String>>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CommandScreenRuntime;
+
+impl CommandScreenRuntime {
+    async fn run(&self, host: &MachineHost, command: Vec<String>) -> Result<ExecResult> {
+        host.exec(&command).await
+    }
+
+    fn succeeded(result: ExecResult) -> Result<()> {
+        match result.code {
+            0 => Ok(()),
+            code => Err(Error::Failed {
+                code,
+                stderr: result.stderr_utf8().trim().to_string(),
+            }),
+        }
+    }
+
+    fn released(result: ExecResult) -> Result<()> {
+        match result.code {
+            0 => Ok(()),
+            3 => Err(Error::denied(
+                "this takeover was replaced; the screen belongs to whoever took it",
+            )),
+            code => Err(Error::Failed {
+                code,
+                stderr: result.stderr_utf8().trim().to_string(),
+            }),
+        }
+    }
+}
+
+#[async_trait]
+impl ScreenRuntime for CommandScreenRuntime {
+    async fn start(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<()> {
+        Self::succeeded(self.run(host, profile.start_command(screen)).await?)
+    }
+
+    async fn stop(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<()> {
+        Self::succeeded(self.run(host, profile.stop_command(screen)).await?)
+    }
+
+    async fn viewers(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<Viewers> {
+        let result = self.run(host, profile.viewers_command(screen)).await?;
+        if result.code != 0 {
+            return Err(Error::Failed {
+                code: result.code,
+                stderr: result.stderr_utf8().trim().to_string(),
+            });
+        }
+
+        Viewers::parse(&result.stdout_utf8())
+            .ok_or_else(|| Error::denied("the viewer count could not be read"))
+    }
+
+    async fn control(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        token: &str,
+        shared: bool,
+    ) -> Result<()> {
+        Self::succeeded(
+            self.run(host, profile.control_command(screen, token, shared))
+                .await?,
+        )
+    }
+
+    async fn release(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        token: &str,
+    ) -> Result<()> {
+        Self::released(
+            self.run(host, profile.release_command(screen, token))
+                .await?,
+        )
+    }
+
+    async fn reclaim(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+    ) -> Result<()> {
+        Self::succeeded(self.run(host, profile.reclaim_command(screen)).await?)
+    }
+
+    async fn record(
+        &self,
+        host: &MachineHost,
+        profile: &dyn Profile,
+        screen: ScreenId,
+        what: Recording,
+        fps: Option<u32>,
+    ) -> Result<Option<String>> {
+        let result = self
+            .run(host, profile.record_command(screen, what, fps))
+            .await?;
+
+        match result.code {
+            0 => {}
+            3 => return Err(Error::denied(result.stderr_utf8().trim().to_string())),
+            // Cannot do at all, as opposed to 3, which refuses right now.
+            4 => return Err(Error::invalid(result.stderr_utf8().trim().to_string())),
+            code => {
+                return Err(Error::Failed {
+                    code,
+                    stderr: result.stderr_utf8().trim().to_string(),
+                });
+            }
+        }
+
+        let said = result.stdout_utf8();
+        let said = said.trim();
+
+        Ok(match said {
+            "idle" | "" => None,
+            said => Some(said.trim_start_matches("recording ").to_string()),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeometrySpec {
+    width_env: String,
+    height_env: String,
+    default: (u32, u32),
+}
+
+impl GeometrySpec {
+    pub fn new(
+        width_env: impl Into<String>,
+        height_env: impl Into<String>,
+        default: (u32, u32),
+    ) -> Self {
+        Self {
+            width_env: width_env.into(),
+            height_env: height_env.into(),
+            default,
+        }
+    }
+
+    pub fn default_size(&self) -> (u32, u32) {
+        self.default
+    }
+
+    pub fn launch_env(&self, width: u32, height: u32) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            (self.width_env.clone(), width.to_string()),
+            (self.height_env.clone(), height.to_string()),
+        ])
+    }
+
+    pub fn from_env(&self, environment: &BTreeMap<String, String>) -> Option<(u32, u32)> {
+        let width = environment.get(&self.width_env)?.parse().ok()?;
+        let height = environment.get(&self.height_env)?.parse().ok()?;
+        Some((width, height))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopContract {
+    name: String,
+    image: ImageSource,
+    ports: PortLayout,
+    screens: CommandScreen,
+    boot: Vec<String>,
+    geometry: GeometrySpec,
+}
+
+impl DesktopContract {
+    pub fn new(
+        name: impl Into<String>,
+        image: ImageSource,
+        ports: PortLayout,
+        screens: CommandScreen,
+        boot: impl IntoIterator<Item = impl Into<String>>,
+        geometry: GeometrySpec,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            image,
+            ports,
+            screens,
+            boot: boot.into_iter().map(Into::into).collect(),
+            geometry,
+        }
+    }
+
+    pub fn standard(name: impl Into<String>, image: ImageSource) -> Self {
+        Self::new(
+            name,
+            image,
+            PortLayout {
+                view_base: image::VIEW_PORT_BASE,
+                vnc_base: image::VNC_PORT_BASE,
+                devtools: Some(image::DEVTOOLS_PORT),
+                devtools_bridge: Some(image::DEVTOOLS_BRIDGE_PORT),
+                max_screens: image::MAX_SCREENS,
+            },
+            CommandScreen::new(image::SCREEN_COMMAND),
+            [image::DESKTOP_COMMAND, "--once"],
+            GeometrySpec::new(
+                image::WIDTH_ENV,
+                image::HEIGHT_ENV,
+                (image::WIDTH, image::HEIGHT),
+            ),
+        )
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn image(&self) -> ImageSource {
+        self.image.clone()
+    }
+
+    pub fn ports(&self) -> PortLayout {
+        self.ports
+    }
+
+    pub fn default_size(&self) -> (u32, u32) {
+        self.geometry.default_size()
+    }
+
+    pub fn screen_command(
+        &self,
+        action: ScreenAction,
+        screen: ScreenId,
+        extra: &[String],
+    ) -> Vec<String> {
+        self.screens.command(action, screen, extra)
+    }
+
+    pub fn boot_command(&self) -> Vec<String> {
+        self.boot.clone()
+    }
+
+    pub fn launch_env(&self, width: u32, height: u32) -> BTreeMap<String, String> {
+        self.geometry.launch_env(width, height)
+    }
+
+    pub fn geometry_from(&self, environment: &BTreeMap<String, String>) -> Option<(u32, u32)> {
+        self.geometry.from_env(environment)
+    }
+}
+
+pub trait ScreenEnvironment: Send + Sync {
+    fn environment(&self, screen: ScreenId) -> BTreeMap<String, String>;
+}
+
+pub trait ViewerUrl: Send + Sync {
+    fn url(&self, at: &Address, ticket: Option<&Secret>) -> String;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct X11Environment;
+
+impl ScreenEnvironment for X11Environment {
+    fn environment(&self, screen: ScreenId) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            (
+                "DISPLAY".to_string(),
+                crate::servers::x11::display_for(screen),
+            ),
+            ("LANG".to_string(), UTF8_LOCALE.to_string()),
+        ])
+    }
+}
+
+pub const UTF8_LOCALE: &str = "C.UTF-8";
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WaylandEnvironment;
+
+impl ScreenEnvironment for WaylandEnvironment {
+    fn environment(&self, screen: ScreenId) -> BTreeMap<String, String> {
+        BTreeMap::from([
+            (
+                "WAYLAND_DISPLAY".to_string(),
+                crate::servers::wayland::DISPLAY_NAME.to_string(),
+            ),
+            (
+                "XDG_RUNTIME_DIR".to_string(),
+                crate::servers::wayland::runtime_dir(screen),
+            ),
+            // For an X11 program under Xwayland, which sway puts on `:0`.
+            ("DISPLAY".to_string(), ":0".to_string()),
+            ("LANG".to_string(), UTF8_LOCALE.to_string()),
+        ])
+    }
+}
+
+#[derive(Clone)]
+pub struct ConfiguredProfile {
+    base: Arc<dyn Profile>,
+    name: Option<String>,
+    image: Option<ImageSource>,
+    driver: Option<Arc<dyn DesktopFactory>>,
+    screens: Option<Arc<dyn ScreenCommands>>,
+    screen_runtime: Option<Arc<dyn ScreenRuntime>>,
+    browser_runtime: Option<Arc<dyn BrowserRuntime>>,
+    wallpaper_runtime: Option<Arc<dyn WallpaperRuntime>>,
+    boot: Option<Vec<String>>,
+    ports: Option<PortLayout>,
+    geometry: Option<GeometrySpec>,
+    screen_environment: Option<Arc<dyn ScreenEnvironment>>,
+    support: Option<DesktopSupport>,
+    viewer: Option<Arc<dyn ViewerUrl>>,
+}
+
+impl ConfiguredProfile {
+    pub fn base(&self) -> &Arc<dyn Profile> {
+        &self.base
+    }
+}
+
+impl std::fmt::Debug for ConfiguredProfile {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ConfiguredProfile")
+            .field("base", &self.base.name())
+            .field("name", &self.name)
+            .field("image", &self.image)
+            .field("driver", &self.driver.as_ref().map(|_| "custom"))
+            .field("screens", &self.screens.as_ref().map(|_| "custom"))
+            .field(
+                "screen_runtime",
+                &self.screen_runtime.as_ref().map(|_| "custom"),
+            )
+            .field(
+                "browser_runtime",
+                &self.browser_runtime.as_ref().map(|_| "custom"),
+            )
+            .field(
+                "wallpaper_runtime",
+                &self.wallpaper_runtime.as_ref().map(|_| "custom"),
+            )
+            .field("boot", &self.boot)
+            .field("ports", &self.ports)
+            .field("geometry", &self.geometry)
+            .field(
+                "screen_environment",
+                &self.screen_environment.as_ref().map(|_| "custom"),
+            )
+            .field("support", &self.support)
+            .field("viewer", &self.viewer.as_ref().map(|_| "custom"))
+            .finish()
+    }
+}
+
+pub struct ProfileBuilder {
+    profile: ConfiguredProfile,
+}
+
+impl ProfileBuilder {
+    pub fn new<P>(base: P) -> Self
+    where
+        P: Profile + 'static,
+    {
+        Self::from_arc(Arc::new(base))
+    }
+
+    pub fn from_arc(base: Arc<dyn Profile>) -> Self {
+        Self {
+            profile: ConfiguredProfile {
+                base,
+                name: None,
+                image: None,
+                driver: None,
+                screens: None,
+                screen_runtime: None,
+                browser_runtime: None,
+                wallpaper_runtime: None,
+                boot: None,
+                ports: None,
+                geometry: None,
+                screen_environment: None,
+                support: None,
+                viewer: None,
+            },
+        }
+    }
+
+    /// A built image must carry the same value in `computer.profile`.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.profile.name = Some(name.into());
+        self
+    }
+
+    pub fn image(mut self, image: ImageSource) -> Self {
+        self.profile.image = Some(image);
+        self
+    }
+
+    /// The `Dockerfile` must carry this profile's name in its `computer.profile` label.
+    pub fn image_dir(self, directory: impl Into<PathBuf>) -> Self {
+        self.image(ImageSource::Directory(directory.into()))
+    }
+
+    pub fn driver<D>(mut self, driver: D) -> Self
+    where
+        D: DesktopFactory + 'static,
+    {
+        self.profile.driver = Some(Arc::new(driver));
+        self
+    }
+
+    pub fn screen_commands<S>(mut self, screens: S) -> Self
+    where
+        S: ScreenCommands + 'static,
+    {
+        self.profile.screens = Some(Arc::new(screens));
+        self
+    }
+
+    pub fn screen_runtime<R>(mut self, runtime: R) -> Self
+    where
+        R: ScreenRuntime + 'static,
+    {
+        self.profile.screen_runtime = Some(Arc::new(runtime));
+        self
+    }
+
+    pub fn browser_runtime<R>(mut self, runtime: R) -> Self
+    where
+        R: BrowserRuntime + 'static,
+    {
+        self.profile.browser_runtime = Some(Arc::new(runtime));
+        self
+    }
+
+    pub fn wallpaper_runtime<R>(mut self, runtime: R) -> Self
+    where
+        R: WallpaperRuntime + 'static,
+    {
+        self.profile.wallpaper_runtime = Some(Arc::new(runtime));
+        self
+    }
+
+    pub fn boot_command<I, S>(mut self, command: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.profile.boot = Some(command.into_iter().map(Into::into).collect());
+        self
+    }
+
+    pub fn ports(mut self, ports: PortLayout) -> Self {
+        self.profile.ports = Some(ports);
+        self
+    }
+
+    pub fn geometry(mut self, geometry: GeometrySpec) -> Self {
+        self.profile.geometry = Some(geometry);
+        self
+    }
+
+    pub fn screen_environment<E>(mut self, environment: E) -> Self
+    where
+        E: ScreenEnvironment + 'static,
+    {
+        self.profile.screen_environment = Some(Arc::new(environment));
+        self
+    }
+
+    /// The display's size is replaced by each request's.
+    pub fn support(mut self, support: DesktopSupport) -> Self {
+        self.profile.support = Some(support);
+        self
+    }
+
+    pub fn viewer_url<V>(mut self, viewer: V) -> Self
+    where
+        V: ViewerUrl + 'static,
+    {
+        self.profile.viewer = Some(Arc::new(viewer));
+        self
+    }
+
+    pub fn build(self) -> ConfiguredProfile {
+        self.profile
+    }
+}
+
+impl Profile for ConfiguredProfile {
+    fn name(&self) -> &str {
+        self.name.as_deref().unwrap_or_else(|| self.base.name())
+    }
+
+    fn server(&self) -> holm_types::DisplayServer {
+        self.base.server()
+    }
+
+    fn image(&self) -> ImageSource {
+        self.image.clone().unwrap_or_else(|| self.base.image())
+    }
+
+    fn ports(&self) -> PortLayout {
+        self.ports.unwrap_or_else(|| self.base.ports())
+    }
+
+    fn default_size(&self) -> (u32, u32) {
+        match &self.geometry {
+            Some(geometry) => geometry.default_size(),
+            None => self.base.default_size(),
+        }
+    }
+
+    fn support_at(&self, width: u32, height: u32) -> DesktopSupport {
+        let Some(support) = &self.support else {
+            return self.base.support_at(width, height);
+        };
+
+        DesktopSupport {
+            display: support.display.map(|display| crate::Display {
+                width,
+                height,
+                ..display
+            }),
+            ..support.clone()
+        }
+    }
+
+    fn driver(&self) -> Arc<dyn DesktopFactory> {
+        self.driver.clone().unwrap_or_else(|| self.base.driver())
+    }
+
+    fn screen_runtime(&self) -> Arc<dyn ScreenRuntime> {
+        self.screen_runtime
+            .clone()
+            .unwrap_or_else(|| self.base.screen_runtime())
+    }
+
+    fn browser_runtime(&self) -> Arc<dyn BrowserRuntime> {
+        self.browser_runtime
+            .clone()
+            .unwrap_or_else(|| self.base.browser_runtime())
+    }
+
+    fn wallpaper_runtime(&self) -> Arc<dyn WallpaperRuntime> {
+        self.wallpaper_runtime
+            .clone()
+            .unwrap_or_else(|| self.base.wallpaper_runtime())
+    }
+
+    fn screen_command(
+        &self,
+        action: ScreenAction,
+        screen: ScreenId,
+        extra: &[String],
+    ) -> Vec<String> {
+        match &self.screens {
+            Some(screens) => screens.command(action, screen, extra),
+            None => self.base.screen_command(action, screen, extra),
+        }
+    }
+
+    fn boot_command(&self) -> Vec<String> {
+        self.boot
+            .clone()
+            .unwrap_or_else(|| self.base.boot_command())
+    }
+
+    fn launch_env(&self, width: u32, height: u32) -> BTreeMap<String, String> {
+        match &self.geometry {
+            Some(geometry) => geometry.launch_env(width, height),
+            None => self.base.launch_env(width, height),
+        }
+    }
+
+    fn screen_env(&self, screen: ScreenId) -> BTreeMap<String, String> {
+        match &self.screen_environment {
+            Some(environment) => environment.environment(screen),
+            None => self.base.screen_env(screen),
+        }
+    }
+
+    fn geometry_from(&self, environment: &BTreeMap<String, String>) -> Option<(u32, u32)> {
+        match &self.geometry {
+            Some(geometry) => geometry.from_env(environment),
+            None => self.base.geometry_from(environment),
+        }
+    }
+
+    fn viewer_url(&self, at: &Address, ticket: Option<&Secret>) -> String {
+        match &self.viewer {
+            Some(viewer) => viewer.url(at, ticket),
+            None => self.base.viewer_url(at, ticket),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_a_window_carries_where_it_is_and_what_it_is() {
+        let window = window_line("25165836\t10\t40\t520\t400\txterm\txterm").expect("a window");
+
+        assert_eq!(window.id, "25165836");
+        assert_eq!(window.class, "xterm");
+        assert_eq!(window.at, Point::new(10, 40));
+        assert_eq!((window.width, window.height), (520, 400));
+    }
+
+    #[test]
+    fn test_a_title_may_hold_anything_and_still_be_the_title() {
+        let window = window_line("7\t0\t0\t100\t50\tMousepad\tnotes\ttabbed.txt - Mousepad")
+            .expect("a window");
+
+        assert_eq!(window.class, "Mousepad");
+        assert_eq!(window.title, "notes\ttabbed.txt - Mousepad");
+    }
+
+    #[test]
+    fn test_a_window_that_went_away_is_skipped_rather_than_guessed_at() {
+        assert!(window_line("25165836\t10").is_none());
+        assert!(window_line("").is_none());
+        assert!(
+            window_line("\t1\t2\t3\t4\tx\ty").is_none(),
+            "an empty id is no window"
+        );
+    }
+
+    #[test]
+    fn test_every_x11_arrangement_names_its_own_verb() {
+        let verb = |how| X11AppRuntime::arranging("42", how).remove(2);
+
+        let placed = verb(Arrange::At {
+            to: Point::new(10, 20),
+        });
+        assert!(placed.contains("windowmove $w 10 20"), "{placed}");
+        assert!(placed.contains("remove,maximized_vert"), "{placed}");
+
+        assert!(
+            verb(Arrange::Size {
+                width: 800,
+                height: 600
+            })
+            .contains("windowsize $w 800 600")
+        );
+        assert!(verb(Arrange::Maximise).contains("add,maximized_vert"));
+        assert!(verb(Arrange::Minimise).contains("windowminimize"));
+        assert!(verb(Arrange::Restore).contains("remove,maximized_vert"));
+    }
+
+    #[test]
+    fn test_an_arrangement_answers_with_the_window_it_left_behind() {
+        let script = X11AppRuntime::arranging("42", Arrange::Maximise).remove(2);
+
+        assert!(script.contains("getwindowgeometry"), "{script}");
+        assert!(script.contains("WM_CLASS"), "{script}");
+    }
+
+    #[test]
+    fn test_a_window_id_reaches_the_shell_as_one_word() {
+        let script = X11AppRuntime::arranging("4 2; rm -rf /", Arrange::Minimise).remove(2);
+
+        assert!(script.contains(r"w='4 2; rm -rf /'"), "{script}");
+    }
+
+    #[test]
+    fn test_a_launch_waits_for_paint_and_a_wait_only_for_a_place() {
+        let painted =
+            X11AppRuntime::wait_for("gimp", SETTLE, SETTLE, X11AppRuntime::DRAWN).remove(2);
+        let placed =
+            X11AppRuntime::wait_for("gimp", SETTLE, SETTLE, X11AppRuntime::PLACED).remove(2);
+
+        assert!(painted.contains("import -window"), "{painted}");
+        assert!(!placed.contains("import -window"), "{placed}");
+        assert!(placed.contains("getwindowgeometry"), "{placed}");
+    }
+
+    #[test]
+    fn test_no_active_window_is_an_answer_rather_than_a_failure() {
+        let script = X11AppRuntime::focused().remove(2);
+
+        assert!(script.contains("getactivewindow"), "{script}");
+        assert!(script.contains("|| exit 0"), "{script}");
+    }
+
+    #[test]
+    fn test_sway_floats_a_window_before_it_is_given_a_place() {
+        let place = WaylandAppRuntime::arranging(
+            ScreenId(0),
+            "7",
+            Arrange::At {
+                to: Point::new(5, 6),
+            },
+        );
+        let script = place.last().expect("a script");
+
+        assert!(script.contains("floating enable, move absolute position 5 6"));
+        assert!(script.contains("[con_id=7]"));
+    }
+
+    #[test]
+    fn test_a_sway_restore_asks_both_ways_back() {
+        let script = WaylandAppRuntime::arranging(ScreenId(0), "7", Arrange::Restore).remove(2);
+
+        assert!(script.contains("fullscreen disable"), "{script}");
+        assert!(script.contains("scratchpad show"), "{script}");
+    }
+
+    #[test]
+    fn test_a_window_with_no_class_is_still_a_window() {
+        let window = window_line("9\t0\t0\t10\t10\t\tsomething").expect("a window");
+
+        assert!(window.class.is_empty());
+        assert_eq!(window.title, "something");
+    }
+
+    use super::*;
+    use crate::testing::{ScriptedEngine, ScriptedProfile};
+
+    const SETTLE: Duration = Duration::from_millis(600);
+
+    use crate::{DisplayServer, WaylandProfile, X11Profile};
+    use std::sync::Mutex;
+
+    #[derive(Clone)]
+    struct RecordingRuntime {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl RecordingRuntime {
+        fn saw(&self, action: &'static str) {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push(action);
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ScreenRuntime for RecordingRuntime {
+        async fn start(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+        ) -> Result<()> {
+            self.saw("start");
+            Ok(())
+        }
+
+        async fn stop(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+        ) -> Result<()> {
+            self.saw("stop");
+            Ok(())
+        }
+
+        async fn viewers(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+        ) -> Result<Viewers> {
+            self.saw("viewers");
+            Ok(Viewers::default())
+        }
+
+        async fn control(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+            _token: &str,
+            _shared: bool,
+        ) -> Result<()> {
+            self.saw("control");
+            Ok(())
+        }
+
+        async fn release(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+            _token: &str,
+        ) -> Result<()> {
+            self.saw("release");
+            Ok(())
+        }
+
+        async fn reclaim(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+        ) -> Result<()> {
+            self.saw("reclaim");
+            Ok(())
+        }
+
+        async fn record(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+            _what: Recording,
+            _fps: Option<u32>,
+        ) -> Result<Option<String>> {
+            self.saw("record");
+            Ok(None)
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingBrowserRuntime {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl BrowserRuntime for RecordingBrowserRuntime {
+        async fn open(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+            _url: &str,
+        ) -> Result<()> {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push("open");
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct RecordingWallpaperRuntime {
+        calls: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl WallpaperRuntime for RecordingWallpaperRuntime {
+        async fn set(
+            &self,
+            _host: &MachineHost,
+            _profile: &dyn Profile,
+            _screen: ScreenId,
+            _path: &Path,
+        ) -> Result<()> {
+            if let Ok(mut calls) = self.calls.lock() {
+                calls.push("wallpaper");
+            }
+            Ok(())
+        }
+    }
+
+    fn host(cli: Arc<ScriptedEngine>) -> MachineHost {
+        let machine: Arc<dyn crate::Machine> =
+            Arc::new(crate::EngineMachine::new(cli as Arc<dyn crate::Engine>));
+        MachineHost::new(machine, Arc::new(ScriptedProfile), "box")
+    }
+
+    #[test]
+    fn test_a_command_screen_keeps_the_shared_protocol_shape() {
+        let screens = CommandScreen::with_args("python3", ["/opt/custom/screen.py"]);
+
+        assert_eq!(
+            screens.command(
+                ScreenAction::Control,
+                ScreenId(2),
+                &["token".to_string(), "shared".to_string()]
+            ),
+            vec![
+                "python3",
+                "/opt/custom/screen.py",
+                "control",
+                "2",
+                "token",
+                "shared"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_the_command_runtime_uses_the_profiles_protocol() {
+        let cli = Arc::new(ScriptedEngine::new().saying("watching=2 driving=1"));
+        let host = host(Arc::clone(&cli));
+
+        let viewers = CommandScreenRuntime
+            .viewers(&host, &ScriptedProfile, ScreenId(2))
+            .await
+            .expect("viewer count");
+
+        assert_eq!((viewers.watching, viewers.driving), (2, 1));
+        assert!(
+            cli.last().is_some_and(|command| command.ends_with(&[
+                "scripted-screen".to_string(),
+                "viewers".to_string(),
+                "2".to_string(),
+            ])),
+            "the adapter must use the custom profile rather than a built-in command"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_the_browser_runtime_uses_the_profiles_protocol() {
+        let cli = Arc::new(ScriptedEngine::new());
+        let host = host(Arc::clone(&cli));
+
+        CommandBrowserRuntime
+            .open(&host, &ScriptedProfile, ScreenId(2), "https://example.com")
+            .await
+            .expect("a page");
+
+        assert!(
+            cli.last().is_some_and(|command| command.ends_with(&[
+                "scripted-screen".to_string(),
+                "open".to_string(),
+                "2".to_string(),
+                "https://example.com".to_string(),
+            ])),
+            "the adapter must use the custom profile rather than a built-in command"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_command_wallpaper_runtime_supports_custom_images() {
+        let cli = Arc::new(ScriptedEngine::new());
+        let host = host(Arc::clone(&cli));
+
+        CommandWallpaperRuntime::new("custom-wallpaper")
+            .set(
+                &host,
+                &ScriptedProfile,
+                ScreenId(2),
+                Path::new("/tmp/custom.image"),
+            )
+            .await
+            .expect("a wallpaper");
+
+        assert!(
+            cli.last().is_some_and(|command| command.ends_with(&[
+                "custom-wallpaper".to_string(),
+                "/tmp/custom.image".to_string(),
+            ])),
+            "the custom image's setter must receive the guest path"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_the_command_runtime_preserves_a_stale_release() {
+        let cli = Arc::new(ScriptedEngine::new().replying(ExecResult {
+            code: 3,
+            ..ExecResult::default()
+        }));
+        let host = host(cli);
+
+        let error = CommandScreenRuntime
+            .release(&host, &ScriptedProfile, ScreenId(0), "old-token")
+            .await
+            .expect_err("the token was replaced");
+
+        assert!(matches!(error, Error::Denied { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_every_desktop_method_reaches_the_driver_through_a_screen() {
+        let cli = Arc::new(ScriptedEngine::new());
+        let computer = crate::Computer::builder()
+            .cli(cli as Arc<dyn crate::Engine>)
+            .wait_for_ready(None)
+            .keep_on_drop(true)
+            .launch()
+            .await
+            .expect("a box");
+
+        let screen = computer.primary();
+        let short = Duration::from_millis(1);
+
+        for (what, outcome) in [
+            (
+                "capture",
+                crate::Desktop::capture(screen, None, Some(50)).await.err(),
+            ),
+            (
+                "click_with",
+                crate::Desktop::click_with(
+                    screen,
+                    Point::new(1, 1),
+                    crate::Button::Left,
+                    &[crate::Held::Shift],
+                )
+                .await
+                .err(),
+            ),
+            (
+                "drag_with",
+                crate::Desktop::drag_with(
+                    screen,
+                    Point::new(1, 1),
+                    Point::new(2, 2),
+                    crate::Button::Left,
+                    &[crate::Held::Shift],
+                )
+                .await
+                .err(),
+            ),
+            (
+                "wait_until_still",
+                crate::Desktop::wait_until_still(screen, short, short)
+                    .await
+                    .err(),
+            ),
+        ] {
+            assert!(
+                !matches!(outcome, Some(Error::Unsupported { .. })),
+                "{what} stopped at the forwarding impl instead of reaching the driver"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_a_profile_runtime_receives_screen_lifecycle_calls() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let profile = ProfileBuilder::new(ScriptedProfile)
+            .screen_runtime(RecordingRuntime {
+                calls: Arc::clone(&calls),
+            })
+            .browser_runtime(RecordingBrowserRuntime {
+                calls: Arc::clone(&calls),
+            })
+            .wallpaper_runtime(RecordingWallpaperRuntime {
+                calls: Arc::clone(&calls),
+            })
+            .build();
+        let cli = Arc::new(ScriptedEngine::new());
+        let computer = crate::Computer::builder()
+            .cli(cli as Arc<dyn crate::Engine>)
+            .profile(Arc::new(profile))
+            .wait_for_ready(None)
+            .keep_on_drop(true)
+            .launch()
+            .await
+            .expect("a box");
+
+        let screen = computer
+            .screen_unfenced(ScreenId(1))
+            .await
+            .expect("a screen");
+        screen
+            .open_url("https://example.com")
+            .await
+            .expect("a page");
+        screen.set_wallpaper(b"image").await.expect("a wallpaper");
+        computer
+            .close_screen(ScreenId(1))
+            .await
+            .expect("screen stopped");
+
+        assert_eq!(
+            calls.lock().map(|calls| calls.clone()).unwrap_or_default(),
+            ["start", "open", "wallpaper", "stop"]
+        );
+    }
+
+    #[test]
+    fn test_geometry_is_written_and_read_by_one_spec() {
+        let geometry = GeometrySpec::new("WIDTH", "HEIGHT", (1280, 800));
+        let environment = geometry.launch_env(1920, 1080);
+
+        assert_eq!(geometry.default_size(), (1280, 800));
+        assert_eq!(geometry.from_env(&environment), Some((1920, 1080)));
+        assert_eq!(
+            geometry.from_env(&BTreeMap::from([("WIDTH".to_string(), "1920".to_string())])),
+            None,
+            "half a size is not a coordinate space"
+        );
+    }
+
+    #[test]
+    fn test_the_builtin_contract_keeps_shared_values_together() {
+        let contract = DesktopContract::standard(
+            "custom",
+            ImageSource::Registry("example/custom:1".to_string()),
+        );
+
+        assert_eq!(contract.name(), "custom");
+        assert_eq!(contract.default_size(), (image::WIDTH, image::HEIGHT));
+        assert_eq!(contract.ports().max_screens, image::MAX_SCREENS);
+        assert_eq!(
+            contract.screen_command(ScreenAction::Start, ScreenId(3), &[]),
+            vec!["computer-screen", "start", "3"]
+        );
+        assert_eq!(contract.boot_command(), vec!["computer-desktop", "--once"]);
+    }
+
+    #[test]
+    fn test_a_profile_override_keeps_the_base_contract() {
+        let profile = ProfileBuilder::new(WaylandProfile)
+            .name("custom-wayland")
+            .image(ImageSource::Registry("example/custom:1".to_string()))
+            .screen_commands(CommandScreen::new("custom-screen"))
+            .boot_command(["custom-desktop", "--once"])
+            .build();
+
+        assert_eq!(profile.name(), "custom-wayland");
+        assert_eq!(
+            profile.image(),
+            ImageSource::Registry("example/custom:1".to_string())
+        );
+        assert_eq!(
+            profile.start_command(ScreenId(1)),
+            vec!["custom-screen", "start", "1"]
+        );
+        assert_eq!(profile.boot_command(), vec!["custom-desktop", "--once"]);
+        assert_eq!(profile.ports(), WaylandProfile.ports());
+        assert_eq!(profile.driver().display_server(), DisplayServer::Wayland);
+        assert_eq!(
+            profile.launch_env(1920, 1080),
+            WaylandProfile.launch_env(1920, 1080)
+        );
+    }
+
+    #[test]
+    fn test_a_profile_carries_the_build_context_it_was_given() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .image_dir("images/ubuntu")
+            .build();
+
+        assert_eq!(
+            profile.image().directory(),
+            Some(Path::new("images/ubuntu")),
+            "a derived profile has to name the image that implements it"
+        );
+        assert!(profile.image().bundle().is_none());
+    }
+
+    #[test]
+    fn test_a_derived_profile_can_name_its_own_driver() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .driver(crate::WaylandDriver)
+            .build();
+
+        assert_eq!(profile.driver().display_server(), DisplayServer::Wayland);
+        assert_eq!(X11Profile.driver().display_server(), DisplayServer::X11);
+    }
+
+    #[test]
+    fn test_a_derived_profile_can_name_its_own_ports() {
+        let ports = PortLayout {
+            view_base: 7000,
+            vnc_base: 7100,
+            devtools: None,
+            devtools_bridge: None,
+            max_screens: 2,
+        };
+        let profile = ProfileBuilder::new(X11Profile).ports(ports).build();
+
+        assert_eq!(profile.ports(), ports);
+        assert_ne!(profile.ports(), X11Profile.ports());
+    }
+
+    #[test]
+    fn test_one_spec_governs_every_way_a_size_is_carried() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .geometry(GeometrySpec::new("W", "H", (640, 480)))
+            .build();
+
+        assert_eq!(profile.default_size(), (640, 480));
+        let launch = profile.launch_env(1024, 768);
+        assert_eq!(launch.get("W").map(String::as_str), Some("1024"));
+        assert_eq!(launch.get("H").map(String::as_str), Some("768"));
+        assert_eq!(profile.geometry_from(&launch), Some((1024, 768)));
+
+        assert_eq!(X11Profile.geometry_from(&launch), None);
+    }
+
+    #[test]
+    fn test_a_derived_profile_can_name_its_own_screen_environment() {
+        let profile = ProfileBuilder::new(X11Profile)
+            .screen_environment(WaylandEnvironment)
+            .build();
+
+        assert_eq!(
+            profile.screen_env(ScreenId(1)),
+            WaylandEnvironment.environment(ScreenId(1))
+        );
+    }
+
+    #[test]
+    fn test_stated_support_takes_the_size_it_is_asked_for() {
+        let mut support = X11Profile.support_at(0, 0);
+        support.browser = None;
+        support.max_screens = 3;
+
+        let profile = ProfileBuilder::new(X11Profile).support(support).build();
+        let at = profile.support_at(1920, 1080);
+
+        assert!(at.browser.is_none());
+        assert_eq!(at.max_screens, 3);
+        assert_eq!(
+            at.display.map(|display| (display.width, display.height)),
+            Some((1920, 1080)),
+            "the size is the request's, not the template's"
+        );
+    }
+
+    #[test]
+    fn test_a_derived_profile_can_serve_its_own_viewer_page() {
+        struct OwnPage;
+        impl ViewerUrl for OwnPage {
+            fn url(&self, at: &Address, _ticket: Option<&Secret>) -> String {
+                format!("https://{}/watch", at.authority())
+            }
+        }
+
+        let profile = ProfileBuilder::new(X11Profile).viewer_url(OwnPage).build();
+        let at = Address {
+            scheme: crate::Scheme::Http,
+            host: "box.example".to_string(),
+            port: 6080,
+        };
+
+        assert_eq!(
+            profile.viewer_url(&at, None),
+            "https://box.example:6080/watch"
+        );
+        assert!(X11Profile.viewer_url(&at, None).contains("vnc.html"));
+    }
+
+    #[test]
+    fn test_an_unmodified_profile_is_only_a_wrapper() {
+        let profile = ProfileBuilder::new(X11Profile).build();
+
+        assert_eq!(profile.name(), X11Profile.name());
+        assert_eq!(profile.image(), X11Profile.image());
+        assert_eq!(profile.ports(), X11Profile.ports());
+        assert_eq!(
+            profile.open_command(ScreenId(0), "https://example.com"),
+            X11Profile.open_command(ScreenId(0), "https://example.com")
+        );
+    }
+}

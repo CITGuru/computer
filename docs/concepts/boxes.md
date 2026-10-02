@@ -13,7 +13,7 @@ The server describes a box with two parts:
 | Spec | The desktop | Screen size, number of screens, applications, packages, features, network policy, viewer access |
 | Placement | Where the box runs, and for how long | Runtime, memory, CPUs, lifetime, idle timeout, browser profile |
 
-They are separate because two desktops that differ only in a memory limit are the same desktop. Each spec has a `spec_digest`, and `computer box` shows it.
+They are separate because two desktops that differ only in a memory limit are the same desktop. Each spec has a `spec_digest`, and `holm box` shows it.
 
 ```json
 {
@@ -25,7 +25,7 @@ They are separate because two desktops that differ only in a memory limit are th
 }
 ```
 
-The CLI flags of `computer new` and the parameters of `launch_box` fill in the same two parts. `computer new --spec box.json` reads a spec from a file. The server refuses unknown keys in a spec.
+The CLI flags of `holm new` and the parameters of `launch_box` fill in the same two parts. `holm new --spec box.json` reads a spec from a file. The server refuses unknown keys in a spec.
 
 ## Screens
 
@@ -57,10 +57,10 @@ Coordinates are device pixels on one screen. `(0, 0)` is the top-left corner.
 
 | Operation | CLI | MCP | Rust |
 | --- | --- | --- | --- |
-| Pause | `computer pause` | `pause_box` | `pause()` |
-| Stop | `computer stop` | `stop_box` | `stop()` |
-| Resume | `computer resume` | `resume_box` | `resume()`, or `start()` after a stop |
-| Remove | `computer rm` | `remove_box` | `shutdown()` |
+| Pause | `holm pause` | `pause_box` | `pause()` |
+| Stop | `holm stop` | `stop_box` | `stop()` |
+| Resume | `holm resume` | `resume_box` | `resume()`, or `start()` after a stop |
+| Remove | `holm rm` | `remove_box` | `shutdown()` |
 
 Use pause when you will come back soon: the desktop comes back as it was. Use stop to release the memory: a resumed box starts a new desktop with nothing open. Remove deletes the files.
 
@@ -78,16 +78,16 @@ Each box has a deadline. A box lives one hour unless it asks for a different tim
 
 The server refuses values under 60 seconds. The clock starts when the server creates the box, not when the box is ready.
 
-`computerd` removes expired boxes every 30 seconds (`COMPUTER_SERVER_REAP_SECS`). It also forgets boxes that the runtime no longer has. The trace records each removal as `gone`, with the reason.
+`holmd` removes expired boxes every 30 seconds (`HOLM_SERVER_REAP_SECS`). It also forgets boxes that the runtime no longer has. The trace records each removal as `gone`, with the reason.
 
 In the Rust library with no server, a box is removed when its `Computer` is dropped, unless you set `keep_on_drop(true)`.
 
 ## History
 
-`computerd` records a trace for each box: actions, frames, commands, lifecycle changes, file transfers, and changes of control between the agent and a person.
+`holmd` records a trace for each box: actions, frames, commands, lifecycle changes, file transfers, and changes of control between the agent and a person.
 
 ```bash
-computer trace "$BOX"
+holm trace "$BOX"
 curl -s "localhost:8080/v1/boxes/$BOX/trace?after=12&limit=100"
 ```
 
@@ -100,8 +100,8 @@ With the default memory store, traces stop when the server stops. Use a durable 
 A fork makes a new box from the same spec, on the same runtime, and does the recorded actions again.
 
 ```bash
-NEW_BOX=$(computer fork "$BOX")
-computer fork "$BOX" --up-to 40
+NEW_BOX=$(holm fork "$BOX")
+holm fork "$BOX" --up-to 40
 ```
 
 A fork does not copy memory or disk. The result can be different from the original, because:
@@ -114,7 +114,7 @@ Actions that the original box refused are also skipped. A fork stops at the firs
 
 ## Restart
 
-A box runs in its runtime, not in the server process. When `computerd` starts, it takes back each box that it recorded. Then it scans each runtime for boxes labeled by an earlier server, so it can also find a box that the store lost. A box that it takes back after a restart starts a new trace, marked `adopted`, unless the store is durable.
+A box runs in its runtime, not in the server process. When `holmd` starts, it takes back each box that it recorded. Then it scans each runtime for boxes labeled by an earlier server, so it can also find a box that the store lost. A box that it takes back after a restart starts a new trace, marked `adopted`, unless the store is durable.
 
 ## What is inside a box
 

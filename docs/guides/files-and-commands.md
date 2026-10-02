@@ -7,8 +7,8 @@ This guide runs commands in a box and moves files and text in and out of it. Com
 A command is an argument list. It does not go through a shell unless you ask for one.
 
 ```bash
-computer exec "$BOX" -- ls -la /tmp
-computer exec "$BOX" -- sh -c 'echo "$HOME" && uname -a'
+holm exec "$BOX" -- ls -la /tmp
+holm exec "$BOX" -- sh -c 'echo "$HOME" && uname -a'
 ```
 
 The CLI prints the command's standard output and standard error, and exits with the command's exit code.
@@ -50,7 +50,7 @@ A command that reaches its limit returns `timed_out: true`. A command can exit w
 Put the packages that your commands need in the box when you create it:
 
 ```bash
-BOX=$(computer new --package jq --package ripgrep)
+BOX=$(holm new --package jq --package ripgrep)
 ```
 
 See [Configure a box](configure-a-box.md#packages).
@@ -65,10 +65,10 @@ See [Configure a box](configure-a-box.md#packages).
 | Read a file | `file <box> get PATH` | `read_file` (UTF-8 only) | `read_file(path)` | `GET /v1/boxes/{id}/files?path=` |
 
 ```bash
-computer file "$BOX" put ./report.pdf
-computer file "$BOX" put ./report.pdf /home/user/report.pdf
-computer file "$BOX" get /tmp/output.csv ./output.csv
-computer file "$BOX" get /etc/hostname
+holm file "$BOX" put ./report.pdf
+holm file "$BOX" put ./report.pdf /home/user/report.pdf
+holm file "$BOX" get /tmp/output.csv ./output.csv
+holm file "$BOX" get /etc/hostname
 ```
 
 - `put` with no path writes to `/tmp/<name>`.
@@ -104,9 +104,9 @@ MCP `write_file` takes `text` and replaces the file. `read_file` refuses a file 
 | Find by name | `file <box> glob PATTERN [DIR]` | `glob` | `glob(pattern, path, limit)` | `GET …/files/glob?pattern=` |
 
 ```bash
-computer file "$BOX" ls /tmp
-computer file "$BOX" grep "error" /var/log --include "*.log" --ignore-case
-computer file "$BOX" glob "*.png" /tmp
+holm file "$BOX" ls /tmp
+holm file "$BOX" grep "error" /var/log --include "*.log" --ignore-case
+holm file "$BOX" glob "*.png" /tmp
 ```
 
 ```rust
@@ -133,9 +133,9 @@ let paths = computer.glob("*.png", "/tmp", None).await?;
 Each screen has a clipboard. Set it to put text into the box with no typing, and read it to get text that an application copied:
 
 ```bash
-computer clip "$BOX" "a long paragraph to paste"
-computer keyboard "$BOX" press ctrl+v
-computer clip "$BOX"
+holm clip "$BOX" "a long paragraph to paste"
+holm keyboard "$BOX" press ctrl+v
+holm clip "$BOX"
 ```
 
 MCP: `clipboard` with `text` to set it, or with no `text` to read it. See [Desktop input](desktop-input.md#clipboard).
@@ -145,11 +145,11 @@ MCP: `clipboard` with `text` to set it, or with no `text` to read it. See [Deskt
 A page's file input opens the operating system's file chooser, which no click can fill. Put the file in the box, then give it to the input directly:
 
 ```bash
-computer file "$BOX" put ./photo.jpg /tmp/photo.jpg
-computer browser "$BOX" upload "Choose file" /tmp/photo.jpg --in-box
+holm file "$BOX" put ./photo.jpg /tmp/photo.jpg
+holm browser "$BOX" upload "Choose file" /tmp/photo.jpg --in-box
 ```
 
-`computer browser upload` can also copy a host file into the box first. With no `--in-box`, the paths are on the host.
+`holm browser upload` can also copy a host file into the box first. With no `--in-box`, the paths are on the host.
 
 MCP: `write_file` (for a text file), then `upload_file` with the paths in the box. REST: `PUT …/files`, then an `upload` element operation.
 
@@ -157,4 +157,4 @@ A page can also print to a PDF in the box with `page_pdf`, and you can then read
 
 ## Record what ran
 
-`computerd` records each command in the box's trace, with its argument list, exit code, and whether it timed out. It records that a file write occurred, but not its bytes. See [Boxes](../concepts/boxes.md#history).
+`holmd` records each command in the box's trace, with its argument list, exit code, and whether it timed out. It records that a file write occurred, but not its bytes. See [Boxes](../concepts/boxes.md#history).

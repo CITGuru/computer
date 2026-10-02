@@ -5,11 +5,11 @@
 //! cargo run --example takeover -- <box-name> release # take a held screen back
 //! ```
 
-use computer::{Button, Computer, Point};
+use holm::{Button, Computer, Point};
 use std::time::Duration;
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let mut args = std::env::args().skip(1);
     let name = args.next();
     let mode = args.next();

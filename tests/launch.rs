@@ -1,5 +1,5 @@
-use computer::testing::{ScriptedDriver, ScriptedEngine, ScriptedProfile};
-use computer::{Bind, Computer, DisplayServer, Error, ExecResult, HolderId, ScreenId, bundle};
+use holm::testing::{ScriptedDriver, ScriptedEngine, ScriptedProfile};
+use holm::{Bind, Computer, DisplayServer, Error, ExecResult, HolderId, ScreenId, bundle};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -39,7 +39,7 @@ async fn a_runtime_that_is_not_answering_is_reported_before_anything_is_created(
     let cli = Arc::new(ScriptedEngine::new().replying(failing("Cannot connect to the daemon")));
 
     let error = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .launch()
         .await
         .expect_err("the daemon is down");
@@ -58,7 +58,7 @@ async fn the_image_is_made_sure_of_before_a_container_is_created() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -84,7 +84,7 @@ async fn a_profile_another_box_holds_is_refused_before_a_container_is_made() {
     );
 
     let error = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .profiles("computer-profile-work")
         .wait_for_ready(None)
         .launch()
@@ -129,7 +129,7 @@ async fn a_profile_nobody_holds_is_mounted() {
     );
 
     Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .profiles("computer-profile-work")
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -150,7 +150,7 @@ async fn a_box_is_asked_to_close_its_browser_before_it_is_removed() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -174,7 +174,7 @@ async fn a_box_is_asked_to_close_its_browser_before_it_is_removed() {
         ],
         "a browser killed outright loses the cookies it has not written to its profile"
     );
-    assert_eq!(calls[removed - 1][4], computer::machine::SETTLE_PROFILE);
+    assert_eq!(calls[removed - 1][4], holm::machine::SETTLE_PROFILE);
 }
 
 #[tokio::test]
@@ -182,7 +182,7 @@ async fn the_ports_the_runtime_mapped_are_the_ones_the_caller_is_handed() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n9223/tcp -> 0.0.0.0:32769\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -206,7 +206,7 @@ async fn devtools_is_read_from_the_bridge_and_not_from_chromiums_own_port() {
     let cli = a_working_runtime("9222/tcp -> 127.0.0.1:32770\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -221,7 +221,7 @@ async fn a_box_with_nothing_published_offers_no_url_rather_than_a_dead_one() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .publish_ports(false)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -241,7 +241,7 @@ async fn the_size_the_box_was_started_at_is_the_size_it_reports() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .size(1920, 1080)
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -264,7 +264,7 @@ async fn a_container_that_will_not_start_is_reported_and_not_half_opened() {
     );
 
     let error = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .launch()
         .await
         .expect_err("it did not start");
@@ -277,7 +277,7 @@ async fn a_container_that_will_not_start_is_reported_and_not_half_opened() {
 async fn attaching_to_a_box_that_is_not_running_says_it_is_gone() {
     let cli = Arc::new(ScriptedEngine::new().replying(saying("false\n")));
 
-    let error = Computer::attach_with(cli as Arc<dyn computer::Engine>, "computer-7")
+    let error = Computer::attach_with(cli as Arc<dyn holm::Engine>, "computer-7")
         .await
         .expect_err("it is not running");
 
@@ -295,7 +295,7 @@ async fn an_attached_box_reports_the_geometry_it_was_started_with() {
             .replying(saying("")),
     );
 
-    let computer = Computer::attach_with(cli as Arc<dyn computer::Engine>, "computer-7")
+    let computer = Computer::attach_with(cli as Arc<dyn holm::Engine>, "computer-7")
         .await
         .expect("it is running");
 
@@ -318,7 +318,7 @@ async fn an_attached_box_is_not_removed_when_the_handle_is_dropped() {
 
     {
         let _computer = Computer::attach_with(
-            Arc::clone(&cli) as Arc<dyn computer::Engine>,
+            Arc::clone(&cli) as Arc<dyn holm::Engine>,
             "somebody-elses-box",
         )
         .await
@@ -336,7 +336,7 @@ async fn an_empty_command_is_refused_rather_than_run() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -355,7 +355,7 @@ async fn shutting_down_removes_the_container_and_its_volumes() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .launch()
         .await
@@ -373,7 +373,7 @@ async fn a_box_given_a_life_records_it_on_itself_and_not_only_in_here() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .expires_after(Duration::from_secs(3600))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -401,7 +401,7 @@ async fn a_box_with_no_life_given_to_it_never_expires() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -416,7 +416,7 @@ async fn a_box_with_no_life_given_to_it_never_expires() {
 async fn a_leased_screen_is_given_back_when_the_handle_is_dropped() {
     let cli = a_working_runtime("");
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -441,7 +441,7 @@ async fn a_leased_screen_is_given_back_when_the_handle_is_dropped() {
 async fn two_holders_cannot_both_have_one_screen() {
     let cli = a_working_runtime("");
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -468,7 +468,7 @@ async fn two_holders_cannot_both_have_one_screen() {
 async fn a_stale_holder_cannot_take_a_screen_back_from_its_replacement() {
     let cli = a_working_runtime("");
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -541,7 +541,7 @@ async fn a_box_whose_life_ran_out_is_asked_for_again_when_the_first_ask_fails() 
     );
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .expires_after(Duration::from_millis(50))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -578,7 +578,7 @@ async fn an_image_built_for_another_contract_is_refused_before_it_starts() {
     );
 
     let error = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .launch()
         .await
@@ -609,7 +609,7 @@ async fn an_image_that_declares_nothing_is_not_refused() {
     );
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -623,7 +623,7 @@ async fn a_box_is_driven_through_x11_unless_it_is_told_otherwise() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -652,8 +652,8 @@ async fn a_swapped_driver_opens_every_screen_and_is_reported_as_the_one_in_use()
     let driver = Arc::new(ScriptedDriver::new());
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
-        .driver(Arc::clone(&driver) as Arc<dyn computer::DesktopFactory>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
+        .driver(Arc::clone(&driver) as Arc<dyn holm::DesktopFactory>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -683,8 +683,8 @@ async fn a_swapped_driver_takes_the_input_and_the_takeover_gate_with_it() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
-        .driver(Arc::new(ScriptedDriver::new()) as Arc<dyn computer::DesktopFactory>)
+        .cli(cli as Arc<dyn holm::Engine>)
+        .driver(Arc::new(ScriptedDriver::new()) as Arc<dyn holm::DesktopFactory>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -692,7 +692,7 @@ async fn a_swapped_driver_takes_the_input_and_the_takeover_gate_with_it() {
         .expect("a box");
 
     computer
-        .double_click((5, 6), computer::Button::Left)
+        .double_click((5, 6), holm::Button::Left)
         .await
         .expect("a double click");
 
@@ -702,10 +702,7 @@ async fn a_swapped_driver_takes_the_input_and_the_takeover_gate_with_it() {
         .hand_over("a person", SystemTime::now());
 
     assert!(
-        computer
-            .click((1, 2), computer::Button::Left)
-            .await
-            .is_err(),
+        computer.click((1, 2), holm::Button::Left).await.is_err(),
         "the gate is on the trait, so it holds for a driver this crate never \
          wrote"
     );
@@ -719,9 +716,9 @@ async fn a_swapped_driver_takes_the_input_and_the_takeover_gate_with_it() {
 async fn sweeping_removes_the_boxes_whose_deadline_has_passed() {
     let listed = "old-box\t1000000000\nyoung-box\t4000000000\n";
     let cli = Arc::new(ScriptedEngine::new().replying(saying(listed)));
-    let machine = computer::EngineMachine::new(cli.clone() as Arc<dyn computer::Engine>);
+    let machine = holm::EngineMachine::new(cli.clone() as Arc<dyn holm::Engine>);
 
-    let swept = computer::sweep_expired(
+    let swept = holm::sweep_expired(
         &machine,
         std::time::UNIX_EPOCH + Duration::from_secs(2_000_000_000),
     )
@@ -741,9 +738,9 @@ async fn sweeping_removes_the_boxes_whose_deadline_has_passed() {
 #[tokio::test]
 async fn a_label_nobody_here_wrote_is_left_alone() {
     let cli = Arc::new(ScriptedEngine::new().replying(saying("odd-box\tsoon\n")));
-    let machine = computer::EngineMachine::new(cli.clone() as Arc<dyn computer::Engine>);
+    let machine = holm::EngineMachine::new(cli.clone() as Arc<dyn holm::Engine>);
 
-    let swept = computer::sweep_expired(&machine, std::time::SystemTime::now())
+    let swept = holm::sweep_expired(&machine, std::time::SystemTime::now())
         .await
         .expect("a sweep");
 
@@ -756,10 +753,10 @@ async fn a_label_nobody_here_wrote_is_left_alone() {
 
 #[tokio::test]
 async fn a_runtime_that_cannot_be_asked_what_it_holds_says_so() {
-    let api = Arc::new(computer::testing::ScriptedMicroVm::new());
-    let machine = computer::MicroVm::new(api as Arc<dyn computer::microvm::MicroVmApi>);
+    let api = Arc::new(holm::testing::ScriptedMicroVm::new());
+    let machine = holm::MicroVm::new(api as Arc<dyn holm::microvm::MicroVmApi>);
 
-    let error = computer::sweep_expired(&machine, std::time::SystemTime::now())
+    let error = holm::sweep_expired(&machine, std::time::SystemTime::now())
         .await
         .expect_err("it cannot look");
 
@@ -779,7 +776,7 @@ async fn a_swapped_profile_supplies_the_image_the_ports_and_the_driver() {
     );
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .profile(Arc::new(ScriptedProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -828,7 +825,7 @@ async fn a_profiles_viewer_url_is_the_one_a_person_is_handed() {
     let cli = a_working_runtime("7100/tcp -> 127.0.0.1:32768\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .profile(Arc::new(ScriptedProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -848,7 +845,7 @@ async fn a_screens_environment_is_the_profiles_and_not_the_runtimes() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .profile(Arc::new(ScriptedProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -912,8 +909,8 @@ async fn a_wayland_box_is_driven_through_the_compositor_and_says_so() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
-        .profile(Arc::new(computer::WaylandProfile))
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
+        .profile(Arc::new(holm::WaylandProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -952,8 +949,8 @@ async fn a_wayland_screen_refuses_a_cursor_it_never_measured() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
-        .profile(Arc::new(computer::WaylandProfile))
+        .cli(cli as Arc<dyn holm::Engine>)
+        .profile(Arc::new(holm::WaylandProfile))
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -969,7 +966,7 @@ async fn a_wayland_screen_refuses_a_cursor_it_never_measured() {
     computer.move_to((640, 400)).await.expect("a move");
     assert_eq!(
         computer.cursor().await.ok(),
-        Some(computer::Point::new(640, 400))
+        Some(holm::Point::new(640, 400))
     );
 
     computer
@@ -989,8 +986,8 @@ async fn a_takeover_token_cannot_be_worked_out_from_the_clock() {
     async fn mint() -> String {
         let cli = a_working_runtime("");
         let computer = Computer::builder()
-            .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
-            .driver(Arc::new(ScriptedDriver::new()) as Arc<dyn computer::DesktopFactory>)
+            .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
+            .driver(Arc::new(ScriptedDriver::new()) as Arc<dyn holm::DesktopFactory>)
             .wait_for_ready(None)
             .keep_on_drop(true)
             .launch()
@@ -1039,7 +1036,7 @@ async fn an_open_viewer_beyond_loopback_is_refused_before_a_box_exists() {
         let cli = a_working_runtime("");
 
         let error = Computer::builder()
-            .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+            .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
             .publish_on(bind.clone())
             .launch()
             .await
@@ -1057,11 +1054,11 @@ async fn an_open_viewer_beyond_loopback_is_refused_before_a_box_exists() {
 
 #[tokio::test]
 async fn a_gated_viewer_beyond_loopback_is_allowed() {
-    for auth in [computer::Auth::Password, computer::Auth::Token] {
+    for auth in [holm::Auth::Password, holm::Auth::Token] {
         let cli = a_working_runtime("");
 
         Computer::builder()
-            .cli(cli as Arc<dyn computer::Engine>)
+            .cli(cli as Arc<dyn holm::Engine>)
             .publish_on(Bind::Any)
             .auth(auth)
             .wait_for_ready(None)
@@ -1077,7 +1074,7 @@ async fn loopback_spelled_out_opens_like_the_default() {
     let cli = a_working_runtime("");
 
     Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .publish_on(Bind::Address("127.0.0.1".parse().unwrap()))
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -1091,7 +1088,7 @@ async fn the_url_a_person_is_handed_names_the_advertised_host() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
+        .cli(cli as Arc<dyn holm::Engine>)
         .advertise("boxes.example.com")
         .wait_for_ready(None)
         .keep_on_drop(true)
@@ -1111,8 +1108,8 @@ async fn a_token_gate_puts_a_different_ticket_on_each_door() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n6081/tcp -> 127.0.0.1:32769\n");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
-        .auth(computer::Auth::Token)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
+        .auth(holm::Auth::Token)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -1143,8 +1140,8 @@ async fn a_password_gate_puts_nothing_in_the_url() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
 
     let computer = Computer::builder()
-        .cli(cli as Arc<dyn computer::Engine>)
-        .auth(computer::Auth::Password)
+        .cli(cli as Arc<dyn holm::Engine>)
+        .auth(holm::Auth::Password)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -1167,8 +1164,8 @@ async fn the_gate_reaches_the_box_as_environment() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
-        .auth(computer::Auth::Token)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
+        .auth(holm::Auth::Token)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -1199,7 +1196,7 @@ async fn an_open_box_carries_no_credential_at_all() {
     let cli = a_working_runtime("");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -1220,7 +1217,7 @@ async fn an_open_box_carries_no_credential_at_all() {
 #[tokio::test]
 async fn a_preview_mints_nothing_it_could_leak() {
     let previewed = Computer::builder()
-        .auth(computer::Auth::Token)
+        .auth(holm::Auth::Token)
         .publish_on(Bind::Any)
         .preview()
         .expect("arguments");
@@ -1239,16 +1236,16 @@ async fn devtools_is_withdrawn_rather_than_published_beyond_loopback() {
     let cli = a_working_runtime("6080/tcp -> 127.0.0.1:32768\n");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .publish_on(Bind::Any)
-        .auth(computer::Auth::Token)
+        .auth(holm::Auth::Token)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
         .await
         .expect("a gated box");
 
-    let bridge = computer::Profile::ports(&computer::X11Profile)
+    let bridge = holm::Profile::ports(&holm::X11Profile)
         .devtools_bridge
         .expect("the built-in image bridges devtools");
 
@@ -1276,7 +1273,7 @@ async fn devtools_survives_on_loopback() {
     let cli = a_working_runtime("9223/tcp -> 127.0.0.1:32769\n");
 
     let computer = Computer::builder()
-        .cli(Arc::clone(&cli) as Arc<dyn computer::Engine>)
+        .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()

@@ -1,0 +1,52 @@
+[package]
+name = "holm-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A REST API that manages and drives computer boxes"
+license = "MIT"
+
+[features]
+default = []
+e2b = ["holm/e2b"]
+vercel = ["holm/vercel"]
+daytona = ["holm/daytona"]
+modal = ["holm/modal"]
+sql = []
+sqlite = ["sql", "holm-storage/sqlite"]
+postgres = ["sql", "holm-storage/postgres"]
+s3 = ["holm-storage/s3"]
+
+[dependencies]
+holm = { package = "holm-core", path = "../holm-core", version = "0.1.0" }
+holm-api = { path = "../holm-api", version = "0.1.0" }
+holm-storage = { path = "../holm-storage", version = "0.1.0" }
+holm-types = { path = "../holm-types", version = "0.1.0" }
+holm-client = { path = "../holm-client", version = "0.1.0" }
+holm-mcp = { path = "../holm-mcp", version = "0.1.0" }
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+base64 = "0.22"
+# A real digest, not FNV: a frame-address collision would hand back a stale picture.
+sha2 = "0.10"
+getrandom = "0.3"
+# The same version axum's `ws` feature carries, so one message type crosses the proxy.
+tokio-tungstenite = "0.29"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+toml = "1.1.6"
+ring = "0.17"
+async-trait = "0.1.92"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+[dev-dependencies]
+holm-types = { path = "../holm-types", version = "0.1.0" }
+holm-storage = { path = "../holm-storage", version = "0.1.0" }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[lints.clippy]
+string_slice = "deny"

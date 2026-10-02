@@ -1,9 +1,9 @@
 //! cargo run --example quickstart
 
-use computer::{Button, Computer, Point};
+use holm::{Button, Computer, Point};
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     println!("opening a box (the first run builds the image) …");
     let computer = Computer::launch().await?;
 

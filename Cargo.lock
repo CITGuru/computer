@@ -1031,155 +1031,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
 
 [[package]]
-name = "computer"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "computer-cli",
- "computer-core",
- "computer-types",
- "libc",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "computer-api"
-version = "0.1.0"
-dependencies = [
- "computer-types",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "computer-cli"
-version = "0.1.0"
-dependencies = [
- "axum",
- "computer-api",
- "computer-client",
- "computer-core",
- "computer-mcp",
- "computer-server",
- "computer-types",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "computer-client"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "computer-api",
- "computer-types",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "computer-core"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "computer-types",
- "flate2",
- "getrandom 0.3.4",
- "microsandbox",
- "prost",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tar",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tonic",
- "tonic-prost",
- "tracing",
- "webpki-roots 1.0.9",
-]
-
-[[package]]
-name = "computer-mcp"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "computer-api",
- "computer-client",
- "computer-types",
- "getrandom 0.3.4",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "computer-server"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "axum",
- "base64 0.22.1",
- "computer-api",
- "computer-client",
- "computer-core",
- "computer-mcp",
- "computer-storage",
- "computer-types",
- "futures-util",
- "getrandom 0.3.4",
- "http-body-util",
- "reqwest 0.12.28",
- "ring",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror",
- "tokio",
- "tokio-tungstenite 0.29.0",
- "toml",
- "tower",
- "tracing",
-]
-
-[[package]]
-name = "computer-storage"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "computer-api",
- "hex",
- "hmac 0.12.1",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sqlx",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "computer-types"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.10.9",
-]
-
-[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2273,6 +2124,155 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
+]
+
+[[package]]
+name = "holm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "holm-cli",
+ "holm-core",
+ "holm-types",
+ "libc",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "holm-api"
+version = "0.1.0"
+dependencies = [
+ "holm-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "holm-cli"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "holm-api",
+ "holm-client",
+ "holm-core",
+ "holm-mcp",
+ "holm-server",
+ "holm-types",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "holm-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "holm-api",
+ "holm-types",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "holm-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "flate2",
+ "getrandom 0.3.4",
+ "holm-types",
+ "microsandbox",
+ "prost",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tonic",
+ "tonic-prost",
+ "tracing",
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
+name = "holm-mcp"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.3.4",
+ "holm-api",
+ "holm-client",
+ "holm-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "holm-server"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "futures-util",
+ "getrandom 0.3.4",
+ "holm-api",
+ "holm-client",
+ "holm-core",
+ "holm-mcp",
+ "holm-storage",
+ "holm-types",
+ "http-body-util",
+ "reqwest 0.12.28",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite 0.29.0",
+ "toml",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "holm-storage"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "hex",
+ "hmac 0.12.1",
+ "holm-api",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "holm-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

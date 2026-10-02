@@ -1,0 +1,295 @@
+mod error;
+mod locks;
+
+pub mod files;
+pub mod memory;
+
+#[cfg(feature = "local")]
+pub mod local;
+
+#[cfg(feature = "s3")]
+pub mod s3;
+
+#[cfg(feature = "sql")]
+pub mod sql;
+
+#[cfg(any(test, feature = "conformance"))]
+pub mod conformance;
+
+pub use error::{Error, Result};
+pub use locks::{Lock, Locks};
+
+use async_trait::async_trait;
+use holm_api::{Actor, Placement, Spec, TraceEntry, TraceEvent};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BoxRecord {
+    pub id: String,
+    #[serde(default = "on_docker")]
+    pub runtime: String,
+    pub spec: Spec,
+    pub placement: Placement,
+    pub width: u32,
+    pub height: u32,
+    pub screens: u32,
+    pub created_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at_ms: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sealed(String);
+
+impl Sealed {
+    pub fn of(carried: impl Into<String>) -> Self {
+        Self(carried.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Sealed {
+    fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        out.write_str("Sealed(…)")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RuntimeRecord {
+    pub name: String,
+    pub provider: String,
+    #[serde(default)]
+    pub fields: serde_json::Value,
+    #[serde(default)]
+    pub secrets: BTreeMap<String, Sealed>,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageRecord {
+    pub runtime: String,
+    pub spec_digest: String,
+    pub reference: String,
+    pub built_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobRecord {
+    pub id: String,
+    pub kind: String,
+    pub body: String,
+    pub created_at_ms: u64,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_until_ms: Option<u64>,
+}
+
+impl JobRecord {
+    pub fn new(id: impl Into<String>, kind: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            kind: kind.into(),
+            body: body.into(),
+            created_at_ms: now_ms(),
+            attempts: 0,
+            claimed_by: None,
+            claimed_until_ms: None,
+        }
+    }
+
+    pub(crate) fn free(&self, now_ms: u64) -> bool {
+        self.claimed_until_ms.is_none_or(|until| until < now_ms)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventRecord {
+    #[serde(default)]
+    pub seq: u64,
+    pub at_ms: u64,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    #[serde(default)]
+    pub data: serde_json::Value,
+}
+
+#[async_trait]
+pub trait Store: Send + Sync {
+    async fn put_box(&self, record: &BoxRecord) -> Result<()>;
+
+    async fn get_box(&self, id: &str) -> Result<Option<BoxRecord>>;
+
+    /// In a stable order, gone boxes included.
+    async fn list_boxes(&self) -> Result<Vec<BoxRecord>>;
+
+    async fn forget_box(&self, id: &str) -> Result<()>;
+
+    async fn put_runtime(&self, record: &RuntimeRecord) -> Result<()>;
+
+    async fn get_runtime(&self, name: &str) -> Result<Option<RuntimeRecord>>;
+
+    async fn list_runtimes(&self) -> Result<Vec<RuntimeRecord>>;
+
+    async fn forget_runtime(&self, name: &str) -> Result<()>;
+
+    async fn put_image(&self, record: &ImageRecord) -> Result<()>;
+
+    async fn get_image(&self, runtime: &str, spec_digest: &str) -> Result<Option<ImageRecord>>;
+
+    async fn list_images(&self) -> Result<Vec<ImageRecord>>;
+
+    async fn forget_image(&self, runtime: &str, spec_digest: &str) -> Result<()>;
+
+    async fn lock(&self, name: &str) -> Result<Lock>;
+
+    async fn push_job(&self, job: &JobRecord) -> Result<()>;
+
+    async fn claim_job(&self, worker: &str, lease_ms: u64) -> Result<Option<JobRecord>>;
+
+    async fn renew_job(&self, id: &str, worker: &str, lease_ms: u64) -> Result<bool>;
+
+    async fn finish_job(&self, id: &str) -> Result<()>;
+
+    async fn append_event(&self, event: &EventRecord) -> Result<u64>;
+
+    async fn events_after(
+        &self,
+        after: u64,
+        until_ms: u64,
+        limit: usize,
+    ) -> Result<Vec<EventRecord>>;
+
+    async fn prune_events(&self, before_ms: u64) -> Result<u64>;
+
+    async fn put_note(
+        &self,
+        kind: &str,
+        key: &str,
+        value: &str,
+        until_ms: Option<u64>,
+    ) -> Result<()>;
+
+    async fn get_note(&self, kind: &str, key: &str) -> Result<Option<String>>;
+
+    async fn list_notes(&self, kind: &str, prefix: &str) -> Result<Vec<(String, String)>>;
+
+    async fn forget_note(&self, kind: &str, key: &str) -> Result<()>;
+
+    async fn forget_notes(&self, kind: &str, prefix: &str) -> Result<()>;
+
+    async fn prune_notes(&self, now_ms: u64) -> Result<u64>;
+
+    async fn append(
+        &self,
+        id: &str,
+        actor: Actor,
+        event: TraceEvent,
+        frame: Option<String>,
+    ) -> Result<u64>;
+
+    /// Oldest first.
+    async fn entries(&self, id: &str, after: Option<u64>, limit: usize) -> Result<Vec<TraceEntry>>;
+
+    async fn frames_before(&self, id: &str, before_ms: u64) -> Result<Vec<String>>;
+
+    async fn prune_entries(&self, id: &str, before_ms: u64) -> Result<u64>;
+
+    async fn flush(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait Frames: Send + Sync {
+    async fn put(&self, id: &str, hash: &str, png: &[u8]) -> Result<()>;
+
+    async fn get(&self, id: &str, hash: &str) -> Result<Option<Arc<Vec<u8>>>>;
+
+    async fn drop_frames(&self, id: &str, hashes: &[String]) -> Result<()>;
+
+    async fn forget(&self, id: &str) -> Result<()>;
+}
+
+#[async_trait]
+pub trait Blobs: Send + Sync {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>>;
+
+    async fn put(&self, key: &str, bytes: &[u8]) -> Result<()>;
+
+    /// In lexical order.
+    async fn list(&self, prefix: &str, start_after: Option<&str>) -> Result<Vec<String>>;
+
+    async fn delete_prefix(&self, prefix: &str) -> Result<()>;
+}
+
+#[async_trait]
+impl<B: Blobs + ?Sized> Blobs for Arc<B> {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        (**self).get(key).await
+    }
+
+    async fn put(&self, key: &str, bytes: &[u8]) -> Result<()> {
+        (**self).put(key, bytes).await
+    }
+
+    async fn list(&self, prefix: &str, start_after: Option<&str>) -> Result<Vec<String>> {
+        (**self).list(prefix, start_after).await
+    }
+
+    async fn delete_prefix(&self, prefix: &str) -> Result<()> {
+        (**self).delete_prefix(prefix).await
+    }
+}
+
+#[async_trait]
+impl<B: Blobs + ?Sized> Blobs for &B {
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        (**self).get(key).await
+    }
+
+    async fn put(&self, key: &str, bytes: &[u8]) -> Result<()> {
+        (**self).put(key, bytes).await
+    }
+
+    async fn list(&self, prefix: &str, start_after: Option<&str>) -> Result<Vec<String>> {
+        (**self).list(prefix, start_after).await
+    }
+
+    async fn delete_prefix(&self, prefix: &str) -> Result<()> {
+        (**self).delete_prefix(prefix).await
+    }
+}
+
+fn on_docker() -> String {
+    "docker".to_string()
+}
+
+pub(crate) fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_millis() as u64)
+        .unwrap_or_default()
+}

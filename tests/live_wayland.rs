@@ -1,6 +1,6 @@
 //! The Wayland image against a real container: `cargo test --test live_wayland -- --ignored`.
 
-use computer::{Button, Computer, Delta, Point, Rect, ScreenId, Shot, WaylandProfile};
+use holm::{Button, Computer, Delta, Point, Rect, ScreenId, Shot, WaylandProfile};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,7 +27,7 @@ async fn a_real_wayland_box_does_everything_the_x11_one_does() {
     outcome.expect("every step");
 }
 
-async fn exercise(computer: &Computer) -> computer::Result<()> {
+async fn exercise(computer: &Computer) -> holm::Result<()> {
     let presence = computer.probe().await;
     assert!(presence.ready(), "the box said it was ready: {presence:?}");
 
@@ -78,13 +78,13 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     second_screen(computer).await?;
 
     // Last: every `DesktopSupport` claim has to prove itself against a real box.
-    let audit = computer::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
+    let audit = holm::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
     println!("  audit: {audit}");
 
     Ok(())
 }
 
-async fn browser(computer: &Computer) -> computer::Result<()> {
+async fn browser(computer: &Computer) -> holm::Result<()> {
     computer.open_url("https://example.com").await?;
 
     // A screenshot before the window appears reads as a broken browser.
@@ -141,7 +141,7 @@ fn column(recorded: &serde_json::Value) -> Option<u32> {
 }
 
 /// Checked through DevTools: sway and `wtype` exit zero after doing nothing.
-async fn input(computer: &Computer) -> computer::Result<()> {
+async fn input(computer: &Computer) -> holm::Result<()> {
     let devtools = computer
         .browser()
         .expect("the descriptor claims a DevTools endpoint");
@@ -213,7 +213,7 @@ async fn input(computer: &Computer) -> computer::Result<()> {
 
     computer
         .primary()
-        .click_with(Point::new(640, 400), Button::Left, &[computer::Held::Shift])
+        .click_with(Point::new(640, 400), Button::Left, &[holm::Held::Shift])
         .await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(
@@ -284,7 +284,7 @@ async fn input(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn clipboard(computer: &Computer) -> computer::Result<()> {
+async fn clipboard(computer: &Computer) -> holm::Result<()> {
     let text = "clipboard \"round trip\", with a newline\nand a $dollar";
 
     computer.set_clipboard(text).await?;
@@ -293,7 +293,7 @@ async fn clipboard(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn takeover(computer: &Computer) -> computer::Result<()> {
+async fn takeover(computer: &Computer) -> holm::Result<()> {
     let handed = computer.hand_over().await?;
     assert!(
         handed.url().is_some(),
@@ -325,7 +325,7 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     assert!(
         matches!(
             computer.cursor().await,
-            Err(computer::Error::Unsupported { .. })
+            Err(holm::Error::Unsupported { .. })
         ),
         "a person drove the screen, so the tracked pointer is stale and \
          nothing in Wayland will say where it went"
@@ -337,7 +337,7 @@ async fn takeover(computer: &Computer) -> computer::Result<()> {
     Ok(())
 }
 
-async fn second_screen(computer: &Computer) -> computer::Result<()> {
+async fn second_screen(computer: &Computer) -> holm::Result<()> {
     let second = computer.screen(ScreenId(1)).await?;
     assert_eq!(second.geometry().await?, (1280, 800));
 

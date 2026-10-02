@@ -1,9 +1,9 @@
 //! On a hypervisor, with microsandbox installed: `cargo test --test live_microvm -- --ignored`.
 
-use computer::SystemEngine;
-use computer::microvm::{MicroVmApi, import_image};
-use computer::sandboxes::microsandbox::msb;
-use computer::{Button, Computer, Delta, Engine, Point, ScreenId, bundle};
+use holm::SystemEngine;
+use holm::microvm::{MicroVmApi, import_image};
+use holm::sandboxes::microsandbox::msb;
+use holm::{Button, Computer, Delta, Engine, Point, ScreenId, bundle};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,7 +45,7 @@ async fn a_real_microvm_runs_the_same_desktop() {
     outcome.expect("every step");
 }
 
-async fn exercise(computer: &Computer) -> computer::Result<()> {
+async fn exercise(computer: &Computer) -> holm::Result<()> {
     assert_eq!(computer.provider(), "microsandbox");
     assert!(
         computer.probe().await.ready(),
@@ -115,7 +115,7 @@ async fn exercise(computer: &Computer) -> computer::Result<()> {
     computer.close_screen(ScreenId(1)).await?;
     println!("  screen 1 is its own display");
 
-    let audit = computer::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
+    let audit = holm::audit::audit_strictly(computer, Duration::from_secs(60)).await?;
     println!("  audit: {audit}");
 
     Ok(())

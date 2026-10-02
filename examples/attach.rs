@@ -3,11 +3,11 @@
 //! cargo run --example attach -- <box-name> pawrly.dev
 //! ```
 
-use computer::Computer;
+use holm::Computer;
 use std::time::Duration;
 
 #[tokio::main]
-async fn main() -> computer::Result<()> {
+async fn main() -> holm::Result<()> {
     let mut args = std::env::args().skip(1);
     let name = args
         .next()
@@ -39,7 +39,7 @@ async fn main() -> computer::Result<()> {
     }
 
     let frame = computer.screenshot().await?;
-    let out = std::env::var("COMPUTER_SHOT").unwrap_or_else(|_| "attached.png".to_string());
+    let out = std::env::var("HOLM_SHOT").unwrap_or_else(|_| "attached.png".to_string());
     std::fs::write(&out, &frame).ok();
     println!("  {} bytes → {out}", frame.len());
 

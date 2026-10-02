@@ -14,15 +14,15 @@ This page tells you how the repository is organized, and which checks a change m
 
 | Crate | Role |
 | --- | --- |
-| `computer` (root) | The root package. It re-exports `computer-core`, and builds the `computer` and `computerd` binaries with the `cli` feature. |
-| `computer-core` | The desktop and the API that drives it: `Computer`, screens, the browser, runtimes, images, and profiles. |
-| `computer-types` | The types that describe a box and how to drive it, such as `Spec`, `Placement`, and `Point`. |
-| `computer-api` | The HTTP contract of the server: request and response types. |
-| `computer-client` | A Rust client for the server API. |
-| `computer-server` | The REST server that manages and drives boxes. |
-| `computer-storage` | Where the server keeps box records, traces, and frames: memory, local files, SQLite, PostgreSQL, or S3. |
-| `computer-mcp` | The MCP server, and the MCP Apps page in `ui/`. |
-| `computer-cli` | The `computer` command and the `computerd` daemon. |
+| `holm` (root) | The root package. It re-exports `holm-core`, and builds the `holm` and `holmd` binaries with the `cli` feature. |
+| `holm-core` | The desktop and the API that drives it: `Computer`, screens, the browser, runtimes, images, and profiles. |
+| `holm-types` | The types that describe a box and how to drive it, such as `Spec`, `Placement`, and `Point`. |
+| `holm-api` | The HTTP contract of the server: request and response types. |
+| `holm-client` | A Rust client for the server API. |
+| `holm-server` | The REST server that manages and drives boxes. |
+| `holm-storage` | Where the server keeps box records, traces, and frames: memory, local files, SQLite, PostgreSQL, or S3. |
+| `holm-mcp` | The MCP server, and the MCP Apps page in `ui/`. |
+| `holm-cli` | The `holm` command and the `holmd` daemon. |
 
 `demos/` is not in the workspace. Each demo is its own Cargo project.
 
@@ -42,10 +42,10 @@ cargo deny check
 The commands above do not turn on optional features, so a backend that nothing uses can stop compiling. Check the features too:
 
 ```bash
-cargo clippy -p computer --no-default-features -- -D warnings
-cargo test -p computer-storage --features sqlite,postgres,s3
-cargo test -p computer-server --features sqlite,s3
-cargo clippy -p computer-core --features microsandbox --all-targets -- -D warnings
+cargo clippy -p holm --no-default-features -- -D warnings
+cargo test -p holm-storage --features sqlite,postgres,s3
+cargo test -p holm-server --features sqlite,s3
+cargo clippy -p holm-core --features microsandbox --all-targets -- -D warnings
 ```
 
 The scripts that the crate runs inside a page are Rust strings, so the compiler does not check them. Parse them:
@@ -57,14 +57,14 @@ python3 scripts/check-page-scripts.py
 The shell scripts that go into an image are not compiled either. Check their syntax:
 
 ```bash
-for script in crates/computer-core/images/*/*.sh; do bash -n "$script"; done
+for script in crates/holm-core/images/*/*.sh; do bash -n "$script"; done
 ```
 
-The MCP Apps page is built and committed. A change under `crates/computer-mcp/ui/src` has no effect until you build it. Build it, and check that the committed page matches:
+The MCP Apps page is built and committed. A change under `crates/holm-mcp/ui/src` has no effect until you build it. Build it, and check that the committed page matches:
 
 ```bash
-crates/computer-mcp/ui/build.sh
-git diff --exit-code -- crates/computer-mcp/ui/screen.html
+crates/holm-mcp/ui/build.sh
+git diff --exit-code -- crates/holm-mcp/ui/screen.html
 ```
 
 Commit the built `screen.html` with the source change.
@@ -87,7 +87,7 @@ The files in `tests/` that start with `live_` are this kind of test.
 
 ## Images
 
-The desktop images are in `crates/computer-core/images/`:
+The desktop images are in `crates/holm-core/images/`:
 
 | Directory | Image |
 | --- | --- |
