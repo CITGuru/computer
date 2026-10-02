@@ -694,3 +694,37 @@ async fn test_a_shared_runtime_takes_no_box_from_a_workspace_with_no_credit() {
         "a runtime on the workspace's own key needs no credit: {body}"
     );
 }
+
+#[tokio::test]
+async fn test_an_image_on_a_shared_runtime_is_the_operators_to_remove() {
+    let world = World::new().await;
+    let a = world.token("ws_a", "admin");
+    let id = world.launch(&a).await;
+
+    let (_, images) = world.send(&a, "GET", "/v1/images", None).await;
+    let digest = images["images"][0]["spec_digest"]
+        .as_str()
+        .expect("the launch recorded an image")
+        .to_string();
+    let image = format!("/v1/runtimes/cloud/images/{digest}");
+
+    let (status, _) = world
+        .send_with(
+            &a,
+            "DELETE",
+            &format!("/v1/boxes/{id}"),
+            None,
+            &[("x-computer-confirm-delete", "true")],
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, body) = world.send(&a, "DELETE", &image, None).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "another workspace may start boxes from it: {body}"
+    );
+    let (status, _) = world.send(OPERATOR, "DELETE", &image, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}

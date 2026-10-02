@@ -118,7 +118,8 @@ async fn admit(
             if !caller.sees_runtime(runtime.owner.as_deref()) {
                 return Err(ApiError::not_found(format!("no runtime named {name} here")));
             }
-            let changes_it = caller::needs(method, path) == Role::Admin;
+            let changes_it =
+                caller::needs(method, path) == Role::Admin || *method == Method::DELETE;
             match changes_it && !caller.sees(runtime.owner.as_deref()) {
                 true => Err(ApiError::new(
                     StatusCode::FORBIDDEN,
