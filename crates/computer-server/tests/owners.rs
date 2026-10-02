@@ -1,11 +1,15 @@
 use axum::body::Body;
+use axum::extract::Query;
 use axum::http::{Request, StatusCode};
+use axum::routing::get;
+use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use computer::sandboxes::remote::RemoteApi;
 use computer::testing::ScriptedRemote;
 use computer::{Secret, testing::ScriptedEngine};
 use computer_server::caller::ConsoleKey;
+use computer_server::console::Console;
 use computer_server::runtimes::{self, Runtimes, Vendors};
 use computer_server::secrets::Keeper;
 use computer_server::{AppState, routes};
@@ -13,6 +17,7 @@ use http_body_util::BodyExt;
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -43,6 +48,10 @@ struct World {
 
 impl World {
     async fn new() -> Self {
+        Self::made(None).await
+    }
+
+    async fn made(console_at: Option<&str>) -> Self {
         let document = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new()).expect("a key");
         let console = Ed25519KeyPair::from_pkcs8(document.as_ref()).expect("a pair");
         let key = ConsoleKey::parse(&STANDARD.encode(console.public_key().as_ref()))
@@ -58,14 +67,15 @@ impl World {
         runtimes.settle();
 
         let remote = Arc::new(ScriptedRemote::new().building());
-        let state = Arc::new(
-            AppState::default()
-                .with(runtimes)
-                .keeping(Keeper::of(&[7u8; 32]).expect("a key"))
-                .serving(Arc::new(Scripted(Arc::clone(&remote))))
-                .gated(Some(Secret::new(OPERATOR).expect("a token")))
-                .trusting(key),
-        );
+        let state = AppState::default()
+            .with(runtimes)
+            .keeping(Keeper::of(&[7u8; 32]).expect("a key"))
+            .serving(Arc::new(Scripted(Arc::clone(&remote))))
+            .gated(Some(Secret::new(OPERATOR).expect("a token")));
+        let state = Arc::new(match console_at {
+            Some(base) => state.linking(Console::linked(base, None, Some(key)).expect("a console")),
+            None => state.trusting(key),
+        });
         let world = Self {
             state,
             console,
@@ -624,5 +634,63 @@ async fn test_a_box_the_runtime_lost_is_said_once_until_it_is_ready_again() {
             "box.unreachable"
         ],
         "a server that finds the same lost box at each start does not say it again"
+    );
+}
+
+async fn console_without_credit_for(unfunded: &'static str) -> String {
+    let funds = move |Query(asked): Query<BTreeMap<String, String>>| async move {
+        match asked.get("workspace").map(String::as_str) == Some(unfunded) {
+            true => Json(json!({ "allowed": false, "reason": "no credit left" })),
+            false => Json(json!({ "allowed": true })),
+        }
+    };
+    let app = Router::new().route("/api/computerd/funds", get(funds));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a port");
+    let address = listener.local_addr().expect("an address");
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("served") });
+    format!("http://{address}")
+}
+
+#[tokio::test]
+async fn test_a_shared_runtime_takes_no_box_from_a_workspace_with_no_credit() {
+    let world = World::made(Some(&console_without_credit_for("ws_a").await)).await;
+    let (a, b) = (world.token("ws_a", "admin"), world.token("ws_b", "member"));
+    let on_cloud = Some(json!({ "placement": { "runtime": "cloud" } }));
+
+    let (status, body) = world.send(&a, "POST", "/v1/boxes", on_cloud.clone()).await;
+    assert_eq!(status, StatusCode::PAYMENT_REQUIRED, "{body}");
+    assert_eq!(body["message"], "no credit left");
+
+    world.launch(&b).await;
+    let (status, _) = world.send(OPERATOR, "POST", "/v1/boxes", on_cloud).await;
+    assert_eq!(status, StatusCode::CREATED, "the operator owes nobody");
+
+    let (status, _) = world
+        .send(
+            &a,
+            "POST",
+            "/v1/runtimes",
+            Some(json!({
+                "name": "mine",
+                "provider": "scripted",
+                "secrets": { "api_key": "own_key_0123456789" }
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, body) = world
+        .send(
+            &a,
+            "POST",
+            "/v1/boxes",
+            Some(json!({ "placement": { "runtime": "mine" } })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "a runtime on the workspace's own key needs no credit: {body}"
     );
 }
