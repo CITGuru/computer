@@ -1,7 +1,8 @@
 use crate::AppState;
+use crate::caller::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
-use crate::idempotency::{self, Lookup, Replies};
+use crate::idempotency::{self, Lookup};
 use crate::images;
 use crate::presses::Pressed;
 use crate::registry::{AsDesktop, Entry};
@@ -11,7 +12,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, post};
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use computer::motion::path;
@@ -69,6 +70,11 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     let gated = Router::new()
         .route(HEALTH, get(health))
+        .route(crate::console::PUSH_PATH, post(take_revoked))
+        .route("/v1/events", get(list_events))
+        .route("/v1/jobs/reap", get(job_reap).post(job_reap))
+        .route("/v1/jobs/prune", get(job_prune).post(job_prune))
+        .route(crate::schedule::RUN_PATH, get(job_run).post(job_run))
         .route("/v1/boxes", get(list_boxes).post(create_box))
         .route("/v1/boxes/{id}", get(get_box).delete(delete_box))
         .route("/v1/boxes/{id}/fork", post(fork))
@@ -135,7 +141,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/v1/runtimes/{name}/images", get(list_runtime_images))
         .route(
             "/v1/runtimes/{name}/images/{digest}",
-            axum::routing::delete(forget_image),
+            get(image_status).delete(forget_image),
         )
         .route("/v1/images", get(list_images))
         .route(
@@ -181,61 +187,85 @@ async fn health() -> Json<Health> {
 
 async fn create_box(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
     headers: HeaderMap,
     ApiJson(body): ApiJson<CreateBox>,
 ) -> ApiResult<Response> {
-    let stamp = Idempotent::of(&headers, "POST /v1/boxes", &body);
-    if let Some(replayed) = stamp.replay(&state.replies)? {
+    let scope = format!("POST /v1/boxes {}", caller.owner.as_deref().unwrap_or(""));
+    let stamp = Idempotent::of(&headers, &scope, &body);
+    if let Some(replayed) = stamp.replay(&state).await? {
         return Ok(replayed);
     }
 
-    let digest = body.spec.digest();
-    let id = new_id();
-    let runtime = state.runtimes.resolve(body.placement.runtime.as_deref())?;
+    let runtime = usable(&state, &caller, body.placement.runtime.as_deref())?;
+    let job = crate::jobs::Launch {
+        id: new_id(),
+        runtime: runtime.name.clone(),
+        spec: body.spec.clone(),
+        placement: body.placement.clone(),
+        owner: caller.owns_what_it_makes(),
+        fork: None,
+    };
 
-    tracing::info!(%id, %digest, runtime = %runtime.name, "launching a box");
-    let (computer, resolved) =
-        images::started(&state, &body.spec, &body.placement, &id, &runtime).await?;
+    if state.jobs == crate::jobs::Mode::Queue {
+        let record = crate::jobs::queue_launch(&state, &job).await?;
+        return stamp
+            .answer(
+                &state,
+                StatusCode::ACCEPTED,
+                &absent(&record, BoxState::Starting, None),
+            )
+            .await;
+    }
 
-    let entry = state
-        .registry
-        .insert(
-            id,
-            runtime.name.clone(),
-            body.spec.clone(),
-            resolved,
-            computer,
-        )
-        .await;
+    let (entry, _) = crate::jobs::launch(&state, &job).await?;
 
-    kept(&state, &entry, &body.placement).await;
-    state
-        .record(
-            &entry.id,
-            Actor::Agent,
-            TraceEvent::BoxCreated {
-                spec_digest: entry.spec_digest(),
-                spec: Box::new(body.spec.clone()),
-                placement: Box::new(body.placement.clone()),
-                width: resolved.width,
-                height: resolved.height,
-                screens: resolved.screens,
-            },
-        )
-        .await;
-
-    stamp.answer(&state.replies, StatusCode::CREATED, &view_of(&entry))
+    stamp
+        .answer(&state, StatusCode::CREATED, &view_of(&state, &entry))
+        .await
 }
 
-async fn list_boxes(State(state): State<Arc<AppState>>) -> Json<BoxList> {
+async fn list_boxes(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
+) -> Json<BoxList> {
     let mut boxes = Vec::new();
+    let removed: std::collections::BTreeSet<String> = state
+        .store
+        .list_boxes()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| record.deleted_at_ms.is_some())
+        .map(|record| record.id)
+        .collect();
 
     for entry in state.registry.list().await.iter() {
-        boxes.push(viewed(entry, state_of(entry).await));
+        if removed.contains(&entry.id) {
+            state.registry.forget(&entry.id).await;
+            continue;
+        }
+        if caller.sees(entry.owner.as_deref()) {
+            boxes.push(viewed(&state, entry, state_of(entry).await));
+        }
+    }
+
+    let pending = crate::jobs::phases(state.store.as_ref()).await;
+    for (id, phase) in &pending {
+        if let Ok(Some(record)) = state.store.get_box(id).await
+            && caller.sees(record.owner.as_deref())
+        {
+            boxes.push(pending_view(&record, phase));
+        }
     }
 
     for (id, why) in state.all_out_of_reach() {
-        if let Ok(Some(record)) = state.store.get_box(&id).await {
+        if pending.iter().any(|(held, _)| held == &id) || removed.contains(&id) {
+            continue;
+        }
+        if let Ok(Some(record)) = state.store.get_box(&id).await
+            && caller.sees(record.owner.as_deref())
+        {
             boxes.push(unreachable(&record, why));
         }
     }
@@ -259,6 +289,16 @@ async fn get_box(
     State(state): State<Arc<AppState>>,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
+    if state.deleted(&id).await {
+        state.registry.forget(&id).await;
+        return Err(crate::removed(&id));
+    }
+    if let Some(phase) = crate::jobs::phase(state.store.as_ref(), &id).await
+        && let Some(record) = state.store.get_box(&id).await?
+    {
+        return Ok(Json(pending_view(&record, &phase)));
+    }
+
     let entry = match state.entry(&id).await {
         Ok(entry) => entry,
         Err(missing) => {
@@ -268,9 +308,9 @@ async fn get_box(
             return Ok(Json(unreachable(&record, why)));
         }
     };
-    let state = state_of(&entry).await;
+    let now = state_of(&entry).await;
 
-    Ok(Json(viewed(&entry, state)))
+    Ok(Json(viewed(&state, &entry, now)))
 }
 
 async fn delete_box(
@@ -284,16 +324,42 @@ async fn delete_box(
         )));
     }
 
-    let _ = state.entry(&id).await;
-    state.registry.remove(&id).await?;
+    if crate::jobs::phase(state.store.as_ref(), &id)
+        .await
+        .is_some()
+    {
+        crate::jobs::forget_phase(state.store.as_ref(), &id).await;
+        state.store.forget_box(&id).await?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    if state.deleted(&id).await {
+        state.registry.forget(&id).await;
+        return Err(crate::removed(&id));
+    }
+
+    let found = state.entry(&id).await;
+    if found.is_ok() {
+        match state.registry.remove(&id).await {
+            Err(why) if !matches!(why.body.code, ErrorCode::Gone | ErrorCode::NotFound) => {
+                return Err(why);
+            }
+            _ => {}
+        }
+    }
+    if !state.mark_deleted(&id).await?
+        && let Err(missing) = found
+    {
+        return Err(missing);
+    }
     state
         .record(&id, Actor::Agent, TraceEvent::BoxDeleted)
         .await;
     state.forget_screens(&id);
     state.tickets.forget(&id);
     state.cdp_tokens.forget(&id);
-    state.presses.take_box(&id);
-    state.labels.forget(&id);
+    crate::presses::take_box(state.store.as_ref(), &id).await;
+    crate::labels::forget(state.store.as_ref(), &id).await;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -309,13 +375,12 @@ async fn actions(
         &format!("POST /v1/boxes/{id}/screens/{screen}/actions"),
         &batch,
     );
-    if let Some(replayed) = stamp.replay(&state.replies)? {
+    if let Some(replayed) = stamp.replay(&state).await? {
         return Ok(replayed);
     }
 
     let entry = state.entry(&id).await?;
-    let lock = entry.screen_lock(screen).await?;
-    let _held = lock.lock().await;
+    let _held = state.store.lock(&entry.screen_lock(screen)?).await?;
 
     let target = entry.desktop(screen).await?;
     let desktop = target.as_desktop();
@@ -402,15 +467,15 @@ async fn actions(
 
             match (is_down, hold_ms) {
                 (true, Some(ms)) => {
-                    let until = hold(&state, &id, screen, &pressed, ms);
+                    let until = hold(&state, desktop, &id, screen, &pressed, ms).await;
                     holding.push((pressed, until));
                 }
                 (true, None) => {
-                    state.presses.close(&id, screen, &pressed);
+                    still_held(&state, desktop, &id, screen, &pressed).await;
                     down.push(pressed);
                 }
                 (false, _) => {
-                    state.presses.close(&id, screen, &pressed);
+                    still_held(&state, desktop, &id, screen, &pressed).await;
                 }
             }
         }
@@ -474,52 +539,54 @@ async fn actions(
         None
     };
 
-    stamp.answer(
-        &state.replies,
-        StatusCode::OK,
-        &BatchResult {
-            results,
-            windows,
-            tabs,
-            stopped_at,
-            frame,
-            cursor,
-            released: down
-                .iter()
-                .filter_map(|pressed| match pressed {
-                    Pressed::Button(button) => Some(*button),
-                    Pressed::Key(_) => None,
-                })
-                .collect(),
-            holding: holding
-                .iter()
-                .filter_map(|(pressed, until_ms)| match pressed {
-                    Pressed::Button(button) => Some(Holding {
-                        button: *button,
-                        until_ms: *until_ms,
-                    }),
-                    Pressed::Key(_) => None,
-                })
-                .collect(),
-            released_keys: down
-                .iter()
-                .filter_map(|pressed| match pressed {
-                    Pressed::Key(key) => Some(key.clone()),
-                    Pressed::Button(_) => None,
-                })
-                .collect(),
-            holding_keys: holding
-                .iter()
-                .filter_map(|(pressed, until_ms)| match pressed {
-                    Pressed::Key(key) => Some(HoldingKey {
-                        key: key.clone(),
-                        until_ms: *until_ms,
-                    }),
-                    Pressed::Button(_) => None,
-                })
-                .collect(),
-        },
-    )
+    stamp
+        .answer(
+            &state,
+            StatusCode::OK,
+            &BatchResult {
+                results,
+                windows,
+                tabs,
+                stopped_at,
+                frame,
+                cursor,
+                released: down
+                    .iter()
+                    .filter_map(|pressed| match pressed {
+                        Pressed::Button(button) => Some(*button),
+                        Pressed::Key(_) => None,
+                    })
+                    .collect(),
+                holding: holding
+                    .iter()
+                    .filter_map(|(pressed, until_ms)| match pressed {
+                        Pressed::Button(button) => Some(Holding {
+                            button: *button,
+                            until_ms: *until_ms,
+                        }),
+                        Pressed::Key(_) => None,
+                    })
+                    .collect(),
+                released_keys: down
+                    .iter()
+                    .filter_map(|pressed| match pressed {
+                        Pressed::Key(key) => Some(key.clone()),
+                        Pressed::Button(_) => None,
+                    })
+                    .collect(),
+                holding_keys: holding
+                    .iter()
+                    .filter_map(|(pressed, until_ms)| match pressed {
+                        Pressed::Key(key) => Some(HoldingKey {
+                            key: key.clone(),
+                            until_ms: *until_ms,
+                        }),
+                        Pressed::Button(_) => None,
+                    })
+                    .collect(),
+            },
+        )
+        .await
 }
 
 /// What one step leaves behind: a window a launch drew, and what a read saw.
@@ -684,7 +751,7 @@ async fn reaching(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
         Action::OnTab { tab, close } => {
             match close {
                 true => {
-                    let tab = tab_named(doing.state, doing.id, tab);
+                    let tab = tab_named(doing.state, doing.id, tab).await;
                     debugger(doing.state, doing.id).await?.close(&tab).await?
                 }
                 false => {
@@ -998,7 +1065,7 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
                     fresh.bring_to_front().await?;
 
                     let mut tab = tab_out(&opened, true);
-                    labelled(doing.state, doing.id, label.as_ref(), &mut tab)?;
+                    labelled(doing.state, doing.id, label.as_ref(), &mut tab).await?;
                     doing.tabs.push(tab);
 
                     let _ = browser.tidy(TABS).await;
@@ -1011,7 +1078,7 @@ async fn run(doing: &mut Doing<'_>, action: &Action) -> ApiResult<Did> {
                     showing.navigate(url).await?;
 
                     let mut tab = tab_out(showing.target(), true);
-                    labelled(doing.state, doing.id, label.as_ref(), &mut tab)?;
+                    labelled(doing.state, doing.id, label.as_ref(), &mut tab).await?;
                     doing.tabs.push(tab);
                 }
                 (None, _) if label.is_some() => {
@@ -1274,11 +1341,14 @@ async fn pointer_start(desktop: &dyn EngineDesktop, spec: &Spec) -> computer_typ
 
 async fn let_go(state: &AppState, entry: &Entry, id: &str, screen: u32, pressed: &Pressed) {
     let released = match entry.desktop(screen).await {
-        Ok(target) => match pressed {
-            Pressed::Button(button) => target.as_desktop().let_go(*button).await,
-            Pressed::Key(key) => target.as_desktop().let_key_go(key).await,
+        Ok(target) => {
+            let _ = target.as_desktop().keep_held(&pressed.still_down()).await;
+            match pressed {
+                Pressed::Button(button) => target.as_desktop().let_go(*button).await,
+                Pressed::Key(key) => target.as_desktop().let_key_go(key).await,
+            }
+            .map_err(ApiError::from)
         }
-        .map_err(ApiError::from),
         Err(error) => Err(error),
     };
 
@@ -1296,26 +1366,54 @@ async fn let_go(state: &AppState, entry: &Entry, id: &str, screen: u32, pressed:
         .await;
 }
 
-fn hold(state: &Arc<AppState>, id: &str, screen: u32, pressed: &Pressed, ms: u64) -> u64 {
+async fn still_held(
+    state: &AppState,
+    desktop: &dyn EngineDesktop,
+    id: &str,
+    screen: u32,
+    pressed: &Pressed,
+) {
+    if crate::presses::close(state.store.as_ref(), id, screen, pressed).await {
+        let _ = desktop.keep_held(&pressed.still_down()).await;
+    }
+}
+
+async fn hold(
+    state: &Arc<AppState>,
+    desktop: &dyn EngineDesktop,
+    id: &str,
+    screen: u32,
+    pressed: &Pressed,
+    ms: u64,
+) -> u64 {
     let life = Duration::from_millis(ms).min(crate::presses::LONGEST_HOLD);
-    let turn = state.presses.open(id, screen, pressed);
     let until = SystemTime::now() + life;
+    let turn = crate::presses::open(state.store.as_ref(), id, screen, pressed, millis(until)).await;
+
+    if desktop
+        .let_go_later(&pressed.still_down(), life, &turn)
+        .await
+        .is_ok()
+    {
+        return millis(until);
+    }
 
     let (state, id, pressed) = (Arc::clone(state), id.to_string(), pressed.clone());
     tokio::spawn(async move {
         tokio::time::sleep(life).await;
 
-        if !state.presses.close_turn(&id, screen, &pressed, turn) {
+        if !crate::presses::close_turn(state.store.as_ref(), &id, screen, &pressed, &turn).await {
             return;
         }
         let Ok(entry) = state.entry(&id).await else {
             return;
         };
-        let Ok(lock) = entry.screen_lock(screen).await else {
+        let Ok(name) = entry.screen_lock(screen) else {
             return;
         };
-
-        let _held = lock.lock().await;
+        let Ok(_held) = state.store.lock(&name).await else {
+            return;
+        };
         let_go(&state, &entry, &id, screen, &pressed).await;
     });
 
@@ -1451,7 +1549,7 @@ async fn start_takeover(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen cannot be handed over"))?;
 
-    for pressed in state.presses.take_screen(&id, screen) {
+    for pressed in crate::presses::take_screen(state.store.as_ref(), &id, screen).await {
         let_go(&state, &entry, &id, screen, &pressed).await;
     }
 
@@ -1474,8 +1572,21 @@ async fn start_takeover(
         )
         .await;
 
+    let url = match entry.computer.viewer_auth() {
+        computer::Auth::Signed => state
+            .doors
+            .token(
+                &id,
+                held.door_port(true),
+                crate::viewer::takeover_life(entry.created_at, entry.computer.expires_at()),
+            )
+            .and_then(|token| computer::Secret::new(token).ok())
+            .and_then(|token| held.signed_page(true, &token)),
+        _ => takeover.url().map(str::to_string),
+    };
+
     Ok(Json(TakeoverView {
-        url: takeover.url().map(str::to_string),
+        url,
         exclusive: takeover.exclusive(),
         screen,
     }))
@@ -1600,14 +1711,14 @@ async fn pause_box(
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.entry(&id).await?;
-    for (screen, pressed) in state.presses.take_box(&id) {
+    for (screen, pressed) in crate::presses::take_box(state.store.as_ref(), &id).await {
         let_go(&state, &entry, &id, screen, &pressed).await;
     }
     entry.computer.pause().await?;
 
     state.record(&id, Actor::Agent, TraceEvent::BoxPaused).await;
 
-    Ok(Json(viewed(&entry, BoxState::Paused)))
+    Ok(Json(viewed(&state, &entry, BoxState::Paused)))
 }
 
 async fn resume_box(
@@ -1624,7 +1735,7 @@ async fn resume_box(
             .record(&id, Actor::Agent, TraceEvent::BoxStarted)
             .await;
 
-        return Ok(Json(viewed(&entry, BoxState::Ready)));
+        return Ok(Json(viewed(&state, &entry, BoxState::Ready)));
     }
 
     entry.computer.resume().await?;
@@ -1632,7 +1743,7 @@ async fn resume_box(
         .record(&id, Actor::Agent, TraceEvent::BoxResumed)
         .await;
 
-    Ok(Json(viewed(&entry, BoxState::Ready)))
+    Ok(Json(viewed(&state, &entry, BoxState::Ready)))
 }
 
 async fn stop_box(
@@ -1640,14 +1751,14 @@ async fn stop_box(
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.entry(&id).await?;
-    state.presses.take_box(&id);
+    crate::presses::take_box(state.store.as_ref(), &id).await;
     entry.computer.stop().await?;
 
     state
         .record(&id, Actor::Agent, TraceEvent::BoxStopped)
         .await;
 
-    Ok(Json(viewed(&entry, BoxState::Stopped)))
+    Ok(Json(viewed(&state, &entry, BoxState::Stopped)))
 }
 
 async fn exec(
@@ -1840,12 +1951,13 @@ async fn write_file(
 
 async fn fork(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
     headers: HeaderMap,
     ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<ForkRequest>,
 ) -> ApiResult<Response> {
     let stamp = Idempotent::of(&headers, &format!("POST /v1/boxes/{id}/fork"), &body);
-    if let Some(replayed) = stamp.replay(&state.replies)? {
+    if let Some(replayed) = stamp.replay(&state).await? {
         return Ok(replayed);
     }
 
@@ -1887,7 +1999,6 @@ async fn fork(
             ..*placement
         }),
     };
-    let new_id = new_id();
     let asked = match placement.runtime.clone() {
         named @ Some(_) => named,
         None => match state.entry(&id).await {
@@ -1901,62 +2012,80 @@ async fn fork(
                 .map(|record| record.runtime),
         },
     };
-    let runtime = state.runtimes.resolve(asked.as_deref())?;
-    tracing::info!(from = %id, to = %new_id, runtime = %runtime.name, "forking a box");
-    let (computer, resolved) =
-        images::started(&state, &spec, &placement, &new_id, &runtime).await?;
+    let runtime = usable(&state, &caller, asked.as_deref())?;
+    let job = crate::jobs::Launch {
+        id: new_id(),
+        runtime: runtime.name.clone(),
+        spec: (*spec).clone(),
+        placement: (*placement).clone(),
+        owner: caller.owns_what_it_makes(),
+        fork: Some(crate::jobs::Forked {
+            source: id.clone(),
+            up_to: body.up_to,
+        }),
+    };
+    tracing::info!(from = %id, to = %job.id, runtime = %runtime.name, "forking a box");
 
-    let entry = state
-        .registry
-        .insert(
-            new_id.clone(),
-            runtime.name.clone(),
-            (*spec).clone(),
-            resolved,
-            computer,
-        )
-        .await;
-
-    kept(&state, &entry, &placement).await;
-    state
-        .record(
-            &new_id,
-            Actor::Agent,
-            TraceEvent::BoxCreated {
-                spec_digest: entry.spec_digest(),
-                spec,
-                placement,
-                width: resolved.width,
-                height: resolved.height,
-                screens: resolved.screens,
-            },
-        )
-        .await;
-    state
-        .record(
-            &new_id,
-            Actor::Agent,
-            TraceEvent::ForkedFrom {
-                source: id.clone(),
-                up_to: body.up_to,
-            },
-        )
-        .await;
-
-    let report = replay_onto(&entry, &state, &new_id, &history, body.up_to).await;
-
-    if let Ok(target) = entry.desktop(0).await {
-        let _ = capture(&state, &new_id, Actor::Agent, 0, target.as_desktop(), None).await;
+    if state.jobs == crate::jobs::Mode::Queue {
+        let record = crate::jobs::queue_launch(&state, &job).await?;
+        return stamp
+            .answer(
+                &state,
+                StatusCode::ACCEPTED,
+                &ForkResult {
+                    created: absent(&record, BoxState::Starting, None),
+                    replay: ReplayReport {
+                        attempted: 0,
+                        ok: 0,
+                        stopped_at: None,
+                        truncated: false,
+                        skipped: Vec::new(),
+                    },
+                },
+            )
+            .await;
     }
 
-    stamp.answer(
-        &state.replies,
-        StatusCode::CREATED,
-        &ForkResult {
-            created: view_of(&entry),
-            replay: report,
-        },
-    )
+    let (entry, report) = crate::jobs::launch(&state, &job).await?;
+    let report = report.ok_or_else(|| ApiError::internal("a fork gave no replay report"))?;
+
+    stamp
+        .answer(
+            &state,
+            StatusCode::CREATED,
+            &ForkResult {
+                created: view_of(&state, &entry),
+                replay: report,
+            },
+        )
+        .await
+}
+
+pub(crate) async fn forked(
+    state: &AppState,
+    entry: &Entry,
+    source: &str,
+    up_to: Option<u64>,
+) -> ApiResult<ReplayReport> {
+    state
+        .record(
+            &entry.id,
+            Actor::Agent,
+            TraceEvent::ForkedFrom {
+                source: source.to_string(),
+                up_to,
+            },
+        )
+        .await;
+
+    let history = state.store.entries(source, None, usize::MAX).await?;
+    let report = replay_onto(entry, state, &entry.id, &history, up_to).await;
+
+    if let Ok(target) = entry.desktop(0).await {
+        let _ = capture(state, &entry.id, Actor::Agent, 0, target.as_desktop(), None).await;
+    }
+
+    Ok(report)
 }
 
 async fn replay_onto(
@@ -2709,6 +2838,7 @@ async fn captured_page(state: &AppState, id: &str, body: &PageShot) -> ApiResult
 
 async fn save_state(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
     ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<SaveState>,
 ) -> ApiResult<Json<StateView>> {
@@ -2741,7 +2871,7 @@ async fn save_state(
     let mut view = state_view(&session);
     match &body.name {
         Some(name) => {
-            state.states.keep(name, json);
+            crate::states::keep(&state, &shelved(&caller, name), json).await?;
             view.name = Some(name.clone());
         }
         None => view.session_json = Some(json),
@@ -2751,13 +2881,13 @@ async fn save_state(
 
 async fn load_state(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
     ApiPath(id): ApiPath<String>,
     ApiJson(body): ApiJson<LoadState>,
 ) -> ApiResult<Json<StateView>> {
     let json = match (&body.name, &body.session_json) {
-        (Some(name), None) => state
-            .states
-            .get(name)
+        (Some(name), None) => crate::states::get(&state, &shelved(&caller, name))
+            .await?
             .ok_or_else(|| ApiError::not_found(format!("no state is saved as {name}")))?,
         (None, Some(json)) => json.clone(),
         _ => {
@@ -2798,15 +2928,48 @@ fn state_view(session: &computer::Session) -> StateView {
     }
 }
 
-async fn list_states(State(state): State<Arc<AppState>>) -> Json<Vec<String>> {
-    Json(state.states.names())
+async fn list_states(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
+) -> ApiResult<Json<Vec<String>>> {
+    let prefix = caller
+        .owner
+        .as_ref()
+        .map(|owner| format!("{owner}/"))
+        .unwrap_or_default();
+
+    Ok(Json(
+        crate::states::keys(&state, &prefix)
+            .await?
+            .into_iter()
+            .filter_map(|held| unshelved(&caller, &held))
+            .collect(),
+    ))
+}
+
+fn shelved(caller: &Caller, name: &str) -> String {
+    match &caller.owner {
+        Some(owner) => format!("{owner}/{name}"),
+        None => name.to_string(),
+    }
+}
+
+fn unshelved(caller: &Caller, held: &str) -> Option<String> {
+    match &caller.owner {
+        Some(owner) => held
+            .strip_prefix(owner.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .map(str::to_string),
+        None => Some(held.to_string()),
+    }
 }
 
 async fn forget_state(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
     ApiPath(name): ApiPath<String>,
 ) -> ApiResult<StatusCode> {
-    match state.states.forget(&name) {
+    match crate::states::forget(&state, &shelved(&caller, &name)).await? {
         true => Ok(StatusCode::NO_CONTENT),
         false => Err(ApiError::not_found(format!("no state is saved as {name}"))),
     }
@@ -3015,12 +3178,15 @@ async fn listed_tabs(state: &AppState, id: &str) -> ApiResult<Vec<Tab>> {
 
     let pages = browser.pages().await?;
     let live: Vec<String> = pages.iter().map(|target| target.id.clone()).collect();
-    state.labels.keep(id, &live);
+    let labels = crate::labels::live(state.store.as_ref(), id, &live).await;
 
     Ok(pages
         .iter()
         .map(|target| Tab {
-            label: state.labels.of(id, &target.id),
+            label: labels
+                .iter()
+                .find(|(_, held)| held == &target.id)
+                .map(|(label, _)| label.clone()),
             ..tab_out(target, showing.as_deref() == Some(target.id.as_str()))
         })
         .collect())
@@ -3039,7 +3205,7 @@ async fn close_tab(
     State(state): State<Arc<AppState>>,
     ApiPath((id, tab)): ApiPath<(String, String)>,
 ) -> ApiResult<StatusCode> {
-    let tab = tab_named(&state, &id, &tab);
+    let tab = tab_named(&state, &id, &tab).await;
     debugger(&state, &id).await?.close(&tab).await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -3063,7 +3229,7 @@ async fn page_for(state: &AppState, id: &str, tab: Option<&str>) -> ApiResult<co
 
 async fn named(state: &AppState, id: &str, tab: &str) -> ApiResult<computer::Page> {
     let browser = debugger(state, id).await?;
-    let tab = &tab_named(state, id, tab);
+    let tab = &tab_named(state, id, tab).await;
 
     let target = browser
         .pages()
@@ -3098,17 +3264,21 @@ fn tab_out(target: &computer::cdp::Target, visible: bool) -> Tab {
     }
 }
 
-fn tab_named(state: &AppState, id: &str, word: &str) -> String {
-    state
-        .labels
-        .target(id, word)
+async fn tab_named(state: &AppState, id: &str, word: &str) -> String {
+    crate::labels::target(state.store.as_ref(), id, word)
+        .await
         .unwrap_or_else(|| word.to_string())
 }
 
-fn labelled(state: &AppState, id: &str, label: Option<&String>, tab: &mut Tab) -> ApiResult<()> {
+async fn labelled(
+    state: &AppState,
+    id: &str,
+    label: Option<&String>,
+    tab: &mut Tab,
+) -> ApiResult<()> {
     if let Some(label) = label {
         crate::labels::Labels::valid(label).map_err(ApiError::bad_request)?;
-        state.labels.set(id, label, &tab.id);
+        crate::labels::set(state.store.as_ref(), id, label, &tab.id).await;
         tab.label = Some(label.clone());
     }
     Ok(())
@@ -3302,6 +3472,93 @@ async fn await_window(
     Ok(Json(screen.wait_for_window(&body.class, within).await?))
 }
 
+#[derive(Debug, Deserialize)]
+struct EventsQuery {
+    #[serde(default)]
+    after: u64,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn list_events(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
+    ApiQuery(query): ApiQuery<EventsQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let limit = query
+        .limit
+        .unwrap_or(crate::events::PAGE)
+        .clamp(1, crate::events::MOST);
+    let settled = millis(SystemTime::now()).saturating_sub(crate::events::SETTLE_MS);
+
+    let read = state
+        .store
+        .events_after(query.after, settled, limit)
+        .await?;
+    let next = read.last().map(|event| event.seq).unwrap_or(query.after);
+    let more = read.len() == limit;
+    let events: Vec<_> = read
+        .into_iter()
+        .filter(|event| caller.sees(event.owner.as_deref()))
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "events": events,
+        "next": next,
+        "more": more,
+    })))
+}
+
+async fn job_reap(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let gone = crate::reap::once(&state).await;
+    Json(serde_json::json!({ "removed": gone }))
+}
+
+async fn job_prune(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let swept = crate::prune::sweep(&state).await;
+    Json(serde_json::json!({
+        "frames": swept.frames,
+        "entries": swept.entries,
+        "boxes": swept.boxes,
+    }))
+}
+
+async fn job_run(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let ran = crate::schedule::run_jobs(&state, crate::schedule::RUN_BUDGET).await;
+    Json(serde_json::json!({ "ran": ran }))
+}
+
+async fn take_revoked(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> ApiResult<StatusCode> {
+    let refused = || {
+        ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            ErrorCode::Denied,
+            "this push is not signed by the console this server is linked to",
+        )
+    };
+    let console = state.console.as_ref().ok_or_else(refused)?;
+    let said = |name: &str| header(&headers, name).unwrap_or_default();
+
+    if !console.admits_push(
+        &said(crate::console::PUSH_ID),
+        &said(crate::console::PUSH_TIMESTAMP),
+        &said(crate::console::PUSH_SIGNATURE),
+        &body,
+    ) {
+        return Err(refused());
+    }
+
+    let push: crate::console::Push = serde_json::from_slice(&body)
+        .map_err(|error| ApiError::bad_request(format!("the push would not parse: {error}")))?;
+    console.take_push(&push).await.map_err(ApiError::internal)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn catalog() -> Json<BTreeMap<String, computer_types::App>> {
     Json(computer::apps::builtin())
 }
@@ -3328,12 +3585,12 @@ impl Idempotent {
         }
     }
 
-    fn replay(&self, replies: &Replies) -> ApiResult<Option<Response>> {
+    async fn replay(&self, state: &AppState) -> ApiResult<Option<Response>> {
         let Some(key) = self.key.as_deref() else {
             return Ok(None);
         };
 
-        match replies.lookup(key, self.print) {
+        match idempotency::lookup(state.store.as_ref(), key, self.print).await? {
             Lookup::Fresh => Ok(None),
             Lookup::Replay { status, body } => {
                 let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
@@ -3351,9 +3608,9 @@ impl Idempotent {
         }
     }
 
-    fn answer<T: serde::Serialize>(
+    async fn answer<T: serde::Serialize>(
         &self,
-        replies: &Replies,
+        state: &AppState,
         status: StatusCode,
         value: &T,
     ) -> ApiResult<Response> {
@@ -3362,14 +3619,27 @@ impl Idempotent {
         })?;
 
         if let Some(key) = self.key.as_deref() {
-            replies.put(key, self.print, status.as_u16(), body.clone());
+            let kept = idempotency::put(
+                state.store.as_ref(),
+                key,
+                self.print,
+                status.as_u16(),
+                &body,
+            )
+            .await;
+            if let Err(why) = kept {
+                tracing::warn!(%why, "a reply was not kept, so a repeat of this request runs again");
+            }
         }
 
         Ok(json_response(status, body))
     }
 }
 
-async fn list_runtimes(State(state): State<Arc<AppState>>) -> Json<RuntimeList> {
+async fn list_runtimes(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
+) -> Json<RuntimeList> {
     let holding = holding(&state).await;
 
     Json(RuntimeList {
@@ -3377,9 +3647,25 @@ async fn list_runtimes(State(state): State<Arc<AppState>>) -> Json<RuntimeList> 
             .runtimes
             .all()
             .iter()
+            .filter(|runtime| caller.sees_runtime(runtime.owner.as_deref()))
             .map(|runtime| runtime.view(*holding.get(&runtime.name).unwrap_or(&0)))
             .collect(),
     })
+}
+
+fn usable(
+    state: &AppState,
+    caller: &Caller,
+    asked: Option<&str>,
+) -> ApiResult<Arc<runtimes::Runtime>> {
+    let runtime = state.runtimes.resolve(asked)?;
+    match caller.sees_runtime(runtime.owner.as_deref()) {
+        true => Ok(runtime),
+        false => Err(ApiError::not_found(format!(
+            "no runtime named {} here",
+            runtime.name
+        ))),
+    }
 }
 
 async fn get_runtime(
@@ -3423,33 +3709,95 @@ async fn prepare_image(
     State(state): State<Arc<AppState>>,
     ApiPath(name): ApiPath<String>,
     ApiJson(body): ApiJson<PrepareImage>,
-) -> ApiResult<Json<PreparedImage>> {
+) -> ApiResult<Response> {
     let runtime = state
         .runtimes
         .get(&name)
         .ok_or_else(|| ApiError::not_found(format!("no runtime named {name} here")))?;
 
-    let config = runtime
-        .drive(computer::Builder::from_spec(&body.spec)?, &body.spec)
-        .config()?;
-    let (machine, _) = runtime.pair(body.spec.desktop.server);
+    let digest = body.spec.digest();
 
-    tracing::info!(runtime = %name, image = %config.image, "preparing an image");
-    machine.ensure_image(&config).await?;
+    if state.jobs == crate::jobs::Mode::Queue {
+        if let Some(built) = images::known(&state, &runtime, &digest).await {
+            return Ok(Json(PreparedImage {
+                runtime: name,
+                image: built,
+                state: ImageState::Ready,
+                reason: None,
+                spec_digest: Some(digest),
+            })
+            .into_response());
+        }
 
-    let reference = images::used(&machine, &config);
-    images::keep(&state, &name, &body.spec.digest(), &reference).await;
+        crate::jobs::queue_build(&state, &name, &body.spec).await?;
+        let building = PreparedImage {
+            runtime: name,
+            image: String::new(),
+            state: ImageState::Building,
+            reason: None,
+            spec_digest: Some(digest),
+        };
+        return Ok((StatusCode::ACCEPTED, Json(building)).into_response());
+    }
+
+    let image = images::prepare(&state, &runtime, &body.spec).await?;
 
     Ok(Json(PreparedImage {
         runtime: name,
-        image: reference,
+        image,
+        state: ImageState::Ready,
+        reason: None,
+        spec_digest: Some(digest),
+    })
+    .into_response())
+}
+
+async fn image_status(
+    State(state): State<Arc<AppState>>,
+    ApiPath((name, digest)): ApiPath<(String, String)>,
+) -> ApiResult<Json<PreparedImage>> {
+    if let Some(build) = crate::jobs::build(state.store.as_ref(), &name, &digest).await {
+        let (state, reason) = match build {
+            crate::jobs::Phase::Starting => (ImageState::Building, None),
+            crate::jobs::Phase::Failed { reason } => (ImageState::Failed, Some(reason)),
+        };
+        return Ok(Json(PreparedImage {
+            runtime: name,
+            image: String::new(),
+            state,
+            reason,
+            spec_digest: Some(digest),
+        }));
+    }
+
+    let record = state
+        .store
+        .get_image(&name, &digest)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("no image for {digest} on {name}")))?;
+
+    Ok(Json(PreparedImage {
+        runtime: name,
+        image: record.reference,
+        state: ImageState::Ready,
+        reason: None,
+        spec_digest: Some(digest),
     }))
 }
 
-async fn list_images(State(state): State<Arc<AppState>>) -> ApiResult<Json<ImageList>> {
-    Ok(Json(ImageList {
-        images: manifest(&state, None).await?,
-    }))
+async fn list_images(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
+) -> ApiResult<Json<ImageList>> {
+    let mut images = manifest(&state, None).await?;
+    images.retain(|image| {
+        state
+            .runtimes
+            .get(&image.runtime)
+            .is_none_or(|runtime| caller.sees_runtime(runtime.owner.as_deref()))
+    });
+
+    Ok(Json(ImageList { images }))
 }
 
 async fn list_runtime_images(
@@ -3525,11 +3873,13 @@ async fn forget_image(
     }
 
     images::forget(&state, &name, &digest).await;
+    images::said(&state, "image.removed", &name, &digest, &record.reference).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn add_runtime(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<Caller>,
     ApiJson(body): ApiJson<NewRuntime>,
 ) -> ApiResult<Response> {
     crate::runtimes::nameable(&body.name).map_err(ApiError::bad_request)?;
@@ -3548,7 +3898,7 @@ async fn add_runtime(
         )));
     }
 
-    let record = sealed(
+    let mut record = sealed(
         &state,
         &body.name,
         &body.provider,
@@ -3556,6 +3906,7 @@ async fn add_runtime(
         &body.secrets,
         None,
     )?;
+    record.owner = caller.owns_what_it_makes();
     let runtime = put(&state, record).await?;
 
     let view = runtime.view(0);
@@ -3676,6 +4027,7 @@ fn sealed(
         secrets,
         created_at_ms: held.map(|held| held.created_at_ms).unwrap_or(now),
         updated_at_ms: now,
+        owner: held.and_then(|held| held.owner.clone()),
     })
 }
 
@@ -3750,11 +4102,25 @@ fn json_response(status: StatusCode, body: Vec<u8>) -> Response {
         .into_response()
 }
 
-fn view_of(entry: &Entry) -> BoxView {
-    viewed(entry, BoxState::Ready)
+fn view_of(server: &AppState, entry: &Entry) -> BoxView {
+    viewed(server, entry, BoxState::Ready)
 }
 
-fn viewed(entry: &Entry, state: BoxState) -> BoxView {
+fn watch_url(server: &AppState, entry: &Entry) -> Option<String> {
+    if entry.computer.viewer_auth() != computer::Auth::Signed {
+        return entry.computer.viewer_url();
+    }
+
+    let screen = entry.computer.primary_screen();
+    let token = server.doors.token(
+        &entry.id,
+        screen.door_port(false),
+        crate::viewer::TICKET_LIFE,
+    )?;
+    screen.signed_page(false, &computer::Secret::new(token).ok()?)
+}
+
+fn viewed(server: &AppState, entry: &Entry, state: BoxState) -> BoxView {
     // A stopped box's held ports may already belong to another box.
     let reachable = state != BoxState::Stopped;
 
@@ -3767,7 +4133,7 @@ fn viewed(entry: &Entry, state: BoxState) -> BoxView {
         screens: entry.screens,
         width: entry.width,
         height: entry.height,
-        viewer_url: entry.computer.viewer_url().filter(|_| reachable),
+        viewer_url: watch_url(server, entry).filter(|_| reachable),
         devtools_url: entry
             .computer
             .devtools()
@@ -3775,16 +4141,32 @@ fn viewed(entry: &Entry, state: BoxState) -> BoxView {
             .filter(|_| reachable),
         created_at_ms: millis(entry.created_at),
         expires_at_ms: entry.computer.expires_at().map(millis),
+        owner: entry.owner.clone(),
+        spec: Some(entry.spec.clone()),
+        placement: Some(entry.placement.clone()),
     }
 }
 
 fn unreachable(record: &BoxRecord, why: String) -> BoxView {
+    absent(record, BoxState::Unreachable, Some(why))
+}
+
+fn pending_view(record: &BoxRecord, phase: &crate::jobs::Phase) -> BoxView {
+    match phase {
+        crate::jobs::Phase::Starting => absent(record, BoxState::Starting, None),
+        crate::jobs::Phase::Failed { reason } => {
+            absent(record, BoxState::Failed, Some(reason.clone()))
+        }
+    }
+}
+
+fn absent(record: &BoxRecord, state: BoxState, reason: Option<String>) -> BoxView {
     BoxView {
         id: record.id.clone(),
         runtime: record.runtime.clone(),
         spec_digest: record.spec.digest(),
-        state: BoxState::Unreachable,
-        reason: Some(why),
+        state,
+        reason,
         screens: record.screens,
         width: record.width,
         height: record.height,
@@ -3792,20 +4174,25 @@ fn unreachable(record: &BoxRecord, why: String) -> BoxView {
         devtools_url: None,
         created_at_ms: record.created_at_ms,
         expires_at_ms: record.expires_at_ms,
+        owner: record.owner.clone(),
+        spec: Some(record.spec.clone()),
+        placement: Some(record.placement.clone()),
     }
 }
 
-async fn kept(state: &AppState, entry: &Entry, placement: &Placement) -> BoxRecord {
+pub(crate) async fn kept(state: &AppState, entry: &Entry) -> BoxRecord {
     let record = BoxRecord {
         id: entry.id.clone(),
         runtime: entry.runtime.clone(),
         spec: entry.spec.clone(),
-        placement: placement.clone(),
+        placement: entry.placement.clone(),
+        owner: entry.owner.clone(),
         width: entry.width,
         height: entry.height,
         screens: entry.screens,
         created_at_ms: millis(entry.created_at),
         expires_at_ms: entry.computer.expires_at().map(millis),
+        deleted_at_ms: None,
     };
 
     if let Err(why) = state.store.put_box(&record).await {

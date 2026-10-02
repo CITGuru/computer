@@ -184,6 +184,12 @@ pub fn catalogue() -> Value {
                         "type": "integer",
                         "description": "Remove the box once nothing has used it for this long."
                     },
+                    "persistent": {
+                        "type": "boolean",
+                        "description": "Keep the files of the box when it stops, so `resume_box` \
+                                        brings it back as it was. Only some runtimes can, and a \
+                                        cloud vendor bills for what it keeps."
+                    },
                     "profile": {
                         "type": "string",
                         "description": "A name for the browser's profile, such as `work`. The \
@@ -2446,6 +2452,10 @@ fn asked(arguments: &Value) -> (Spec, Placement) {
         expires_after_secs: whole("ttl_minutes").map(|minutes| minutes * 60),
         idle_timeout_secs: whole("idle_minutes").map(|minutes| minutes * 60),
         profile: said("profile"),
+        persistent: arguments
+            .get("persistent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     };
 
     (spec, placement)
@@ -4137,6 +4147,7 @@ mod tests {
             "runtime": "smolvm",
             "ttl_minutes": 60,
             "idle_minutes": 10,
+            "persistent": true,
             "profile": "work",
         });
         for name in offered.as_object().expect("properties").keys() {

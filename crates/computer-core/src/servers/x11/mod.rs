@@ -425,6 +425,25 @@ impl Desktop for X11Desktop {
         self.run(every_key_up()).await.map(|_| ())
     }
 
+    async fn let_go_later(
+        &self,
+        held: &crate::desktop::StillDown,
+        after: Duration,
+        turn: &str,
+    ) -> Result<()> {
+        let release = match held {
+            crate::desktop::StillDown::Button(button) => button_argv(None, "mouseup", *button),
+            crate::desktop::StillDown::Key(key) => argv(&["xdotool", "keyup", &one_key(key)?]),
+        };
+        self.run(crate::desktop::later(held, after, turn, release))
+            .await
+            .map(|_| ())
+    }
+
+    async fn keep_held(&self, held: &crate::desktop::StillDown) -> Result<()> {
+        self.run(crate::desktop::kept(held)).await.map(|_| ())
+    }
+
     async fn move_along(&self, steps: &[Step]) -> Result<()> {
         let mut args = argv(&["xdotool"]);
         args.extend(along(steps));

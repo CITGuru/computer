@@ -89,6 +89,7 @@ pub struct Runtime {
     pub can: Capabilities,
     pub tuning: Tuning,
     pub state: RuntimeState,
+    pub owner: Option<String>,
 }
 
 impl Runtime {
@@ -119,6 +120,10 @@ impl Runtime {
         self.tuning.lifetime_secs.unwrap_or(LIFETIME_SECS)
     }
 
+    pub fn tokens_the_viewer(&self, spec: &computer_api::Spec) -> bool {
+        self.can.reach == PortReach::VendorUrl && spec.policy.auth == computer_api::Auth::None
+    }
+
     pub fn drive(&self, builder: Builder, spec: &computer_api::Spec) -> Builder {
         let (machine, profile) = self.pair(spec.desktop.server);
         let mut builder = builder
@@ -126,7 +131,7 @@ impl Runtime {
             .profile(profile)
             .expires_after(std::time::Duration::from_secs(self.lifetime()));
 
-        if self.can.reach == PortReach::VendorUrl && spec.policy.auth == computer_api::Auth::None {
+        if self.tokens_the_viewer(spec) {
             builder = builder.auth(computer::Auth::Token);
         }
 
@@ -220,6 +225,7 @@ impl Runtime {
             secrets: self.secrets.clone(),
             can: self.can.clone(),
             boxes,
+            owner: self.owner.clone(),
         }
     }
 }
@@ -363,6 +369,7 @@ pub async fn host(name: String, provider: String, source: Source, tuning: Tuning
     capped(&mut can, &tuning);
 
     Runtime {
+        owner: None,
         name,
         provider,
         secrets: Vec::new(),
@@ -389,6 +396,7 @@ pub fn remote(name: String, api: Arc<dyn RemoteApi>, tuning: Tuning) -> Runtime 
     capped(&mut can, &tuning);
 
     Runtime {
+        owner: None,
         name,
         provider,
         secrets: Vec::new(),
@@ -474,6 +482,7 @@ async fn hypervisor(name: String, provider: String, source: Source, tuning: Tuni
     capped(&mut can, &tuning);
 
     Runtime {
+        owner: None,
         name,
         provider,
         secrets: Vec::new(),
@@ -1024,6 +1033,7 @@ pub fn stored(
     capped(&mut can, &tuning);
 
     Ok(Runtime {
+        owner: record.owner.clone(),
         name: record.name.clone(),
         provider: record.provider.clone(),
         secrets: record.secrets.keys().cloned().collect(),
@@ -1061,6 +1071,7 @@ fn unavailable(record: &computer_storage::RuntimeRecord, why: String) -> Runtime
     let can = absent.can();
 
     Runtime {
+        owner: record.owner.clone(),
         name: record.name.clone(),
         provider: record.provider.clone(),
         secrets: record.secrets.keys().cloned().collect(),
@@ -1144,6 +1155,7 @@ pub fn engine(name: &str, machine: Arc<dyn Machine>) -> Runtime {
     capped(&mut can, &Tuning::default());
 
     Runtime {
+        owner: None,
         name: name.to_string(),
         provider: name.to_string(),
         secrets: Vec::new(),
@@ -1187,6 +1199,7 @@ mod tests {
         let can = api.can();
 
         Runtime {
+            owner: None,
             name: "cloud".to_string(),
             provider: "e2b".to_string(),
             secrets: Vec::new(),

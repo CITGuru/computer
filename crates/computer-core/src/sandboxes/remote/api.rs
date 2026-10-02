@@ -166,6 +166,22 @@ pub trait RemoteApi: Send + Sync {
         Ok(false)
     }
 
+    fn persists(&self) -> bool {
+        false
+    }
+
+    async fn stop(&self, _id: &str) -> Result<()> {
+        Err(Error::Unsupported {
+            gaps: vec!["stopping a box without removing it"],
+        })
+    }
+
+    async fn start(&self, _id: &str) -> Result<Sandbox> {
+        Err(Error::Unsupported {
+            gaps: vec!["stopping a box without removing it"],
+        })
+    }
+
     async fn logs(&self, _id: &str) -> Result<String> {
         Ok(String::new())
     }

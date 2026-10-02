@@ -19,6 +19,7 @@ pub struct Files<B> {
     blobs: B,
     next: Mutex<HashMap<String, u64>>,
     held: Mutex<HashMap<String, Waiting>>,
+    locks: crate::Locks,
 }
 
 struct Waiting {
@@ -32,7 +33,21 @@ impl<B: Blobs> Files<B> {
             blobs,
             next: Mutex::new(HashMap::new()),
             held: Mutex::new(HashMap::new()),
+            locks: crate::Locks::default(),
         }
+    }
+
+    async fn put_job(&self, job: &crate::JobRecord) -> Result<()> {
+        let body = serde_json::to_vec(job)
+            .map_err(|error| Error::Internal(format!("a job would not serialise: {error}")))?;
+        let at = format!(
+            "jobs/{:0width$}-{}.json",
+            job.created_at_ms,
+            part(&job.id)?,
+            width = WIDTH
+        );
+
+        self.blobs.put(&at, &body).await
     }
 
     async fn put_down(&self, id: &str) -> Result<()> {
@@ -262,6 +277,223 @@ impl<B: Blobs + 'static> Store for Files<B> {
         self.blobs
             .delete_prefix(&image(runtime, spec_digest)?)
             .await
+    }
+
+    async fn lock(&self, name: &str) -> Result<crate::Lock> {
+        Ok(crate::Lock::of(self.locks.hold(name).await))
+    }
+
+    async fn push_job(&self, job: &crate::JobRecord) -> Result<()> {
+        self.put_job(job).await
+    }
+
+    async fn claim_job(&self, worker: &str, lease_ms: u64) -> Result<Option<crate::JobRecord>> {
+        let _one_at_a_time = self.locks.hold("jobs").await;
+        let now = now_ms();
+
+        for at in self.blobs.list("jobs/", None).await? {
+            let Some(body) = self.blobs.get(&at).await? else {
+                continue;
+            };
+            let mut job: crate::JobRecord = serde_json::from_slice(&body).map_err(|error| {
+                Error::Corrupt(format!("the job at {at} does not parse: {error}"))
+            })?;
+            if !job.free(now) {
+                continue;
+            }
+
+            job.attempts += 1;
+            job.claimed_by = Some(worker.to_string());
+            job.claimed_until_ms = Some(now + lease_ms);
+            self.put_job(&job).await?;
+            return Ok(Some(job));
+        }
+
+        Ok(None)
+    }
+
+    async fn renew_job(&self, id: &str, worker: &str, lease_ms: u64) -> Result<bool> {
+        let _one_at_a_time = self.locks.hold("jobs").await;
+
+        for at in self.blobs.list("jobs/", None).await? {
+            if !at.ends_with(&format!("-{}.json", part(id)?)) {
+                continue;
+            }
+            let Some(body) = self.blobs.get(&at).await? else {
+                continue;
+            };
+            let mut job: crate::JobRecord = serde_json::from_slice(&body).map_err(|error| {
+                Error::Corrupt(format!("the job at {at} does not parse: {error}"))
+            })?;
+            if job.claimed_by.as_deref() != Some(worker) {
+                return Ok(false);
+            }
+
+            job.claimed_until_ms = Some(now_ms() + lease_ms);
+            self.put_job(&job).await?;
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    async fn finish_job(&self, id: &str) -> Result<()> {
+        let suffix = format!("-{}.json", part(id)?);
+
+        for at in self.blobs.list("jobs/", None).await? {
+            if at.ends_with(&suffix) {
+                self.blobs.delete_prefix(&at).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn append_event(&self, event: &crate::EventRecord) -> Result<u64> {
+        let _one_at_a_time = self.locks.hold("events").await;
+        let last = self
+            .blobs
+            .list("events/", None)
+            .await?
+            .last()
+            .and_then(|at| event_seq(at))
+            .unwrap_or(0);
+        let seq = last + 1;
+
+        let body = serde_json::to_vec(&crate::EventRecord {
+            seq,
+            ..event.clone()
+        })
+        .map_err(|error| Error::Internal(format!("an event would not serialise: {error}")))?;
+        self.blobs.put(&event_at(seq), &body).await?;
+
+        Ok(seq)
+    }
+
+    async fn events_after(
+        &self,
+        after: u64,
+        until_ms: u64,
+        limit: usize,
+    ) -> Result<Vec<crate::EventRecord>> {
+        let mut found = Vec::new();
+
+        for at in self.blobs.list("events/", Some(&event_at(after))).await? {
+            if found.len() >= limit {
+                break;
+            }
+            let Some(body) = self.blobs.get(&at).await? else {
+                continue;
+            };
+            let event: crate::EventRecord = serde_json::from_slice(&body).map_err(|error| {
+                Error::Corrupt(format!("the event at {at} does not parse: {error}"))
+            })?;
+            if event.at_ms > until_ms {
+                break;
+            }
+            if event.seq > after {
+                found.push(event);
+            }
+        }
+
+        Ok(found)
+    }
+
+    async fn prune_events(&self, before_ms: u64) -> Result<u64> {
+        let mut gone = 0;
+
+        for at in self.blobs.list("events/", None).await? {
+            let Some(body) = self.blobs.get(&at).await? else {
+                continue;
+            };
+            let event: crate::EventRecord = serde_json::from_slice(&body).map_err(|error| {
+                Error::Corrupt(format!("the event at {at} does not parse: {error}"))
+            })?;
+            if event.at_ms >= before_ms {
+                break;
+            }
+            self.blobs.delete_prefix(&at).await?;
+            gone += 1;
+        }
+
+        Ok(gone)
+    }
+
+    async fn put_note(
+        &self,
+        kind: &str,
+        key: &str,
+        value: &str,
+        until_ms: Option<u64>,
+    ) -> Result<()> {
+        let body = serde_json::to_vec(&Note {
+            key: key.to_string(),
+            value: value.to_string(),
+            until_ms,
+        })
+        .map_err(|error| Error::Internal(format!("a note would not serialise: {error}")))?;
+
+        self.blobs.put(&note(kind, key)?, &body).await
+    }
+
+    async fn get_note(&self, kind: &str, key: &str) -> Result<Option<String>> {
+        let Some(body) = self.blobs.get(&note(kind, key)?).await? else {
+            return Ok(None);
+        };
+
+        Ok(Note::read(&body)?.live(now_ms()).map(|held| held.value))
+    }
+
+    async fn list_notes(&self, kind: &str, prefix: &str) -> Result<Vec<(String, String)>> {
+        let now = now_ms();
+        let mut found = Vec::new();
+
+        for at in self.blobs.list(&notes(kind)?, None).await? {
+            let Some(body) = self.blobs.get(&at).await? else {
+                continue;
+            };
+            if let Some(held) = Note::read(&body)?.live(now) {
+                if held.key.starts_with(prefix) {
+                    found.push((held.key, held.value));
+                }
+            }
+        }
+
+        found.sort();
+        Ok(found)
+    }
+
+    async fn forget_note(&self, kind: &str, key: &str) -> Result<()> {
+        self.blobs.delete_prefix(&note(kind, key)?).await
+    }
+
+    async fn forget_notes(&self, kind: &str, prefix: &str) -> Result<()> {
+        for at in self.blobs.list(&notes(kind)?, None).await? {
+            let Some(body) = self.blobs.get(&at).await? else {
+                continue;
+            };
+            if Note::read(&body)?.key.starts_with(prefix) {
+                self.blobs.delete_prefix(&at).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn prune_notes(&self, now_ms: u64) -> Result<u64> {
+        let mut gone = 0;
+
+        for at in self.blobs.list("notes/", None).await? {
+            let Some(body) = self.blobs.get(&at).await? else {
+                continue;
+            };
+            if Note::read(&body)?.live(now_ms).is_none() {
+                self.blobs.delete_prefix(&at).await?;
+                gone += 1;
+            }
+        }
+
+        Ok(gone)
     }
 
     async fn append(
@@ -512,6 +744,48 @@ fn main(id: &str) -> Result<String> {
 
 fn image(runtime: &str, digest: &str) -> Result<String> {
     Ok(format!("images/{}/{}.json", part(runtime)?, part(digest)?))
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Note {
+    key: String,
+    value: String,
+    #[serde(default)]
+    until_ms: Option<u64>,
+}
+
+impl Note {
+    fn read(body: &[u8]) -> Result<Self> {
+        serde_json::from_slice(body)
+            .map_err(|error| Error::Corrupt(format!("a note does not parse: {error}")))
+    }
+
+    fn live(self, now_ms: u64) -> Option<Self> {
+        self.until_ms
+            .is_none_or(|until| until > now_ms)
+            .then_some(self)
+    }
+}
+
+fn event_at(seq: u64) -> String {
+    format!("events/{seq:0width$}.json", width = WIDTH)
+}
+
+fn event_seq(at: &str) -> Option<u64> {
+    at.strip_prefix("events/")?
+        .strip_suffix(".json")?
+        .parse()
+        .ok()
+}
+
+fn notes(kind: &str) -> Result<String> {
+    Ok(format!("notes/{}/", part(kind)?))
+}
+
+fn note(kind: &str, key: &str) -> Result<String> {
+    let name: String = key.bytes().map(|byte| format!("{byte:02x}")).collect();
+
+    Ok(format!("{}{name}.json", notes(kind)?))
 }
 
 fn runtime(name: &str) -> Result<String> {

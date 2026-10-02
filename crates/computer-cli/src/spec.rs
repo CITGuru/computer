@@ -61,6 +61,7 @@ pub fn asked(args: &[String]) -> Result<CreateBox, String> {
                 }
             }
             "--no-network" => body.spec.policy.network = false,
+            "--persistent" => body.placement.persistent = true,
             "--base" | "--minimal" => {
                 let asked = arg == "--minimal";
                 if minimal.is_some_and(|held| held != asked) {
@@ -195,6 +196,7 @@ mod tests {
             "10",
             "--profile",
             "work",
+            "--persistent",
         ]))
         .expect("all of it");
 
@@ -221,6 +223,7 @@ mod tests {
         assert_eq!(body.placement.runtime.as_deref(), Some("podman"));
         assert_eq!(body.placement.expires_after_secs, Some(3600));
         assert_eq!(body.placement.idle_timeout_secs, Some(600));
+        assert!(body.placement.persistent);
         assert_eq!(body.placement.profile.as_deref(), Some("work"));
     }
 

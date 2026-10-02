@@ -295,6 +295,7 @@ async fn test_a_runtime_holding_a_box_is_not_removed() {
     state
         .store
         .put_box(&computer_storage::BoxRecord {
+            owner: None,
             id: "box_1".to_string(),
             runtime: "cloud".to_string(),
             spec: Default::default(),
@@ -304,6 +305,7 @@ async fn test_a_runtime_holding_a_box_is_not_removed() {
             screens: 1,
             created_at_ms: 1_700_000_000_000,
             expires_at_ms: None,
+            deleted_at_ms: None,
         })
         .await
         .expect("recorded");

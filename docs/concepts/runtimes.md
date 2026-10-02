@@ -218,6 +218,8 @@ Give a box its own lifetime:
 - REST: `expires_after_secs` and `idle_timeout_secs` in the placement. Values under 60 seconds are refused.
 - MCP: `ttl_minutes` and `idle_minutes` on `launch_box`
 
+On a cloud runtime, the vendor ends the box at its deadline, so no server has to be up to do it. With no idle timeout, the deadline is the lifetime of the box, and a box that nobody drives stays until then. With an idle timeout, each command through the server moves the deadline, and the vendor ends the box when no command came for that time. A person who only watches the screen does not move the deadline.
+
 ## Restart
 
 When `computerd` restarts, it takes back each box that it recorded, through the runtime in the record. Then it scans each runtime for boxes that an earlier server labeled. A box whose runtime is missing shows `unreachable` with the reason, and its record stays.

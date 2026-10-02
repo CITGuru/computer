@@ -120,6 +120,9 @@ impl Builder {
         if let Some(secs) = placement.idle_timeout_secs {
             self = self.expires_when_idle(Duration::from_secs(secs));
         }
+        if placement.persistent {
+            self = self.persistent(true);
+        }
         if let Some(name) = &placement.profile {
             self = self.profiles(profile_volume(name)?);
         }

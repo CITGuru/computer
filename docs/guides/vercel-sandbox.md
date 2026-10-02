@@ -138,6 +138,25 @@ For a runtime added with the CLI, use `--field lifetime_secs=1800 --field max_li
 
 While a box is in use, the server extends its deadline at Vercel.
 
+## Persistent boxes
+
+A box is not persistent by default: when its session ends, Vercel discards its files.
+
+Create a box with `--persistent` (`"persistent": true` in the placement) to keep them:
+
+```bash
+BOX=$(computer new --runtime vercel --persistent)
+computer stop "$BOX"
+computer resume "$BOX"
+```
+
+- A stop takes a snapshot of the files. Vercel bills for snapshot storage. The server keeps only the latest snapshot of a box.
+- A resume starts a new session from the snapshot, and the server starts the desktop again. The files come back. Programs that were running do not.
+- The viewer address changes at each resume. Read the box again for the new one.
+- A box with an idle timeout stops at that time and can be resumed. A box that passes its lifetime is removed.
+- A delete removes the box and its snapshots.
+- A stop of a box that is not persistent is refused, because Vercel would discard it.
+
 ## Restart
 
 Vercel allows at most 5 tags for each sandbox, with values of at most 256 characters. The server's record of a box is longer. So the box name goes in a tag, and all labels go in `/tmp/computer-labels.json` in the box. When `computerd` restarts, it reads that file to take the box back.

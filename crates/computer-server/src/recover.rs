@@ -17,6 +17,8 @@ pub struct BoxLabel {
     pub width: u32,
     pub height: u32,
     pub screens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 impl BoxLabel {
@@ -36,6 +38,7 @@ impl BoxLabel {
             width: record.width,
             height: record.height,
             screens: record.screens,
+            owner: record.owner.clone(),
         }
     }
 }
@@ -56,7 +59,12 @@ pub async fn from_records(state: &AppState) -> usize {
     let mut taken = 0;
 
     for record in records {
-        if state.registry.get(&record.id).await.is_ok() {
+        if record.deleted_at_ms.is_some()
+            || state.registry.get(&record.id).await.is_ok()
+            || crate::jobs::phase(state.store.as_ref(), &record.id)
+                .await
+                .is_some()
+        {
             continue;
         }
 
@@ -85,6 +93,7 @@ pub async fn from_records(state: &AppState) -> usize {
             &record.id,
             &BoxLabel::of(&record),
             Some(&record),
+            Taking::AtStart,
         )
         .await
         {
@@ -105,10 +114,20 @@ pub async fn one(state: &AppState, id: &str) {
     let Ok(Some(record)) = state.store.get_box(id).await else {
         return;
     };
+    if record.deleted_at_ms.is_some() {
+        return;
+    }
     let Some(runtime) = state.runtimes.get(&record.runtime) else {
         return;
     };
     if !runtime.ready() {
+        return;
+    }
+
+    let Ok(_held) = state.store.lock(&format!("take/{id}")).await else {
+        return;
+    };
+    if state.registry.get(id).await.is_ok() {
         return;
     }
 
@@ -118,6 +137,7 @@ pub async fn one(state: &AppState, id: &str) {
         &record.id,
         &BoxLabel::of(&record),
         Some(&record),
+        Taking::ForARequest,
     )
     .await
     {
@@ -155,7 +175,7 @@ pub async fn from_labels(state: &AppState) -> usize {
                 continue;
             };
 
-            match take(state, &runtime, &name, &label, None).await {
+            match take(state, &runtime, &name, &label, None, Taking::AtStart).await {
                 Ok(()) => taken += 1,
                 Err(why) => tracing::warn!(
                     box_ = %name,
@@ -171,12 +191,19 @@ pub async fn from_labels(state: &AppState) -> usize {
     taken
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Taking {
+    AtStart,
+    ForARequest,
+}
+
 async fn take(
     state: &AppState,
     runtime: &Runtime,
     name: &str,
     label: &BoxLabel,
     recorded: Option<&BoxRecord>,
+    taking: Taking,
 ) -> Result<(), String> {
     let (machine, profile) = runtime.pair(label.spec.desktop.server);
 
@@ -207,7 +234,7 @@ async fn take(
             .map(|at| UNIX_EPOCH + Duration::from_millis(at)),
     );
 
-    if running && !frozen {
+    if running && !frozen && taking == Taking::AtStart {
         for button in [Button::Left, Button::Middle, Button::Right] {
             let _ = computer::Desktop::let_go(&computer, button).await;
         }
@@ -226,6 +253,12 @@ async fn take(
                 screens: label.screens,
             },
             computer,
+            crate::registry::Made {
+                placement: label.placement.clone(),
+                owner: label.owner.clone(),
+                created_at: recorded
+                    .map(|record| UNIX_EPOCH + Duration::from_millis(record.created_at_ms)),
+            },
         )
         .await;
 
@@ -240,6 +273,8 @@ async fn take(
             screens: label.screens,
             created_at_ms: crate::routes::ms_of(entry.created_at),
             expires_at_ms: entry.computer.expires_at().map(crate::routes::ms_of),
+            owner: label.owner.clone(),
+            deleted_at_ms: None,
         };
         if let Err(why) = state.store.put_box(&record).await {
             tracing::warn!(box_ = %entry.id, %why, "an adopted box was not recorded");
@@ -261,15 +296,17 @@ async fn take(
             .await;
     }
 
-    state
-        .record(
-            &entry.id,
-            Actor::System,
-            TraceEvent::Adopted {
-                runtime: runtime.name.clone(),
-            },
-        )
-        .await;
+    if taking == Taking::AtStart {
+        state
+            .record(
+                &entry.id,
+                Actor::System,
+                TraceEvent::Adopted {
+                    runtime: runtime.name.clone(),
+                },
+            )
+            .await;
+    }
 
     tracing::info!(box_ = %entry.id, runtime = %runtime.name, "took a box back");
     Ok(())
@@ -283,6 +320,7 @@ mod tests {
 
     fn label() -> BoxLabel {
         BoxLabel {
+            owner: None,
             digest: "abc".to_string(),
             spec: Spec::default(),
             placement: Placement::default(),
@@ -363,6 +401,7 @@ mod tests {
         state
             .store
             .put_box(&BoxRecord {
+                owner: None,
                 id: "desk-1".to_string(),
                 runtime: "cloud".to_string(),
                 spec: Spec::default(),
@@ -372,6 +411,7 @@ mod tests {
                 screens: 1,
                 created_at_ms: 1_700_000_000_000,
                 expires_at_ms: None,
+                deleted_at_ms: None,
             })
             .await
             .expect("recorded");
@@ -390,6 +430,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_two_requests_for_one_box_take_it_back_once_with_its_launch_time() {
+        let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
+        let state = Arc::new(holding(api));
+
+        state
+            .store
+            .put_box(&BoxRecord {
+                owner: None,
+                id: "desk-1".to_string(),
+                runtime: "cloud".to_string(),
+                spec: Spec::default(),
+                placement: Placement::default(),
+                width: 1280,
+                height: 800,
+                screens: 1,
+                created_at_ms: 1_700_000_000_000,
+                expires_at_ms: None,
+                deleted_at_ms: None,
+            })
+            .await
+            .expect("recorded");
+
+        let (one, two) = tokio::join!(state.entry("desk-1"), state.entry("desk-1"));
+        let (one, two) = (one.expect("taken back"), two.expect("taken back"));
+
+        assert!(
+            Arc::ptr_eq(&one, &two),
+            "the second request waits for the first and uses what it took back"
+        );
+        assert_eq!(
+            crate::routes::ms_of(one.created_at),
+            1_700_000_000_000,
+            "the box keeps the time it was launched, not the time it was taken back"
+        );
+        let entries = state
+            .store
+            .entries("desk-1", None, 10)
+            .await
+            .expect("a trace");
+        assert!(
+            entries.is_empty(),
+            "a take-back for a request writes nothing to the trace: {entries:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn test_a_box_comes_back_with_the_deadline_it_had() {
         let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
         let state = holding(api);
@@ -398,6 +484,7 @@ mod tests {
         state
             .store
             .put_box(&BoxRecord {
+                owner: None,
                 id: "desk-1".to_string(),
                 runtime: "cloud".to_string(),
                 spec: Spec::default(),
@@ -407,6 +494,7 @@ mod tests {
                 screens: 1,
                 created_at_ms: 1_700_000_000_000,
                 expires_at_ms: Some(ends),
+                deleted_at_ms: None,
             })
             .await
             .expect("recorded");
@@ -428,6 +516,7 @@ mod tests {
         state
             .store
             .put_box(&BoxRecord {
+                owner: None,
                 id: "desk-1".to_string(),
                 runtime: "cloud".to_string(),
                 spec: Spec::default(),
@@ -437,6 +526,7 @@ mod tests {
                 screens: 1,
                 created_at_ms: 1_700_000_000_000,
                 expires_at_ms: None,
+                deleted_at_ms: None,
             })
             .await
             .expect("recorded");

@@ -68,6 +68,7 @@ computer screenshot "$(computer new)" out.png
 | `--runtime NAME` | Put the box on this runtime. See `runtime ls`. |
 | `--ttl MINUTES` | Remove the box this long after it opens. |
 | `--idle MINUTES` | Remove the box this long after its last use. |
+| `--persistent` | Keep the files of the box when it stops, so that a resume brings it back. Only on a runtime that can. |
 | `--profile NAME` | Keep browser logins, cookies, and history in a volume with this name. The next box with the same name starts with them. Only one box at a time can use a profile. |
 | `--spec FILE` | Read a box specification, in the shape of the `POST /v1/boxes` body. Use `-` for standard input. A flag overrides the file. |
 

@@ -74,6 +74,7 @@ Each box has a deadline. A box lives one hour unless it asks for a different tim
 | --- | --- | --- | --- |
 | Fixed lifetime | `--ttl MINUTES` | `expires_after_secs` | `ttl_minutes` |
 | Idle timeout | `--idle MINUTES` | `idle_timeout_secs` | `idle_minutes` |
+| Keep files when stopped | `--persistent` | `persistent` | `persistent` |
 
 The server refuses values under 60 seconds. The clock starts when the server creates the box, not when the box is ready.
 

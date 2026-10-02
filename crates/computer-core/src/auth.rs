@@ -4,6 +4,7 @@ use crate::error::Result;
 pub const AUTH_ENV: &str = "COMPUTER_VIEWER_AUTH";
 pub const VIEW_SECRET_ENV: &str = "COMPUTER_VIEW_SECRET";
 pub const CONTROL_SECRET_ENV: &str = "COMPUTER_CONTROL_SECRET";
+pub const VIEWER_KEY_ENV: &str = "COMPUTER_VIEWER_KEY";
 
 pub const VIEWER_USER: &str = "computer";
 
@@ -13,6 +14,7 @@ pub enum Auth {
     Open,
     Password,
     Token,
+    Signed,
 }
 
 impl Auth {
@@ -29,6 +31,7 @@ impl Auth {
             Self::Open => "open",
             Self::Password => "password",
             Self::Token => "token",
+            Self::Signed => "signed",
         }
     }
 }
@@ -65,6 +68,7 @@ pub fn from_environment(
     let auth = match environment.get(AUTH_ENV).map(String::as_str) {
         Some("password") => Auth::Password,
         Some("token") => Auth::Token,
+        Some("signed") => Auth::Signed,
         _ => Auth::Open,
     };
 

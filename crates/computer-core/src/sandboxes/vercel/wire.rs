@@ -9,16 +9,21 @@ use std::time::Duration;
 const LIVE: [&str; 3] = ["pending", "running", "snapshotting"];
 
 pub fn new_sandbox(project: &str, plan: &SandboxPlan) -> Result<Value> {
+    let persistent = plan.metadata.contains_key(crate::PERSISTENT_LABEL);
     let mut body = json!({
         "projectId": project,
         "name": plan.name,
         "image": plan.image,
         "ports": fitted(&plan.publish)?,
         "timeout": millis(plan.ttl),
-        "persistent": false,
+        "persistent": persistent,
         "env": plan.env,
         "tags": tags(&plan.metadata),
     });
+
+    if persistent {
+        body["keepLastSnapshots"] = json!({ "count": 1, "deleteEvicted": true });
+    }
 
     if !plan.network {
         body["networkPolicy"] = json!({ "mode": "deny-all" });
@@ -113,6 +118,17 @@ pub fn sandbox_from(answer: &Value) -> Result<(Sandbox, String)> {
     }
 
     Ok((sandbox, session.to_string()))
+}
+
+pub fn snapshot_ids(answer: &Value) -> Vec<String> {
+    answer
+        .get("snapshots")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|snapshot| snapshot.get("status").and_then(Value::as_str) != Some("deleted"))
+        .filter_map(|snapshot| snapshot.get("id")?.as_str().map(str::to_string))
+        .collect()
 }
 
 pub fn live(answer: &Value) -> bool {
@@ -595,6 +611,38 @@ mod tests {
         assert!(!image_missing(
             r#"{"error":{"code":"not_found","message":"Named sandbox 'x' not found for this project."}}"#
         ));
+    }
+
+    #[test]
+    fn test_a_persistent_box_asks_for_one_kept_snapshot() {
+        let mut asked = plan();
+        asked
+            .metadata
+            .insert(crate::PERSISTENT_LABEL.to_string(), "1".to_string());
+        let body = new_sandbox("prj_1", &asked).expect("a body");
+
+        assert_eq!(body["persistent"], true);
+        assert_eq!(
+            body["keepLastSnapshots"],
+            json!({ "count": 1, "deleteEvicted": true }),
+            "a box that stops many times must not keep a snapshot for each stop"
+        );
+        assert!(
+            new_sandbox("prj_1", &plan())
+                .expect("a body")
+                .get("keepLastSnapshots")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_the_snapshots_to_remove_are_the_ones_still_there() {
+        let listing = json!({ "snapshots": [
+            { "id": "snap_a", "status": "created" },
+            { "id": "snap_b", "status": "deleted" },
+        ] });
+
+        assert_eq!(snapshot_ids(&listing), ["snap_a"]);
     }
 
     #[test]

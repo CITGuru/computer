@@ -1,10 +1,14 @@
 pub mod auth;
+pub mod caller;
 pub mod cdp;
 pub mod config;
+pub mod console;
 pub mod error;
+pub mod events;
 pub mod extract;
 pub mod idempotency;
 pub mod images;
+pub mod jobs;
 pub mod labels;
 pub mod mcp;
 pub mod oidc;
@@ -15,6 +19,7 @@ pub mod recover;
 pub mod registry;
 pub mod routes;
 pub mod runtimes;
+pub mod schedule;
 pub mod secrets;
 pub mod spec;
 pub mod states;
@@ -26,7 +31,6 @@ use computer_storage::files::Files;
 use computer_storage::local::LocalDir;
 use computer_storage::memory::Memory;
 use computer_storage::{Frames, Store};
-use idempotency::Replies;
 use registry::Registry;
 use runtimes::Runtimes;
 use std::collections::{BTreeMap, HashMap};
@@ -34,7 +38,6 @@ use std::sync::{Arc, Mutex};
 
 pub struct AppState {
     pub registry: Registry,
-    pub replies: Replies,
     pub token: Option<computer::Secret>,
     pub store: Arc<dyn Store>,
     pub frames: Arc<dyn Frames>,
@@ -45,9 +48,10 @@ pub struct AppState {
     pub vendors: Arc<dyn runtimes::Vendors>,
     pub tickets: viewer::Tickets,
     pub cdp_tokens: viewer::Tickets,
-    pub presses: presses::Presses,
-    pub labels: labels::Labels,
-    pub states: states::States,
+    pub doors: viewer::Doors,
+    pub console: Option<Arc<console::Console>>,
+    pub jobs: jobs::Mode,
+    pub cron: schedule::Cron,
 }
 
 impl Default for AppState {
@@ -66,7 +70,6 @@ impl AppState {
     pub fn split(store: Arc<dyn Store>, frames: Arc<dyn Frames>) -> Self {
         Self {
             registry: Registry::default(),
-            replies: Replies::default(),
             token: None,
             store,
             frames,
@@ -77,15 +80,20 @@ impl AppState {
             vendors: Arc::new(runtimes::Builtin),
             tickets: viewer::Tickets::default(),
             cdp_tokens: viewer::Tickets::default(),
-            presses: presses::Presses::default(),
-            labels: labels::Labels::default(),
-            states: states::States::default(),
+            doors: viewer::Doors::default(),
+            console: None,
+            jobs: jobs::Mode::default(),
+            cron: schedule::Cron::default(),
         }
     }
 
     pub async fn from_env() -> Result<Self, String> {
         let mut state = Self::stored().await?;
-        state.secrets = secrets::Keeper::from_env()?;
+        state = state.keeping(secrets::Keeper::from_env()?);
+        state.jobs = jobs::Mode::from_env()?;
+        state.cron = schedule::Cron::from_env()?;
+        state.console = console::Console::from_env()?
+            .map(|console| Arc::new(console.watching(Arc::clone(&state.store))));
 
         let config = config::ServerConfig::from_env()?;
         let found = runtimes::discover(
@@ -183,7 +191,46 @@ impl AppState {
         self
     }
 
+    pub fn trusting(mut self, key: caller::ConsoleKey) -> Self {
+        self.console = Some(Arc::new(console::Console::pinned(key)));
+        self
+    }
+
+    pub fn linking(mut self, console: console::Console) -> Self {
+        self.console = Some(Arc::new(console.watching(Arc::clone(&self.store))));
+        self
+    }
+
+    pub async fn owner_of(&self, id: &str) -> Option<Option<String>> {
+        if let Ok(entry) = self.registry.get(id).await {
+            return Some(entry.owner.clone());
+        }
+        match self.store.get_box(id).await {
+            Ok(Some(record)) => Some(record.owner),
+            _ => None,
+        }
+    }
+
+    pub fn scheduled(mut self, cron: schedule::Cron) -> Self {
+        self.cron = cron;
+        self
+    }
+
+    pub fn queueing(mut self) -> Self {
+        self.jobs = jobs::Mode::Queue;
+        self
+    }
+
     pub fn keeping(mut self, secrets: secrets::Keeper) -> Self {
+        if let Some(key) = secrets.derive("tickets") {
+            self.tickets = viewer::Tickets::keyed(&key);
+        }
+        if let Some(key) = secrets.derive("cdp-tokens") {
+            self.cdp_tokens = viewer::Tickets::keyed(&key);
+        }
+        if let Some(key) = secrets.derive("viewer-keys") {
+            self.doors = viewer::Doors::keyed(&key);
+        }
         self.secrets = secrets;
         self
     }
@@ -211,8 +258,71 @@ impl AppState {
     }
 
     pub async fn record(&self, id: &str, actor: Actor, event: TraceEvent) {
+        let said = events::of(&event);
+
         if let Err(why) = self.store.append(id, actor, event, None).await {
             tracing::warn!(box_ = %id, %why, "a trace entry was not written");
+        }
+        for (kind, data) in said {
+            if !self.news(id, kind).await {
+                continue;
+            }
+            self.box_event(id, kind, data).await;
+        }
+    }
+
+    async fn news(&self, id: &str, kind: &str) -> bool {
+        const KIND: &str = "unreachable";
+
+        match kind {
+            "box.unreachable" => {
+                if matches!(self.store.get_note(KIND, id).await, Ok(Some(_))) {
+                    return false;
+                }
+                let _ = self.store.put_note(KIND, id, "", None).await;
+                true
+            }
+            "box.ready" | "box.removed" => {
+                let _ = self.store.forget_note(KIND, id).await;
+                true
+            }
+            _ => true,
+        }
+    }
+
+    pub async fn box_event(&self, id: &str, kind: &str, data: serde_json::Value) {
+        let (owner, runtime) = match self.store.get_box(id).await {
+            Ok(Some(record)) => (record.owner, Some(record.runtime)),
+            _ => match self.registry.get(id).await {
+                Ok(entry) => (entry.owner.clone(), Some(entry.runtime.clone())),
+                Err(_) => (None, None),
+            },
+        };
+
+        self.event(kind, owner, Some(id.to_string()), runtime, data)
+            .await;
+    }
+
+    pub async fn event(
+        &self,
+        kind: &str,
+        owner: Option<String>,
+        box_id: Option<String>,
+        runtime: Option<String>,
+        data: serde_json::Value,
+    ) {
+        let event = computer_storage::EventRecord {
+            seq: 0,
+            at_ms: routes::ms_of(std::time::SystemTime::now()),
+            kind: kind.to_string(),
+            owner,
+            box_id,
+            runtime,
+            data,
+        };
+
+        if let Err(why) = self.store.append_event(&event).await {
+            tracing::warn!(%kind, %why, "an event was not written");
         }
     }
 
@@ -264,8 +374,35 @@ impl AppState {
             return Ok(entry);
         }
 
+        if let Some(phase) = jobs::phase(self.store.as_ref(), id).await {
+            return Err(jobs::not_ready(id, &phase));
+        }
+        if self.deleted(id).await {
+            return Err(removed(id));
+        }
+
         recover::one(self, id).await;
         self.registry.get(id).await
+    }
+
+    pub async fn deleted(&self, id: &str) -> bool {
+        matches!(
+            self.store.get_box(id).await,
+            Ok(Some(record)) if record.deleted_at_ms.is_some()
+        )
+    }
+
+    pub async fn mark_deleted(&self, id: &str) -> error::ApiResult<bool> {
+        let Some(mut record) = self.store.get_box(id).await? else {
+            return Ok(false);
+        };
+        if record.deleted_at_ms.is_none() {
+            record.deleted_at_ms = Some(routes::ms_of(std::time::SystemTime::now()));
+            self.store.put_box(&record).await?;
+        }
+        self.registry.forget(id).await;
+
+        Ok(true)
     }
 
     pub fn out_of_reach(&self, id: &str, why: String) {
@@ -296,6 +433,14 @@ impl AppState {
             seen.retain(|(held, _), _| held != id);
         }
     }
+}
+
+pub fn removed(id: &str) -> error::ApiError {
+    error::ApiError::new(
+        axum::http::StatusCode::GONE,
+        computer_api::ErrorCode::Gone,
+        format!("box {id} was removed"),
+    )
 }
 
 fn need(name: &str) -> Result<String, String> {

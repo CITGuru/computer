@@ -23,6 +23,15 @@ pub const TEMPLATE_MEMORY_MIB: u64 = 2048;
 pub const BUILD_WAIT: Duration = Duration::from_secs(20 * 60);
 
 impl E2bVendor {
+    async fn build(&self, built: &api::Built, plan: &template::Plan, name: &str) -> Result<()> {
+        for carried in &plan.carries {
+            self.api.carry_files(&built.template, carried).await?;
+        }
+
+        self.api.start_build(built, plan).await?;
+        self.wait_for(built, name).await
+    }
+
     async fn wait_for(&self, built: &api::Built, name: &str) -> Result<()> {
         let deadline = std::time::Instant::now() + BUILD_WAIT;
 
@@ -246,14 +255,16 @@ impl RemoteApi for E2bVendor {
         tracing::info!(template = %name, steps = plan.steps.len(), "building a template");
         let built = self.api.create_template(&name, cpus, memory as u32).await?;
 
-        for carried in &plan.carries {
-            self.api.carry_files(&built.template, carried).await?;
+        match self.build(&built, &plan, &name).await {
+            Ok(()) => Ok(Some(built.template)),
+            Err(why @ Error::Timeout { .. }) => Err(why),
+            Err(why) => {
+                if let Err(error) = self.api.delete_template(&built.template).await {
+                    tracing::warn!(template = %name, %error, "a failed template was not removed");
+                }
+                Err(why)
+            }
         }
-
-        self.api.start_build(&built, &plan).await?;
-        self.wait_for(&built, &name).await?;
-
-        Ok(Some(built.template))
     }
 
     fn reaper(&self, id: &str) -> Option<(String, Vec<String>)> {
@@ -297,6 +308,26 @@ mod tests {
             "the box starts from the template, not from the container image"
         );
         assert_eq!(api.built().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_a_template_whose_build_failed_is_removed() {
+        let api = Arc::new(ScriptedE2b::new().breaking_builds());
+        let config = Config {
+            image: bundle::DESKTOP.tag(),
+            ..Config::default()
+        };
+
+        let failed = vendor(Arc::clone(&api)).ensure_image(&config).await;
+
+        assert!(matches!(failed, Err(Error::Failed { .. })));
+        assert_eq!(
+            api.find_template(&template::named(&config.image))
+                .await
+                .expect("a listing"),
+            None,
+            "the next box builds again rather than starting from a template with nothing in it"
+        );
     }
 
     #[tokio::test]

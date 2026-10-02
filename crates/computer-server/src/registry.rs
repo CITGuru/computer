@@ -1,23 +1,29 @@
 use crate::error::{ApiError, ApiResult};
 use computer::spec::Resolved;
 use computer::{Computer, ScreenId};
-use computer_types::Spec;
+use computer_types::{Placement, Spec};
+
+pub struct Made {
+    pub placement: Placement,
+    pub owner: Option<String>,
+    pub created_at: Option<SystemTime>,
+}
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 pub struct Entry {
     pub id: String,
     pub runtime: String,
     pub spec: Spec,
+    pub placement: Placement,
+    pub owner: Option<String>,
     pub created_at: SystemTime,
     pub screens: u32,
     pub width: u32,
     pub height: u32,
     pub computer: Computer,
-    /// Per screen, so a batch never interleaves with another caller's on that screen.
-    locks: Mutex<BTreeMap<u32, Arc<Mutex<()>>>>,
 }
 
 impl Entry {
@@ -25,12 +31,10 @@ impl Entry {
         self.spec.digest()
     }
 
-    /// Refuses unknown screens: nothing prunes the lock map, so any number would grow it.
-    pub async fn screen_lock(&self, screen: u32) -> ApiResult<Arc<Mutex<()>>> {
+    pub fn screen_lock(&self, screen: u32) -> ApiResult<String> {
         self.check(screen)?;
 
-        let mut locks = self.locks.lock().await;
-        Ok(Arc::clone(locks.entry(screen).or_default()))
+        Ok(format!("screen/{}/{screen}", self.id))
     }
 
     fn check(&self, screen: u32) -> ApiResult<()> {
@@ -99,17 +103,19 @@ impl Registry {
         spec: Spec,
         size: Resolved,
         computer: Computer,
+        made: Made,
     ) -> Arc<Entry> {
         let entry = Arc::new(Entry {
             id: id.clone(),
             runtime,
             spec,
-            created_at: SystemTime::now(),
+            placement: made.placement,
+            owner: made.owner,
+            created_at: made.created_at.unwrap_or_else(SystemTime::now),
             screens: size.screens,
             width: size.width,
             height: size.height,
             computer,
-            locks: Mutex::new(BTreeMap::new()),
         });
 
         self.boxes.write().await.insert(id, Arc::clone(&entry));
@@ -140,12 +146,13 @@ impl Registry {
             id: was.id.clone(),
             runtime: was.runtime.clone(),
             spec: was.spec.clone(),
+            placement: was.placement.clone(),
+            owner: was.owner.clone(),
             created_at: was.created_at,
             screens: was.screens,
             width: was.width,
             height: was.height,
             computer,
-            locks: Mutex::new(BTreeMap::new()),
         });
 
         boxes.insert(id.to_string(), Arc::clone(&entry));

@@ -1,4 +1,5 @@
 mod error;
+mod locks;
 
 pub mod files;
 pub mod memory;
@@ -16,6 +17,7 @@ pub mod sql;
 pub mod conformance;
 
 pub use error::{Error, Result};
+pub use locks::{Lock, Locks};
 
 use async_trait::async_trait;
 use computer_api::{Actor, Placement, Spec, TraceEntry, TraceEvent};
@@ -37,6 +39,10 @@ pub struct BoxRecord {
     pub created_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at_ms: Option<u64>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +74,8 @@ pub struct RuntimeRecord {
     pub secrets: BTreeMap<String, Sealed>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -78,6 +86,54 @@ pub struct ImageRecord {
     pub built_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct JobRecord {
+    pub id: String,
+    pub kind: String,
+    pub body: String,
+    pub created_at_ms: u64,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_until_ms: Option<u64>,
+}
+
+impl JobRecord {
+    pub fn new(id: impl Into<String>, kind: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            kind: kind.into(),
+            body: body.into(),
+            created_at_ms: now_ms(),
+            attempts: 0,
+            claimed_by: None,
+            claimed_until_ms: None,
+        }
+    }
+
+    pub(crate) fn free(&self, now_ms: u64) -> bool {
+        self.claimed_until_ms.is_none_or(|until| until < now_ms)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EventRecord {
+    #[serde(default)]
+    pub seq: u64,
+    pub at_ms: u64,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub box_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<String>,
+    #[serde(default)]
+    pub data: serde_json::Value,
 }
 
 #[async_trait]
@@ -106,6 +162,45 @@ pub trait Store: Send + Sync {
     async fn list_images(&self) -> Result<Vec<ImageRecord>>;
 
     async fn forget_image(&self, runtime: &str, spec_digest: &str) -> Result<()>;
+
+    async fn lock(&self, name: &str) -> Result<Lock>;
+
+    async fn push_job(&self, job: &JobRecord) -> Result<()>;
+
+    async fn claim_job(&self, worker: &str, lease_ms: u64) -> Result<Option<JobRecord>>;
+
+    async fn renew_job(&self, id: &str, worker: &str, lease_ms: u64) -> Result<bool>;
+
+    async fn finish_job(&self, id: &str) -> Result<()>;
+
+    async fn append_event(&self, event: &EventRecord) -> Result<u64>;
+
+    async fn events_after(
+        &self,
+        after: u64,
+        until_ms: u64,
+        limit: usize,
+    ) -> Result<Vec<EventRecord>>;
+
+    async fn prune_events(&self, before_ms: u64) -> Result<u64>;
+
+    async fn put_note(
+        &self,
+        kind: &str,
+        key: &str,
+        value: &str,
+        until_ms: Option<u64>,
+    ) -> Result<()>;
+
+    async fn get_note(&self, kind: &str, key: &str) -> Result<Option<String>>;
+
+    async fn list_notes(&self, kind: &str, prefix: &str) -> Result<Vec<(String, String)>>;
+
+    async fn forget_note(&self, kind: &str, key: &str) -> Result<()>;
+
+    async fn forget_notes(&self, kind: &str, prefix: &str) -> Result<()>;
+
+    async fn prune_notes(&self, now_ms: u64) -> Result<u64>;
 
     async fn append(
         &self,

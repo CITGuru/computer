@@ -47,11 +47,14 @@ pub mod spec;
 pub mod testing;
 
 pub use audit::{Audit, audit};
-pub use auth::{AUTH_ENV, Auth, CONTROL_SECRET_ENV, Credentials, VIEW_SECRET_ENV, VIEWER_USER};
+pub use auth::{
+    AUTH_ENV, Auth, CONTROL_SECRET_ENV, Credentials, VIEW_SECRET_ENV, VIEWER_KEY_ENV, VIEWER_USER,
+};
 pub use cdp::{
     BrowserGroup, BrowserStore, Carry, Changes, Cookie, Database, Devtools, Element, Link, Page,
     PageText, Reading, Scroll, SearchProvider, Session, Snapshot, Target,
 };
+pub use desktop::StillDown;
 pub use desktop::{
     Browser, BrowserEndpoint, Button, Clipboard, Control, Delta, Desktop, DesktopFactory,
     DesktopNeed, DesktopPresence, DesktopSupport, Display, DisplayServer, Held, Keys, Node,
@@ -126,6 +129,8 @@ impl std::fmt::Display for HolderId {
 
 /// Written on the box too, so a box that outlives its process can still be swept.
 pub const EXPIRY_LABEL: &str = "computer.expires-at";
+pub const IDLE_LABEL: &str = "computer.idle-secs";
+pub const PERSISTENT_LABEL: &str = "computer.persistent";
 
 pub const READY_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -147,6 +152,7 @@ pub struct Builder {
     keep: bool,
     ttl: Option<Duration>,
     idle: Option<Duration>,
+    persistent: bool,
 }
 
 impl Default for Builder {
@@ -169,6 +175,7 @@ impl Default for Builder {
             keep: false,
             ttl: None,
             idle: None,
+            persistent: false,
         }
     }
 }
@@ -375,6 +382,11 @@ impl Builder {
         self
     }
 
+    pub fn persistent(mut self, persistent: bool) -> Self {
+        self.persistent = persistent;
+        self
+    }
+
     pub fn keep_on_drop(mut self, keep: bool) -> Self {
         self.keep = keep;
         self
@@ -392,6 +404,12 @@ impl Builder {
 
     pub fn credentials(mut self, credentials: Credentials) -> Self {
         self.config.credentials = Some(credentials);
+        self
+    }
+
+    pub fn viewer_key(mut self, key: Secret) -> Self {
+        self.config.auth = Auth::Signed;
+        self.config.viewer_key = Some(key);
         self
     }
 
@@ -493,7 +511,17 @@ impl Builder {
             config.publish.retain(|port| *port != bridge);
         }
 
-        if config.auth.is_gated() {
+        if config.auth == Auth::Signed {
+            let key = config.viewer_key.clone().ok_or_else(|| {
+                Error::denied("a signed viewer needs a viewer key, and none was given")
+            })?;
+            config
+                .env
+                .insert(auth::AUTH_ENV.to_string(), config.auth.as_str().to_string());
+            config
+                .env
+                .insert(auth::VIEWER_KEY_ENV.to_string(), key.expose().to_string());
+        } else if config.auth.is_gated() {
             let credentials = match config.credentials.take() {
                 Some(supplied) => supplied,
                 None => Credentials::generate()?,
@@ -529,6 +557,21 @@ impl Builder {
         }
 
         let name = self.name.clone().unwrap_or_else(unique_name);
+        if let Some(idle) = self.idle {
+            config
+                .labels
+                .insert(IDLE_LABEL.to_string(), idle.as_secs().to_string());
+        }
+        if self.persistent {
+            if !machine.persists() {
+                return Err(Error::Unsupported {
+                    gaps: vec!["a persistent box on this runtime"],
+                });
+            }
+            config
+                .labels
+                .insert(PERSISTENT_LABEL.to_string(), "1".to_string());
+        }
         let expires_at = self.ttl.map(|ttl| SystemTime::now() + ttl);
         if let Some(at) = expires_at {
             config.labels.insert(
@@ -597,7 +640,9 @@ impl Builder {
             });
         }
 
-        if let Some(idle) = self.idle {
+        if let Some(idle) = self.idle
+            && !machine.stops_when_idle()
+        {
             let doomed = Arc::clone(&machine);
             let condemned = name.clone();
             let active_at = computer.host.active_at();
@@ -959,6 +1004,10 @@ impl Computer {
         self.host.gate().1
     }
 
+    pub fn viewer_auth(&self) -> Auth {
+        self.host.gate().0
+    }
+
     pub fn support(&self) -> &DesktopSupport {
         &self.support
     }
@@ -1098,6 +1147,10 @@ impl Computer {
 
     pub fn viewer_url(&self) -> Option<String> {
         self.primary.viewer_url()
+    }
+
+    pub fn primary_screen(&self) -> &Screen {
+        &self.primary
     }
 
     pub fn devtools(&self) -> Option<BrowserEndpoint> {
@@ -1596,6 +1649,14 @@ impl Desktop for Computer {
         Desktop::let_keys_go(&self.primary).await
     }
 
+    async fn let_go_later(&self, held: &StillDown, after: Duration, turn: &str) -> Result<()> {
+        Desktop::let_go_later(&self.primary, held, after, turn).await
+    }
+
+    async fn keep_held(&self, held: &StillDown) -> Result<()> {
+        Desktop::keep_held(&self.primary, held).await
+    }
+
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {
         Desktop::wait_until_still(&self.primary, settle, within).await
     }
@@ -1712,6 +1773,37 @@ impl Screen {
 
     pub fn socket_headers(&self) -> Vec<(String, String)> {
         self.profile.port_headers()
+    }
+
+    pub fn door_port(&self, control: bool) -> u16 {
+        match control {
+            true => self.ports.control_vnc,
+            false => self.ports.view_vnc,
+        }
+    }
+
+    pub fn signed_page(&self, control: bool, token: &Secret) -> Option<String> {
+        self.mapped
+            .get(&self.door(control))
+            .filter(|_| self.profile.port_headers().is_empty())
+            .map(|port| {
+                self.profile
+                    .viewer_url(&self.host.address(*port), Some(token))
+            })
+    }
+
+    pub fn signed_socket(&self, control: bool, token: &Secret) -> Option<String> {
+        self.mapped.get(&self.door(control)).map(|port| {
+            self.profile
+                .viewer_socket(&self.host.address(*port), Some(token))
+        })
+    }
+
+    fn door(&self, control: bool) -> u16 {
+        match control {
+            true => self.ports.control,
+            false => self.ports.view,
+        }
     }
 
     pub fn viewer_socket(&self) -> Option<String> {
@@ -2286,6 +2378,14 @@ impl Desktop for Screen {
 
     async fn let_keys_go(&self) -> Result<()> {
         self.driver.let_keys_go().await
+    }
+
+    async fn let_go_later(&self, held: &StillDown, after: Duration, turn: &str) -> Result<()> {
+        self.driver.let_go_later(held, after, turn).await
+    }
+
+    async fn keep_held(&self, held: &StillDown) -> Result<()> {
+        self.driver.keep_held(held).await
     }
 
     async fn wait_until_still(&self, settle: Duration, within: Duration) -> Result<()> {

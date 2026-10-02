@@ -473,6 +473,18 @@ pub trait Desktop: Send + Sync {
         Ok(())
     }
 
+    async fn let_go_later(&self, held: &StillDown, after: Duration, turn: &str) -> Result<()> {
+        let _ = (held, after, turn);
+        Err(Error::Unsupported {
+            gaps: vec!["a release timed inside the box"],
+        })
+    }
+
+    async fn keep_held(&self, held: &StillDown) -> Result<()> {
+        let _ = held;
+        Ok(())
+    }
+
     /// A desktop that cannot pace keystrokes must refuse a `delay`.
     async fn type_text(&self, text: &str, delay: Option<Duration>) -> Result<()>;
 
@@ -697,5 +709,148 @@ mod tests {
         assert_eq!(Delta::down(3).dy, 3);
         assert_eq!(Delta::up(3).dy, -3);
         assert_eq!(Delta::up(-3).dy, -3, "a sign mistake must not reverse it");
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StillDown {
+    Button(Button),
+    Key(String),
+}
+
+impl StillDown {
+    fn name(&self) -> String {
+        match self {
+            Self::Button(button) => format!("button-{button:?}").to_lowercase(),
+            Self::Key(key) => {
+                let plain: String = key
+                    .chars()
+                    .map(|one| match one.is_ascii_alphanumeric() {
+                        true => one,
+                        false => '_',
+                    })
+                    .collect();
+                format!("key-{plain}")
+            }
+        }
+    }
+}
+
+const HOLDS: &str = "/tmp/computer/holds";
+
+const LATER: &str = r#"mkdir -p "$1" || exit 1; f="$1/$2"; t="$3"; s="$4"; shift 4; printf %s "$t" > "$f" || exit 1; nohup sh -c 'sleep "$1"; [ "$(cat "$2" 2>/dev/null)" = "$3" ] || exit 0; rm -f "$2"; shift 3; exec "$@"' sh "$s" "$f" "$t" "$@" </dev/null >/dev/null 2>&1 &"#;
+
+pub(crate) fn later(
+    held: &StillDown,
+    after: Duration,
+    turn: &str,
+    release: Vec<String>,
+) -> Vec<String> {
+    let mut args = vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        LATER.to_string(),
+        "sh".to_string(),
+        HOLDS.to_string(),
+        held.name(),
+        turn.to_string(),
+        format!("{:.3}", after.as_secs_f64()),
+    ];
+    args.extend(release);
+    args
+}
+
+pub(crate) fn kept(held: &StillDown) -> Vec<String> {
+    vec![
+        "rm".to_string(),
+        "-f".to_string(),
+        format!("{HOLDS}/{}", held.name()),
+    ]
+}
+
+#[cfg(all(test, unix))]
+mod later_tests {
+    use super::*;
+    use std::process::Command;
+
+    fn start(dir: &std::path::Path, turn: &str, done: &str) {
+        let status = Command::new("sh")
+            .args(["-c", LATER, "sh"])
+            .arg(dir)
+            .args(["key-a", turn, "0.3", "touch"])
+            .arg(dir.join(done))
+            .status()
+            .expect("sh ran");
+        assert!(status.success(), "the timer starts and the command returns");
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("computer-later-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn test_a_release_runs_in_the_box_after_its_time_with_nothing_waiting_for_it() {
+        let dir = scratch("fires");
+        start(&dir, "t1", "done");
+
+        assert!(!dir.join("done").exists(), "not before its time");
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(dir.join("done").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_newer_press_or_a_release_by_hand_stops_the_one_that_was_waiting() {
+        let dir = scratch("stops");
+        start(&dir, "t1", "first");
+        start(&dir, "t2", "second");
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(
+            !dir.join("first").exists(),
+            "the first deadline would cut the second press short"
+        );
+        assert!(dir.join("second").exists());
+
+        start(&dir, "t3", "third");
+        std::fs::remove_file(dir.join("key-a")).expect("what `kept` removes");
+        std::thread::sleep(Duration::from_millis(900));
+        assert!(!dir.join("third").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_the_timer_is_given_the_press_its_turn_and_the_release() {
+        let args = later(
+            &StillDown::Key("shift".to_string()),
+            Duration::from_millis(1500),
+            "t1",
+            vec![
+                "xdotool".to_string(),
+                "keyup".to_string(),
+                "shift".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            args.get(4..).expect("the arguments"),
+            [
+                HOLDS,
+                "key-shift",
+                "t1",
+                "1.500",
+                "xdotool",
+                "keyup",
+                "shift"
+            ]
+        );
+        assert_eq!(
+            kept(&StillDown::Button(Button::Left)),
+            ["rm", "-f", "/tmp/computer/holds/button-left"]
+        );
     }
 }

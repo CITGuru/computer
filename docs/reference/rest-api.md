@@ -8,7 +8,7 @@ To start the server and set a token, see [The server](../concepts/server.md).
 
 **Base URL.** `http://127.0.0.1:8080` unless `COMPUTER_SERVER_ADDR` changes it.
 
-**Authentication.** When the server has a token, send `Authorization: Bearer <COMPUTER_SERVER_TOKEN>` on each request. These endpoints need no bearer token:
+**Authentication.** When the server has a token, send `Authorization: Bearer <COMPUTER_SERVER_TOKEN>` on each request, or a workspace token or API key (`holm_sk_…`) from a console. See [Workspaces](../concepts/server.md#workspaces). These endpoints need no bearer token:
 
 - `GET /v1/health`
 - The viewer socket, which takes a short-lived token in the query
@@ -63,7 +63,7 @@ All errors have this body:
 | `GET` | `/v1/boxes` | List boxes. |
 | `POST` | `/v1/boxes` | Create a box. See [Create a box](#create-a-box). |
 | `GET` | `/v1/boxes/{id}` | Get one box. |
-| `DELETE` | `/v1/boxes/{id}` | Remove a box. Needs the header `x-computer-confirm-delete: true`. |
+| `DELETE` | `/v1/boxes/{id}` | Remove a box. Needs the header `x-computer-confirm-delete: true`. The server keeps the record of a removed box for its history: the box leaves the list, and each later call to it answers `410`. |
 | `POST` | `/v1/boxes/{id}/pause` | Pause the box. |
 | `POST` | `/v1/boxes/{id}/resume` | Resume a paused or stopped box. |
 | `POST` | `/v1/boxes/{id}/stop` | Stop the box and keep its files. |
@@ -85,11 +85,14 @@ A box in a response:
   "viewer_url": "…",
   "devtools_url": "…",
   "created_at_ms": 1790000000000,
-  "expires_at_ms": 1790003600000
+  "expires_at_ms": 1790003600000,
+  "owner": "ws_…",
+  "spec": { "desktop": { … }, "apps": { … }, "policy": { … } },
+  "placement": { "runtime": "docker", … }
 }
 ```
 
-`state` is `ready`, `paused`, `stopped`, `unreachable`, or `gone`. `reason` is present when the state needs an explanation.
+`state` is `ready`, `paused`, `stopped`, `unreachable`, `gone`, `starting`, or `failed`. `reason` is present when the state needs an explanation. When the server queues its jobs (`COMPUTER_SERVER_JOBS=queue`), `POST /v1/boxes` answers `202` with a box in the `starting` state. Read the box until it is `ready` or `failed`. `POST /v1/boxes/{id}/fork` answers `202` in the same way, with an empty replay report. A box that is `starting` or `failed` refuses other calls with `409`, and a `failed` box stays until it is deleted. `owner` is the workspace that launched the box, and is absent for a box launched with the server token. `spec` and `placement` are what the box was launched with, so the same box can be launched again.
 
 ### Screen
 
@@ -148,7 +151,7 @@ A frame in a response:
 | `POST` | `/v1/boxes/{id}/screens/{screen}/takeover` | Give the screen to a person. Body: `{"shared": false}`. Returns `{url, exclusive, screen}`. |
 | `DELETE` | `/v1/boxes/{id}/screens/{screen}/takeover` | Take the screen back. |
 | `GET` | `/v1/boxes/{id}/screens/{screen}/viewers` | Returns `{watching, driving, person_driving, taken_over}`. |
-| `POST` | `/v1/boxes/{id}/screens/{screen}/viewer/ticket` | Make a short-lived token for the viewer socket. Returns `{ticket, expires_at_ms}`. Valid for 15 minutes. |
+| `POST` | `/v1/boxes/{id}/screens/{screen}/viewer/ticket` | Make a short-lived token for the viewer socket. Returns `{ticket, expires_at_ms}`. Valid for 15 minutes. For a box with a signed viewer, the reply also has `view_socket` and, for a member or higher, `control_socket`: WebSocket URLs that go to the box directly. |
 | `GET` | `/v1/boxes/{id}/screens/{screen}/viewer/socket` | The viewer WebSocket, through the server. Query: `ticket`, and `mode` = `view` (default) or `control`. No bearer token. |
 
 See [Human control](../concepts/human-control.md).
@@ -235,8 +238,9 @@ Give `url` to Playwright `connectOverCDP` or browser-use `cdp_url`. Give `ws_url
 | `POST` | `/v1/runtimes` | Add a remote vendor. See below. |
 | `PATCH` | `/v1/runtimes/{name}` | Change fields or secrets. Body: `{"fields": {…}, "secrets": {"api_key": "…"}}`. |
 | `DELETE` | `/v1/runtimes/{name}` | Remove a vendor. Refused while a box uses it. |
-| `POST` | `/v1/runtimes/{name}/image` | Build the image for a spec before a box needs it. Body: `{"spec": {…}}`. |
+| `POST` | `/v1/runtimes/{name}/image` | Build the image for a spec before a box needs it. Body: `{"spec": {…}}`. Returns `{runtime, image, spec_digest}`. When the server queues its jobs, it answers `202` with `state: "building"` and an empty `image`. |
 | `GET` | `/v1/runtimes/{name}/images` | List the images built for a runtime. |
+| `GET` | `/v1/runtimes/{name}/images/{digest}` | Read one image. `state` is `building` or `failed` (with `reason`), and is absent when the image is built. |
 | `DELETE` | `/v1/runtimes/{name}/images/{digest}` | Remove an image. Refused while a box uses it. |
 | `GET` | `/v1/images` | List all images the server built. |
 
@@ -247,6 +251,49 @@ Add a vendor:
 ```
 
 The server encrypts secrets before it stores them and never returns them. See [Runtimes](../concepts/runtimes.md#remote-runtimes).
+
+### Events
+
+The server keeps a log of what happens to boxes, screens and images, for usage and for webhooks.
+
+| Method | Path | Effect |
+| --- | --- | --- |
+| `GET` | `/v1/events` | Read events in order. Query: `after` (the `next` of the last read, default 0) and `limit` (default 200, maximum 1000). Returns `{events, next, more}`. |
+
+Each event has `seq`, `at_ms`, `kind`, and, when they apply, `owner`, `box_id`, `runtime` and `data`. A workspace reads its own events. The server token reads all of them. An event shows about two seconds after it happens, and the server keeps events for 7 days.
+
+| Kind | When |
+| --- | --- |
+| `box.created` | A box was launched. `box.ready` follows it. |
+| `box.ready` | A box is ready, after a launch, a resume or a start. |
+| `box.paused`, `box.stopped` | A box was paused or stopped. |
+| `box.removed` | A box was deleted, or it passed its deadline. |
+| `box.unreachable` | The runtime no longer has the box. |
+| `box.failed` | A queued box did not start. `data.why` says why. |
+| `screen.taken_over`, `screen.given_back` | A person took a screen, or it was taken back. |
+| `image.built`, `image.removed` | An image was built or removed on a runtime. |
+
+### Scheduled work
+
+For a server that cannot keep a loop alive, such as a serverless function. Set `COMPUTER_SERVER_SCHEDULE=external`, and call these routes from a scheduler. Each accepts `GET` and `POST`, with the server token or `CRON_SECRET` as the bearer token.
+
+| Method | Path | Effect |
+| --- | --- | --- |
+| `GET`, `POST` | `/v1/jobs/reap` | Remove the boxes that are past their deadline. Returns `{removed}`. Call it each minute. |
+| `GET`, `POST` | `/v1/jobs/prune` | Remove old frames, trace entries and expired notes. Returns `{frames, entries, boxes}`. Call it each hour. |
+| `GET`, `POST` | `/v1/jobs/run` | Do the queued launches, forks and builds. It stops taking new jobs after 50 seconds. Returns `{ran}`. Call it each minute. |
+
+When `COMPUTER_PUBLIC_URL` and `CRON_SECRET` are set, the server calls its own `/v1/jobs/run` when it queues a job, so a job does not wait for the scheduler. On Vercel, the schedule goes in `vercel.json`:
+
+```json
+{
+  "crons": [
+    { "path": "/v1/jobs/run", "schedule": "* * * * *" },
+    { "path": "/v1/jobs/reap", "schedule": "* * * * *" },
+    { "path": "/v1/jobs/prune", "schedule": "0 * * * *" }
+  ]
+}
+```
 
 ### MCP
 
@@ -311,6 +358,7 @@ All fields are optional. `{}` creates a box with the defaults.
 | `memory`, `cpus` | Limits, such as `"2g"` and `"2"` |
 | `expires_after_secs` | Remove the box after this time. Minimum 60. |
 | `idle_timeout_secs` | Remove the box after this time with no use. Minimum 60. |
+| `persistent` | `true` keeps the files of the box when it stops, so that `POST /v1/boxes/{id}/resume` brings it back. Default `false`. A runtime that cannot do this refuses the box. |
 | `profile` | A browser profile name. Container runtimes only. |
 
 The response is the box.
