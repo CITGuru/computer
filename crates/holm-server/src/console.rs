@@ -15,6 +15,7 @@ pub const API_KEY_PREFIX: &str = "holm_sk_";
 pub const KEYS_PATH: &str = "/api/holmd/keys.json";
 pub const REVOKED_PATH: &str = "/api/holmd/revoked";
 pub const USAGE_PATH: &str = "/api/holmd/usage";
+pub const FUNDS_PATH: &str = "/api/holmd/funds";
 pub const PUSH_PATH: &str = "/v1/console/revoked";
 
 pub const PUSH_ID: &str = "webhook-id";
@@ -31,6 +32,7 @@ const KEYS_EVERY: Duration = Duration::from_secs(300);
 const USAGE_EVERY: Duration = Duration::from_secs(60);
 const UNKNOWN_KEY_GAP: Duration = Duration::from_secs(30);
 const ASKING: Duration = Duration::from_secs(10);
+const FUNDED_FOR: Duration = Duration::from_secs(10);
 
 pub struct Console {
     pinned: Option<ConsoleKey>,
@@ -42,6 +44,20 @@ pub struct Console {
     store: Option<Arc<dyn Store>>,
     pushed: RwLock<Option<(Instant, Revoked)>>,
     push_seen: AtomicBool,
+    funded: Mutex<HashMap<String, Instant>>,
+}
+
+#[derive(Deserialize)]
+struct Funds {
+    allowed: bool,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    Unfunded(String),
+    Unknown(String),
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,6 +181,7 @@ impl Console {
             store: None,
             pushed: RwLock::new(None),
             push_seen: AtomicBool::new(false),
+            funded: Mutex::new(HashMap::new()),
         }
     }
 
@@ -405,6 +422,56 @@ impl Console {
             *revoked = Some(list);
         }
         Ok(())
+    }
+
+    pub async fn funds(&self, workspace: &str) -> Result<(), Refusal> {
+        let Some(link) = &self.link else {
+            return Ok(());
+        };
+        let known = self
+            .funded
+            .lock()
+            .ok()
+            .and_then(|funded| funded.get(workspace).copied());
+        if known.is_some_and(|at| at.elapsed() < FUNDED_FOR) {
+            return Ok(());
+        }
+
+        let asked = link
+            .asked(FUNDS_PATH, |url| {
+                let request = link.http.get(url).query(&[("workspace", workspace)]);
+                match &link.secret {
+                    Some(secret) => request.bearer_auth(secret),
+                    None => request,
+                }
+            })
+            .await;
+        let answer = match asked {
+            Ok(answer) => answer
+                .json::<Funds>()
+                .await
+                .map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        };
+
+        match answer {
+            Ok(Funds { allowed: true, .. }) => {
+                if let Ok(mut funded) = self.funded.lock() {
+                    funded.insert(workspace.to_string(), Instant::now());
+                }
+                Ok(())
+            }
+            Ok(Funds { reason, .. }) => {
+                if let Ok(mut funded) = self.funded.lock() {
+                    funded.remove(workspace);
+                }
+                Err(Refusal::Unfunded(reason.unwrap_or_else(|| {
+                    "this workspace has no credit for a shared runtime".to_string()
+                })))
+            }
+            Err(_) if known.is_some() => Ok(()),
+            Err(why) => Err(Refusal::Unknown(why.to_string())),
+        }
     }
 
     pub async fn report_usage(&self) -> Result<(), String> {

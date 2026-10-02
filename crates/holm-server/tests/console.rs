@@ -1,11 +1,11 @@
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use holm_server::caller::{Caller, Role};
-use holm_server::console::{Console, Revoked};
+use holm_server::console::{Console, Refusal, Revoked};
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
@@ -20,6 +20,7 @@ struct Held {
     published: Vec<(String, Vec<u8>)>,
     revoked: Revoked,
     reported: Vec<Value>,
+    unfunded: Vec<String>,
     down: bool,
 }
 
@@ -69,12 +70,30 @@ async fn usage(
     StatusCode::NO_CONTENT
 }
 
+async fn funds(
+    State(held): State<Shared>,
+    headers: HeaderMap,
+    Query(asked): Query<BTreeMap<String, String>>,
+) -> Result<Json<Value>, StatusCode> {
+    let held = held.lock().expect("held");
+    let workspace = asked.get("workspace").cloned().unwrap_or_default();
+    match (held.down, authorized(&headers)) {
+        (true, _) => Err(StatusCode::SERVICE_UNAVAILABLE),
+        (_, false) => Err(StatusCode::UNAUTHORIZED),
+        _ if held.unfunded.contains(&workspace) => Ok(Json(
+            json!({ "allowed": false, "reason": "no credit left" }),
+        )),
+        _ => Ok(Json(json!({ "allowed": true }))),
+    }
+}
+
 async fn fake_console() -> (String, Shared) {
     let held: Shared = Arc::default();
     let app = Router::new()
         .route("/api/holmd/keys.json", get(keys))
         .route("/api/holmd/revoked", get(revoked))
         .route("/api/holmd/usage", post(usage))
+        .route("/api/holmd/funds", get(funds))
         .with_state(Arc::clone(&held));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -334,6 +353,7 @@ async fn test_a_console_that_still_serves_the_earlier_paths_is_read_there() {
         .route("/api/computerd/keys.json", get(keys))
         .route("/api/computerd/revoked", get(revoked))
         .route("/api/computerd/usage", post(usage))
+        .route("/api/computerd/funds", get(funds))
         .fallback(|| async { axum::response::Html("<html>sign in</html>") })
         .with_state(Arc::clone(&held));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -357,4 +377,46 @@ async fn test_a_console_that_still_serves_the_earlier_paths_is_read_there() {
     );
     console.report_usage().await.expect("reported");
     assert_eq!(held.lock().expect("held").reported.len(), 1);
+    assert_eq!(console.funds("ws_a").await, Ok(()));
+}
+
+#[tokio::test]
+async fn test_a_workspace_with_no_credit_is_refused_and_a_silent_console_keeps_its_last_answer() {
+    let (base, held) = fake_console().await;
+    held.lock().expect("held").unfunded = vec!["ws_b".into()];
+    let console = Console::linked(&base, Some(SECRET.into()), None).expect("a console");
+
+    assert_eq!(console.funds("ws_a").await, Ok(()));
+    assert_eq!(
+        console.funds("ws_b").await,
+        Err(Refusal::Unfunded("no credit left".into())),
+        "the console's reason is what the caller reads"
+    );
+
+    held.lock().expect("held").unfunded.clear();
+    assert_eq!(
+        console.funds("ws_b").await,
+        Ok(()),
+        "a refusal is not kept, so bought credit counts at once"
+    );
+
+    held.lock().expect("held").down = true;
+    assert_eq!(
+        console.funds("ws_a").await,
+        Ok(()),
+        "a workspace that had credit keeps working while the console is away"
+    );
+    assert!(
+        matches!(console.funds("ws_c").await, Err(Refusal::Unknown(_))),
+        "one nothing is known about is not let onto a shared runtime"
+    );
+
+    let pinned = Console::pinned(
+        holm_server::caller::ConsoleKey::raw(pair().public_key().as_ref().to_vec()).expect("a key"),
+    );
+    assert_eq!(
+        pinned.funds("ws_b").await,
+        Ok(()),
+        "with no console to ask there is no credit to check"
+    );
 }

@@ -1,5 +1,6 @@
 use crate::AppState;
 use crate::caller::Caller;
+use crate::console::Refusal;
 use crate::error::{ApiError, ApiResult};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::idempotency::{self, Lookup};
@@ -198,7 +199,7 @@ async fn create_box(
         return Ok(replayed);
     }
 
-    let runtime = usable(&state, &caller, body.placement.runtime.as_deref())?;
+    let runtime = usable(&state, &caller, body.placement.runtime.as_deref()).await?;
     let job = crate::jobs::Launch {
         id: new_id(),
         runtime: runtime.name.clone(),
@@ -1725,6 +1726,9 @@ async fn resume_box(
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<Json<BoxView>> {
     let entry = state.entry(&id).await?;
+    if let Some(runtime) = state.runtimes.get(&entry.runtime) {
+        funded(&state, entry.owner.as_deref(), &runtime).await?;
+    }
 
     if entry.computer.stopped().await.unwrap_or(false) {
         let woken = entry.computer.start(WAKE).await?;
@@ -2009,7 +2013,7 @@ async fn fork(
                 .map(|record| record.runtime),
         },
     };
-    let runtime = usable(&state, &caller, asked.as_deref())?;
+    let runtime = usable(&state, &caller, asked.as_deref()).await?;
     let job = crate::jobs::Launch {
         id: new_id(),
         runtime: runtime.name.clone(),
@@ -3647,18 +3651,50 @@ async fn list_runtimes(
     })
 }
 
-fn usable(
+async fn usable(
     state: &AppState,
     caller: &Caller,
     asked: Option<&str>,
 ) -> ApiResult<Arc<runtimes::Runtime>> {
     let runtime = state.runtimes.resolve(asked)?;
-    match caller.sees_runtime(runtime.owner.as_deref()) {
-        true => Ok(runtime),
-        false => Err(ApiError::not_found(format!(
+    if !caller.sees_runtime(runtime.owner.as_deref()) {
+        return Err(ApiError::not_found(format!(
             "no runtime named {} here",
             runtime.name
-        ))),
+        )));
+    }
+    funded(state, caller.owner.as_deref(), &runtime).await?;
+    Ok(runtime)
+}
+
+async fn funded(
+    state: &AppState,
+    owner: Option<&str>,
+    runtime: &runtimes::Runtime,
+) -> ApiResult<()> {
+    let (Some(console), Some(workspace), None) = (&state.console, owner, &runtime.owner) else {
+        return Ok(());
+    };
+    match console.funds(workspace).await {
+        Ok(()) => Ok(()),
+        Err(Refusal::Unfunded(why)) => Err(ApiError::new(
+            StatusCode::PAYMENT_REQUIRED,
+            ErrorCode::Denied,
+            why,
+        )),
+        Err(Refusal::Unknown(why)) => {
+            tracing::warn!(%why, "the console could not be asked about a workspace's credit");
+            let mut refused = ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                ErrorCode::Unavailable,
+                format!(
+                    "{} is shared, and the console that knows this workspace's credit did not answer",
+                    runtime.name
+                ),
+            );
+            refused.body.retryable = true;
+            Err(refused)
+        }
     }
 }
 
