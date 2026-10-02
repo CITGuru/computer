@@ -31,7 +31,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const HEALTH: &str = "/v1/health";
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 const CONFIRM_DELETE: &str = "x-holm-confirm-delete";
-const CONFIRM_DELETE_BEFORE: &str = "x-computer-confirm-delete";
 const TRACE_PAGE: usize = 500;
 const RAISE: Duration = Duration::from_millis(250);
 const MAX_PACE: Duration = Duration::from_millis(1_000);
@@ -320,9 +319,7 @@ async fn delete_box(
     headers: HeaderMap,
     ApiPath(id): ApiPath<String>,
 ) -> ApiResult<StatusCode> {
-    if header(&headers, CONFIRM_DELETE).is_none()
-        && header(&headers, CONFIRM_DELETE_BEFORE).is_none()
-    {
+    if header(&headers, CONFIRM_DELETE).is_none() {
         return Err(ApiError::bad_request(format!(
             "removing a box takes the {CONFIRM_DELETE} header: its files do not come back"
         )));

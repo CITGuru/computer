@@ -23,7 +23,7 @@ impl States {
 }
 
 fn whose(key: &str) -> Whose {
-    Whose::new("states", "computerd", key)
+    Whose::new("states", "holmd", key)
 }
 
 pub async fn keep(state: &AppState, key: &str, json: String) -> Result<(), ApiError> {

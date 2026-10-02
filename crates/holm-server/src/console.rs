@@ -74,48 +74,19 @@ struct Link {
     base: String,
     secret: Option<String>,
     http: reqwest::Client,
-    earlier: AtomicBool,
-}
-
-const PATHS: &str = "/api/holmd/";
-const PATHS_BEFORE: &str = "/api/computerd/";
-
-fn meant(answer: &reqwest::Response) -> bool {
-    let json = answer
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|kind| kind.contains("json"));
-
-    answer.status().is_success() && (json || answer.status() == reqwest::StatusCode::NO_CONTENT)
 }
 
 impl Link {
-    fn at(&self, path: &str) -> String {
-        match self.earlier.load(Ordering::Relaxed) {
-            true => format!("{}{}", self.base, path.replacen(PATHS, PATHS_BEFORE, 1)),
-            false => format!("{}{path}", self.base),
-        }
-    }
-
     async fn asked(
         &self,
         path: &str,
         make: impl Fn(String) -> reqwest::RequestBuilder,
     ) -> Result<reqwest::Response, String> {
-        let first = make(self.at(path))
+        make(format!("{}{path}", self.base))
             .send()
             .await
-            .map_err(|error| error.to_string())?;
-
-        let answer = match !meant(&first) && !self.earlier.swap(true, Ordering::Relaxed) {
-            true => make(self.at(path))
-                .send()
-                .await
-                .map_err(|error| error.to_string())?,
-            false => first,
-        };
-        answer.error_for_status().map_err(|error| error.to_string())
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -165,7 +136,6 @@ impl Console {
                 base: base.trim_end_matches('/').to_string(),
                 secret,
                 http,
-                earlier: AtomicBool::new(false),
             }),
         ))
     }

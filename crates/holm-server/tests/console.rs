@@ -347,40 +347,6 @@ async fn test_a_pushed_revocation_stops_a_key_on_every_server_that_shares_the_st
 }
 
 #[tokio::test]
-async fn test_a_console_that_still_serves_the_earlier_paths_is_read_there() {
-    let held: Shared = Arc::default();
-    let app = Router::new()
-        .route("/api/computerd/keys.json", get(keys))
-        .route("/api/computerd/revoked", get(revoked))
-        .route("/api/computerd/usage", post(usage))
-        .route("/api/computerd/funds", get(funds))
-        .fallback(|| async { axum::response::Html("<html>sign in</html>") })
-        .with_state(Arc::clone(&held));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("a port");
-    let base = format!("http://{}", listener.local_addr().expect("an address"));
-    tokio::spawn(async move { axum::serve(listener, app).await.expect("served") });
-
-    let signer = pair();
-    held.lock().expect("held").published =
-        vec![("k1".into(), signer.public_key().as_ref().to_vec())];
-    let console = Console::linked(&base, Some(SECRET.into()), None).expect("a console");
-
-    console.refresh_revoked().await.expect("the revoked list");
-    assert!(
-        console
-            .verify(&api_key(&signer, "k1", "key_1", "ws_a"), NOW)
-            .await
-            .is_some(),
-        "a console from before the rename still gives its keys"
-    );
-    console.report_usage().await.expect("reported");
-    assert_eq!(held.lock().expect("held").reported.len(), 1);
-    assert_eq!(console.funds("ws_a").await, Ok(()));
-}
-
-#[tokio::test]
 async fn test_a_workspace_with_no_credit_is_refused_and_a_silent_console_keeps_its_last_answer() {
     let (base, held) = fake_console().await;
     held.lock().expect("held").unfunded = vec!["ws_b".into()];

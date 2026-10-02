@@ -56,7 +56,7 @@ impl Keeper {
     pub fn derive(&self, purpose: &str) -> Option<[u8; 32]> {
         let tag = ring::hmac::sign(
             self.deriving.as_ref()?,
-            format!("computerd {purpose}").as_bytes(),
+            format!("holmd {purpose}").as_bytes(),
         );
         tag.as_ref().try_into().ok()
     }

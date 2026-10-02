@@ -6,27 +6,6 @@ mod spec;
 
 pub use daemon::serve as daemon;
 
-const EARLIER_NAMES: &str = "COMPUTER_";
-const NAMES: &str = "HOLM_";
-
-fn renamed(name: &str) -> Option<String> {
-    name.strip_prefix(EARLIER_NAMES)
-        .map(|rest| format!("{NAMES}{rest}"))
-}
-
-pub fn adopt_earlier_names() {
-    let earlier: Vec<(String, std::ffi::OsString)> = std::env::vars_os()
-        .filter_map(|(name, value)| Some((renamed(name.to_str()?)?, value)))
-        .collect();
-
-    for (name, value) in earlier {
-        if std::env::var_os(&name).is_none() {
-            // SAFETY: called from `main` before the runtime starts, so no other thread reads the environment.
-            unsafe { std::env::set_var(&name, value) };
-        }
-    }
-}
-
 use holm_client::Client;
 
 pub const USAGE: &str = "\
@@ -696,16 +675,6 @@ pub fn bare(args: &[String], valued: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_a_setting_under_its_earlier_name_is_read_under_the_new_one() {
-        assert_eq!(
-            renamed("COMPUTER_SERVER_ADDR").as_deref(),
-            Some("HOLM_SERVER_ADDR")
-        );
-        assert_eq!(renamed("HOLM_SERVER_ADDR"), None);
-        assert_eq!(renamed("PATH"), None);
-    }
 
     fn args(listed: &[&str]) -> Vec<String> {
         listed.iter().map(|arg| arg.to_string()).collect()

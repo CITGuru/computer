@@ -12,7 +12,6 @@ pub const CONSOLE_KEY_FILE: &str = "HOLM_CONSOLE_PUBLIC_KEY_FILE";
 
 const ISSUER: &str = "console";
 const AUDIENCE: &str = "holmd";
-const AUDIENCE_BEFORE: &str = "computerd";
 const LEEWAY_SECS: u64 = 30;
 const SPKI_ED25519: usize = 44;
 const RAW_ED25519: usize = 32;
@@ -189,9 +188,7 @@ impl Token {
         let named = kind == Kind::Call || claims.sub.as_deref().is_some_and(|sub| !sub.is_empty());
 
         match (
-            claims.iss == ISSUER
-                && (claims.aud == AUDIENCE || claims.aud == AUDIENCE_BEFORE)
-                && claims.kind == kind,
+            claims.iss == ISSUER && claims.aud == AUDIENCE && claims.kind == kind,
             unexpired && started && named,
             claims.role,
         ) {

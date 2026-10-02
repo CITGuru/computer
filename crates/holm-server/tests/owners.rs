@@ -726,20 +726,3 @@ async fn test_an_image_on_a_shared_runtime_is_the_operators_to_remove() {
     let (status, _) = world.send(OPERATOR, "DELETE", &image, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
-
-#[tokio::test]
-async fn test_a_delete_with_the_earlier_header_is_still_taken() {
-    let world = World::new().await;
-    let id = world.launch(OPERATOR).await;
-
-    let (status, _) = world
-        .send_with(
-            OPERATOR,
-            "DELETE",
-            &format!("/v1/boxes/{id}"),
-            None,
-            &[("x-computer-confirm-delete", "true")],
-        )
-        .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
-}
