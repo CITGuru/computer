@@ -671,7 +671,7 @@ impl Store for Sql {
              WHERE kind = ? AND substr(key, 1, ?) = ? AND (until_ms IS NULL OR until_ms > ?)
              ORDER BY key"))
         .bind(kind)
-        .bind(prefix.chars().count() as i64)
+        .bind(i32::try_from(prefix.chars().count()).unwrap_or(i32::MAX))
         .bind(prefix)
         .bind(now_ms() as i64)
         .fetch_all(&self.pool)
@@ -705,7 +705,7 @@ impl Store for Sql {
     async fn forget_notes(&self, kind: &str, prefix: &str) -> Result<()> {
         sqlx::query(self.q("DELETE FROM notes WHERE kind = ? AND substr(key, 1, ?) = ?"))
             .bind(kind)
-            .bind(prefix.chars().count() as i64)
+            .bind(i32::try_from(prefix.chars().count()).unwrap_or(i32::MAX))
             .bind(prefix)
             .execute(&self.pool)
             .await
