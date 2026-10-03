@@ -51,6 +51,7 @@ See [Storage](../concepts/server.md#storage).
 | `HOLM_STORAGE_BACKEND` | `memory` | `memory`, `local`, `sqlite`, `postgres`, or `s3`. |
 | `HOLM_STATE_DIR` | None | The directory for `local`. |
 | `HOLM_STATE_URL` | None | The database URL for `sqlite` and `postgres`. |
+| `HOLM_STATE_POOL` | `10` | The most database connections one server process holds. Set it low when many processes share a pooler with a client limit. |
 | `HOLM_S3_ENDPOINT` | None | The S3 endpoint for `s3`. |
 | `HOLM_S3_BUCKET` | None | The bucket for `s3`. |
 | `HOLM_S3_REGION` | None | The region for `s3`. |

@@ -152,7 +152,15 @@ impl AppState {
             ));
         }
 
-        let store = holm_storage::sql::Sql::open(&url)
+        let connections = match std::env::var("HOLM_STATE_POOL") {
+            Ok(value) => Some(
+                value
+                    .parse()
+                    .map_err(|_| format!("HOLM_STATE_POOL={value} is not a number"))?,
+            ),
+            Err(_) => None,
+        };
+        let store = holm_storage::sql::Sql::open_sized(&url, connections)
             .await
             .map_err(|why| format!("{dialect}: {why}"))?;
 

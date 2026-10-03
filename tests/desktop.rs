@@ -300,6 +300,24 @@ async fn a_held_key_is_not_cleared_by_what_is_typed_under_it() {
 }
 
 #[tokio::test]
+async fn a_key_another_server_holds_is_not_cleared_by_what_this_one_types() {
+    let host = Arc::new(ScriptedHost::new());
+    let screen = driver(Arc::clone(&host));
+
+    screen.assume_keys_down(&["shift".to_string()]);
+    screen.type_text("abc", None).await.expect("text");
+    assert_eq!(
+        host.last_line(),
+        "xdotool type -- abc",
+        "the shift a different process pressed is still down in the box"
+    );
+
+    screen.assume_keys_down(&[]);
+    screen.type_text("abc", None).await.expect("text");
+    assert_eq!(host.last_line(), "xdotool type --clearmodifiers -- abc");
+}
+
+#[tokio::test]
 async fn a_key_is_let_go_even_while_a_person_holds_the_screen() {
     let host = Arc::new(ScriptedHost::new());
     let gate = Arc::new(ControlGate::new());

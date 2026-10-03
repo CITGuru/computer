@@ -25,6 +25,12 @@ impl KeysDown {
         }
     }
 
+    pub(crate) fn replace(&self, now: Vec<String>) {
+        if let Ok(mut keys) = self.0.lock() {
+            *keys = now;
+        }
+    }
+
     pub(crate) fn clear(&self) {
         if let Ok(mut keys) = self.0.lock() {
             keys.clear();

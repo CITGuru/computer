@@ -385,6 +385,7 @@ async fn actions(
 
     let target = entry.desktop(screen).await?;
     let desktop = target.as_desktop();
+    desktop.assume_keys_down(&crate::presses::held_keys(state.store.as_ref(), &id, screen).await);
 
     // Resolved lazily: `open_url` raises a new tab, so an early handle is stale.
     let browser = entry.computer.browser();
@@ -4088,7 +4089,10 @@ async fn rebuilt(state: &AppState, runtime: &crate::runtimes::Runtime) -> usize 
             continue;
         }
 
-        let (machine, profile) = runtime.pair(entry.spec.desktop.server);
+        let (machine, profile) = runtime.pair_for(
+            entry.spec.desktop.server,
+            state.doors.devtools_secret(&entry.id),
+        );
         let taken = holm::Computer::attach_using(machine, &entry.id, profile, None).await;
 
         match taken {

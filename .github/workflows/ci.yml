@@ -43,6 +43,14 @@ jobs:
 
   features:
     runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: holm
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 15
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -58,6 +66,8 @@ jobs:
           cargo clippy -p holm-storage --all-targets --locked \
             --features sqlite,postgres,s3,conformance -- -D warnings
           cargo test -p holm-storage --locked --features sqlite,postgres,s3
+        env:
+          HOLM_STORAGE_POSTGRES_URL: postgres://postgres:holm@127.0.0.1:5432/postgres
 
       - name: The commands, with everything a daemon can be built with
         run: |

@@ -12,6 +12,7 @@ pub fn plan(
     name: &str,
     runtime: &Runtime,
     owner: Option<&str>,
+    devtools: Option<holm::Secret>,
 ) -> Result<(Builder, Resolved), ApiError> {
     let resolved = resolve(spec)?;
 
@@ -19,7 +20,7 @@ pub fn plan(
 
     let digest = spec.digest();
     let mut builder = runtime
-        .drive(Builder::from_spec(spec)?, spec)
+        .drive(Builder::from_spec(spec)?, spec, devtools)
         .place(placement)?
         .name(name)
         // The box outlives the request, so a dropped handle must not take it away.
@@ -60,7 +61,14 @@ mod tests {
     fn test_a_spec_the_engine_refuses_is_a_bad_request() {
         let spec: Spec = serde_json::from_str(r#"{"desktop":{"screens":99}}"#).unwrap();
 
-        let Err(error) = plan(&spec, &Placement::default(), "box", &on_docker(), None) else {
+        let Err(error) = plan(
+            &spec,
+            &Placement::default(),
+            "box",
+            &on_docker(),
+            None,
+            None,
+        ) else {
             panic!("a spec asking for more screens than the image runs was accepted");
         };
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
@@ -73,7 +81,14 @@ mod tests {
             ..Placement::default()
         };
 
-        let Err(error) = plan(&Spec::default(), &placement, "box", &on_docker(), None) else {
+        let Err(error) = plan(
+            &Spec::default(),
+            &placement,
+            "box",
+            &on_docker(),
+            None,
+            None,
+        ) else {
             panic!("a box was accepted that would be removed while starting");
         };
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
@@ -84,8 +99,15 @@ mod tests {
         let mut tuned = on_docker();
         tuned.tuning.memory = Some("4g".to_string());
 
-        let (builder, _) =
-            plan(&Spec::default(), &Placement::default(), "box", &tuned, None).expect("a box");
+        let (builder, _) = plan(
+            &Spec::default(),
+            &Placement::default(),
+            "box",
+            &tuned,
+            None,
+            None,
+        )
+        .expect("a box");
         assert_eq!(
             builder.config().expect("a config").memory.as_deref(),
             Some("4g")
@@ -95,7 +117,8 @@ mod tests {
             memory: Some("8g".to_string()),
             ..Placement::default()
         };
-        let (builder, _) = plan(&Spec::default(), &placement, "box", &tuned, None).expect("a box");
+        let (builder, _) =
+            plan(&Spec::default(), &placement, "box", &tuned, None, None).expect("a box");
         assert_eq!(
             builder.config().expect("a config").memory.as_deref(),
             Some("8g"),
@@ -113,6 +136,7 @@ mod tests {
             &Placement::default(),
             "box",
             &hardened,
+            None,
             None,
         )
         .expect("a box");
@@ -132,6 +156,7 @@ mod tests {
             &Placement::default(),
             "box",
             &on_docker(),
+            None,
             None,
         )
         .expect("a default spec launches");

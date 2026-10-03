@@ -420,6 +420,14 @@ impl Desktop for X11Desktop {
             .map(|_| ())
     }
 
+    fn assume_keys_down(&self, keys: &[String]) {
+        self.down.replace(
+            keys.iter()
+                .filter_map(|key| crate::servers::x11::one_key(key).ok())
+                .collect(),
+        );
+    }
+
     async fn let_keys_go(&self) -> Result<()> {
         self.down.clear();
         self.run(every_key_up()).await.map(|_| ())

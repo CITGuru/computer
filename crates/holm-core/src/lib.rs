@@ -1649,6 +1649,10 @@ impl Desktop for Computer {
         Desktop::let_keys_go(&self.primary).await
     }
 
+    fn assume_keys_down(&self, keys: &[String]) {
+        Desktop::assume_keys_down(&self.primary, keys)
+    }
+
     async fn let_go_later(&self, held: &StillDown, after: Duration, turn: &str) -> Result<()> {
         Desktop::let_go_later(&self.primary, held, after, turn).await
     }
@@ -2378,6 +2382,10 @@ impl Desktop for Screen {
 
     async fn let_keys_go(&self) -> Result<()> {
         self.driver.let_keys_go().await
+    }
+
+    fn assume_keys_down(&self, keys: &[String]) {
+        self.driver.assume_keys_down(keys)
     }
 
     async fn let_go_later(&self, held: &StillDown, after: Duration, turn: &str) -> Result<()> {

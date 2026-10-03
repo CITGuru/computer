@@ -943,6 +943,7 @@ pub struct ScriptedRemote {
     listable: bool,
     builds: bool,
     persists: bool,
+    answers: bool,
     stops: Mutex<Vec<String>>,
     next: AtomicU64,
     templates: AtomicU64,
@@ -973,6 +974,7 @@ impl ScriptedRemote {
             listable: true,
             builds: false,
             persists: false,
+            answers: true,
             stops: Mutex::new(Vec::new()),
             next: AtomicU64::new(0),
             templates: AtomicU64::new(0),
@@ -1001,6 +1003,11 @@ impl ScriptedRemote {
 
     pub fn persisting(mut self) -> Self {
         self.persists = true;
+        self
+    }
+
+    pub fn not_answering(mut self) -> Self {
+        self.answers = false;
         self
     }
 
@@ -1191,6 +1198,12 @@ impl RemoteApi for ScriptedRemote {
     async fn find(&self, name: &str) -> Result<Option<RemoteSandbox>> {
         if let Ok(mut found) = self.found.lock() {
             found.push(name.to_string());
+        }
+        if !self.answers {
+            return Err(Error::Unavailable {
+                provider: "scripted".to_string(),
+                detail: "too many requests".to_string(),
+            });
         }
         Ok(self
             .known

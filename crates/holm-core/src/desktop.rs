@@ -473,6 +473,10 @@ pub trait Desktop: Send + Sync {
         Ok(())
     }
 
+    fn assume_keys_down(&self, keys: &[String]) {
+        let _ = keys;
+    }
+
     async fn let_go_later(&self, held: &StillDown, after: Duration, turn: &str) -> Result<()> {
         let _ = (held, after, turn);
         Err(Error::Unsupported {

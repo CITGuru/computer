@@ -123,6 +123,27 @@ pub async fn close_turn(
     mine
 }
 
+pub async fn held_keys(store: &dyn Store, box_id: &str, screen: u32) -> Vec<String> {
+    store
+        .list_notes(KIND, &format!("{box_id}/{screen}/"))
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(_, value)| serde_json::from_str::<Open>(&value).ok())
+        .filter_map(|open| match open.pressed {
+            Pressed::Key(key) => Some(key),
+            Pressed::Button(_) => None,
+        })
+        .collect()
+}
+
+pub async fn any_held(store: &dyn Store, box_id: &str) -> bool {
+    store
+        .list_notes(KIND, &format!("{box_id}/"))
+        .await
+        .is_ok_and(|held| !held.is_empty())
+}
+
 pub async fn take_screen(store: &dyn Store, box_id: &str, screen: u32) -> Vec<Pressed> {
     take(store, &format!("{box_id}/{screen}/"))
         .await

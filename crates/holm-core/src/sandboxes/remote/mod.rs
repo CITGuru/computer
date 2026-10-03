@@ -50,10 +50,20 @@ pub fn pair(
     api: Arc<dyn RemoteApi>,
     image: Arc<dyn Profile>,
 ) -> (RemoteMachine, Arc<RemoteProfile>) {
-    let remote = Arc::new(Remote::new());
+    pair_with(api, image, None)
+}
 
-    (
-        RemoteMachine::new(api, Arc::clone(&remote)),
-        Arc::new(RemoteProfile::new(image, remote)),
-    )
+pub fn pair_with(
+    api: Arc<dyn RemoteApi>,
+    image: Arc<dyn Profile>,
+    devtools: Option<crate::Secret>,
+) -> (RemoteMachine, Arc<RemoteProfile>) {
+    let remote = Arc::new(Remote::new());
+    let profile = RemoteProfile::new(image, Arc::clone(&remote));
+    let profile = match devtools {
+        Some(secret) => profile.devtools_secret(secret),
+        None => profile,
+    };
+
+    (RemoteMachine::new(api, remote), Arc::new(profile))
 }
