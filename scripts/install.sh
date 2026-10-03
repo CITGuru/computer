@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install `holm` and `holmd` from a GitHub release.
 #
-#   curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/holm-inc/holm/main/scripts/install.sh | sh
 #
 # Reads:
 #   HOLM_VERSION      a tag such as v0.1.0. Default: the latest release.
@@ -16,7 +16,7 @@
 
 set -eu
 
-REPO="CITGuru/computer"
+REPO="holm-inc/holm"
 VERSION="${HOLM_VERSION:-}"
 INSTALL_DIR="${HOLM_INSTALL_DIR:-$HOME/.local/bin}"
 PRINT_TARGET=""

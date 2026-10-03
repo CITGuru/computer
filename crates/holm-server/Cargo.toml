@@ -3,7 +3,7 @@ name = "holm-server"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A REST API that manages and drives computer boxes"
+description = "A REST API that manages and drives holm boxes"
 license = "MIT"
 
 [features]

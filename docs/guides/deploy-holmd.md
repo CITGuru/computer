@@ -17,7 +17,7 @@ Plan the size of the host from the number of boxes that run at the same time. Ea
 ## 2. Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | HOLM_INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/holm-inc/holm/main/scripts/install.sh | HOLM_INSTALL_DIR=/usr/local/bin sh
 ```
 
 Make a user for the service, and give it access to Docker:
@@ -230,7 +230,7 @@ The server encrypts the key with the key file from step 4. Keep that file: if it
 ## Upgrade
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | HOLM_INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/holm-inc/holm/main/scripts/install.sh | HOLM_INSTALL_DIR=/usr/local/bin sh
 sudo systemctl restart holmd
 ```
 

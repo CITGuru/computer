@@ -21,7 +21,7 @@ One crate holds both halves.
 For the commands, take a build rather than compiling one:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/holm-inc/holm/main/scripts/install.sh | sh
 ```
 
 macOS and Linux, on x86-64 and arm64. You get two: `holm`, which drives a box from a shell and serves MCP to an agent, and `holmd`, the server that keeps running. `HOLM_INSTALL_DIR` moves them and `HOLM_VERSION` pins a tag.
@@ -30,7 +30,7 @@ To drive a desktop from your own program, take the API:
 
 ```toml
 [dependencies]
-holm = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -839,7 +839,7 @@ The included integration lives in `sandboxes::microsandbox`, targets `microsandb
 A container and a microVM both put the desktop on this host. E2B does not, so a service on a small machine can hand out desktops with no container runtime and no `/dev/kvm` of its own. The boundary is still a kernel the box does not share.
 
 ```toml
-holm = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false, features = ["e2b"] }
 ```
 
 ```bash

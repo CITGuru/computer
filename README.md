@@ -42,7 +42,7 @@ There's no need to fetch or manage a separate desktop image. The image is built 
 #### Using Curl
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/holm-inc/holm/main/scripts/install.sh | sh
 ```
 
 #### Build from source
@@ -50,8 +50,8 @@ curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/insta
 Build and install `holm` and `holmd` from the current source:
 
 ```bash
-git clone https://github.com/CITGuru/computer.git
-cd computer
+git clone https://github.com/holm-inc/holm.git
+cd holm
 cargo install --path . --locked
 ```
 
@@ -74,7 +74,7 @@ Add the API without the command dependencies:
 
 ```toml
 [dependencies]
-holm = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -137,7 +137,7 @@ See the [CLI guide](crates/holm-cli/README.md).
 The root `holm` package exports the desktop API. Disable its default `cli` feature when an application needs only the library:
 
 ```toml
-holm = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false }
 ```
 
 Optional features add the E2B, Vercel Sandbox, Daytona, and Modal clients, microsandbox library binding, and daemon storage backends: `e2b`, `vercel`, `daytona`, `modal`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
@@ -1622,7 +1622,7 @@ Other hypervisors can implement `MicroVmApi`.
 The included E2B integration runs the desktop away from the local host. Build with the E2B HTTP client and set its API key:
 
 ```toml
-holm = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false, features = ["e2b"] }
 ```
 
 ```bash
@@ -1669,7 +1669,7 @@ Page tools reach Chrome DevTools at the vendor's address for port 9223. A bridge
 The included Vercel Sandbox integration works the same way from the library. Build with the `vercel` feature and set the token, team, and project:
 
 ```toml
-holm = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["vercel"] }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false, features = ["vercel"] }
 ```
 
 ```bash

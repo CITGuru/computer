@@ -3,10 +3,10 @@ name = "holm"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A computer in a box: an X11 desktop in a container, driven from Rust"
+description = "holm: an isolated Linux desktop for each agent, driven from Rust"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/CITGuru/computer"
+repository = "https://github.com/holm-inc/holm"
 keywords = ["computer-use", "x11", "desktop", "container", "automation"]
 categories = ["api-bindings", "development-tools"]
 

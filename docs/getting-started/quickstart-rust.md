@@ -8,7 +8,7 @@ Disable the default `cli` feature when your program needs only the library:
 
 ```toml
 [dependencies]
-computer = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

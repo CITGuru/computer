@@ -3,9 +3,9 @@ name = "holm-core"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "A computer in a box: the desktop, and the API that drives it"
+description = "holm: the desktop, and the API that drives it"
 license = "MIT"
-repository = "https://github.com/CITGuru/computer"
+repository = "https://github.com/holm-inc/holm"
 keywords = ["computer-use", "x11", "desktop", "container", "automation"]
 categories = ["api-bindings", "development-tools"]
 

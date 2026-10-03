@@ -204,4 +204,4 @@ run git push "$REMOTE" "$BRANCH"
 run git push "$REMOTE" "$TAG"
 
 info "${GREEN}released $TAG${RESET}"
-info "watch the build:  https://github.com/CITGuru/computer/actions/workflows/release.yml"
+info "watch the build:  https://github.com/holm-inc/holm/actions/workflows/release.yml"

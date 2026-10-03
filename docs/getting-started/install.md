@@ -21,7 +21,7 @@ Cloud sandboxes such as E2B, Vercel, Daytona, and Modal need no local runtime, o
 The script downloads a release build of `holm` and `holmd` for macOS or Linux on x86_64 or aarch64, and verifies its checksum:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/holm-inc/holm/main/scripts/install.sh | sh
 ```
 
 | Setting | Flag | Default |
@@ -36,8 +36,8 @@ Make sure that the install directory is on your `PATH`.
 Install Rust 1.85 or newer, then:
 
 ```bash
-git clone https://github.com/CITGuru/computer.git
-cd computer
+git clone https://github.com/holm-inc/holm.git
+cd holm
 cargo install --path . --locked
 ```
 
