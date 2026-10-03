@@ -58,7 +58,7 @@ Some examples take the name of a box that is already running. Start one with `ca
 | `daytona` | Launch a box on Daytona, drive it, and remove it. With no image, Daytona builds the built-in image. It also takes a snapshot name or an image directory. `--keep` leaves it running. | `cargo run --features daytona --example daytona [-- <snapshot-or-dir>] [--keep]` | `DAYTONA_API_KEY` |
 | `modal` | Launch a box on Modal, drive it, and remove it. With no image, Modal builds the built-in image. It also takes a Modal image ID, a registry tag, or an image directory. `--keep` leaves it running. | `cargo run --features modal --example modal [-- <image-or-dir>] [--keep]` | `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` |
 
-`examples/images/acme/Dockerfile` adds `htop`, `jq`, and a file to the bundled image. It keeps the `computer.profile` label, which a custom image needs.
+`examples/images/acme/Dockerfile` adds `htop`, `jq`, and a file to the bundled image. It keeps the `holm.profile` label, which a custom image needs.
 
 ## Full demos
 

@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn test_a_copied_file_is_written_by_the_build_itself() {
         let dockerfile = inline(
-            "FROM debian\nCOPY start.sh     /usr/local/bin/computer-desktop\nRUN true\n",
+            "FROM debian\nCOPY start.sh     /usr/local/bin/holm-desktop\nRUN true\n",
             &files(),
         )
         .expect("inlined");
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(
             decoded(lines[1]),
             (
-                "/usr/local/bin/computer-desktop".to_string(),
+                "/usr/local/bin/holm-desktop".to_string(),
                 b"#!/bin/sh\n".to_vec()
             ),
             "daytona builds with no context, so the bytes ride in the Dockerfile"
@@ -212,13 +212,10 @@ mod tests {
     #[test]
     fn test_a_directory_destination_keeps_each_file_name() {
         let dockerfile =
-            inline("COPY start.sh fluxbox.apps /etc/computer/\n", &files()).expect("inlined");
+            inline("COPY start.sh fluxbox.apps /etc/holm/\n", &files()).expect("inlined");
 
         let targets: Vec<String> = dockerfile.lines().map(|line| decoded(line).0).collect();
-        assert_eq!(
-            targets,
-            ["/etc/computer/start.sh", "/etc/computer/fluxbox.apps"]
-        );
+        assert_eq!(targets, ["/etc/holm/start.sh", "/etc/holm/fluxbox.apps"]);
     }
 
     #[test]
@@ -231,7 +228,7 @@ mod tests {
 
     #[test]
     fn test_a_stage_copy_is_left_to_the_builder() {
-        let line = "COPY --from=pointer /src/computer-pointer /usr/local/bin/computer-pointer";
+        let line = "COPY --from=pointer /src/holm-pointer /usr/local/bin/holm-pointer";
 
         assert_eq!(inline(line, &files()).expect("inlined").trim_end(), line);
     }

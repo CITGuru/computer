@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_a_key_file_is_made_once_and_read_after() {
-        let at = std::env::temp_dir().join(format!("computer-key-{}", std::process::id()));
+        let at = std::env::temp_dir().join(format!("holm-key-{}", std::process::id()));
         let _ = std::fs::remove_file(&at);
 
         let made = kept(&at).expect("a key");

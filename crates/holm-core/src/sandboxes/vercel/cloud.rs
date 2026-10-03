@@ -791,7 +791,7 @@ impl Cloud {
     }
 
     async fn build(&self, context: &build::Context, reference: &str) -> Result<()> {
-        let name = format!("computer-build-{}-{:x}", std::process::id(), now_ms());
+        let name = format!("holm-build-{}-{:x}", std::process::id(), now_ms());
 
         let answer = self
             .json(

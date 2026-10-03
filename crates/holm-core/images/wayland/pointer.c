@@ -179,7 +179,7 @@ static long number(const char *text) {
 }
 
 static const char *USAGE =
-    "usage: computer-pointer move X Y\n"
+    "usage: holm-pointer move X Y\n"
     "                        click X Y BUTTON\n"
     "                        dblclick X Y BUTTON\n"
     "                        drag X1 Y1 X2 Y2 BUTTON\n"
@@ -310,7 +310,7 @@ static int load_keymap(void) {
 		return 1;
 	}
 
-	int fd = memfd_create("computer-keymap", MFD_CLOEXEC);
+	int fd = memfd_create("holm-keymap", MFD_CLOEXEC);
 	int failed = fd < 0 || write(fd, text, size + 1) != (ssize_t)size + 1;
 	if (!failed) {
 		zwp_virtual_keyboard_v1_keymap(keys, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fd, size + 1);
@@ -874,7 +874,7 @@ static int door_address(struct sockaddr_un *at, const char *path) {
 }
 
 static int resident_path(char *path, size_t size) {
-	const char *named = getenv("COMPUTER_POINTER_SOCKET");
+	const char *named = getenv("HOLM_POINTER_SOCKET");
 	if (named != NULL && named[0] != '\0') {
 		return snprintf(path, size, "%s", named) < (int)size ? 0 : 1;
 	}
@@ -883,7 +883,7 @@ static int resident_path(char *path, size_t size) {
 	if (runtime == NULL || runtime[0] == '\0') {
 		return 1;
 	}
-	return snprintf(path, size, "%s/computer-pointer", runtime) < (int)size ? 0 : 1;
+	return snprintf(path, size, "%s/holm-pointer", runtime) < (int)size ? 0 : 1;
 }
 
 static int knock(const char *path) {
@@ -912,7 +912,7 @@ static void revive(const char *path) {
 		dup2(nowhere, 1);
 		dup2(nowhere, 2);
 	}
-	execlp("computer-pointer", "computer-pointer", "serve", path, (char *)NULL);
+	execlp("holm-pointer", "holm-pointer", "serve", path, (char *)NULL);
 	_exit(127);
 }
 

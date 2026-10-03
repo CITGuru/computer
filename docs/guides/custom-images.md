@@ -40,20 +40,20 @@ With `image`, the crate does not build anything, so it cannot add packages. `pac
 
 The desktop driver runs fixed commands and connects to fixed ports in the image. An image must provide them, or the box does not start or some tools do not work.
 
-The contract of the built-in X11 profile (`computer-desktop`):
+The contract of the built-in X11 profile (`holm-desktop`):
 
 | Item | Value |
 | --- | --- |
-| Boot command | `computer-desktop --once` |
-| Screen command | `computer-screen` |
-| Browser command | `computer-browser` |
-| Screen size | From `COMPUTER_SCREEN_WIDTH` and `COMPUTER_SCREEN_HEIGHT`. Default 1280x800. |
+| Boot command | `holm-desktop --once` |
+| Screen command | `holm-screen` |
+| Browser command | `holm-browser` |
+| Screen size | From `HOLM_SCREEN_WIDTH` and `HOLM_SCREEN_HEIGHT`. Default 1280x800. |
 | Watch viewer, screen N | Port `6080 + 2N` |
 | Control viewer, screen N | Port `6081 + 2N` |
 | Chrome DevTools | Port `9222`, with a bridge on `9223` |
 | Screens | At most 8 |
 
-The Wayland profile uses the name `computer-wayland`.
+The Wayland profile uses the name `holm-wayland`.
 
 The easy way to meet the contract is to build `FROM` the built-in image, which already has all of it.
 
@@ -62,7 +62,7 @@ The easy way to meet the contract is to build `FROM` the built-in image, which a
 Put this label in the Dockerfile:
 
 ```dockerfile
-LABEL computer.profile="computer-desktop"
+LABEL holm.profile="holm-desktop"
 ```
 
 Before it starts a box, the crate reads the label. If the image declares a different profile from the one that drives the box, the launch fails at once with the two names. With no label, the crate does not check, and a mismatch shows only as a failure later.
@@ -72,7 +72,7 @@ Before it starts a box, the crate reads the label. If the image declares a diffe
 `examples/images/acme/Dockerfile` adds two packages and a file to the built-in image:
 
 ```dockerfile
-ARG BASE=computer-desktop:unset
+ARG BASE=holm-desktop:unset
 FROM ${BASE}
 
 RUN apt-get update \
@@ -82,7 +82,7 @@ RUN apt-get update \
 RUN mkdir -p /opt/acme \
     && printf 'built into the image, not written after launch\n' > /opt/acme/README
 
-LABEL computer.profile="computer-desktop"
+LABEL holm.profile="holm-desktop"
 ```
 
 The built-in image tag changes when the crate's image source changes, so the example passes it in as `BASE`. Get the current tag in Rust:
@@ -145,14 +145,14 @@ For a server, `holm image build` builds the image that a runtime needs on the se
 
 ### Other contexts in the repository
 
-`crates/holm-core/images` has other contexts that implement the same `computer-desktop` contract. Tests keep their scripts the same as the built-in ones.
+`crates/holm-core/images` has other contexts that implement the same `holm-desktop` contract. Tests keep their scripts the same as the built-in ones.
 
 | Directory | Base |
 | --- | --- |
 | `desktop` | Debian bookworm. The built-in image. |
 | `ubuntu` | Ubuntu 24.04, with Chromium from the Xtradeb PPA |
 | `tiny` | Debian bookworm, with documentation, locales, and other large files left out |
-| `wayland` | The Wayland image. Contract `computer-wayland`. |
+| `wayland` | The Wayland image. Contract `holm-wayland`. |
 
 Use one with `image_dir`:
 
@@ -185,7 +185,7 @@ let computer = Computer::builder()
 
 | Method | Changes |
 | --- | --- |
-| `name(…)` | The contract name. It must match the image's `computer.profile` label. |
+| `name(…)` | The contract name. It must match the image's `holm.profile` label. |
 | `image(ImageSource)`, `image_dir(path)` | The image. |
 | `boot_command(…)` | The command that starts the desktop. |
 | `screen_commands(…)` | The command that starts and stops a screen. |

@@ -85,7 +85,7 @@ async fn a_profile_another_box_holds_is_refused_before_a_container_is_made() {
 
     let error = Computer::builder()
         .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
-        .profiles("computer-profile-work")
+        .profiles("holm-profile-work")
         .wait_for_ready(None)
         .launch()
         .await
@@ -94,7 +94,7 @@ async fn a_profile_another_box_holds_is_refused_before_a_container_is_made() {
     assert!(
         error
             .to_string()
-            .contains("computer-profile-work is held by box_1234"),
+            .contains("holm-profile-work is held by box_1234"),
         "{error}"
     );
     let calls = cli.calls();
@@ -104,7 +104,7 @@ async fn a_profile_another_box_holds_is_refused_before_a_container_is_made() {
             "ps",
             "--all",
             "--filter",
-            "volume=computer-profile-work",
+            "volume=holm-profile-work",
             "--format",
             "{{.Names}}"
         ],
@@ -130,7 +130,7 @@ async fn a_profile_nobody_holds_is_mounted() {
 
     Computer::builder()
         .cli(Arc::clone(&cli) as Arc<dyn holm::Engine>)
-        .profiles("computer-profile-work")
+        .profiles("holm-profile-work")
         .wait_for_ready(None)
         .keep_on_drop(true)
         .launch()
@@ -142,7 +142,7 @@ async fn a_profile_nobody_holds_is_mounted() {
         .into_iter()
         .find(|call| call[0] == "run")
         .expect("a run");
-    assert!(run.contains(&"computer-profile-work:/home/computer/.browser-profiles".to_string()));
+    assert!(run.contains(&"holm-profile-work:/home/holm/.browser-profiles".to_string()));
 }
 
 #[tokio::test]
@@ -277,11 +277,11 @@ async fn a_container_that_will_not_start_is_reported_and_not_half_opened() {
 async fn attaching_to_a_box_that_is_not_running_says_it_is_gone() {
     let cli = Arc::new(ScriptedEngine::new().replying(saying("false\n")));
 
-    let error = Computer::attach_with(cli as Arc<dyn holm::Engine>, "computer-7")
+    let error = Computer::attach_with(cli as Arc<dyn holm::Engine>, "holm-7")
         .await
         .expect_err("it is not running");
 
-    assert!(matches!(error, Error::Gone(name) if name == "computer-7"));
+    assert!(matches!(error, Error::Gone(name) if name == "holm-7"));
 }
 
 #[tokio::test]
@@ -290,12 +290,12 @@ async fn an_attached_box_reports_the_geometry_it_was_started_with() {
         ScriptedEngine::new()
             .replying(saying("true\n"))
             .replying(saying(
-                "PATH=/usr/bin\nCOMPUTER_SCREEN_WIDTH=1600\nCOMPUTER_SCREEN_HEIGHT=900\n",
+                "PATH=/usr/bin\nHOLM_SCREEN_WIDTH=1600\nHOLM_SCREEN_HEIGHT=900\n",
             ))
             .replying(saying("")),
     );
 
-    let computer = Computer::attach_with(cli as Arc<dyn holm::Engine>, "computer-7")
+    let computer = Computer::attach_with(cli as Arc<dyn holm::Engine>, "holm-7")
         .await
         .expect("it is running");
 
@@ -390,8 +390,7 @@ async fn a_box_given_a_life_records_it_on_itself_and_not_only_in_here() {
         .find(|argv| argv[0] == "run")
         .expect("the run command");
     assert!(
-        run.iter()
-            .any(|arg| arg.starts_with("computer.expires-at=")),
+        run.iter().any(|arg| arg.starts_with("holm.expires-at=")),
         "a box that outlives this process must still be findable by a sweeper"
     );
 }
@@ -574,7 +573,7 @@ async fn an_image_built_for_another_contract_is_refused_before_it_starts() {
         ScriptedEngine::new()
             .replying(ok())
             .replying(ok())
-            .saying("computer-wayland\n"),
+            .saying("holm-wayland\n"),
     );
 
     let error = Computer::builder()
@@ -586,7 +585,7 @@ async fn an_image_built_for_another_contract_is_refused_before_it_starts() {
 
     let message = error.to_string();
     assert!(
-        message.contains("computer-wayland") && message.contains("computer-desktop"),
+        message.contains("holm-wayland") && message.contains("holm-desktop"),
         "the refusal has to name both halves, or it sends the caller to look \
          at the display server: {message}"
     );
@@ -640,7 +639,7 @@ async fn a_box_is_driven_through_x11_unless_it_is_told_otherwise() {
 
 #[tokio::test]
 async fn a_swapped_driver_opens_every_screen_and_is_reported_as_the_one_in_use() {
-    // version, image inspect, run, port, then `computer-screen start 1`.
+    // version, image inspect, run, port, then `holm-screen start 1`.
     let cli = Arc::new(
         ScriptedEngine::new()
             .replying(ok())
@@ -925,7 +924,7 @@ async fn a_wayland_box_is_driven_through_the_compositor_and_says_so() {
 
     let run = cli.calls().into_iter().nth(2).expect("the run call");
     assert!(
-        run.iter().any(|part| part.starts_with("computer-wayland:")),
+        run.iter().any(|part| part.starts_with("holm-wayland:")),
         "a Wayland box must not be started from the X11 image's tag"
     );
 
@@ -937,7 +936,7 @@ async fn a_wayland_box_is_driven_through_the_compositor_and_says_so() {
     let sent = cli.last().expect("the exec call");
     assert!(
         sent.contains(&"WAYLAND_DISPLAY=wayland-1".to_string())
-            && sent.contains(&"XDG_RUNTIME_DIR=/tmp/computer/run-1".to_string()),
+            && sent.contains(&"XDG_RUNTIME_DIR=/tmp/holm/run-1".to_string()),
         "a compositor is reached through its socket, not through a display \
          number"
     );
@@ -1180,13 +1179,13 @@ async fn the_gate_reaches_the_box_as_environment() {
         .expect("the box was created");
 
     let carries = |wanted: &str| run.iter().any(|word| word == wanted);
-    assert!(carries("COMPUTER_VIEWER_AUTH=token"));
+    assert!(carries("HOLM_VIEWER_AUTH=token"));
     assert!(carries(&format!(
-        "COMPUTER_VIEW_SECRET={}",
+        "HOLM_VIEW_SECRET={}",
         credentials.view.expose()
     )));
     assert!(carries(&format!(
-        "COMPUTER_CONTROL_SECRET={}",
+        "HOLM_CONTROL_SECRET={}",
         credentials.control.expose()
     )));
 }
@@ -1208,8 +1207,7 @@ async fn an_open_box_carries_no_credential_at_all() {
         !cli.calls()
             .concat()
             .iter()
-            .any(|word| word.contains("COMPUTER_VIEW_SECRET")
-                || word.contains("COMPUTER_VIEWER_AUTH")),
+            .any(|word| word.contains("HOLM_VIEW_SECRET") || word.contains("HOLM_VIEWER_AUTH")),
         "an open gate is the absence of one, not a variable saying so"
     );
 }
@@ -1225,8 +1223,7 @@ async fn a_preview_mints_nothing_it_could_leak() {
     assert!(
         !previewed
             .iter()
-            .any(|word| word.contains("COMPUTER_VIEW_SECRET")
-                || word.contains("COMPUTER_CONTROL_SECRET")),
+            .any(|word| word.contains("HOLM_VIEW_SECRET") || word.contains("HOLM_CONTROL_SECRET")),
         "{previewed:?}"
     );
 }

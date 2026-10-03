@@ -63,10 +63,7 @@ async fn main() -> holm::Result<()> {
     if hold {
         // The owner's gate goes with this process; the person's server stays in the box.
         println!("\n  the screen is yours until you release it:");
-        println!(
-            "    docker exec {} computer-screen release 0",
-            computer.name()
-        );
+        println!("    docker exec {} holm-screen release 0", computer.name());
         return Ok(());
     }
 

@@ -16,13 +16,13 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub const INPUT_COMMAND: &str = "computer-input";
-pub const POINTER_COMMAND: &str = "computer-pointer";
+pub const INPUT_COMMAND: &str = "holm-input";
+pub const POINTER_COMMAND: &str = "holm-pointer";
 
 pub const DISPLAY_NAME: &str = "wayland-1";
 
 pub fn runtime_dir(screen: ScreenId) -> String {
-    format!("/tmp/computer/run-{}", screen.0 + 1)
+    format!("/tmp/holm/run-{}", screen.0 + 1)
 }
 
 fn argv(parts: &[&str]) -> Vec<String> {
@@ -595,7 +595,7 @@ impl Desktop for WaylandDesktop {
 
     /// Asks the compositor, since a dead one leaves its socket file behind.
     async fn alive(&self) -> Result<()> {
-        let sockfile = format!("/tmp/computer/screen-{}.sway", self.screen.0);
+        let sockfile = format!("/tmp/holm/screen-{}.sway", self.screen.0);
         let mut args = argv(&["bash", "-c"]);
         args.push(format!(
             "swaymsg -s \"$(cat {sockfile})\" -t get_version >/dev/null 2>&1"
@@ -770,8 +770,8 @@ mod tests {
 
     #[test]
     fn test_screens_are_told_apart_by_directory_and_not_by_socket_name() {
-        assert_eq!(runtime_dir(ScreenId(0)), "/tmp/computer/run-1");
-        assert_eq!(runtime_dir(ScreenId(7)), "/tmp/computer/run-8");
+        assert_eq!(runtime_dir(ScreenId(0)), "/tmp/holm/run-1");
+        assert_eq!(runtime_dir(ScreenId(7)), "/tmp/holm/run-8");
         assert_eq!(
             DISPLAY_NAME, "wayland-1",
             "a compositor takes the first free name in the directory it is \

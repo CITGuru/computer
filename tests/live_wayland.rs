@@ -96,7 +96,7 @@ async fn browser(computer: &Computer) -> holm::Result<()> {
             [
                 "bash",
                 "-c",
-                "swaymsg -s \"$(cat /tmp/computer/screen-0.sway)\" -t get_tree",
+                "swaymsg -s \"$(cat /tmp/holm/screen-0.sway)\" -t get_tree",
             ],
         )
         .await?;
@@ -309,12 +309,12 @@ async fn takeover(computer: &Computer) -> holm::Result<()> {
     );
 
     let raw = computer
-        .exec_on(ScreenId(0), ["computer-input", "move", "10", "10"])
+        .exec_on(ScreenId(0), ["holm-input", "move", "10", "10"])
         .await?;
     assert_eq!(
         raw.code,
         3,
-        "computer-input let a caller past the takeover: {}",
+        "holm-input let a caller past the takeover: {}",
         raw.stderr_utf8()
     );
     println!("  the box refuses input, not only the SDK");

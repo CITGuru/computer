@@ -32,7 +32,7 @@ launcher_padding = 0 0 8
 launcher_background_id = 2
 launcher_icon_size = 44
 launcher_icon_theme = hicolor
-launcher_item_app = /usr/share/applications/computer-terminal.desktop
-launcher_item_app = /usr/share/applications/computer-browser.desktop
+launcher_item_app = /usr/share/applications/holm-terminal.desktop
+launcher_item_app = /usr/share/applications/holm-browser.desktop
 %APPS%
 launcher_tooltip = 1

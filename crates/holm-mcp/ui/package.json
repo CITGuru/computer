@@ -1,7 +1,7 @@
 {
-  "name": "computer-screen-ui",
+  "name": "holm-screen-ui",
   "private": true,
-  "description": "The screen page an MCP Apps host renders beside a computer tool result",
+  "description": "The screen page an MCP Apps host renders beside a holm tool result",
   "scripts": {
     "build": "./build.sh"
   },

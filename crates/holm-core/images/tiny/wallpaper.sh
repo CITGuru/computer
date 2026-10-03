@@ -2,9 +2,9 @@
 # Run after the window manager: fluxbox's `fbsetbg` covers anything set earlier.
 set -uo pipefail
 
-width="${COMPUTER_SCREEN_WIDTH:-1280}"
-height="${COMPUTER_SCREEN_HEIGHT:-800}"
-out="${1:-/tmp/computer/wallpaper.jpg}"
+width="${HOLM_SCREEN_WIDTH:-1280}"
+height="${HOLM_SCREEN_HEIGHT:-800}"
+out="${1:-/tmp/holm/wallpaper.jpg}"
 
 mkdir -p "$(dirname "$out")"
 

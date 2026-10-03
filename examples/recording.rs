@@ -3,14 +3,12 @@
 use holm::{Button, Computer, Error, Point};
 use std::time::Duration;
 
-const FRAMES: &str = "/tmp/computer-frames";
-const GIF: &str = "/tmp/computer.gif";
+const FRAMES: &str = "/tmp/holm-frames";
+const GIF: &str = "/tmp/holm.gif";
 
 #[tokio::main]
 async fn main() {
-    let out = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "computer.gif".into());
+    let out = std::env::args().nth(1).unwrap_or_else(|| "holm.gif".into());
 
     println!("opening a box …");
     let computer = match Computer::launch().await {

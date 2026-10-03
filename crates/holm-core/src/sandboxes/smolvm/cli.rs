@@ -9,7 +9,7 @@ pub const RUNTIME: &str = "smolvm";
 
 pub const DEFAULT_HOME: &str = ".local/bin/smolvm";
 
-pub const IMAGES: &str = ".smolvm/computer-images";
+pub const IMAGES: &str = ".smolvm/holm-images";
 
 const HELD_OPEN: &str = "sleep infinity";
 
@@ -167,7 +167,7 @@ pub fn create_args(plan: &Plan, image: &str) -> Vec<String> {
     }
 
     args.push("--label".to_string());
-    args.push("computer-rs=1".to_string());
+    args.push("holm-rs=1".to_string());
 
     args.push("--".to_string());
     args.extend(HELD_OPEN.split(' ').map(str::to_string));
@@ -340,7 +340,7 @@ impl MicroVmApi for SmolVm {
     }
 
     async fn read(&self, name: &str, path: &str) -> Result<Vec<u8>> {
-        let local = std::env::temp_dir().join(format!("computer-smolvm-{name}-read"));
+        let local = std::env::temp_dir().join(format!("holm-smolvm-{name}-read"));
         let _ = tokio::fs::remove_file(&local).await;
 
         self.copy_out(name, path, &local).await?;
@@ -354,7 +354,7 @@ impl MicroVmApi for SmolVm {
     }
 
     async fn write(&self, name: &str, path: &str, bytes: &[u8]) -> Result<()> {
-        let local = std::env::temp_dir().join(format!("computer-smolvm-{name}-write"));
+        let local = std::env::temp_dir().join(format!("holm-smolvm-{name}-write"));
         tokio::fs::write(&local, bytes)
             .await
             .map_err(|error| Error::transport(error.to_string(), false))?;
@@ -461,13 +461,13 @@ mod tests {
     fn plan() -> Plan {
         Plan {
             name: "desk".to_string(),
-            image: "computer-desktop:abc".to_string(),
+            image: "holm-desktop:abc".to_string(),
             cpus: Some(2),
             memory_mib: Some(2048),
             network: true,
             env: BTreeMap::from([("SCREEN_WIDTH".to_string(), "1280".to_string())]),
             ports: vec![(51234, 6080)],
-            labels: BTreeMap::from([("computer.server.box".to_string(), "{}".to_string())]),
+            labels: BTreeMap::from([("holm.server.box".to_string(), "{}".to_string())]),
             replace: true,
         }
     }
@@ -481,12 +481,12 @@ mod tests {
 
     #[test]
     fn test_a_machine_is_created_with_what_the_box_needs() {
-        let args = create_args(&plan(), "computer-desktop:abc");
+        let args = create_args(&plan(), "holm-desktop:abc");
 
         assert_eq!(pairs(&args, "--name"), vec!["desk".to_string()]);
         assert_eq!(
             pairs(&args, "--image"),
-            vec!["computer-desktop:abc".to_string()]
+            vec!["holm-desktop:abc".to_string()]
         );
         assert_eq!(pairs(&args, "--cpus"), vec!["2".to_string()]);
         assert_eq!(pairs(&args, "--mem"), vec!["2048".to_string()]);
@@ -509,8 +509,8 @@ mod tests {
     fn test_a_box_carries_its_label_so_a_restart_finds_it() {
         let args = create_args(&plan(), "image");
 
-        assert!(pairs(&args, "--label").contains(&"computer.server.box={}".to_string()));
-        assert!(pairs(&args, "--label").contains(&"computer-rs=1".to_string()));
+        assert!(pairs(&args, "--label").contains(&"holm.server.box={}".to_string()));
+        assert!(pairs(&args, "--label").contains(&"holm-rs=1".to_string()));
     }
 
     #[test]
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn test_what_is_running_is_read_from_the_listing() {
         let listing = r#"[
-            {"name": "desk", "state": "running", "labels": {"computer.server.box": "{}"}},
+            {"name": "desk", "state": "running", "labels": {"holm.server.box": "{}"}},
             {"name": "other", "state": "stopped", "labels": {}}
         ]"#;
 
@@ -554,12 +554,12 @@ mod tests {
     #[test]
     fn test_a_label_is_read_back_from_the_listing() {
         let listing = r#"[
-            {"name": "desk", "state": "running", "labels": {"computer.server.box": "{\"width\":1280}"}},
-            {"name": "plain", "state": "running", "labels": {"computer-rs": "1"}}
+            {"name": "desk", "state": "running", "labels": {"holm.server.box": "{\"width\":1280}"}},
+            {"name": "plain", "state": "running", "labels": {"holm-rs": "1"}}
         ]"#;
 
         assert_eq!(
-            parse_labelled(listing, "computer.server.box"),
+            parse_labelled(listing, "holm.server.box"),
             vec![("desk".to_string(), "{\"width\":1280}".to_string())],
             "a machine somebody else made is not ours to take"
         );
@@ -613,8 +613,8 @@ other running         2   1024 MiB       0       1
         let smolvm = SmolVm::new("smolvm").keeping_images("/tmp/images");
 
         assert_eq!(
-            smolvm.archive_for("computer-desktop:abc"),
-            PathBuf::from("/tmp/images/computer-desktop-abc.tar")
+            smolvm.archive_for("holm-desktop:abc"),
+            PathBuf::from("/tmp/images/holm-desktop-abc.tar")
         );
         assert_eq!(
             smolvm.archive_for("ghcr.io/owner/image:1"),

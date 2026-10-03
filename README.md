@@ -42,7 +42,7 @@ There's no need to fetch or manage a separate desktop image. The image is built 
 #### Using Curl
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/holm-inc/holm/main/scripts/install.sh | sh
 ```
 
 #### Build from source
@@ -50,8 +50,8 @@ curl -fsSL https://raw.githubusercontent.com/CITGuru/computer/main/scripts/insta
 Build and install `holm` and `holmd` from the current source:
 
 ```bash
-git clone https://github.com/CITGuru/computer.git
-cd computer
+git clone https://github.com/holm-inc/holm.git
+cd holm
 cargo install --path . --locked
 ```
 
@@ -74,7 +74,7 @@ Add the API without the command dependencies:
 
 ```toml
 [dependencies]
-holm = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -137,7 +137,7 @@ See the [CLI guide](crates/holm-cli/README.md).
 The root `holm` package exports the desktop API. Disable its default `cli` feature when an application needs only the library:
 
 ```toml
-holm = { git = "https://github.com/CITGuru/computer", default-features = false }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false }
 ```
 
 Optional features add the E2B, Vercel Sandbox, Daytona, and Modal clients, microsandbox library binding, and daemon storage backends: `e2b`, `vercel`, `daytona`, `modal`, `microsandbox`, `sqlite`, `postgres`, and `s3`.
@@ -1348,7 +1348,7 @@ From the CLI or MCP, name the profile when the box is made:
 holm new --profile work
 ```
 
-The volume is `computer-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B, Vercel, Daytona, Modal, and microsandbox boxes refuse a profile, since they have no Docker volume.
+The volume is `holm-profile-work`. A second box asking for a profile that a box holds, running or stopped, is refused and names that box. Before a box with a profile is removed or stopped, its browser is closed cleanly, so a cookie set a moment earlier is written. A fork does not take the profile. Session cookies end with the browser, as they do on any computer; a site's "remember me" cookie is the one that carries a login over. E2B, Vercel, Daytona, Modal, and microsandbox boxes refuse a profile, since they have no Docker volume.
 
 Use session export when the data must move between hosts. Use a named profile when all browser state must stay on one host.
 
@@ -1622,7 +1622,7 @@ Other hypervisors can implement `MicroVmApi`.
 The included E2B integration runs the desktop away from the local host. Build with the E2B HTTP client and set its API key:
 
 ```toml
-holm = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["e2b"] }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false, features = ["e2b"] }
 ```
 
 ```bash
@@ -1639,10 +1639,10 @@ python3 crates/holm-core/images/context.py \
   /tmp/e2b-ctx \
   --for e2b
 
-e2b template create computer-desktop \
+e2b template create holm-desktop \
   -p /tmp/e2b-ctx \
   -d Dockerfile \
-  -c "/usr/local/bin/computer-desktop" \
+  -c "/usr/local/bin/holm-desktop" \
   --ready-cmd "true" \
   --cpu-count 2 \
   --memory-mb 2048
@@ -1669,7 +1669,7 @@ Page tools reach Chrome DevTools at the vendor's address for port 9223. A bridge
 The included Vercel Sandbox integration works the same way from the library. Build with the `vercel` feature and set the token, team, and project:
 
 ```toml
-holm = { git = "https://github.com/CITGuru/computer", default-features = false, features = ["vercel"] }
+holm = { git = "https://github.com/holm-inc/holm", default-features = false, features = ["vercel"] }
 ```
 
 ```bash
@@ -1677,7 +1677,7 @@ export VERCEL_TOKEN=... VERCEL_TEAM_ID=... VERCEL_PROJECT_ID=...
 cargo run --features vercel --example vercel
 ```
 
-Vercel starts sandboxes only from its own registry, for `linux/amd64`. With no image, the first launch builds the bundled image in a builder sandbox at Vercel, pushes it to `vcr.vercel.com/<team-slug>/<project>/computer-desktop:<fingerprint>-x86_64`, and removes the builder; later launches find the tag and start in seconds. An image directory is built the same way. A named image goes to Vercel as it is and must already be in the registry. Every published port has a public URL, so viewers need `Auth::Token` or `Auth::Password`, and page tools go through the same DevTools bridge with its secret. Vercel publishes at most 14 ports, so a box has at most 6 screens. See [docs/guides/vercel-sandbox.md](docs/guides/vercel-sandbox.md).
+Vercel starts sandboxes only from its own registry, for `linux/amd64`. With no image, the first launch builds the bundled image in a builder sandbox at Vercel, pushes it to `vcr.vercel.com/<team-slug>/<project>/holm-desktop:<fingerprint>-x86_64`, and removes the builder; later launches find the tag and start in seconds. An image directory is built the same way. A named image goes to Vercel as it is and must already be in the registry. Every published port has a public URL, so viewers need `Auth::Token` or `Auth::Password`, and page tools go through the same DevTools bridge with its secret. Vercel publishes at most 14 ports, so a box has at most 6 screens. See [docs/guides/vercel-sandbox.md](docs/guides/vercel-sandbox.md).
 
 The included Daytona integration needs only `DAYTONA_API_KEY` and the `daytona` feature. Daytona builds from a Dockerfile but has no build context, so each `COPY` of a file in the bundled image or an image directory is sent as a `RUN` that writes the file from base64; Daytona keeps each build by the Dockerfile's content, so a later box starts in seconds. Each published port gets a signed preview URL that a browser opens with no header. See [docs/guides/daytona.md](docs/guides/daytona.md).
 
@@ -1733,7 +1733,7 @@ A local context must contain a `Dockerfile` that implements the selected profile
 An image can declare its contract:
 
 ```dockerfile
-LABEL computer.profile="computer-desktop"
+LABEL holm.profile="holm-desktop"
 ```
 
 The crate refuses a declared profile mismatch before startup.

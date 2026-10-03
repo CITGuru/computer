@@ -50,7 +50,7 @@ async fn exercise(computer: &Computer) -> holm::Result<()> {
 
     let started = SystemTime::now();
     computer
-        .record(Duration::from_secs(3), "/tmp/computer/screen.mp4")
+        .record(Duration::from_secs(3), "/tmp/holm/screen.mp4")
         .await?;
 
     let elapsed = started.elapsed().unwrap_or_default();
@@ -59,16 +59,16 @@ async fn exercise(computer: &Computer) -> holm::Result<()> {
         "the recording returned before it could have recorded anything"
     );
 
-    let video = computer.read_file("/tmp/computer/screen.mp4").await?;
+    let video = computer.read_file("/tmp/holm/screen.mp4").await?;
     assert!(video.len() > 1_000, "the film is {} bytes", video.len());
     println!("  video: {} bytes for {elapsed:?} of screen", video.len());
 
     let second = computer.screen(ScreenId(1)).await?;
     second
-        .record(Duration::from_secs(2), "/tmp/computer/second.mp4")
+        .record(Duration::from_secs(2), "/tmp/holm/second.mp4")
         .await?;
 
-    let other = computer.read_file("/tmp/computer/second.mp4").await?;
+    let other = computer.read_file("/tmp/holm/second.mp4").await?;
     assert!(other.len() > 1_000);
     computer.close_screen(ScreenId(1)).await?;
     println!("  video: screen 1 records itself");

@@ -38,11 +38,11 @@ pub const VIRTUAL_POINTER_XML: &str =
 pub const VIRTUAL_KEYBOARD_XML: &str =
     include_str!("../images/wayland/virtual-keyboard-unstable-v1.xml");
 
-pub const IMAGE_NAME: &str = "computer-desktop";
+pub const IMAGE_NAME: &str = "holm-desktop";
 
-pub const WAYLAND_IMAGE_NAME: &str = "computer-wayland";
+pub const WAYLAND_IMAGE_NAME: &str = "holm-wayland";
 
-const LOCAL_IMAGE_NAME: &str = "computer-local";
+const LOCAL_IMAGE_NAME: &str = "holm-local";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bundle {
@@ -137,7 +137,7 @@ impl Bundle {
     /// Per version and per image: files and constants only agree within one release.
     pub fn scratch_dir(&self) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "computer-rs-image-{}-{}",
+            "holm-rs-image-{}-{}",
             env!("CARGO_PKG_VERSION"),
             self.name
         ))
@@ -506,7 +506,7 @@ mod tests {
     fn local_image() -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
-            "computer-local-image-test-{}-{}",
+            "holm-local-image-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn test_the_tag_is_the_same_for_the_same_bytes() {
         assert_eq!(DESKTOP.tag(), DESKTOP.tag());
-        assert!(DESKTOP.tag().starts_with("computer-desktop:"));
+        assert!(DESKTOP.tag().starts_with("holm-desktop:"));
     }
 
     #[test]
@@ -611,7 +611,7 @@ mod tests {
 
         assert_ne!(before, with_script);
         assert_ne!(with_script, changed);
-        assert!(changed.starts_with("computer-local:"));
+        assert!(changed.starts_with("holm-local:"));
         assert!(changed.ends_with(std::env::consts::ARCH));
     }
 

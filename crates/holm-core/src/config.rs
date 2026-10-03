@@ -58,4 +58,4 @@ impl Default for Config {
     }
 }
 
-pub const PROFILES: &str = "/home/computer/.browser-profiles";
+pub const PROFILES: &str = "/home/holm/.browser-profiles";

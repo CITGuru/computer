@@ -2,7 +2,7 @@ use crate::bundle::{Bundle, Extras};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const START_COMMAND: &str = "/usr/local/bin/computer-desktop";
+pub const START_COMMAND: &str = "/usr/local/bin/holm-desktop";
 
 pub const READY_COMMAND: &str = "true";
 
@@ -272,7 +272,7 @@ mod tests {
         assert!(
             copied
                 .iter()
-                .any(|args| args[0] == "start.sh" && args[1] == "/usr/local/bin/computer-desktop"),
+                .any(|args| args[0] == "start.sh" && args[1] == "/usr/local/bin/holm-desktop"),
             "the desktop's own start script is copied in: {copied:?}"
         );
         assert_eq!(
@@ -292,11 +292,11 @@ mod tests {
 
     #[test]
     fn test_the_same_file_hashes_the_same_and_two_files_do_not() {
-        let one = hashed("start.sh", "/usr/local/bin/computer-desktop", "#!/bin/sh\n");
-        let same = hashed("start.sh", "/usr/local/bin/computer-desktop", "#!/bin/sh\n");
+        let one = hashed("start.sh", "/usr/local/bin/holm-desktop", "#!/bin/sh\n");
+        let same = hashed("start.sh", "/usr/local/bin/holm-desktop", "#!/bin/sh\n");
         let other = hashed(
             "start.sh",
-            "/usr/local/bin/computer-desktop",
+            "/usr/local/bin/holm-desktop",
             "#!/bin/sh\nexit\n",
         );
         let elsewhere = hashed("start.sh", "/elsewhere", "#!/bin/sh\n");
@@ -367,7 +367,7 @@ mod tests {
 
         assert_eq!(last.kind, "RUN");
         assert!(
-            last.args[0].contains("chown -R 1000:1000 /home/computer"),
+            last.args[0].contains("chown -R 1000:1000 /home/holm"),
             "E2B runs as uid 1000, which cannot write a HOME made for root: {:?}",
             last.args
         );
@@ -376,8 +376,8 @@ mod tests {
     #[test]
     fn test_a_template_is_named_after_the_image_it_holds() {
         assert_eq!(
-            named("computer-desktop:49735930ac64ae2a-aarch64"),
-            "computer-desktop-49735930ac64ae2a-aarch64"
+            named("holm-desktop:49735930ac64ae2a-aarch64"),
+            "holm-desktop-49735930ac64ae2a-aarch64"
         );
     }
 }

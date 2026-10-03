@@ -675,7 +675,7 @@ mod tests {
     fn test_the_metadata_filter_escapes_its_own_separator() {
         assert_eq!(
             metadata_query(NAME_KEY, "box-7"),
-            "computer.name%3Dbox-7",
+            "holm.name%3Dbox-7",
             "an unescaped = would end the parameter"
         );
     }

@@ -3,7 +3,7 @@ Type=Application
 Name=Terminal
 # rgb: colours, because a shell-run Exec truncates at '#'.
 Comment=A shell in the box
-Exec=computer-launch xterm xterm -bg rgb:14/14/1a -fg rgb:e8/e8/ea -cr rgb:9f/b0/c2 -bw 0 -fa "DejaVu Sans Mono" -fs 10 -title Terminal
-Icon=/usr/share/computer/terminal.png
+Exec=holm-launch xterm xterm -bg rgb:14/14/1a -fg rgb:e8/e8/ea -cr rgb:9f/b0/c2 -bw 0 -fa "DejaVu Sans Mono" -fs 10 -title Terminal
+Icon=/usr/share/holm/terminal.png
 Terminal=false
 Categories=System;TerminalEmulator;

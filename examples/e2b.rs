@@ -7,8 +7,8 @@
 //!
 //! ```text
 //! python3 images/context.py images/desktop /tmp/e2b-ctx --for e2b
-//! e2b template create computer-desktop -p /tmp/e2b-ctx -d Dockerfile \
-//!     -c "/usr/local/bin/computer-desktop" --ready-cmd "true" \
+//! e2b template create holm-desktop -p /tmp/e2b-ctx -d Dockerfile \
+//!     -c "/usr/local/bin/holm-desktop" --ready-cmd "true" \
 //!     --cpu-count 2 --memory-mb 2048
 //! ```
 

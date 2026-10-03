@@ -1,5 +1,5 @@
 # The tag follows the bundled image's contents, so it is passed in.
-ARG BASE=computer-desktop:unset
+ARG BASE=holm-desktop:unset
 FROM ${BASE}
 
 RUN apt-get update \
@@ -11,4 +11,4 @@ RUN apt-get update \
 RUN mkdir -p /opt/acme \
     && printf 'built into the image, not written after launch\n' > /opt/acme/README
 
-LABEL computer.profile="computer-desktop"
+LABEL holm.profile="holm-desktop"

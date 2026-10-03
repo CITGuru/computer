@@ -8,7 +8,7 @@ BIN="$(command -v chromium || command -v chromium-browser || true)"
 case " $* " in
   *" --user-data-dir="* | *" --user-data-dir "*) ;;
   *)
-    set -- "--user-data-dir=${HOME:-/home/computer}/.browser-profiles/screen-${DISPLAY#:}" "$@"
+    set -- "--user-data-dir=${HOME:-/home/holm}/.browser-profiles/screen-${DISPLAY#:}" "$@"
     ;;
 esac
 

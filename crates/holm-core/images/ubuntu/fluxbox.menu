@@ -1,14 +1,14 @@
-[begin] (Computer)
-  [exec] (Browser) {computer-launch chromium computer-browser}
-  [exec] (Terminal) {computer-launch xterm xterm -bg rgb:14/14/1a -fg rgb:e8/e8/ea -cr rgb:9f/b0/c2 -bw 0 -fa "DejaVu Sans Mono" -fs 10 -title Terminal}
+[begin] (holm)
+  [exec] (Browser) {holm-launch chromium holm-browser}
+  [exec] (Terminal) {holm-launch xterm xterm -bg rgb:14/14/1a -fg rgb:e8/e8/ea -cr rgb:9f/b0/c2 -bw 0 -fa "DejaVu Sans Mono" -fs 10 -title Terminal}
   [separator]
   [submenu] (New window) {}
-    [exec] (Browser) {computer-launch --new chromium computer-browser --new-window}
-    [exec] (Terminal) {computer-launch --new xterm xterm -bg rgb:14/14/1a -fg rgb:e8/e8/ea -cr rgb:9f/b0/c2 -bw 0 -fa "DejaVu Sans Mono" -fs 10 -title Terminal}
+    [exec] (Browser) {holm-launch --new chromium holm-browser --new-window}
+    [exec] (Terminal) {holm-launch --new xterm xterm -bg rgb:14/14/1a -fg rgb:e8/e8/ea -cr rgb:9f/b0/c2 -bw 0 -fa "DejaVu Sans Mono" -fs 10 -title Terminal}
   [end]
   [submenu] (Screen) {}
     [exec] (Capture to /tmp/screenshot.png) {import -window root /tmp/screenshot.png}
-    [exec] (Reload wallpaper) {computer-wallpaper}
+    [exec] (Reload wallpaper) {holm-wallpaper}
   [end]
   [submenu] (Window manager) {}
     [reconfig] (Reload configuration)

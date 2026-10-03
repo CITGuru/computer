@@ -6,7 +6,7 @@ use holm_types::{Capabilities, Environment};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-pub const NAME_KEY: &str = "computer.name";
+pub const NAME_KEY: &str = "holm.name";
 
 /// The vendors' own defaults are too short for an image pull.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(5 * 60);
@@ -116,7 +116,7 @@ pub(crate) fn build_it_yourself(vendor: &str, image: &str, bundle: &str) -> Erro
         detail: format!(
             "{image} is a container image and {vendor} runs its own. Write the \
              {bundle} build context out with Bundle::materialize, build it \
-             there with /usr/local/bin/computer-desktop as the start command, \
+             there with /usr/local/bin/holm-desktop as the start command, \
              and pass what {vendor} calls the result to Builder::image"
         ),
     }

@@ -4,13 +4,13 @@ set -uo pipefail
 
 real=/usr/bin/xdotool
 screen=$(( ${DISPLAY#:} - 1 ))
-token_file="/tmp/computer/screen-${screen}.control"
+token_file="/tmp/holm/screen-${screen}.control"
 
 case "${1:-}" in
   mousemove|mousemove_relative|click|mousedown|mouseup|key|keydown|keyup|type|windowactivate|windowfocus)
     if [ -s "$token_file" ]; then
       held=$(cat "$token_file" 2>/dev/null || true)
-      if [ "${COMPUTER_TOKEN:-}" != "$held" ]; then
+      if [ "${HOLM_TOKEN:-}" != "$held" ]; then
         echo "a person is driving screen ${screen}; observe, do not act" >&2
         exit 3
       fi

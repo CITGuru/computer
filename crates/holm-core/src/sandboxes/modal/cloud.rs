@@ -124,7 +124,7 @@ impl Cloud {
             ("x-modal-client-version", CLIENT_VERSION.to_string()),
             (
                 "x-modal-libmodal-version",
-                format!("computer-rs/{}", env!("CARGO_PKG_VERSION")),
+                format!("holm-rs/{}", env!("CARGO_PKG_VERSION")),
             ),
             ("x-modal-token-id", self.token_id.clone()),
             ("x-modal-token-secret", self.token_secret.clone()),

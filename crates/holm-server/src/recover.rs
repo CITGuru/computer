@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
-pub const BOX_LABEL: &str = "computer.server.box";
+pub const BOX_LABEL: &str = "holm.server.box";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoxLabel {

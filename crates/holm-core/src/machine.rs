@@ -303,7 +303,7 @@ fn if_absent(stderr: &str) -> Option<Error> {
     Some(Error::invalid(format!("the box has no file at {path}")))
 }
 
-pub const SETTLE_PROFILE: &str = r#"grep -q ' /home/computer/.browser-profiles ' /proc/mounts || exit 0
+pub const SETTLE_PROFILE: &str = r#"grep -q ' /home/holm/.browser-profiles ' /proc/mounts || exit 0
 export LC_ALL=C
 devtools() {
   exec 3<>/dev/tcp/127.0.0.1/9222 || return 1
@@ -413,7 +413,7 @@ impl EngineMachine {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let ticket = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let home = std::env::temp_dir().join(format!("computer-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("holm-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&home);
         #[cfg(unix)]
         {
@@ -746,7 +746,7 @@ mod tests {
         );
         assert!(
             SETTLE_PROFILE
-                .starts_with("grep -q ' /home/computer/.browser-profiles ' /proc/mounts || exit 0"),
+                .starts_with("grep -q ' /home/holm/.browser-profiles ' /proc/mounts || exit 0"),
             "a box with no profile has nothing to lose, and is left alone"
         );
     }

@@ -3,7 +3,7 @@ use crate::machine::ScreenHost;
 use crate::{Node, NodeQuery, ScreenId};
 use std::sync::Arc;
 
-const READER: &str = "computer-a11y";
+const READER: &str = "holm-a11y";
 
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| (*part).to_string()).collect()

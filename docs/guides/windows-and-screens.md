@@ -143,7 +143,7 @@ holm record "$BOX" stop screen.mp4
 
 - `start` fails if the screen is already recording.
 - `stop` stops ffmpeg and copies the file to the host. With no file name, it writes `recording.mp4`.
-- The file in the box is `/tmp/computer/recording-<screen>.mp4`. The next `start` on the same screen deletes it.
+- The file in the box is `/tmp/holm/recording-<screen>.mp4`. The next `start` on the same screen deletes it.
 - On X11, if the box has the `audio` feature, the recording includes the screen's sound. On Wayland, the recording has no sound, and the frames come from repeated screenshots.
 - The default is 12 frames per second.
 

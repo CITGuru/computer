@@ -20,19 +20,19 @@ a11y_bus() {
   }
 
   /usr/libexec/at-spi-bus-launcher --launch-immediately \
-    >/tmp/computer/a11y.log 2>&1 &
+    >/tmp/holm/a11y.log 2>&1 &
 }
 
 boot() {
-  mkdir -p /tmp/computer "${HOME:-/home/computer}"
+  mkdir -p /tmp/holm "${HOME:-/home/holm}"
   a11y_bus
-  computer-screen start 0 || return 1
+  holm-screen start 0 || return 1
 
-  if [ -n "${COMPUTER_DEVTOOLS_SECRET:-}" ] && command -v computer-devtools-bridge >/dev/null; then
-    computer-devtools-bridge >/tmp/computer/devtools-bridge.log 2>&1 &
+  if [ -n "${HOLM_DEVTOOLS_SECRET:-}" ] && command -v holm-devtools-bridge >/dev/null; then
+    holm-devtools-bridge >/tmp/holm/devtools-bridge.log 2>&1 &
   else
     socat TCP-LISTEN:9223,fork,reuseaddr TCP:127.0.0.1:9222 \
-      >/tmp/computer/devtools-bridge.log 2>&1 &
+      >/tmp/holm/devtools-bridge.log 2>&1 &
   fi
 }
 
@@ -45,7 +45,7 @@ fi
 boot || exit 1
 
 # Exiting when screen 0's compositor dies is what makes a healthy-looking box one with a screen.
-while swaymsg -s "$(cat /tmp/computer/screen-0.sway 2>/dev/null)" -t get_version \
+while swaymsg -s "$(cat /tmp/holm/screen-0.sway 2>/dev/null)" -t get_version \
     >/dev/null 2>&1; do
   sleep 5
 done

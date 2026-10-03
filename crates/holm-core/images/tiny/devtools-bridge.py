@@ -8,7 +8,7 @@ import sys
 
 LISTEN = ("0.0.0.0", 9223)
 BROWSER = ("127.0.0.1", 9222)
-SECRET_HEADER = b"x-computer-devtools"
+SECRET_HEADER = b"x-holm-devtools"
 LARGEST_HEAD = 64 * 1024
 
 
@@ -111,9 +111,9 @@ async def serve(client_reader, client_writer, secret: bytes):
 
 
 async def main():
-    secret = os.environ.get("COMPUTER_DEVTOOLS_SECRET", "").encode()
+    secret = os.environ.get("HOLM_DEVTOOLS_SECRET", "").encode()
     if not secret:
-        sys.exit("COMPUTER_DEVTOOLS_SECRET is empty, and this bridge opens nothing without it")
+        sys.exit("HOLM_DEVTOOLS_SECRET is empty, and this bridge opens nothing without it")
 
     server = await asyncio.start_server(
         lambda reader, writer: serve(reader, writer, secret),

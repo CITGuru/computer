@@ -1,12 +1,12 @@
 use crate::Secret;
 use crate::error::Result;
 
-pub const AUTH_ENV: &str = "COMPUTER_VIEWER_AUTH";
-pub const VIEW_SECRET_ENV: &str = "COMPUTER_VIEW_SECRET";
-pub const CONTROL_SECRET_ENV: &str = "COMPUTER_CONTROL_SECRET";
-pub const VIEWER_KEY_ENV: &str = "COMPUTER_VIEWER_KEY";
+pub const AUTH_ENV: &str = "HOLM_VIEWER_AUTH";
+pub const VIEW_SECRET_ENV: &str = "HOLM_VIEW_SECRET";
+pub const CONTROL_SECRET_ENV: &str = "HOLM_CONTROL_SECRET";
+pub const VIEWER_KEY_ENV: &str = "HOLM_VIEWER_KEY";
 
-pub const VIEWER_USER: &str = "computer";
+pub const VIEWER_USER: &str = "holm";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Auth {

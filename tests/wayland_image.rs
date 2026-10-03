@@ -84,10 +84,10 @@ fn screen_n_is_the_socket_the_profile_names() {
     );
     assert_eq!(
         environment.get("XDG_RUNTIME_DIR").map(String::as_str),
-        Some("/tmp/computer/run-1"),
+        Some("/tmp/holm/run-1"),
         "two compositors sharing a runtime directory each claim wayland-1"
     );
-    assert!(WAYLAND_SCREEN_SH.contains(r#"runtime="/tmp/computer/run-${number}""#));
+    assert!(WAYLAND_SCREEN_SH.contains(r#"runtime="/tmp/holm/run-${number}""#));
 }
 
 #[test]
@@ -131,12 +131,7 @@ fn every_input_verb_the_driver_sends_is_one_the_script_answers() {
 
 #[test]
 fn the_commands_the_code_names_are_the_ones_the_image_installs() {
-    for command in [
-        "computer-desktop",
-        "computer-screen",
-        "computer-browser",
-        INPUT_COMMAND,
-    ] {
+    for command in ["holm-desktop", "holm-screen", "holm-browser", INPUT_COMMAND] {
         assert!(
             WAYLAND_DOCKERFILE.contains(&format!("/usr/local/bin/{command}")),
             "{command} is run by the code and installed under another name"
@@ -153,7 +148,7 @@ fn the_image_carries_every_binary_the_driver_calls() {
         "wl-clipboard",
         "chromium",
         "bash",
-        "computer-pointer",
+        "holm-pointer",
     ] {
         assert!(
             WAYLAND_DOCKERFILE.contains(binary),
@@ -225,13 +220,13 @@ fn one_pointer_stays_for_the_life_of_the_screen() {
         "a pointer asked for before the compositor is up has nothing to connect to"
     );
     assert!(
-        WAYLAND_SCREEN_SH.contains(r#"computer-pointer serve "$pointer_door""#),
+        WAYLAND_SCREEN_SH.contains(r#"holm-pointer serve "$pointer_door""#),
         "between two clients the seat has no pointer at all, so a button cannot stay down \
          and a menu loses its hover after every command"
     );
     assert!(
-        WAYLAND_SCREEN_SH.contains(r#"pointer_door="${runtime}/computer-pointer""#)
-            && POINTER_C.contains(r#""%s/computer-pointer", runtime"#),
+        WAYLAND_SCREEN_SH.contains(r#"pointer_door="${runtime}/holm-pointer""#)
+            && POINTER_C.contains(r#""%s/holm-pointer", runtime"#),
         "the script and the client have to mean the same socket, and the runtime directory \
          is what tells one screen from another"
     );
@@ -278,9 +273,9 @@ fn the_script_tells_screens_apart_the_way_the_driver_does() {
     );
 
     let second = holm::servers::wayland::runtime_dir(ScreenId(1));
-    assert_eq!(second, "/tmp/computer/run-2");
+    assert_eq!(second, "/tmp/holm/run-2");
     assert!(
-        WAYLAND_SCREEN_SH.contains(r#"runtime="/tmp/computer/run-${number}""#),
+        WAYLAND_SCREEN_SH.contains(r#"runtime="/tmp/holm/run-${number}""#),
         "the driver, the screen script and the input script have to mean the same directory"
     );
 }
@@ -288,7 +283,7 @@ fn the_script_tells_screens_apart_the_way_the_driver_does() {
 #[test]
 fn a_gesture_that_was_refused_is_a_gesture_that_failed() {
     assert!(
-        WAYLAND_INPUT_SH.contains(r#"computer-pointer "$verb" "$@" || exit $?"#),
+        WAYLAND_INPUT_SH.contains(r#"holm-pointer "$verb" "$@" || exit $?"#),
         "a press the pointer refused was once reported as a press, because the script \
          ended on a test that was true for every pointer verb"
     );
@@ -512,7 +507,7 @@ fn a_key_nobody_has_is_an_error_and_not_a_silence() {
 #[test]
 fn input_is_refused_by_the_image_and_not_only_by_the_crate() {
     assert!(
-        WAYLAND_INPUT_SH.contains("COMPUTER_TOKEN"),
+        WAYLAND_INPUT_SH.contains("HOLM_TOKEN"),
         "the holder of a takeover has to be able to drive its own screen"
     );
     assert!(
@@ -624,10 +619,10 @@ fn the_compositor_socket_is_recorded_rather_than_guessed() {
     assert!(SWAY_CONFIG.contains("%SOCKFILE%"));
     assert!(WAYLAND_SCREEN_SH.contains("s|%SOCKFILE%|${sockfile}|"));
     assert!(
-        WAYLAND_SCREEN_SH.contains(r#"sockfile="/tmp/computer/screen-${screen}.sway""#),
+        WAYLAND_SCREEN_SH.contains(r#"sockfile="/tmp/holm/screen-${screen}.sway""#),
         "the driver and the script have to look in the same place"
     );
-    assert!(WAYLAND_INPUT_SH.contains("/tmp/computer/screen-${screen}.sway"));
+    assert!(WAYLAND_INPUT_SH.contains("/tmp/holm/screen-${screen}.sway"));
 }
 
 #[test]
@@ -689,7 +684,7 @@ fn the_image_can_also_bring_a_screen_up_and_return() {
     assert!(WAYLAND_START_SH.contains(r#"if [ "${1:-}" = "--once" ]; then"#));
     assert_eq!(
         WaylandProfile.boot_command(),
-        vec!["computer-desktop", "--once"],
+        vec!["holm-desktop", "--once"],
         "the profile sends this and the script has to answer it"
     );
     assert!(WAYLAND_START_SH.contains("boot()"));

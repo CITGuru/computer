@@ -14,14 +14,14 @@ pub const DEVTOOLS_PORT: u16 = 9222;
 
 pub const DEVTOOLS_BRIDGE_PORT: u16 = 9223;
 
-pub const PROFILE_NAME: &str = "computer-desktop";
+pub const PROFILE_NAME: &str = "holm-desktop";
 
-pub const DESKTOP_COMMAND: &str = "computer-desktop";
-pub const SCREEN_COMMAND: &str = "computer-screen";
-pub const BROWSER_COMMAND: &str = "computer-browser";
+pub const DESKTOP_COMMAND: &str = "holm-desktop";
+pub const SCREEN_COMMAND: &str = "holm-screen";
+pub const BROWSER_COMMAND: &str = "holm-browser";
 
-pub const WIDTH_ENV: &str = "COMPUTER_SCREEN_WIDTH";
-pub const HEIGHT_ENV: &str = "COMPUTER_SCREEN_HEIGHT";
+pub const WIDTH_ENV: &str = "HOLM_SCREEN_WIDTH";
+pub const HEIGHT_ENV: &str = "HOLM_SCREEN_HEIGHT";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenPorts {

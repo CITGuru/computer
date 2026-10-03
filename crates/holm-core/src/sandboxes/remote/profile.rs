@@ -33,18 +33,20 @@ impl Remote {
     }
 }
 
-pub const DEVTOOLS_SECRET_ENV: &str = "COMPUTER_DEVTOOLS_SECRET";
+pub const DEVTOOLS_SECRET_ENV: &str = "HOLM_DEVTOOLS_SECRET";
 
-pub const DEVTOOLS_SECRET_HEADER: &str = "x-computer-devtools";
+pub const DEVTOOLS_SECRET_HEADER: &str = "x-holm-devtools";
 
-pub const REKEY_SCRIPT: &str = r#"command -v computer-devtools-bridge >/dev/null 2>&1 || exit 0
-bridge='^[^ ]*python[0-9.]* [^ ]*/computer-devtools-bridge'
+pub const REKEY_SCRIPT: &str = r#"command -v holm-devtools-bridge >/dev/null 2>&1 || exit 0
+bridge='^[^ ]*python[0-9.]* [^ ]*/holm-devtools-bridge'
+relay='^socat TCP-LISTEN:9223'
 pkill -f "$bridge" || true
-for _ in $(seq 1 50); do pgrep -f "$bridge" >/dev/null || break; sleep 0.1; done
-mkdir -p /tmp/computer
-nohup computer-devtools-bridge >>/tmp/computer/devtools-bridge.log 2>&1 </dev/null &
+pkill -f "$relay" || true
+for _ in $(seq 1 50); do pgrep -f "$bridge" >/dev/null || pgrep -f "$relay" >/dev/null || break; sleep 0.1; done
+mkdir -p /tmp/holm
+nohup holm-devtools-bridge >>/tmp/holm/devtools-bridge.log 2>&1 </dev/null &
 sleep 0.5
-pgrep -f "$bridge" >/dev/null || { tail -5 /tmp/computer/devtools-bridge.log >&2; exit 1; }
+pgrep -f "$bridge" >/dev/null || { tail -5 /tmp/holm/devtools-bridge.log >&2; exit 1; }
 "#;
 
 pub struct RemoteProfile {

@@ -121,7 +121,7 @@ pub fn run_args(name: &str, config: &Config) -> Vec<String> {
     }
 
     args.push(arg("--label"));
-    args.push(arg("computer-rs=1"));
+    args.push(arg("holm-rs=1"));
     for (key, value) in &config.labels {
         args.push(arg("--label"));
         args.push(format!("{key}={value}"));
