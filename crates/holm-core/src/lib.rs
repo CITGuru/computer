@@ -128,9 +128,9 @@ impl std::fmt::Display for HolderId {
 }
 
 /// Written on the box too, so a box that outlives its process can still be swept.
-pub const EXPIRY_LABEL: &str = "computer.expires-at";
-pub const IDLE_LABEL: &str = "computer.idle-secs";
-pub const PERSISTENT_LABEL: &str = "computer.persistent";
+pub const EXPIRY_LABEL: &str = "holm.expires-at";
+pub const IDLE_LABEL: &str = "holm.idle-secs";
+pub const PERSISTENT_LABEL: &str = "holm.persistent";
 
 pub const READY_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -421,7 +421,7 @@ impl Builder {
     /// Carries no credential: secrets are minted at launch, so this is safe to log.
     pub fn preview(&self) -> Result<Vec<String>> {
         Ok(engine::run_args(
-            self.name.as_deref().unwrap_or("computer-preview"),
+            self.name.as_deref().unwrap_or("holm-preview"),
             &self.config()?,
         ))
     }
@@ -1836,7 +1836,7 @@ impl Screen {
         self.runtimes.wallpaper.supported()?;
 
         // Kept: swaybg reads it after swaymsg returns, and again whenever sway restarts it.
-        let path = PathBuf::from(format!("/tmp/computer/wallpaper-{}.image", self.id.0));
+        let path = PathBuf::from(format!("/tmp/holm/wallpaper-{}.image", self.id.0));
         self.host.touch();
         self.host
             .machine()
@@ -2049,7 +2049,7 @@ impl Screen {
 
     pub fn audio_socket(&self) -> String {
         // PulseAudio is a singleton per user, so every screen shares one daemon.
-        "/tmp/computer/pulse.socket".to_string()
+        "/tmp/holm/pulse.socket".to_string()
     }
 
     /// The sink's monitor: `default` finds no source when the only card is a null sink.
@@ -2144,7 +2144,7 @@ impl Screen {
         target: &str,
         bytes: &[u8],
     ) -> Result<()> {
-        let path = format!("/tmp/computer/{}-{}.bytes", selection.name(), self.id.0);
+        let path = format!("/tmp/holm/{}-{}.bytes", selection.name(), self.id.0);
         let port = self.clipboard_port()?;
 
         self.host
@@ -2155,7 +2155,7 @@ impl Screen {
     }
 
     pub async fn set_selection(&self, selection: Selection, text: &str) -> Result<()> {
-        let path = format!("/tmp/computer/{}-{}", selection.name(), self.id.0);
+        let path = format!("/tmp/holm/{}-{}", selection.name(), self.id.0);
         let port = self.clipboard_port()?;
 
         self.host
@@ -2563,7 +2563,7 @@ fn tick() -> u64 {
 
 fn unique_name() -> String {
     format!(
-        "computer-{}-{:x}-{}",
+        "holm-{}-{:x}-{}",
         std::process::id(),
         nanos() as u32,
         tick()
@@ -2708,7 +2708,7 @@ mod tests {
 
     #[test]
     fn test_a_name_says_which_process_opened_it() {
-        assert!(unique_name().starts_with(&format!("computer-{}-", std::process::id())));
+        assert!(unique_name().starts_with(&format!("holm-{}-", std::process::id())));
     }
 
     #[test]
@@ -2781,7 +2781,7 @@ mod tests {
 
         assert_eq!(config.image_dir.as_deref(), Some(expected.as_path()));
         assert!(config.bundle.is_none());
-        assert!(config.image.starts_with("computer-local:"));
+        assert!(config.image.starts_with("holm-local:"));
     }
 
     #[test]
@@ -2797,7 +2797,7 @@ mod tests {
 
         assert_eq!(config.image_dir.as_deref(), Some(expected.as_path()));
         assert!(config.bundle.is_none());
-        assert!(config.image.starts_with("computer-local:"));
+        assert!(config.image.starts_with("holm-local:"));
     }
 
     #[test]
@@ -2839,7 +2839,7 @@ mod tests {
             .preview()
             .expect("an image this crate builds");
 
-        assert!(args.contains(&"COMPUTER_SCREEN_WIDTH=1920".to_string()));
+        assert!(args.contains(&"HOLM_SCREEN_WIDTH=1920".to_string()));
         assert!(args.contains(&"none".to_string()));
         assert!(args.contains(&"preview-box".to_string()));
     }

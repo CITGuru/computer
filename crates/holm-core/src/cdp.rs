@@ -1455,7 +1455,7 @@ const MATCH: &str = r#"(q, exact) => {
 
   const ref = /^@e(\d+)$/.exec(q.trim());
   if (ref) {
-    const numbered = (window.__computerRefs || [])[+ref[1] - 1];
+    const numbered = (window.__holmRefs || [])[+ref[1] - 1];
     if (numbered && numbered.isConnected) add(numbered);
     return out;
   }
@@ -1637,7 +1637,7 @@ const NEARBY: &str = r#"(query, kind) => {
       ':not([type=image]), textarea, select, [contenteditable=""], [contenteditable="true"]';
   const reachable = field => kind === 'file' || field.getClientRects().length > 0;
   const fields = node => Array.from(node.querySelectorAll(wanted)).filter(reachable);
-  const refs = window.__computerRefs || [];
+  const refs = window.__holmRefs || [];
   const named = field => {
     const at = refs.indexOf(field);
     return at >= 0 ? '@e' + (at + 1) : (SELECTOR_FN)(field);
@@ -1725,7 +1725,7 @@ const HIGHLIGHT: &str = r#"(query, ms) => {
   const o = (OFFSET_FN)(el), own = el.getBoundingClientRect();
   const r = { left: own.left + o.x, top: own.top + o.y, width: own.width, height: own.height };
   const mark = document.createElement('div');
-  mark.setAttribute('data-computer-mark', '');
+  mark.setAttribute('data-holm-mark', '');
   Object.assign(mark.style, {
     position: 'absolute', left: (r.left + scrollX - 3) + 'px', top: (r.top + scrollY - 3) + 'px',
     width: (r.width + 6) + 'px', height: (r.height + 6) + 'px', boxSizing: 'border-box',
@@ -1739,14 +1739,14 @@ const HIGHLIGHT: &str = r#"(query, ms) => {
 
 const ANNOTATE: &str = r#"(full) => {
   const layer = document.createElement('div');
-  layer.setAttribute('data-computer-annotations', '');
+  layer.setAttribute('data-holm-annotations', '');
   Object.assign(layer.style, {
     position: 'absolute', left: '0', top: '0', width: '0', height: '0',
     zIndex: '2147483647', pointerEvents: 'none',
   });
 
   let drawn = 0;
-  (window.__computerRefs || []).forEach((el, at) => {
+  (window.__holmRefs || []).forEach((el, at) => {
     if (!el || !el.isConnected) return;
     const o = (OFFSET_FN)(el), own = el.getBoundingClientRect();
     const r = { left: own.left + o.x, top: own.top + o.y, width: own.width, height: own.height,
@@ -1776,7 +1776,7 @@ const ANNOTATE: &str = r#"(full) => {
 }"#;
 
 const UNANNOTATE: &str =
-    "document.querySelectorAll('[data-computer-annotations]').forEach(layer => layer.remove())";
+    "document.querySelectorAll('[data-holm-annotations]').forEach(layer => layer.remove())";
 
 fn highlight() -> String {
     HIGHLIGHT
@@ -1886,7 +1886,7 @@ const DESCRIBE: &str = r#"(el) => {
   if (aria('selected') === 'true') states.push('selected');
   if (el.required === true || aria('required') === 'true') states.push('required');
 
-  const numbered = (window.__computerRefs || []).indexOf(el);
+  const numbered = (window.__holmRefs || []).indexOf(el);
 
   return {
     text: (el.innerText || el.value || el.getAttribute('aria-label') || '')
@@ -1932,18 +1932,18 @@ const SNAPSHOT: &str = r#"(root, limit, mode, scope) => {
 
   // Only a snapshot hands numbers out: an agent must have seen a number before it can
   // name one, or a number kept from the last page would land on this one.
-  const numbered = Array.isArray(window.__computerRefs);
+  const numbered = Array.isArray(window.__holmRefs);
   if ((mode === 'prime' || mode === 'since') && !numbered) {
     return JSON.stringify({ ...page, elements: [] });
   }
 
-  const refs = numbered ? window.__computerRefs : [];
+  const refs = numbered ? window.__holmRefs : [];
   // A hole, not a gap: the numbers after it hold still and the page can free it.
   for (let i = 0; i < refs.length; i++) if (refs[i] && !refs[i].isConnected) refs[i] = null;
   for (const el of found) if (!refs.includes(el)) refs.push(el);
-  window.__computerRefs = refs;
+  window.__holmRefs = refs;
 
-  const remembered = window.__computerLast || (window.__computerLast = {});
+  const remembered = window.__holmLast || (window.__holmLast = {});
   const before = remembered[scope];
 
   // Priming never overwrites what a snapshot remembered.
@@ -2038,7 +2038,7 @@ const REACH: &str = r#"(el) => {
 }"#;
 
 const REF_STATE: &str = r#"(n) => {
-  const refs = window.__computerRefs;
+  const refs = window.__holmRefs;
   if (!Array.isArray(refs)) return 'none';
   const el = refs[n - 1];
   if (el === undefined) return 'unknown';
@@ -2052,7 +2052,7 @@ fn snapshot_script() -> String {
 
 // The page's own scripts see the global, so it carries this crate's name.
 const WATCH: &str = r#"() => {
-  const key = '__computerWatch';
+  const key = '__holmWatch';
   if (window[key]) window[key].observer.disconnect();
   const state = { changed: false, observer: null };
   state.observer = new MutationObserver(() => { state.changed = true; });
@@ -2063,7 +2063,7 @@ const WATCH: &str = r#"() => {
 }"#;
 
 const CHANGED: &str = r#"() => {
-  const key = '__computerWatch';
+  const key = '__holmWatch';
   const state = window[key];
   if (!state) return null;
   state.observer.disconnect();
@@ -2555,9 +2555,7 @@ impl Page {
     }
 
     pub async fn capture_annotated(&mut self, shot: &PageShot) -> Result<(Vec<u8>, usize)> {
-        let numbered = self
-            .evaluate("Array.isArray(window.__computerRefs)")
-            .await?;
+        let numbered = self.evaluate("Array.isArray(window.__holmRefs)").await?;
         if numbered != Value::Bool(true) {
             self.snapshot(None, Some(0)).await?;
         }
@@ -2710,7 +2708,7 @@ impl Page {
     async fn pointer(&mut self) -> Result<Point> {
         let at = self
             .evaluate(
-                "JSON.stringify(window.__computerPointer || \
+                "JSON.stringify(window.__holmPointer || \
                  { x: Math.round(innerWidth / 2), y: Math.round(innerHeight / 2) })",
             )
             .await?;
@@ -2721,7 +2719,7 @@ impl Page {
 
     async fn pointed(&mut self, at: Point) -> Result<()> {
         self.evaluate(&format!(
-            "void (window.__computerPointer = {{ x: {}, y: {} }})",
+            "void (window.__holmPointer = {{ x: {}, y: {} }})",
             at.x, at.y
         ))
         .await
@@ -4895,7 +4893,7 @@ mod tests {
         );
         for script in [MATCH, DESCRIBE, SNAPSHOT] {
             assert!(
-                script.contains("window.__computerRefs"),
+                script.contains("window.__holmRefs"),
                 "the three scripts share one global, or a number means different things"
             );
         }
@@ -4908,7 +4906,7 @@ mod tests {
             "an element already numbered keeps its number, and a new one is appended"
         );
         assert!(
-            SNAPSHOT.contains("const refs = numbered ? window.__computerRefs : [];"),
+            SNAPSHOT.contains("const refs = numbered ? window.__holmRefs : [];"),
             "and the first snapshot starts from nothing"
         );
     }
@@ -5087,7 +5085,7 @@ mod tests {
             "an action on a page nobody has snapshotted does not number it"
         );
         assert!(
-            SNAPSHOT.contains("const numbered = Array.isArray(window.__computerRefs);"),
+            SNAPSHOT.contains("const numbered = Array.isArray(window.__holmRefs);"),
             "and a navigation, which empties the globals, counts as nobody having"
         );
         assert!(
@@ -5380,8 +5378,8 @@ mod tests {
             "the number drawn is the query the caller types"
         );
         assert!(
-            UNANNOTATE.contains("[data-computer-annotations]")
-                && ANNOTATE.contains("setAttribute('data-computer-annotations', '')"),
+            UNANNOTATE.contains("[data-holm-annotations]")
+                && ANNOTATE.contains("setAttribute('data-holm-annotations', '')"),
             "what the capture drew is taken away by the same name"
         );
     }

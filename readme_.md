@@ -450,7 +450,7 @@ Three things differ inside the box:
 | ------- | --------------------- | --------------------------------------------------------------------- |
 | Server  | `Xvfb` plus `fluxbox` | `sway`, headless                                                      |
 | Capture | ImageMagick `import`  | `grim`                                                                |
-| Input   | `xdotool`             | `computer-input` — a virtual pointer and keyboard that stay           |
+| Input   | `xdotool`             | `holm-input` — a virtual pointer and keyboard that stay           |
 | Viewer  | `x11vnc -viewonly`    | `wayvnc -d`                                                           |
 | Runs as | root                  | an unprivileged user, because sway will not start as root             |
 
@@ -458,7 +458,7 @@ Screens are told apart differently. An X display number is global, so screen `N`
 
 Wayland input needs no extra privilege. It does **not** use `ydotool` or `/dev/uinput`, so the box keeps the isolation it was started with.
 
-The pointer is a `zwlr_virtual_pointer_v1` device and the keyboard a `zwp_virtual_keyboard_v1`, and such a device lives only as long as the client that made it. Each screen keeps one `computer-pointer serve` for its whole life and every gesture and every key goes through it, so a button can stay down between two steps — `mouse_down` and `mouse_up` work as they do on X11 — a modifier can be held through a click, and a menu keeps its hover from one command to the next. If it dies, the next gesture starts it again.
+The pointer is a `zwlr_virtual_pointer_v1` device and the keyboard a `zwp_virtual_keyboard_v1`, and such a device lives only as long as the client that made it. Each screen keeps one `holm-pointer serve` for its whole life and every gesture and every key goes through it, so a button can stay down between two steps — `mouse_down` and `mouse_up` work as they do on X11 — a modifier can be held through a click, and a menu keeps its hover from one command to the next. If it dies, the next gesture starts it again.
 
 The keyboard is a US layout, so `H` reaches a page as `KeyH` with Shift and a shortcut matches on the code it expects. A character the layout does not have — `é`, `日`, `Привет` — is put on the same printable keys in another group, which is where a keyboard of that script has it; Chrome types a character only from a key code it knows. One limit is Chrome's and not the keyboard's: a key event there carries sixteen bits, so an emoji typed as a key is dropped. `fill` on a page inserts it, and an X11 program under Xwayland takes it as a key.
 
@@ -522,11 +522,11 @@ Such an image takes no extra packages, because there is no build to install them
 An image says which contract it implements, and a box driven by another profile is refused before it starts:
 
 ```dockerfile
-LABEL computer.profile="computer-desktop"
+LABEL holm.profile="holm-desktop"
 ```
 
 ```
-Denied: computer-local:905f378b… implements the computer-wayland contract and this box is driven by computer-desktop: the commands would go in and the screen would not move
+Denied: holm-local:905f378b… implements the holm-wayland contract and this box is driven by holm-desktop: the commands would go in and the screen would not move
 ```
 
 An image that declares nothing is not refused — your own image owes this crate no label. Without one, a mismatch surfaces ninety seconds later as a display that never came up, which points at the display server rather than at the pairing.
@@ -550,7 +550,7 @@ let computer = Computer::builder().profile(Arc::new(profile)).launch().await?;
 
 Whatever you leave alone comes from the base contract, so a custom image does not copy the X11 or Wayland one to change two names. `ports()`, `geometry()`, `support()`, `screen_environment()` and `viewer_url()` replace the rest. `geometry()` takes one `GeometrySpec` rather than three methods, because the default size, the environment a launch carries and the size read back off a running box have to agree.
 
-**A profile carries its own image.** `image_dir()` puts the build context on the profile rather than on the builder, so the image and the contract it implements arrive together instead of being two things a caller has to pair correctly. The directory needs a `Dockerfile` whose `computer.profile` label matches the profile's name. `image(ImageSource::Registry("me/desktop:1".into()))` names somebody else's instead, and `Computer::builder().image_dir(...)` still wins over whatever the profile says.
+**A profile carries its own image.** `image_dir()` puts the build context on the profile rather than on the builder, so the image and the contract it implements arrive together instead of being two things a caller has to pair correctly. The directory needs a `Dockerfile` whose `holm.profile` label matches the profile's name. `image(ImageSource::Registry("me/desktop:1".into()))` names somebody else's instead, and `Computer::builder().image_dir(...)` still wins over whatever the profile says.
 
 `driver()` names the display server driver, which a base contract otherwise supplies — an image that keeps a contract but speaks Wayland needs its own.
 
@@ -851,8 +851,8 @@ E2B runs templates, not container images, and builds them itself. Its builder is
 ```bash
 python3 crates/holm-core/images/context.py crates/holm-core/images/desktop /tmp/e2b-ctx --for e2b
 
-e2b template create computer-desktop -p /tmp/e2b-ctx -d Dockerfile \
-  -c "/usr/local/bin/computer-desktop" --ready-cmd "true" \
+e2b template create holm-desktop -p /tmp/e2b-ctx -d Dockerfile \
+  -c "/usr/local/bin/holm-desktop" --ready-cmd "true" \
   --cpu-count 2 --memory-mb 2048
 ```
 

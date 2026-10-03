@@ -166,7 +166,7 @@ async fn serve(computer: &Computer) -> holm::Result<()> {
 #[tokio::test]
 #[ignore = "needs a container runtime"]
 async fn a_volume_keeps_the_browser_between_boxes() {
-    let volume = format!("computer-test-{}", std::process::id());
+    let volume = format!("holm-test-{}", std::process::id());
 
     let first = Computer::builder()
         .profiles(&volume)

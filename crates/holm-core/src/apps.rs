@@ -64,7 +64,7 @@ pub fn builtin() -> BTreeMap<String, App> {
             command: vec![
                 "code".to_string(),
                 "--no-sandbox".to_string(),
-                "--user-data-dir=/var/lib/computer/vscode".to_string(),
+                "--user-data-dir=/var/lib/holm/vscode".to_string(),
             ],
             window: Some(WindowMatch::Class("code".to_string())),
             // Maps immediately and paints seconds later.
@@ -218,8 +218,8 @@ fn script(wanted: &BTreeMap<String, App>) -> String {
         lines.push("mkdir -p /usr/share/applications".to_string());
         lines.push(format!(
             "printf '%s\\n' '[Desktop Entry]' 'Type=Application' 'Name={}' \
-             'Exec=computer-launch {} {}' 'Icon={}' 'Terminal=false' \
-             > /usr/share/applications/computer-app-{}.desktop",
+             'Exec=holm-launch {} {}' 'Icon={}' 'Terminal=false' \
+             > /usr/share/applications/holm-app-{}.desktop",
             plain(name),
             plain(&class),
             plain(&command),
@@ -366,7 +366,7 @@ mod installing {
             "nothing in Debian needs an archive of its own: {said}"
         );
         assert!(
-            said.contains("computer-app-gimp.desktop"),
+            said.contains("holm-app-gimp.desktop"),
             "and the dock gets a launcher, or open_app has nothing to open: {said}"
         );
     }

@@ -20,7 +20,7 @@ struct Held {
     stopped: bool,
 }
 
-const WAKING: &str = "/var/tmp/computer-wake.json";
+const WAKING: &str = "/var/tmp/holm-wake.json";
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Waking {
@@ -520,7 +520,7 @@ mod tests {
         Config {
             image: "snapshot-abc".to_string(),
             publish: vec![6080, 6081],
-            boot: vec!["computer-desktop".to_string(), "--once".to_string()],
+            boot: vec!["holm-desktop".to_string(), "--once".to_string()],
             bundle: None,
             ..Config::default()
         }
@@ -582,7 +582,7 @@ mod tests {
 
         assert_eq!(
             api.commands(),
-            vec![vec!["computer-desktop".to_string(), "--once".to_string()]]
+            vec![vec!["holm-desktop".to_string(), "--once".to_string()]]
         );
     }
 
@@ -822,7 +822,7 @@ mod tests {
         let boots = |api: &ScriptedRemote| {
             api.commands()
                 .iter()
-                .filter(|argv| argv.first().map(String::as_str) == Some("computer-desktop"))
+                .filter(|argv| argv.first().map(String::as_str) == Some("holm-desktop"))
                 .count()
         };
         assert_eq!(boots(&api), 1);
@@ -873,9 +873,9 @@ mod tests {
     #[tokio::test]
     async fn test_a_sweep_reads_names_and_not_ids() {
         let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
-        api.metadata("sbx-9", "computer.expires", "1700000000");
+        api.metadata("sbx-9", "holm.expires", "1700000000");
 
-        let found = machine(api).labelled("computer.expires").await.unwrap();
+        let found = machine(api).labelled("holm.expires").await.unwrap();
 
         assert_eq!(
             found,

@@ -173,7 +173,7 @@ There are two ways to keep a login.
 BOX=$(holm new --profile work)
 ```
 
-The volume is `computer-profile-work`. The next box with `--profile work` starts with the same browser data. The server refuses a second box that asks for a profile that another box holds, running or stopped, and names that box.
+The volume is `holm-profile-work`. The next box with `--profile work` starts with the same browser data. The server refuses a second box that asks for a profile that another box holds, running or stopped, and names that box.
 
 Before the server stops or removes a box with a profile, it closes the browser cleanly, so recent cookies are written. Session cookies end when the browser closes, as on any computer. A site's "remember me" cookie is the one that keeps a login. A fork does not take the profile.
 

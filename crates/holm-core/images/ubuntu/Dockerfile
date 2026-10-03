@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xclip \
       bash \
   && rm -rf /var/lib/apt/lists/* \
-  && mkdir -p /etc/computer/fluxbox \
+  && mkdir -p /etc/holm/fluxbox \
   && printf '%s\n' '#!/bin/sh' 'exec xsetroot -solid "#111113" "$@"' > /usr/bin/fbsetbg \
   && chmod +x /usr/bin/fbsetbg \
   && ln -sfn /bin/true /usr/bin/xmessage
@@ -65,63 +65,63 @@ RUN if [ -n "$EXTRA_APPS" ]; then \
         { echo '[Desktop Entry]'; \
           echo 'Type=Application'; \
           echo "Name=$name"; \
-          echo "Exec=computer-launch $class $command"; \
+          echo "Exec=holm-launch $class $command"; \
           echo "Icon=$(printf '%s' "$command" | cut -d" " -f1 | xargs -r basename)"; \
           echo 'Terminal=false'; \
-        } > "/usr/share/applications/computer-app-$name.desktop"; \
+        } > "/usr/share/applications/holm-app-$name.desktop"; \
       done; \
     fi
 
 ENV DISPLAY=:1
-ENV HOME=/home/computer
+ENV HOME=/home/holm
 ENV LANG=C.UTF-8
-ENV COMPUTER_SCREEN_WIDTH=1280
-ENV COMPUTER_SCREEN_HEIGHT=800
+ENV HOLM_SCREEN_WIDTH=1280
+ENV HOLM_SCREEN_HEIGHT=800
 
 # Fixed here, because this is the only environment a later `docker exec` inherits.
-ENV DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/computer/a11y-bus.socket
+ENV DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/holm/a11y-bus.socket
 ENV QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
-WORKDIR /home/computer
+WORKDIR /home/holm
 
 COPY input-guard.sh /usr/local/bin/xdotool
-COPY start.sh       /usr/local/bin/computer-desktop
-COPY screen.sh      /usr/local/bin/computer-screen
-COPY browser.sh     /usr/local/bin/computer-browser
-COPY fluxbox.apps   /etc/computer/fluxbox/apps
-COPY fluxbox.menu   /etc/computer/fluxbox/menu
-COPY fluxbox.init   /etc/computer/fluxbox/init
-COPY fluxbox.style  /etc/computer/fluxbox/style
+COPY start.sh       /usr/local/bin/holm-desktop
+COPY screen.sh      /usr/local/bin/holm-screen
+COPY browser.sh     /usr/local/bin/holm-browser
+COPY fluxbox.apps   /etc/holm/fluxbox/apps
+COPY fluxbox.menu   /etc/holm/fluxbox/menu
+COPY fluxbox.init   /etc/holm/fluxbox/init
+COPY fluxbox.style  /etc/holm/fluxbox/style
 COPY embed.html     /usr/share/novnc/embed.html
 COPY paste.js /usr/share/novnc/app/paste.js
 RUN sed -i 's|</head>|<script type="module">import UI from "./app/ui.js"; import paste from "./app/paste.js"; paste(() => UI.rfb);</script>\n</head>|' /usr/share/novnc/vnc.html \
   && grep -q app/paste.js /usr/share/novnc/vnc.html
-COPY wallpaper.sh   /usr/local/bin/computer-wallpaper
-COPY launch.sh      /usr/local/bin/computer-launch
-COPY devtools-bridge.py /usr/local/bin/computer-devtools-bridge
-COPY tint2rc        /etc/computer/tint2rc
-COPY terminal.desktop /usr/share/applications/computer-terminal.desktop
-COPY browser.desktop  /usr/share/applications/computer-browser.desktop
+COPY wallpaper.sh   /usr/local/bin/holm-wallpaper
+COPY launch.sh      /usr/local/bin/holm-launch
+COPY devtools-bridge.py /usr/local/bin/holm-devtools-bridge
+COPY tint2rc        /etc/holm/tint2rc
+COPY terminal.desktop /usr/share/applications/holm-terminal.desktop
+COPY browser.desktop  /usr/share/applications/holm-browser.desktop
 
-RUN mkdir -p /usr/share/computer \
+RUN mkdir -p /usr/share/holm \
   && convert -size 128x128 xc:none \
        -fill "#15151b" -stroke "#3d3d4a" -strokewidth 4 \
        -draw "roundrectangle 8,8 120,120 26,26" \
        -stroke "#8fe3a8" -strokewidth 9 -fill none \
        -draw "polyline 42,50 64,68 42,86" \
        -draw "line 74,88 94,88" \
-       /usr/share/computer/terminal.png
-RUN chmod +x /usr/local/bin/computer-desktop \
-             /usr/local/bin/computer-screen \
-             /usr/local/bin/computer-browser \
+       /usr/share/holm/terminal.png
+RUN chmod +x /usr/local/bin/holm-desktop \
+             /usr/local/bin/holm-screen \
+             /usr/local/bin/holm-browser \
              /usr/local/bin/xdotool \
-             /usr/local/bin/computer-wallpaper \
-             /usr/local/bin/computer-launch \
-             /usr/local/bin/computer-devtools-bridge
+             /usr/local/bin/holm-wallpaper \
+             /usr/local/bin/holm-launch \
+             /usr/local/bin/holm-devtools-bridge
 
-LABEL computer.profile="computer-desktop"
+LABEL holm.profile="holm-desktop"
 
 EXPOSE 6080 6081 6082 6083 6084 6085 6086 6087 6088 6089 6090 6091 6092 6093 6094 6095
 
 EXPOSE 9222 9223
 
-CMD ["/usr/local/bin/computer-desktop"]
+CMD ["/usr/local/bin/holm-desktop"]

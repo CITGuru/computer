@@ -736,7 +736,7 @@ impl StillDown {
     }
 }
 
-const HOLDS: &str = "/tmp/computer/holds";
+const HOLDS: &str = "/tmp/holm/holds";
 
 const LATER: &str = r#"mkdir -p "$1" || exit 1; f="$1/$2"; t="$3"; s="$4"; shift 4; printf %s "$t" > "$f" || exit 1; nohup sh -c 'sleep "$1"; [ "$(cat "$2" 2>/dev/null)" = "$3" ] || exit 0; rm -f "$2"; shift 3; exec "$@"' sh "$s" "$f" "$t" "$@" </dev/null >/dev/null 2>&1 &"#;
 
@@ -785,8 +785,7 @@ mod later_tests {
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("computer-later-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("holm-later-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -850,7 +849,7 @@ mod later_tests {
         );
         assert_eq!(
             kept(&StillDown::Button(Button::Left)),
-            ["rm", "-f", "/tmp/computer/holds/button-left"]
+            ["rm", "-f", "/tmp/holm/holds/button-left"]
         );
     }
 }

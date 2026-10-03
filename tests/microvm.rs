@@ -37,7 +37,7 @@ async fn the_screen_is_brought_up_once_and_nothing_idles() {
 
     assert_eq!(
         api.last_line(),
-        "computer-desktop --once",
+        "holm-desktop --once",
         "a microVM lives until it is stopped, so the supervisor's idle loop \
          would hold an exec open for the life of the machine"
     );
@@ -86,7 +86,7 @@ async fn a_container_image_is_refused_with_the_way_out_named() {
     let machine = micro(Arc::new(ScriptedMicroVm::new()));
 
     let error = machine
-        .ensure_image(&bundled_image("computer-desktop:a16756c2080fd481"))
+        .ensure_image(&bundled_image("holm-desktop:a16756c2080fd481"))
         .await
         .expect_err("a hypervisor cannot read a container runtime's store");
 
@@ -234,7 +234,7 @@ fn a_plan_is_a_value_and_not_a_chain_of_builder_calls() {
 
 #[tokio::test]
 async fn an_image_already_handed_over_is_not_refused() {
-    let image = "computer-desktop:a16756c2080fd481";
+    let image = "holm-desktop:a16756c2080fd481";
     let machine = micro(Arc::new(ScriptedMicroVm::new().holding(image)));
 
     machine

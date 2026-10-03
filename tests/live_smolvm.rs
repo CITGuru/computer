@@ -94,7 +94,7 @@ async fn exercise(computer: &Computer) -> holm::Result<()> {
 
     let taken = computer
         .machine()
-        .labelled("computer-rs")
+        .labelled("holm-rs")
         .await
         .unwrap_or_default();
     assert!(

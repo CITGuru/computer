@@ -13,11 +13,11 @@ pub const BUILDER_LIFETIME: Duration = Duration::from_secs(30 * 60);
 
 pub const BUILD_WAIT: Duration = Duration::from_secs(20 * 60);
 
-pub const CONTEXT_DIR: &str = "/tmp/computer-build";
+pub const CONTEXT_DIR: &str = "/tmp/holm-build";
 
-pub const AUTH_ENV: &str = "COMPUTER_REGISTRY_AUTH";
+pub const AUTH_ENV: &str = "HOLM_REGISTRY_AUTH";
 
-pub const IMAGE_ENV: &str = "COMPUTER_IMAGE";
+pub const IMAGE_ENV: &str = "HOLM_IMAGE";
 
 pub const SCRIPT: &str = r#"set -eu
 export DEBIAN_FRONTEND=noninteractive
@@ -30,12 +30,12 @@ if ! docker info >/dev/null 2>&1; then
   for _ in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
 fi
 docker info >/dev/null 2>&1 || { tail -20 /tmp/dockerd.log >&2; exit 1; }
-export DOCKER_CONFIG=/tmp/computer-docker
+export DOCKER_CONFIG=/tmp/holm-docker
 mkdir -p "$DOCKER_CONFIG"
-printf '{"auths":{"vcr.vercel.com":{"auth":"%s"}}}' "$COMPUTER_REGISTRY_AUTH" >"$DOCKER_CONFIG/config.json"
+printf '{"auths":{"vcr.vercel.com":{"auth":"%s"}}}' "$HOLM_REGISTRY_AUTH" >"$DOCKER_CONFIG/config.json"
 docker buildx build --platform linux/amd64 --progress plain \
-  --output "type=image,name=$COMPUTER_IMAGE,push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true" \
-  /tmp/computer-build
+  --output "type=image,name=$HOLM_IMAGE,push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true" \
+  /tmp/holm-build
 "#;
 
 pub use crate::sandboxes::context::File;
@@ -124,7 +124,7 @@ pub fn builder(project: &str, name: &str, image: &str) -> Value {
         "timeout": BUILDER_LIFETIME.as_millis() as u64,
         "persistent": false,
         "resources": { "vcpus": BUILDER_CPUS },
-        "tags": { "computer.build": image },
+        "tags": { "holm.build": image },
     })
 }
 
@@ -192,12 +192,12 @@ mod tests {
     #[test]
     fn test_the_image_is_named_under_team_and_project() {
         assert_eq!(
-            reference("bitpowr", "melt", "computer-desktop", "abc-x86_64"),
-            "vcr.vercel.com/bitpowr/melt/computer-desktop:abc-x86_64"
+            reference("bitpowr", "melt", "holm-desktop", "abc-x86_64"),
+            "vcr.vercel.com/bitpowr/melt/holm-desktop:abc-x86_64"
         );
         assert_eq!(
-            manifest_url("bitpowr", "melt", "computer-desktop", "abc-x86_64"),
-            "https://vcr.vercel.com/v2/bitpowr/melt/computer-desktop/manifests/abc-x86_64"
+            manifest_url("bitpowr", "melt", "holm-desktop", "abc-x86_64"),
+            "https://vcr.vercel.com/v2/bitpowr/melt/holm-desktop/manifests/abc-x86_64"
         );
     }
 
@@ -209,7 +209,7 @@ mod tests {
         assert!(
             files
                 .iter()
-                .any(|file| file.path == "/tmp/computer-build/Dockerfile")
+                .any(|file| file.path == "/tmp/holm-build/Dockerfile")
         );
         assert!(SCRIPT.trim_end().ends_with(CONTEXT_DIR));
     }
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn test_the_builder_is_short_lived_and_not_kept() {
-        let body = builder("prj_1", "computer-build-1", "r:x");
+        let body = builder("prj_1", "holm-build-1", "r:x");
 
         assert_eq!(body["persistent"], false);
         assert_eq!(body["timeout"], 1_800_000);
@@ -254,7 +254,7 @@ mod tests {
 
     fn scratch(name: &str) -> std::path::PathBuf {
         let directory = std::env::temp_dir().join(format!(
-            "computer-vercel-{name}-{}-{:?}",
+            "holm-vercel-{name}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
@@ -275,11 +275,10 @@ mod tests {
         )
         .expect("chmod");
 
-        let context =
-            directory(&root, "computer-local:0123456789abcdef-aarch64").expect("a context");
+        let context = directory(&root, "holm-local:0123456789abcdef-aarch64").expect("a context");
         let _ = std::fs::remove_dir_all(&root);
 
-        assert_eq!(context.repository, "computer-local");
+        assert_eq!(context.repository, "holm-local");
         assert_eq!(
             context.tag, "0123456789abcdef-x86_64",
             "the hash of the directory, named for the arch vercel runs"
@@ -291,10 +290,7 @@ mod tests {
             .collect();
         assert_eq!(
             paths,
-            [
-                "/tmp/computer-build/Dockerfile",
-                "/tmp/computer-build/bin/start.sh"
-            ]
+            ["/tmp/holm-build/Dockerfile", "/tmp/holm-build/bin/start.sh"]
         );
         #[cfg(unix)]
         assert_eq!(
@@ -310,7 +306,7 @@ mod tests {
         std::fs::write(root.join("Dockerfile"), "FROM debian\n").expect("written");
         std::os::unix::fs::symlink("/etc/hostname", root.join("host")).expect("a link");
 
-        let refused = directory(&root, "computer-local:abc-aarch64");
+        let refused = directory(&root, "holm-local:abc-aarch64");
         let _ = std::fs::remove_dir_all(&root);
 
         assert!(matches!(refused, Err(Error::Unsupported { .. })));
@@ -324,7 +320,7 @@ mod tests {
         let dockerfile = context
             .files
             .iter()
-            .find(|file| file.path == "/tmp/computer-build/Dockerfile")
+            .find(|file| file.path == "/tmp/holm-build/Dockerfile")
             .map(|file| String::from_utf8_lossy(&file.bytes).into_owned())
             .expect("a Dockerfile");
         assert!(dockerfile.contains("$(printf '%b' 'gimp')"));

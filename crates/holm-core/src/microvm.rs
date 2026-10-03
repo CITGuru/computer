@@ -482,7 +482,7 @@ pub async fn export_rootfs(
         .await
         .map_err(|error| Error::transport(format!("{}: {error}", into.display()), false))?;
 
-    let name = format!("computer-export-{}", std::process::id());
+    let name = format!("holm-export-{}", std::process::id());
     let tarball = std::env::temp_dir().join(format!("{name}.tar"));
 
     let created = cli
@@ -542,7 +542,7 @@ pub async fn export_rootfs(
 
 pub async fn import_image(cli: &dyn Engine, loader: &dyn ImageLoader, image: &str) -> Result<()> {
     let archive = std::env::temp_dir().join(format!(
-        "computer-import-{}.tar",
+        "holm-import-{}.tar",
         image.replace([':', '/'], "-")
     ));
 

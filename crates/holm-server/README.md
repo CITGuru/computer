@@ -98,7 +98,7 @@ Unknown keys in a spec are refused rather than ignored: a misspelled key that is
 
 `"runtime": "docker"` in the placement names one of the runtimes below. A name this server does not have is refused with the names it has, and the box lands on the default when the placement names none.
 
-`"profile": "work"` in the placement keeps the browser's logins, cookies and history in the volume `computer-profile-work` after the box is gone, and the next box given the name starts with them. A profile that another box holds, running or stopped, is refused with that box's name.
+`"profile": "work"` in the placement keeps the browser's logins, cookies and history in the volume `holm-profile-work` after the box is gone, and the next box given the name starts with them. A profile that another box holds, running or stopped, is refused with that box's name.
 
 ## Where a box runs
 
@@ -235,7 +235,7 @@ Three things worth knowing:
 
 `pause_ms` waits after the move, a second at most. A drawing program reads the pointer at intervals and merges moves that arrive faster than it reads: without a pause GIMP joined the two ends of a stroke and never saw the corner between them. 40 is enough.
 
-Both take `at` and `button`, or act where the pointer is. They are safe only inside one batch, which holds the screen for the whole run. A button still down when the batch ends is let go, even when a step failed or a person took the screen over, and `released` names it. The trace records that release, so a fork replays it. X11 keeps a button down by itself. On Wayland a virtual pointer lives only as long as its client, so each screen keeps one `computer-pointer serve` for its whole life and every gesture goes through it.
+Both take `at` and `button`, or act where the pointer is. They are safe only inside one batch, which holds the screen for the whole run. A button still down when the batch ends is let go, even when a step failed or a person took the screen over, and `released` names it. The trace records that release, so a fork replays it. X11 keeps a button down by itself. On Wayland a virtual pointer lives only as long as its client, so each screen keeps one `holm-pointer serve` for its whole life and every gesture goes through it.
 
 ## A whole form in one request
 
@@ -430,7 +430,7 @@ INFO took back boxes left running by an earlier server taken=1
 
 Each box record names the runtime it was created on, so a restart goes there first. A box whose runtime is no longer configured is listed as `unreachable` with the reason, and its record is kept: it comes back when the runtime does.
 
-Then every runtime is scanned for the `computer.server.box` label, which carries the box's own spec where the runtime keeps it rather than where this process does. So a box the store lost still comes back as one this server can drive *and* fork, rather than a name it has to guess about.
+Then every runtime is scanned for the `holm.server.box` label, which carries the box's own spec where the runtime keeps it rather than where this process does. So a box the store lost still comes back as one this server can drive *and* fork, rather than a name it has to guess about.
 
 With the default memory store, **the trace does not come back.** An adopted box starts a new trace that says `adopted`, and a fork can replay only what happened since. A durable storage backend keeps earlier entries and frames across the restart.
 

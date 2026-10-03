@@ -146,7 +146,7 @@ pub fn command(argv: &[String], env: &BTreeMap<String, String>) -> Result<Value>
         return Err(Error::denied("an empty command has nothing to run"));
     }
 
-    let args: Vec<&str> = ["-c", ENCODED, "computer"]
+    let args: Vec<&str> = ["-c", ENCODED, "holm"]
         .into_iter()
         .chain(argv.iter().map(String::as_str))
         .collect();
@@ -309,7 +309,7 @@ mod tests {
     fn plan() -> SandboxPlan {
         SandboxPlan {
             name: "desk-1".to_string(),
-            image: "computer-desktop:latest".to_string(),
+            image: "holm-desktop:latest".to_string(),
             publish: vec![6080, 9223],
             metadata: BTreeMap::from([(NAME_KEY.to_string(), "desk-1".to_string())]),
             ..SandboxPlan::default()
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(body["command"], "sh");
         assert_eq!(
             body["args"],
-            json!(["-c", ENCODED, "computer", "printf", "%s", "a b"]),
+            json!(["-c", ENCODED, "holm", "printf", "%s", "a b"]),
             "each argument stays one argument"
         );
     }
@@ -522,8 +522,8 @@ mod tests {
     fn test_a_sweep_lists_live_sandboxes_only() {
         let listing = json!({
             "sandboxes": [
-                { "name": "a", "status": "running", "currentSessionId": "sbx_a", "tags": { "computer.expires": "1" } },
-                { "name": "b", "status": "stopped", "currentSessionId": "sbx_b", "tags": { "computer.expires": "2" } },
+                { "name": "a", "status": "running", "currentSessionId": "sbx_a", "tags": { "holm.expires": "1" } },
+                { "name": "b", "status": "stopped", "currentSessionId": "sbx_b", "tags": { "holm.expires": "2" } },
                 { "name": "c", "status": "running", "tags": {} },
             ],
             "pagination": { "count": 3, "next": null },
@@ -537,7 +537,7 @@ mod tests {
         );
         assert_eq!(live[0].session.as_deref(), Some("sbx_a"));
         assert_eq!(
-            live[0].tags.get("computer.expires").map(String::as_str),
+            live[0].tags.get("holm.expires").map(String::as_str),
             Some("1")
         );
         assert_eq!(next_page(&listing), None);
@@ -579,8 +579,8 @@ mod tests {
     #[test]
     fn test_a_labels_file_that_is_not_json_carries_nothing() {
         assert_eq!(
-            labels(br#"{"computer.server.box":"{}"}"#)
-                .get("computer.server.box")
+            labels(br#"{"holm.server.box":"{}"}"#)
+                .get("holm.server.box")
                 .map(String::as_str),
             Some("{}")
         );

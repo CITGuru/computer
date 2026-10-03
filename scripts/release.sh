@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cut a Computer release: bump the workspace version, refresh Cargo.lock, commit,
+# Cut a holm release: bump the workspace version, refresh Cargo.lock, commit,
 # tag `v<version>`, and push — which triggers .github/workflows/release.yml to
 # build prebuilt binaries and publish the GitHub Release that scripts/install.sh
 # downloads from.

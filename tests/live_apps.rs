@@ -32,7 +32,7 @@ async fn exercise(computer: &Computer) -> holm::Result<()> {
             vec![
                 "code".to_string(),
                 "--no-sandbox".to_string(),
-                "--user-data-dir=/var/lib/computer/vscode".to_string(),
+                "--user-data-dir=/var/lib/holm/vscode".to_string(),
             ],
         ),
     ] {

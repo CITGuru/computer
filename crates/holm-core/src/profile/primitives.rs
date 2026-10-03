@@ -174,7 +174,7 @@ impl WallpaperRuntime for WaylandWallpaperRuntime {
         screen: ScreenId,
         path: &Path,
     ) -> Result<()> {
-        let sockfile = format!("/tmp/computer/screen-{}.sway", screen.0);
+        let sockfile = format!("/tmp/holm/screen-{}.sway", screen.0);
         let socket = host
             .machine()
             .read_file(host.name(), Path::new(&sockfile))
@@ -668,7 +668,7 @@ pub struct WaylandAppRuntime;
 impl WaylandAppRuntime {
     /// Read from the file the image wrote; it cannot be derived from the screen number.
     fn socket(screen: ScreenId) -> String {
-        format!("\"$(cat /tmp/computer/screen-{}.sway)\"", screen.0)
+        format!("\"$(cat /tmp/holm/screen-{}.sway)\"", screen.0)
     }
 
     /// No `jq` in the image, and sway has no window type, so the largest match wins.
@@ -2223,9 +2223,9 @@ mod tests {
         assert_eq!(contract.ports().max_screens, image::MAX_SCREENS);
         assert_eq!(
             contract.screen_command(ScreenAction::Start, ScreenId(3), &[]),
-            vec!["computer-screen", "start", "3"]
+            vec!["holm-screen", "start", "3"]
         );
-        assert_eq!(contract.boot_command(), vec!["computer-desktop", "--once"]);
+        assert_eq!(contract.boot_command(), vec!["holm-desktop", "--once"]);
     }
 
     #[test]

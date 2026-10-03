@@ -130,7 +130,7 @@ async fn gates(computer: &Computer) -> Result<(), String> {
         headers: endpoint
             .headers
             .iter()
-            .filter(|(name, _)| name != "x-computer-devtools")
+            .filter(|(name, _)| name != "x-holm-devtools")
             .cloned()
             .collect(),
         ..endpoint
@@ -225,14 +225,14 @@ async fn exercise(computer: &Computer) -> holm::Result<()> {
     computer.write_file("/tmp/made/here/in.txt", bytes).await?;
     assert_eq!(computer.read_file("/tmp/made/here/in.txt").await?, bytes);
 
-    let local = std::env::temp_dir().join("computer-e2b-upload");
+    let local = std::env::temp_dir().join("holm-e2b-upload");
     tokio::fs::write(&local, bytes)
         .await
         .expect("a file to send");
     computer.upload(&local, "/tmp/sent/up.txt").await?;
     assert_eq!(computer.read_file("/tmp/sent/up.txt").await?, bytes);
 
-    let back = std::env::temp_dir().join("computer-e2b-download");
+    let back = std::env::temp_dir().join("holm-e2b-download");
     let _ = tokio::fs::remove_file(&back).await;
     computer.download("/tmp/sent/up.txt", &back).await?;
     assert_eq!(

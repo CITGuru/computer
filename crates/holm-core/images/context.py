@@ -7,7 +7,7 @@ Some sandbox vendors build a subset of the Dockerfile language, so an image a
 container runtime accepts does not go over unchanged. Each vendor's differences
 are one entry in RULES; the transform itself knows nothing about any of them.
 
- `LABEL computer.profile` is what a machine reads to refuse a
+ `LABEL holm.profile` is what a machine reads to refuse a
 mismatched box, and everything in a container runs as root.
 """
 
@@ -112,15 +112,15 @@ def carrying(dockerfile: str, carried: dict) -> str:
 
     lines = dockerfile.splitlines(keepends=True)
     for at, line in enumerate(lines):
-        if "/usr/local/share/computer-" in line:
-            lines.insert(at, "COPY computer-* /usr/local/share/\n")
+        if "/usr/local/share/holm-" in line:
+            lines.insert(at, "COPY holm-* /usr/local/share/\n")
             break
 
     return "".join(lines)
 
 
 def kept_at(name: str) -> str:
-    return f"/usr/local/share/computer-{name.removeprefix('EXTRA_').lower()}"
+    return f"/usr/local/share/holm-{name.removeprefix('EXTRA_').lower()}"
 
 
 def values(argv: list[str]) -> dict:
@@ -163,7 +163,7 @@ def main(argv: list[str]) -> int:
 
     carried = values(argv)
     for name, given in carried.items():
-        at = target / f"computer-{name.removeprefix('EXTRA_').lower()}"
+        at = target / f"holm-{name.removeprefix('EXTRA_').lower()}"
         at.write_text(given if given.endswith("\n") else given + "\n")
 
     dockerfile = target / "Dockerfile"

@@ -159,12 +159,12 @@ mod tests {
 
         assert_eq!(
             profile.start_command(ScreenId(3)),
-            vec!["computer-screen", "start", "3"],
+            vec!["holm-screen", "start", "3"],
             "the script does the +1, so only one place knows the offset"
         );
         assert_eq!(
             profile.control_command(ScreenId(0), "token-1", false),
-            vec!["computer-screen", "control", "0", "token-1"]
+            vec!["holm-screen", "control", "0", "token-1"]
         );
         assert_eq!(
             profile.control_command(ScreenId(0), "token-1", true).last(),
@@ -174,11 +174,11 @@ mod tests {
         );
         assert_eq!(
             profile.release_command(ScreenId(0), FORCE),
-            vec!["computer-screen", "release", "0", "--force"]
+            vec!["holm-screen", "release", "0", "--force"]
         );
         assert_eq!(
             profile.open_command(ScreenId(1), "https://example.com"),
-            vec!["computer-screen", "open", "1", "https://example.com"]
+            vec!["holm-screen", "open", "1", "https://example.com"]
         );
     }
 

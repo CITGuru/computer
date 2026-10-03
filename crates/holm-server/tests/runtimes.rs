@@ -561,7 +561,7 @@ async fn test_an_image_is_prepared_before_a_box_waits_for_it() {
     assert!(
         body["image"]
             .as_str()
-            .is_some_and(|image| image.starts_with("computer-desktop:")),
+            .is_some_and(|image| image.starts_with("holm-desktop:")),
         "the answer names what was built: {body}"
     );
 

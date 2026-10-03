@@ -95,10 +95,10 @@ python3 crates/holm-core/images/context.py \
   /tmp/e2b-ctx \
   --for e2b
 
-e2b template create computer-desktop \
+e2b template create holm-desktop \
   -p /tmp/e2b-ctx \
   -d Dockerfile \
-  -c "/usr/local/bin/computer-desktop" \
+  -c "/usr/local/bin/holm-desktop" \
   --ready-cmd "true" \
   --cpu-count 2 \
   --memory-mb 2048

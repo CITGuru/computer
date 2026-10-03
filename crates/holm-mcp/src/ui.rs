@@ -16,7 +16,7 @@ pub fn listed(origin: &str) -> Value {
     json!([{
         "uri": URI,
         "name": "screen",
-        "title": "Computer screen",
+        "title": "holm screen",
         "description": DESCRIPTION,
         "mimeType": MIME,
         "_meta": meta(origin),

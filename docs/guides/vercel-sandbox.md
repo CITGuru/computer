@@ -78,15 +78,15 @@ Vercel starts a sandbox only from an image in Vercel Container Registry (VCR), f
 
 When a box names no image, the server does this:
 
-1. It tags the built-in image `computer-desktop:<fingerprint>-x86_64`. The fingerprint comes from the image files, so a changed image gets a new tag.
+1. It tags the built-in image `holm-desktop:<fingerprint>-x86_64`. The fingerprint comes from the image files, so a changed image gets a new tag.
 2. It asks the registry for that tag. If the tag is there, the box starts from it.
-3. If the tag is not there, it starts a builder sandbox with 4 vCPUs, uploads the image files, installs Docker, builds for `linux/amd64`, and pushes to `vcr.vercel.com/<team-slug>/<project>/computer-desktop`. Then it removes the builder sandbox.
+3. If the tag is not there, it starts a builder sandbox with 4 vCPUs, uploads the image files, installs Docker, builds for `linux/amd64`, and pushes to `vcr.vercel.com/<team-slug>/<project>/holm-desktop`. Then it removes the builder sandbox.
 
 The builder sandbox gets the token for the push. It lives at most 30 minutes, and the server removes it when the build ends, also when the build fails.
 
 ### An image directory
 
-An image directory (`image_dir` in the library) is built the same way. All files in the directory go to the builder, with their modes. The image is `computer-local:<fingerprint>-x86_64`. A symlink in the directory is refused.
+An image directory (`image_dir` in the library) is built the same way. All files in the directory go to the builder, with their modes. The image is `holm-local:<fingerprint>-x86_64`. A symlink in the directory is refused.
 
 ### An image that you name
 
@@ -102,7 +102,7 @@ To push an image yourself:
 
 ```bash
 docker buildx build --platform linux/amd64 \
-  -t vcr.vercel.com/<team-slug>/<project>/computer-desktop:mine --push \
+  -t vcr.vercel.com/<team-slug>/<project>/holm-desktop:mine --push \
   crates/holm-core/images/desktop
 ```
 
@@ -159,7 +159,7 @@ holm resume "$BOX"
 
 ## Restart
 
-Vercel allows at most 5 tags for each sandbox, with values of at most 256 characters. The server's record of a box is longer. So the box name goes in a tag, and all labels go in `/tmp/computer-labels.json` in the box. When `holmd` restarts, it reads that file to take the box back.
+Vercel allows at most 5 tags for each sandbox, with values of at most 256 characters. The server's record of a box is longer. So the box name goes in a tag, and all labels go in `/tmp/holm-labels.json` in the box. When `holmd` restarts, it reads that file to take the box back.
 
 Each sandbox is created as not persistent. A stop removes it, and Vercel keeps no snapshot.
 
@@ -198,6 +198,6 @@ Run the example. With no argument, it builds the built-in image. It also takes a
 
 ```bash
 cargo run --features vercel --example vercel
-cargo run --features vercel --example vercel -- computer-desktop:mine
+cargo run --features vercel --example vercel -- holm-desktop:mine
 cargo run --features vercel --example vercel -- path/to/image-dir --keep
 ```

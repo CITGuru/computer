@@ -12,7 +12,7 @@ RUN cd /src \
        && wayland-scanner private-code "$protocol.xml" "$protocol-protocol.c" \
        || exit 1; \
      done \
-  && gcc -O2 -Wall -Wextra -Werror -o computer-pointer \
+  && gcc -O2 -Wall -Wextra -Werror -o holm-pointer \
        pointer.c wlr-virtual-pointer-unstable-v1-protocol.c \
        virtual-keyboard-unstable-v1-protocol.c -lwayland-client
 
@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       socat \
       bash \
   && rm -rf /var/lib/apt/lists/* \
-  && mkdir -p /etc/computer
+  && mkdir -p /etc/holm
 
 # One tab-separated record per line: name, key URL, deb line.
 ARG EXTRA_SOURCES=""
@@ -61,43 +61,43 @@ RUN if [ -n "$EXTRA_PACKAGES" ]; then \
     fi
 
 # Not root: sway refuses to start as root.
-RUN useradd --create-home --shell /bin/bash --uid 1000 computer \
-  && mkdir -p /tmp/computer /home/computer/.browser-profiles \
-  && chown -R computer:computer /tmp/computer /home/computer
+RUN useradd --create-home --shell /bin/bash --uid 1000 holm \
+  && mkdir -p /tmp/holm /home/holm/.browser-profiles \
+  && chown -R holm:holm /tmp/holm /home/holm
 
-ENV HOME=/home/computer
+ENV HOME=/home/holm
 ENV LANG=C.UTF-8
-ENV COMPUTER_SCREEN_WIDTH=1280
-ENV COMPUTER_SCREEN_HEIGHT=800
+ENV HOLM_SCREEN_WIDTH=1280
+ENV HOLM_SCREEN_HEIGHT=800
 
 # Fixed here, because this is the only environment a later `docker exec` inherits.
-ENV DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/computer/a11y-bus.socket
+ENV DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/holm/a11y-bus.socket
 ENV QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
-WORKDIR /home/computer
+WORKDIR /home/holm
 
-COPY --from=pointer /src/computer-pointer /usr/local/bin/computer-pointer
-COPY start.sh   /usr/local/bin/computer-desktop
-COPY screen.sh  /usr/local/bin/computer-screen
-COPY browser.sh /usr/local/bin/computer-browser
-COPY input.sh   /usr/local/bin/computer-input
-COPY a11y.py    /usr/local/bin/computer-a11y
-COPY devtools-bridge.py /usr/local/bin/computer-devtools-bridge
-COPY sway.config /etc/computer/sway.config
+COPY --from=pointer /src/holm-pointer /usr/local/bin/holm-pointer
+COPY start.sh   /usr/local/bin/holm-desktop
+COPY screen.sh  /usr/local/bin/holm-screen
+COPY browser.sh /usr/local/bin/holm-browser
+COPY input.sh   /usr/local/bin/holm-input
+COPY a11y.py    /usr/local/bin/holm-a11y
+COPY devtools-bridge.py /usr/local/bin/holm-devtools-bridge
+COPY sway.config /etc/holm/sway.config
 COPY paste.js /usr/share/novnc/app/paste.js
 RUN sed -i 's|</head>|<script type="module">import UI from "./app/ui.js"; import paste from "./app/paste.js"; paste(() => UI.rfb);</script>\n</head>|' /usr/share/novnc/vnc.html \
   && grep -q app/paste.js /usr/share/novnc/vnc.html
-RUN chmod +x /usr/local/bin/computer-desktop \
-             /usr/local/bin/computer-screen \
-             /usr/local/bin/computer-browser \
-             /usr/local/bin/computer-input \
-             /usr/local/bin/computer-a11y \
-             /usr/local/bin/computer-devtools-bridge
+RUN chmod +x /usr/local/bin/holm-desktop \
+             /usr/local/bin/holm-screen \
+             /usr/local/bin/holm-browser \
+             /usr/local/bin/holm-input \
+             /usr/local/bin/holm-a11y \
+             /usr/local/bin/holm-devtools-bridge
 
-LABEL computer.profile="computer-wayland"
+LABEL holm.profile="holm-wayland"
 
 EXPOSE 6080 6081 6082 6083 6084 6085 6086 6087 6088 6089 6090 6091 6092 6093 6094 6095
 
 EXPOSE 9222 9223
 
-USER computer
-CMD ["/usr/local/bin/computer-desktop"]
+USER holm
+CMD ["/usr/local/bin/holm-desktop"]

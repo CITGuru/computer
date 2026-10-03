@@ -198,7 +198,7 @@ async function start() {
     return;
   }
 
-  app = new App({ name: "computer", version: "0.1.0" });
+  app = new App({ name: "holm", version: "0.1.0" });
   app.ontoolresult = (params) => apply(params);
   app.onhostcontextchanged = (context) => theme(context);
   app.onteardown = async () => {

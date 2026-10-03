@@ -374,13 +374,13 @@ async fn text_is_paced_at_the_speed_that_was_asked_for() {
         .expect("paced on Wayland");
     assert_eq!(
         host.last_line(),
-        "computer-input paced 100 abc",
+        "holm-input paced 100 abc",
         "a pace that is dropped without a word is text that arrives too fast for the \
          field that asked for it"
     );
 
     wayland.type_text("abc", None).await.expect("at full speed");
-    assert_eq!(host.last_line(), "computer-input type abc");
+    assert_eq!(host.last_line(), "holm-input type abc");
 }
 
 #[test]
@@ -412,7 +412,7 @@ async fn wayland_holds_a_modifier_through_a_pointer_gesture() {
         .expect("a click with two modifiers");
     assert_eq!(
         host.last_line(),
-        "computer-input with ctrl,shift click 10 20 left",
+        "holm-input with ctrl,shift click 10 20 left",
         "one run, so the modifiers come up in the command that put them down"
     );
 
@@ -427,14 +427,14 @@ async fn wayland_holds_a_modifier_through_a_pointer_gesture() {
         .expect("a drag with shift");
     assert_eq!(
         host.last_line(),
-        "computer-input with shift drag 1 2 30 40 left"
+        "holm-input with shift drag 1 2 30 40 left"
     );
 
     wayland
         .click_with(Point::new(10, 20), Button::Left, &[])
         .await
         .expect("a plain click");
-    assert_eq!(host.last_line(), "computer-input click 10 20 left");
+    assert_eq!(host.last_line(), "holm-input click 10 20 left");
 }
 
 #[tokio::test]
@@ -446,13 +446,13 @@ async fn wayland_holds_a_button_through_the_pointer_that_stays() {
         .button_down(Some(Point::new(10, 20)), Button::Left)
         .await
         .expect("a press");
-    assert_eq!(host.last_line(), "computer-input down left 10 20");
+    assert_eq!(host.last_line(), "holm-input down left 10 20");
 
     wayland
         .button_up(None, Button::Right)
         .await
         .expect("a release where the pointer is");
-    assert_eq!(host.last_line(), "computer-input up right");
+    assert_eq!(host.last_line(), "holm-input up right");
 }
 
 #[tokio::test]
@@ -476,8 +476,8 @@ async fn wayland_lets_a_button_go_past_both_of_its_gates() {
     wayland.let_go(Button::Left).await.expect("let go");
     assert_eq!(
         host.last_line(),
-        "computer-pointer up left",
-        "computer-input refuses while a person holds the screen, so the release goes to \
+        "holm-pointer up left",
+        "holm-input refuses while a person holds the screen, so the release goes to \
          the pointer itself"
     );
 }
@@ -490,16 +490,16 @@ async fn wayland_holds_a_key_through_the_keyboard_that_stays() {
     wayland.key_down("Shift").await.expect("a modifier");
     assert_eq!(
         host.last_line(),
-        "computer-input press -M shift",
+        "holm-input press -M shift",
         "a modifier goes down as one, so the keyboard sends the state every later key carries"
     );
     wayland.key_down("cmd").await.expect("a modifier");
-    assert_eq!(host.last_line(), "computer-input press -M logo");
+    assert_eq!(host.last_line(), "holm-input press -M logo");
 
     wayland.key_down("a").await.expect("a key");
-    assert_eq!(host.last_line(), "computer-input press -P a");
+    assert_eq!(host.last_line(), "holm-input press -P a");
     wayland.key_up("a").await.expect("a release");
-    assert_eq!(host.last_line(), "computer-input press -p a");
+    assert_eq!(host.last_line(), "holm-input press -p a");
 
     wayland
         .click_with(Point::new(5, 6), Button::Left, &[Held::Shift, Held::Ctrl])
@@ -507,12 +507,12 @@ async fn wayland_holds_a_key_through_the_keyboard_that_stays() {
         .expect("a click");
     assert_eq!(
         host.last_line(),
-        "computer-input with ctrl click 5 6 left",
+        "holm-input with ctrl click 5 6 left",
         "`with` lets go of what it held, which would end the shift key_down holds"
     );
 
     wayland.key_up("shift").await.expect("a release");
-    assert_eq!(host.last_line(), "computer-input press -m shift");
+    assert_eq!(host.last_line(), "holm-input press -m shift");
     assert!(wayland.key_down("ctrl+a").await.is_err());
 }
 
@@ -528,12 +528,12 @@ async fn wayland_lets_a_key_go_past_both_of_its_gates() {
     assert!(wayland.key_up("space").await.is_err());
 
     wayland.let_key_go("space").await.expect("let go");
-    assert_eq!(host.last_line(), "computer-pointer press -p space");
+    assert_eq!(host.last_line(), "holm-pointer press -p space");
 
     wayland.let_keys_go().await.expect("let go");
     assert_eq!(
         host.last_line(),
-        "computer-pointer release",
+        "holm-pointer release",
         "the keyboard that stays knows which keys it put down, where a restarted server does not"
     );
 }
@@ -608,19 +608,19 @@ async fn the_clipboard_is_read_with_one_command_and_written_from_a_file() {
     assert_eq!(host.last_line(), "xclip -selection clipboard -o");
 
     clipboard(&screen)
-        .set_from(Selection::Clipboard, "/tmp/computer/clipboard-0")
+        .set_from(Selection::Clipboard, "/tmp/holm/clipboard-0")
         .await
         .expect("a paste");
 
     let sent = host.last().expect("a call");
     assert_eq!(sent[0], "bash", "the text is a file, not an argument");
     assert!(
-        sent.contains(&"/tmp/computer/clipboard-0".to_string()),
+        sent.contains(&"/tmp/holm/clipboard-0".to_string()),
         "the path is a positional argument, so a space or a quotation mark in \
          it cannot become shell syntax: {sent:?}"
     );
     assert!(
-        !sent[2].contains("/tmp/computer/clipboard-0"),
+        !sent[2].contains("/tmp/holm/clipboard-0"),
         "the path must not be interpolated into the command"
     );
     assert!(
@@ -653,7 +653,7 @@ async fn each_selection_is_read_and_written_by_name() {
     );
 
     clipboard(&screen)
-        .set_from(Selection::Primary, "/tmp/computer/primary-0")
+        .set_from(Selection::Primary, "/tmp/holm/primary-0")
         .await
         .expect("a write");
 

@@ -2,8 +2,8 @@
 # Screen N is display :N+1, never :0, which is a real console on a real host.
 set -uo pipefail
 
-action="${1:?usage: computer-screen start|stop|control|release|open|viewers <screen> [url]}"
-screen="${2:?usage: computer-screen start|stop|control|release|open|viewers <screen> [url]}"
+action="${1:?usage: holm-screen start|stop|control|release|open|viewers <screen> [url]}"
+screen="${2:?usage: holm-screen start|stop|control|release|open|viewers <screen> [url]}"
 url="${3:-}"
 
 display=":$((screen + 1))"
@@ -13,24 +13,24 @@ control_port=$((6081 + screen * 2))
 view_vnc=$((5900 + screen * 2))
 control_vnc=$((5901 + screen * 2))
 
-width="${COMPUTER_SCREEN_WIDTH:-1280}"
-height="${COMPUTER_SCREEN_HEIGHT:-800}"
+width="${HOLM_SCREEN_WIDTH:-1280}"
+height="${HOLM_SCREEN_HEIGHT:-800}"
 
-control_token="/tmp/computer/screen-${screen}.control"
+control_token="/tmp/holm/screen-${screen}.control"
 # PulseAudio is a singleton per user: one daemon for the box, one sink per screen.
-pulse_home="/tmp/computer/pulse"
-pulse_socket="/tmp/computer/pulse.socket"
-wm_home="/tmp/computer-wm-${number}"
-profile="${HOME:-/home/computer}/.browser-profiles/screen-${number}"
+pulse_home="/tmp/holm/pulse"
+pulse_socket="/tmp/holm/pulse.socket"
+wm_home="/tmp/holm-wm-${number}"
+profile="${HOME:-/home/holm}/.browser-profiles/screen-${number}"
 running="$(ps -eo args= | grep -oE -- "--user-data-dir=[^ ]*/\.browser-profiles/screen-${number}( |$)" | head -n 1)"
 if [ -n "$running" ]; then
   profile="${running#--user-data-dir=}"
   profile="${profile% }"
 fi
-logs="/tmp/computer/screen-${number}"
+logs="/tmp/holm/screen-${number}"
 
-viewer_auth="${COMPUTER_VIEWER_AUTH:-open}"
-gate_dir="/tmp/computer/gate"
+viewer_auth="${HOLM_VIEWER_AUTH:-open}"
+gate_dir="/tmp/holm/gate"
 
 # `token` reads its target from the file, which keeps the secret out of `ps`.
 build_gate() {
@@ -40,20 +40,20 @@ build_gate() {
   if [ "$viewer_auth" = "open" ]; then return 0; fi
 
   if [ "$viewer_auth" = "signed" ]; then
-    if [ -z "${COMPUTER_VIEWER_KEY:-}" ]; then
-      echo "viewer auth is signed but COMPUTER_VIEWER_KEY is unset" >&2
+    if [ -z "${HOLM_VIEWER_KEY:-}" ]; then
+      echo "viewer auth is signed but HOLM_VIEWER_KEY is unset" >&2
       return 1
     fi
     mkdir -p "$gate_dir"
     file="${gate_dir}/viewer-key"
-    (umask 077; printf '%s' "$COMPUTER_VIEWER_KEY" >"$file")
+    (umask 077; printf '%s' "$HOLM_VIEWER_KEY" >"$file")
     gate_args=(--token-plugin JWTTokenApi --token-source "$file")
     return 0
   fi
 
   case "$door" in
-    view) secret="${COMPUTER_VIEW_SECRET:-}" ;;
-    control) secret="${COMPUTER_CONTROL_SECRET:-}" ;;
+    view) secret="${HOLM_VIEW_SECRET:-}" ;;
+    control) secret="${HOLM_CONTROL_SECRET:-}" ;;
   esac
 
   # An empty secret would serve an open viewer the crate believes is gated.
@@ -71,7 +71,7 @@ build_gate() {
       ;;
     password)
       gate_args=(--auth-plugin BasicHTTPAuth
-        --auth-source "computer:${secret}" --web-auth "$target")
+        --auth-source "holm:${secret}" --web-auth "$target")
       ;;
     *)
       echo "unknown viewer auth: ${viewer_auth}" >&2
@@ -145,7 +145,7 @@ start() {
     exit 0
   fi
 
-  mkdir -p /tmp/computer "$wm_home/.fluxbox" /tmp/.X11-unix "$profile"
+  mkdir -p /tmp/holm "$wm_home/.fluxbox" /tmp/.X11-unix "$profile"
   rm -f "/tmp/.X${number}-lock" "/tmp/.X11-unix/X${number}"
 
   Xvfb "$display" -screen 0 "${width}x${height}x24" -ac +extension RANDR +render -noreset \
@@ -153,20 +153,20 @@ start() {
   await xdpyinfo -display "$display" || { echo "no X server on $display" >&2; exit 1; }
 
   # Copied: fluxbox rewrites its apps file, and /etc is read-only to the box user.
-  cp /etc/computer/fluxbox/init "$wm_home/.fluxbox/init"
-  cp /etc/computer/fluxbox/menu "$wm_home/.fluxbox/menu"
-  cp /etc/computer/fluxbox/apps "$wm_home/.fluxbox/apps"
-  cp /etc/computer/fluxbox/style "$wm_home/.fluxbox/style"
+  cp /etc/holm/fluxbox/init "$wm_home/.fluxbox/init"
+  cp /etc/holm/fluxbox/menu "$wm_home/.fluxbox/menu"
+  cp /etc/holm/fluxbox/apps "$wm_home/.fluxbox/apps"
+  cp /etc/holm/fluxbox/style "$wm_home/.fluxbox/style"
   HOME="$wm_home" DISPLAY="$display" fluxbox -rc "$wm_home/.fluxbox/init" \
     >"${logs}-wm.log" 2>&1 &
 
   # After the window manager, never before — see `wallpaper.sh`.
-  DISPLAY="$display" computer-wallpaper "$wm_home/wallpaper.jpg" \
+  DISPLAY="$display" holm-wallpaper "$wm_home/wallpaper.jpg" \
     >>"${logs}-wm.log" 2>&1 || true
 
   if command -v tint2 >/dev/null 2>&1; then
     apps=""
-    for entry in /usr/share/applications/computer-app-*.desktop; do
+    for entry in /usr/share/applications/holm-app-*.desktop; do
       [ -e "$entry" ] || continue
       apps="${apps}launcher_item_app = ${entry}
 "
@@ -178,7 +178,7 @@ start() {
     dock="${wm_home}/tint2rc"
     awk -v apps="$apps" -v width="$width" \
       '{ sub(/^%APPS%$/, apps); sub(/%PANELWIDTH%/, width); print }' \
-      /etc/computer/tint2rc > "$dock"
+      /etc/holm/tint2rc > "$dock"
 
     DISPLAY="$display" tint2 -c "$dock" >"${logs}-dock.log" 2>&1 &
   fi
@@ -192,7 +192,7 @@ start() {
     esac
   fi
 
-  DISPLAY="$display" computer-browser --user-data-dir="$profile" >"${logs}-browser.log" 2>&1 &
+  DISPLAY="$display" holm-browser --user-data-dir="$profile" >"${logs}-browser.log" 2>&1 &
 
   # The socket is named: PulseAudio otherwise puts it under the caller's runtime directory.
   if command -v pulseaudio >/dev/null 2>&1; then
@@ -244,7 +244,7 @@ control() {
   # The token lives in the box, so it outlives a caller that exits.
   token="${3:-}"
   mode="${4:-exclusive}"
-  [ -n "$token" ] || { echo "usage: computer-screen control <screen> <token> [shared]" >&2; exit 2; }
+  [ -n "$token" ] || { echo "usage: holm-screen control <screen> <token> [shared]" >&2; exit 2; }
 
   xdpyinfo -display "$display" >/dev/null 2>&1 \
     || { echo "screen ${screen} is not running" >&2; exit 1; }
@@ -257,7 +257,7 @@ control() {
 
   finish "^x11vnc .* -rfbport ${control_vnc}"
   finish "websockify.*${control_port}"
-  mkdir -p /tmp/computer
+  mkdir -p /tmp/holm
   x11vnc -display "$display" -forever -shared -nopw \
     -listen 0.0.0.0 -rfbport "$control_vnc" -xkb -ncache 0 >"${logs}-vnc-control.log" 2>&1 &
   build_gate control "127.0.0.1:${control_vnc}" || exit 1
@@ -295,17 +295,17 @@ release() {
 }
 
 open_url() {
-  [ -n "$url" ] || { echo "usage: computer-screen open <screen> <url>" >&2; exit 2; }
+  [ -n "$url" ] || { echo "usage: holm-screen open <screen> <url>" >&2; exit 2; }
   xdpyinfo -display "$display" >/dev/null 2>&1 \
     || { echo "screen ${screen} is not running" >&2; exit 1; }
 
   # The running browser's profile, so this joins it instead of fighting for the lock.
-  DISPLAY="$display" computer-browser --user-data-dir="$profile" "$url" \
+  DISPLAY="$display" holm-browser --user-data-dir="$profile" "$url" \
     >>"${logs}-browser.log" 2>&1 &
 }
 
-recording_file="/tmp/computer/recording-${screen}.mp4"
-recording_pid="/tmp/computer/recording-${screen}.pid"
+recording_file="/tmp/holm/recording-${screen}.mp4"
+recording_pid="/tmp/holm/recording-${screen}.pid"
 
 # Ended with SIGINT and waited on: killed outright, ffmpeg writes no index.
 record() {
@@ -358,7 +358,7 @@ record() {
       running && echo "recording ${recording_file}" || echo "idle"
       ;;
     *)
-      echo "usage: computer-screen record <screen> start|stop|status [fps]" >&2
+      echo "usage: holm-screen record <screen> start|stop|status [fps]" >&2
       exit 2
       ;;
   esac
@@ -372,5 +372,5 @@ case "$action" in
   release) release "$@" ;;
   open)    open_url ;;
   record)  record "$@" ;;
-  *) echo "usage: computer-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
+  *) echo "usage: holm-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
 esac

@@ -4,11 +4,11 @@ import json
 import os
 import sys
 
-USAGE = """usage: computer-a11y tree   [--app NAME] [--depth N]
-       computer-a11y find   <query> [--role R] [--limit N] [--exact] [--app NAME]
-       computer-a11y focus  <query> [--role R] [--exact] [--app NAME]
-       computer-a11y invoke <query> [--role R] [--exact] [--app NAME] [--action NAME]
-       computer-a11y set    <query> <value> [--role R] [--exact] [--app NAME]"""
+USAGE = """usage: holm-a11y tree   [--app NAME] [--depth N]
+       holm-a11y find   <query> [--role R] [--limit N] [--exact] [--app NAME]
+       holm-a11y focus  <query> [--role R] [--exact] [--app NAME]
+       holm-a11y invoke <query> [--role R] [--exact] [--app NAME] [--action NAME]
+       holm-a11y set    <query> <value> [--role R] [--exact] [--app NAME]"""
 
 # Checked before importing pyatspi, which reports an empty desktop rather than an error without a bus.
 if not os.path.exists("/usr/libexec/at-spi-bus-launcher"):

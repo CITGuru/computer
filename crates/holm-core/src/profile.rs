@@ -17,9 +17,9 @@ pub use primitives::{
     X11Environment, X11WallpaperRuntime,
 };
 
-pub const PROFILE_LABEL: &str = "computer.profile";
+pub const PROFILE_LABEL: &str = "holm.profile";
 
-pub const PROFILE_ENV: &str = "COMPUTER_PROFILE";
+pub const PROFILE_ENV: &str = "HOLM_PROFILE";
 
 /// `?` and `=` are percent-encoded because both viewer pages `decodeURIComponent` the value.
 pub fn viewer_path(ticket: &crate::Secret) -> String {
@@ -288,16 +288,16 @@ mod tests {
     fn test_a_recording_is_asked_for_by_verb() {
         assert_eq!(
             X11Profile.record_command(ScreenId(0), Recording::Start, Some(15)),
-            vec!["computer-screen", "record", "0", "start", "15"]
+            vec!["holm-screen", "record", "0", "start", "15"]
         );
         assert_eq!(
             X11Profile.record_command(ScreenId(2), Recording::Stop, None),
-            vec!["computer-screen", "record", "2", "stop"],
+            vec!["holm-screen", "record", "2", "stop"],
             "a rate belongs to the recording that is starting, not the one ending"
         );
         assert_eq!(
             X11Profile.record_command(ScreenId(0), Recording::Status, None),
-            vec!["computer-screen", "record", "0", "status"]
+            vec!["holm-screen", "record", "0", "status"]
         );
     }
 
@@ -328,7 +328,7 @@ mod tests {
         );
         assert_eq!(
             wayland.get("XDG_RUNTIME_DIR").map(String::as_str),
-            Some("/tmp/computer/run-2")
+            Some("/tmp/holm/run-2")
         );
         assert_eq!(
             wayland.get("DISPLAY").map(String::as_str),
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_a_registry_image_is_never_the_bundled_one_under_another_name() {
-        let theirs = ImageSource::Registry("computer-desktop:mine".to_string());
+        let theirs = ImageSource::Registry("holm-desktop:mine".to_string());
 
         assert!(
             theirs.bundle().is_none(),

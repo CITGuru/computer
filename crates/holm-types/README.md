@@ -22,7 +22,7 @@ A spec with no `features` gets the default set: wide fonts, video, the dock and 
 
 ## Nothing here knows about an image
 
-A spec that names no size is portable across images whose natural sizes differ, and whatever compiles it applies its own defaults and its own limits — the `computer-desktop` image runs eight screens and a macOS guest runs one, and neither number belongs in the description.
+A spec that names no size is portable across images whose natural sizes differ, and whatever compiles it applies its own defaults and its own limits — the `holm-desktop` image runs eight screens and a macOS guest runs one, and neither number belongs in the description.
 
 So `width`, `height` and `screens` are all optional, and a spec that leaves them open is a *different* spec from one that pins them, with a different digest. One travels to an image that has its own idea of a screen; the other insists.
 

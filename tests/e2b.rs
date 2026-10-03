@@ -57,7 +57,7 @@ async fn the_screen_is_brought_up_once_because_a_sandbox_has_no_entrypoint() {
 
     assert_eq!(
         api.commands().first().expect("a first command"),
-        &vec!["computer-desktop".to_string(), "--once".to_string()],
+        &vec!["holm-desktop".to_string(), "--once".to_string()],
     );
 }
 
@@ -114,7 +114,7 @@ async fn a_public_sandbox_hands_out_the_links_a_browser_can_open() {
         devtools
             .headers
             .iter()
-            .any(|(name, _)| name == "x-computer-devtools"),
+            .any(|(name, _)| name == "x-holm-devtools"),
         "open ports or not, the bridge still wants its secret"
     );
 }
@@ -154,7 +154,7 @@ async fn devtools_is_the_sandboxs_own_host_behind_the_traffic_token() {
             endpoint
                 .headers
                 .iter()
-                .any(|(name, _)| name == "x-computer-devtools"),
+                .any(|(name, _)| name == "x-holm-devtools"),
             "and the bridge in the box refuses it without this"
         );
         assert!(computer.browser().is_some());
@@ -288,11 +288,11 @@ async fn a_container_image_becomes_a_template_nobody_had_to_build() {
 
 #[tokio::test]
 async fn a_template_that_is_already_there_is_not_built_again() {
-    let api = Arc::new(ScriptedE2b::new().holding_template("computer-desktop-abc", "tmpl-held"));
+    let api = Arc::new(ScriptedE2b::new().holding_template("holm-desktop-abc", "tmpl-held"));
     let (machine, profile) = e2b::pair(Arc::clone(&api) as Arc<dyn E2bApi>, Arc::new(X11Profile));
 
     let mut config = bundled(profile);
-    config.image = "computer-desktop:abc".to_string();
+    config.image = "holm-desktop:abc".to_string();
 
     machine.ensure_image(&config).await.expect("it is there");
 

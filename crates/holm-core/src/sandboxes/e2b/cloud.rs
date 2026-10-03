@@ -206,11 +206,7 @@ fn boundary() -> String {
         .map(|since| since.as_nanos())
         .unwrap_or_default();
 
-    format!(
-        "computer{:x}{:x}",
-        nanos,
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    )
+    format!("holm{:x}{:x}", nanos, NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 #[async_trait]

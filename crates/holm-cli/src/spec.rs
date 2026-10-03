@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_a_flag_goes_over_the_file_and_keeps_what_it_does_not_name() {
-        let dir = std::env::temp_dir().join(format!("computer-spec-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("holm-spec-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a directory");
         let file = dir.join("box.json");
         std::fs::write(
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn test_a_file_with_a_field_nobody_reads_is_refused() {
-        let dir = std::env::temp_dir().join(format!("computer-spec-odd-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("holm-spec-odd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a directory");
         let file = dir.join("box.json");
         std::fs::write(&file, r#"{ "spec": { "desktop": { "widht": 1280 } } }"#).expect("a file");

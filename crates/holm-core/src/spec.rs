@@ -9,7 +9,7 @@ use std::time::Duration;
 /// The clock starts at creation, and below this a box can expire while starting.
 const MIN_LIFE: u64 = 60;
 
-pub const PROFILE_VOLUME: &str = "computer-profile-";
+pub const PROFILE_VOLUME: &str = "holm-profile-";
 
 pub fn profile_volume(name: &str) -> Result<String> {
     let plain = name
@@ -198,13 +198,10 @@ mod tests {
 
     #[test]
     fn test_a_profile_is_a_volume_of_its_own_name() {
-        assert_eq!(
-            profile_volume("work").expect("a name"),
-            "computer-profile-work"
-        );
+        assert_eq!(profile_volume("work").expect("a name"), "holm-profile-work");
         assert_eq!(
             profile_volume("client.a_2-b").expect("a name"),
-            "computer-profile-client.a_2-b"
+            "holm-profile-client.a_2-b"
         );
         for wrong in ["", "-work", "two words", "a/b", "../etc", &"x".repeat(41)] {
             assert!(
@@ -224,7 +221,7 @@ mod tests {
             .expect("placed");
         assert_eq!(
             placed.config().expect("a config").profiles.as_deref(),
-            Some("computer-profile-work")
+            Some("holm-profile-work")
         );
 
         let plain = Builder::default()

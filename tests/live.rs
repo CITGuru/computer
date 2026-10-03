@@ -334,17 +334,14 @@ async fn labelled_controls(computer: &Computer) -> holm::Result<()> {
     );
 
     computer
-        .write_file("/tmp/computer-labelled-upload.txt", b"one")
+        .write_file("/tmp/holm-labelled-upload.txt", b"one")
         .await?;
-    page.upload(
-        "File input",
-        &["/tmp/computer-labelled-upload.txt".to_string()],
-    )
-    .await?;
+    page.upload("File input", &["/tmp/holm-labelled-upload.txt".to_string()])
+        .await?;
     assert_eq!(
         page.evaluate("document.querySelector('#file').files[0].name")
             .await?,
-        serde_json::json!("computer-labelled-upload.txt")
+        serde_json::json!("holm-labelled-upload.txt")
     );
 
     let refused = page
@@ -537,7 +534,7 @@ async fn exercise(computer: &Computer) -> holm::Result<()> {
     screen.move_to(Point::new(100, 120)).await?;
     assert_eq!(screen.cursor().await?, Point::new(100, 120));
 
-    screen.type_text("computer-rs").await?;
+    screen.type_text("holm-rs").await?;
     screen.press("ctrl+a").await?;
     screen.scroll(Point::new(640, 400), Delta::down(2)).await?;
     println!("  typed, chorded and scrolled");
@@ -1001,7 +998,7 @@ async fn takeover(computer: &Computer) -> holm::Result<()> {
 /// The token lives in the box, so a stale release is refused after its caller exits.
 async fn takeover_ends_stale(computer: &Computer) -> bool {
     let refused = computer
-        .exec(["computer-screen", "release", "0", "a-token-nobody-issued"])
+        .exec(["holm-screen", "release", "0", "a-token-nobody-issued"])
         .await;
 
     matches!(refused, Ok(result) if result.code == 3)

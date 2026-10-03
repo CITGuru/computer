@@ -1799,7 +1799,7 @@ fn number(args: &[String], at: usize, what: &str) -> Result<u32, String> {
         .map_err(|_| format!("{what} must be a whole number of pixels"))
 }
 
-const UPLOADS: &str = "/tmp/computer/uploads";
+const UPLOADS: &str = "/tmp/holm/uploads";
 
 const SETTLE_MS: u64 = 600;
 

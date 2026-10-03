@@ -7,7 +7,7 @@ if [ "${1:-}" = "--new" ]; then
   shift
 fi
 
-class="${1:?usage: computer-launch [--new] <window-class> <command> [args...]}"
+class="${1:?usage: holm-launch [--new] <window-class> <command> [args...]}"
 shift
 
 if [ "$new" -eq 0 ]; then

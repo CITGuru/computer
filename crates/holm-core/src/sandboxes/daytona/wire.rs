@@ -23,9 +23,9 @@ pub const LIVE: [&str; 6] = [
 
 pub const FAILED: [&str; 3] = ["error", "build_failed", "destroyed"];
 
-const STDERR_MARK: &str = "@@computer-stderr@@";
+const STDERR_MARK: &str = "@@holm-stderr@@";
 
-const ENCODED: &str = r#"out=$(mktemp) && err=$(mktemp) || exit 125; "$@" >"$out" 2>"$err"; code=$?; base64 "$out"; echo @@computer-stderr@@; base64 "$err"; rm -f "$out" "$err"; exit $code"#;
+const ENCODED: &str = r#"out=$(mktemp) && err=$(mktemp) || exit 125; "$@" >"$out" 2>"$err"; code=$?; base64 "$out"; echo @@holm-stderr@@; base64 "$err"; rm -f "$out" "$err"; exit $code"#;
 
 pub enum Source<'a> {
     Dockerfile(&'a str),
@@ -162,7 +162,7 @@ pub fn command(
         return Err(Error::denied("an empty command has nothing to run"));
     }
 
-    let words: Vec<String> = ["sh", "-c", ENCODED, "computer"]
+    let words: Vec<String> = ["sh", "-c", ENCODED, "holm"]
         .into_iter()
         .map(quote)
         .chain(argv.iter().map(|arg| quote(arg)))
@@ -243,7 +243,7 @@ mod tests {
     fn plan() -> SandboxPlan {
         SandboxPlan {
             name: "desk-1".to_string(),
-            image: "computer-desktop:abc".to_string(),
+            image: "holm-desktop:abc".to_string(),
             publish: vec![6080, 9223],
             metadata: BTreeMap::from([(NAME_KEY.to_string(), "desk-1".to_string())]),
             ..SandboxPlan::default()
@@ -318,7 +318,7 @@ mod tests {
 
         let line = body["command"].as_str().expect("a string");
         assert!(line.starts_with("'sh' '-c' "));
-        assert!(line.ends_with(r"'computer' 'echo' 'it'\''s two words'"));
+        assert!(line.ends_with(r"'holm' 'echo' 'it'\''s two words'"));
         assert_eq!(body["timeout"], 150);
     }
 
@@ -366,15 +366,15 @@ mod tests {
     fn test_a_sweep_reads_labels_of_live_sandboxes() {
         let listing = json!({
             "items": [
-                { "id": "a", "state": "started", "labels": { "computer.expires": "1" } },
-                { "id": "b", "state": "destroyed", "labels": { "computer.expires": "2" } },
+                { "id": "a", "state": "started", "labels": { "holm.expires": "1" } },
+                { "id": "b", "state": "destroyed", "labels": { "holm.expires": "2" } },
                 { "id": "c", "state": "started", "labels": {} },
             ],
             "nextCursor": null,
         });
 
         assert_eq!(
-            carrying(&listing, "computer.expires"),
+            carrying(&listing, "holm.expires"),
             vec![("a".to_string(), "1".to_string())]
         );
         assert_eq!(next_page(&listing), None);

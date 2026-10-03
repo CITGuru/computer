@@ -41,7 +41,7 @@ pub async fn list() -> holm::Result<()> {
         .args([
             "ps",
             "--filter",
-            "label=computer-rs=1",
+            "label=holm-rs=1",
             "--format",
             "{{.Names}}\t{{.Status}}",
         ])

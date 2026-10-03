@@ -2,8 +2,8 @@
 # One compositor per screen, each in its own runtime directory.
 set -uo pipefail
 
-action="${1:?usage: computer-screen start|stop|control|release|open|viewers <screen> [url]}"
-screen="${2:?usage: computer-screen start|stop|control|release|open|viewers <screen> [url]}"
+action="${1:?usage: holm-screen start|stop|control|release|open|viewers <screen> [url]}"
+screen="${2:?usage: holm-screen start|stop|control|release|open|viewers <screen> [url]}"
 url="${3:-}"
 
 number=$((screen + 1))
@@ -12,29 +12,29 @@ control_port=$((6081 + screen * 2))
 view_vnc=$((5900 + screen * 2))
 control_vnc=$((5901 + screen * 2))
 
-width="${COMPUTER_SCREEN_WIDTH:-1280}"
-height="${COMPUTER_SCREEN_HEIGHT:-800}"
+width="${HOLM_SCREEN_WIDTH:-1280}"
+height="${HOLM_SCREEN_HEIGHT:-800}"
 
 # Per screen: two compositors sharing a directory would each claim `wayland-1`.
-runtime="/tmp/computer/run-${number}"
+runtime="/tmp/holm/run-${number}"
 # The same name on every screen: the directory, not the name, tells screens apart.
 wayland_display="wayland-1"
-sockfile="/tmp/computer/screen-${screen}.sway"
-control_token="/tmp/computer/screen-${screen}.control"
-pointer_door="${runtime}/computer-pointer"
-profile="${HOME:-/home/computer}/.browser-profiles/screen-${number}"
+sockfile="/tmp/holm/screen-${screen}.sway"
+control_token="/tmp/holm/screen-${screen}.control"
+pointer_door="${runtime}/holm-pointer"
+profile="${HOME:-/home/holm}/.browser-profiles/screen-${number}"
 running="$(ps -eo args= | grep -oE -- "--user-data-dir=[^ ]*/\.browser-profiles/screen-${number}( |$)" | head -n 1)"
 if [ -n "$running" ]; then
   profile="${running#--user-data-dir=}"
   profile="${profile% }"
 fi
-logs="/tmp/computer/screen-${number}"
+logs="/tmp/holm/screen-${number}"
 
 export XDG_RUNTIME_DIR="$runtime"
 export WAYLAND_DISPLAY="$wayland_display"
 
-viewer_auth="${COMPUTER_VIEWER_AUTH:-open}"
-gate_dir="/tmp/computer/gate"
+viewer_auth="${HOLM_VIEWER_AUTH:-open}"
+gate_dir="/tmp/holm/gate"
 
 # `token` reads its target from the file, which keeps the secret out of `ps`.
 build_gate() {
@@ -44,20 +44,20 @@ build_gate() {
   if [ "$viewer_auth" = "open" ]; then return 0; fi
 
   if [ "$viewer_auth" = "signed" ]; then
-    if [ -z "${COMPUTER_VIEWER_KEY:-}" ]; then
-      echo "viewer auth is signed but COMPUTER_VIEWER_KEY is unset" >&2
+    if [ -z "${HOLM_VIEWER_KEY:-}" ]; then
+      echo "viewer auth is signed but HOLM_VIEWER_KEY is unset" >&2
       return 1
     fi
     mkdir -p "$gate_dir"
     file="${gate_dir}/viewer-key"
-    (umask 077; printf '%s' "$COMPUTER_VIEWER_KEY" >"$file")
+    (umask 077; printf '%s' "$HOLM_VIEWER_KEY" >"$file")
     gate_args=(--token-plugin JWTTokenApi --token-source "$file")
     return 0
   fi
 
   case "$door" in
-    view) secret="${COMPUTER_VIEW_SECRET:-}" ;;
-    control) secret="${COMPUTER_CONTROL_SECRET:-}" ;;
+    view) secret="${HOLM_VIEW_SECRET:-}" ;;
+    control) secret="${HOLM_CONTROL_SECRET:-}" ;;
   esac
 
   # An empty secret would serve an open viewer the crate believes is gated.
@@ -75,7 +75,7 @@ build_gate() {
       ;;
     password)
       gate_args=(--auth-plugin BasicHTTPAuth
-        --auth-source "computer:${secret}" --web-auth "$target")
+        --auth-source "holm:${secret}" --web-auth "$target")
       ;;
     *)
       echo "unknown viewer auth: ${viewer_auth}" >&2
@@ -131,12 +131,12 @@ viewers() {
 }
 
 resident_pointer() {
-  if [ -S "$pointer_door" ] && pgrep -f "computer-pointer serve ${pointer_door}$" >/dev/null; then
+  if [ -S "$pointer_door" ] && pgrep -f "holm-pointer serve ${pointer_door}$" >/dev/null; then
     return 0
   fi
 
   rm -f "$pointer_door"
-  computer-pointer serve "$pointer_door" >>"${logs}-pointer.log" 2>&1 &
+  holm-pointer serve "$pointer_door" >>"${logs}-pointer.log" 2>&1 &
   await test -S "$pointer_door"
 }
 
@@ -168,7 +168,7 @@ start() {
     exit 0
   fi
 
-  mkdir -p /tmp/computer "$runtime" "$profile"
+  mkdir -p /tmp/holm "$runtime" "$profile"
   chmod 700 "$runtime"
   rm -f "$sockfile"
 
@@ -180,7 +180,7 @@ start() {
       -e "s/%HEIGHT%/${height}/" \
       -e "s|%SOCKFILE%|${sockfile}|" \
       -e "s/%XWAYLAND%/${xwayland}/" \
-      /etc/computer/sway.config > "${runtime}/sway.config"
+      /etc/holm/sway.config > "${runtime}/sway.config"
 
   # sway on a real backend refuses to start without a seat, and a box has none.
   WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
@@ -203,7 +203,7 @@ start() {
     esac
   fi
 
-  computer-browser --user-data-dir="$profile" >"${logs}-browser.log" 2>&1 &
+  holm-browser --user-data-dir="$profile" >"${logs}-browser.log" 2>&1 &
 
   # `-d` is the read-only guarantee; the page's own setting is a courtesy.
   wayvnc -d 127.0.0.1 "$view_vnc" >"${logs}-vnc.log" 2>&1 &
@@ -221,7 +221,7 @@ stop() {
   [ -n "$sock" ] && swaymsg -s "$sock" exit >/dev/null 2>&1
 
   pkill -f -- "--user-data-dir=${profile}" || true
-  pkill -f "computer-pointer serve ${pointer_door}$" || true
+  pkill -f "holm-pointer serve ${pointer_door}$" || true
   pkill -f "wayvnc .* ${view_vnc}$" || true
   pkill -f "wayvnc .* ${control_vnc}$" || true
   pkill -f "websockify.*${view_port}" || true
@@ -233,7 +233,7 @@ control() {
   # The token lives in the box, so it outlives a caller that exits.
   token="${3:-}"
   mode="${4:-exclusive}"
-  [ -n "$token" ] || { echo "usage: computer-screen control <screen> <token> [shared]" >&2; exit 2; }
+  [ -n "$token" ] || { echo "usage: holm-screen control <screen> <token> [shared]" >&2; exit 2; }
 
   alive || { echo "screen ${screen} is not running" >&2; exit 1; }
 
@@ -282,16 +282,16 @@ release() {
 }
 
 open_url() {
-  [ -n "$url" ] || { echo "usage: computer-screen open <screen> <url>" >&2; exit 2; }
+  [ -n "$url" ] || { echo "usage: holm-screen open <screen> <url>" >&2; exit 2; }
   alive || { echo "screen ${screen} is not running" >&2; exit 1; }
 
   # The running browser's profile, so this joins it instead of fighting for the lock.
-  computer-browser --user-data-dir="$profile" "$url" >>"${logs}-browser.log" 2>&1 &
+  holm-browser --user-data-dir="$profile" "$url" >>"${logs}-browser.log" 2>&1 &
 }
 
-recording_file="/tmp/computer/recording-${screen}.mp4"
-recording_pid="/tmp/computer/recording-${screen}.pid"
-recording_flag="/tmp/computer/recording-${screen}.on"
+recording_file="/tmp/holm/recording-${screen}.mp4"
+recording_pid="/tmp/holm/recording-${screen}.pid"
+recording_flag="/tmp/holm/recording-${screen}.on"
 
 # wlroots publishes no input ffmpeg can read, so the frames come from `grim`.
 # No pointer: headless sway draws no cursor for `grim` to capture.
@@ -350,7 +350,7 @@ record() {
       running && echo "recording ${recording_file}" || echo "idle"
       ;;
     *)
-      echo "usage: computer-screen record <screen> start|stop|status [fps]" >&2
+      echo "usage: holm-screen record <screen> start|stop|status [fps]" >&2
       exit 2
       ;;
   esac
@@ -364,5 +364,5 @@ case "$action" in
   release) release "$@" ;;
   open)    open_url ;;
   record)  record "$@" ;;
-  *) echo "usage: computer-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
+  *) echo "usage: holm-screen start|stop|control|release|open|record|viewers <screen> [arg]" >&2; exit 2 ;;
 esac

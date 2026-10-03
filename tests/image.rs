@@ -329,7 +329,7 @@ fn input_is_refused_by_the_image_and_not_only_by_the_crate() {
         "the guard must run the real one when it allows the call"
     );
     assert!(
-        INPUT_GUARD.contains("COMPUTER_TOKEN"),
+        INPUT_GUARD.contains("HOLM_TOKEN"),
         "the holder of a takeover has to be able to drive its own screen"
     );
 
@@ -386,7 +386,7 @@ fn the_image_can_also_bring_a_screen_up_and_return() {
     // A container needs the idle loop to stay up; on a machine it would hold an exec open.
     assert!(
         START_SH.contains(r#"if [ "${1:-}" = "--once" ]; then"#),
-        "computer-desktop --once is what a microVM boots with"
+        "holm-desktop --once is what a microVM boots with"
     );
     assert_eq!(
         X11Profile.boot_command(),
@@ -414,8 +414,8 @@ fn the_window_manager_is_configured_rather_than_left_to_its_defaults() {
         FLUXBOX_INIT.contains("session.screen0.toolbar.visible: false"),
         "a toolbar is screen area that is not the work, in every screenshot"
     );
-    assert!(DOCKERFILE.contains("/etc/computer/fluxbox/init"));
-    assert!(SCREEN_SH.contains("/etc/computer/fluxbox/init"));
+    assert!(DOCKERFILE.contains("/etc/holm/fluxbox/init"));
+    assert!(SCREEN_SH.contains("/etc/holm/fluxbox/init"));
 }
 
 /// `materialize` writes only the bundle's list, so an unlisted `COPY` source fails the build.
@@ -449,11 +449,11 @@ fn every_file_the_dockerfile_copies_is_one_the_bundle_carries() {
 fn the_window_manager_is_handed_every_configuration_the_image_installs() {
     for name in ["init", "menu", "apps", "style"] {
         assert!(
-            DOCKERFILE.contains(&format!("/etc/computer/fluxbox/{name}")),
+            DOCKERFILE.contains(&format!("/etc/holm/fluxbox/{name}")),
             "{name} is not installed by the image"
         );
         assert!(
-            SCREEN_SH.contains(&format!("/etc/computer/fluxbox/{name}")),
+            SCREEN_SH.contains(&format!("/etc/holm/fluxbox/{name}")),
             "{name} is installed and never put where fluxbox reads it, so it \
              does nothing at all"
         );
@@ -485,7 +485,7 @@ fn the_wallpaper_is_set_once_the_window_manager_cannot_overwrite_it() {
         .expect("the script starts fluxbox");
 
     assert!(
-        after_wm.contains("computer-wallpaper"),
+        after_wm.contains("holm-wallpaper"),
         "fluxbox paints the root window through fbsetbg when it starts, so a \
          wallpaper set before it is one nobody ever sees"
     );
@@ -504,7 +504,7 @@ fn the_dock_is_started_only_where_one_was_installed() {
          anyway logs a failure on every screen that comes up"
     );
     assert!(
-        DOCKERFILE.contains("/etc/computer/tint2rc"),
+        DOCKERFILE.contains("/etc/holm/tint2rc"),
         "the configuration is carried by the image even when the package is \
          not, so installing tint2 is the only thing the extra has to do"
     );
@@ -529,7 +529,7 @@ fn the_terminal_launcher_has_an_icon_the_image_draws() {
         "{icon} is named by the launcher and never drawn by the image"
     );
     assert!(
-        TINT2RC.contains("computer-terminal.desktop"),
+        TINT2RC.contains("holm-terminal.desktop"),
         "the dock has to name the launcher the image installs, not xterm's own \
          — whose icon is the X logo and reads as nothing"
     );
@@ -538,13 +538,13 @@ fn the_terminal_launcher_has_an_icon_the_image_draws() {
 #[test]
 fn every_launcher_starts_the_browser_this_screen_already_owns() {
     assert!(
-        TINT2RC.contains("computer-browser.desktop"),
+        TINT2RC.contains("holm-browser.desktop"),
         "chromium's own launcher runs `/usr/bin/chromium` with no profile, so \
          a browser opened from the dock has different cookies, no DevTools \
-         port, and nothing for `computer-screen stop` to match"
+         port, and nothing for `holm-screen stop` to match"
     );
     assert!(
-        BROWSER_DESKTOP.contains("computer-browser"),
+        BROWSER_DESKTOP.contains("holm-browser"),
         "the launcher has to go through the wrapper, which is what knows the \
          profile"
     );
@@ -591,7 +591,7 @@ fn a_launcher_focuses_what_is_already_running() {
             .expect("the launcher runs something");
 
         assert!(
-            exec.starts_with("computer-launch "),
+            exec.starts_with("holm-launch "),
             "the {name} launcher starts another copy every time it is clicked: \
              {exec}"
         );
@@ -607,7 +607,7 @@ fn a_launcher_focuses_what_is_already_running() {
          a new-window action asks for"
     );
     assert!(
-        FLUXBOX_MENU.contains("computer-launch --new"),
+        FLUXBOX_MENU.contains("holm-launch --new"),
         "tint2 gives a launcher no context menu, so the desktop menu is where \
          a new window can be asked for"
     );
@@ -769,19 +769,19 @@ fn neither_viewer_reaches_websockify_around_the_gate() {
 #[test]
 fn an_app_the_box_was_built_with_is_offered_by_the_dock() {
     assert!(
-        DOCKERFILE.contains("ARG EXTRA_APPS") && DOCKERFILE.contains("computer-app-$name.desktop"),
+        DOCKERFILE.contains("ARG EXTRA_APPS") && DOCKERFILE.contains("holm-app-$name.desktop"),
         "the build writes a launcher per app"
     );
     assert!(
-        DOCKERFILE.contains("Exec=computer-launch $class $command"),
-        "through computer-launch, so a second click returns to the open window"
+        DOCKERFILE.contains("Exec=holm-launch $class $command"),
+        "through holm-launch, so a second click returns to the open window"
     );
     assert!(
         TINT2RC.contains("%APPS%"),
         "the dock's launcher list is filled in rather than fixed"
     );
     assert!(
-        SCREEN_SH.contains("computer-app-*.desktop") && SCREEN_SH.contains("%APPS%"),
+        SCREEN_SH.contains("holm-app-*.desktop") && SCREEN_SH.contains("%APPS%"),
         "and the script is what fills it: {}",
         "the entries exist only in an image built with apps"
     );

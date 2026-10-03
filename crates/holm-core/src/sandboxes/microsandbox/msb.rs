@@ -101,7 +101,7 @@ pub fn create_args(plan: &Plan) -> Vec<String> {
     }
 
     args.push("--label".to_string());
-    args.push("computer-rs=1".to_string());
+    args.push("holm-rs=1".to_string());
 
     args.push(plan.image.clone());
     args
@@ -196,7 +196,7 @@ impl MicroVmApi for Msb {
     }
 
     async fn read(&self, name: &str, path: &str) -> Result<Vec<u8>> {
-        let local = std::env::temp_dir().join(format!("computer-msb-{name}-read"));
+        let local = std::env::temp_dir().join(format!("holm-msb-{name}-read"));
         let _ = tokio::fs::remove_file(&local).await;
 
         let copied = self
@@ -219,7 +219,7 @@ impl MicroVmApi for Msb {
     }
 
     async fn write(&self, name: &str, path: &str, bytes: &[u8]) -> Result<()> {
-        let local = std::env::temp_dir().join(format!("computer-msb-{name}-write"));
+        let local = std::env::temp_dir().join(format!("holm-msb-{name}-write"));
         tokio::fs::write(&local, bytes)
             .await
             .map_err(|error| Error::transport(error.to_string(), false))?;
@@ -316,11 +316,11 @@ mod tests {
     fn test_the_msb_arguments_carry_everything_the_plan_decided() {
         let plan = Plan {
             name: "box".to_string(),
-            image: "computer-desktop:abc".to_string(),
+            image: "holm-desktop:abc".to_string(),
             cpus: Some(2),
             memory_mib: Some(2048),
             network: false,
-            env: BTreeMap::from([("COMPUTER_SCREEN_WIDTH".to_string(), "1280".to_string())]),
+            env: BTreeMap::from([("HOLM_SCREEN_WIDTH".to_string(), "1280".to_string())]),
             ports: vec![(40000, 6080)],
             labels: BTreeMap::new(),
             replace: true,
@@ -330,11 +330,11 @@ mod tests {
         assert_eq!(args[0], "create");
         assert!(args.contains(&"--no-net".to_string()));
         assert!(args.contains(&"127.0.0.1:40000:6080".to_string()));
-        assert!(args.contains(&"COMPUTER_SCREEN_WIDTH=1280".to_string()));
+        assert!(args.contains(&"HOLM_SCREEN_WIDTH=1280".to_string()));
         assert!(args.contains(&"2048".to_string()));
         assert_eq!(
             args.last().map(String::as_str),
-            Some("computer-desktop:abc"),
+            Some("holm-desktop:abc"),
             "the image is last, so nothing after it is read as a command"
         );
     }
@@ -350,11 +350,11 @@ mod tests {
 
     #[test]
     fn test_an_image_the_hypervisor_never_received_is_reported_missing() {
-        let listed = "REFERENCE                 DIGEST         SIZE\n                      computer-desktop:abc      sha256:1234    396 MiB\n";
+        let listed = "REFERENCE                 DIGEST         SIZE\n                      holm-desktop:abc      sha256:1234    396 MiB\n";
 
-        assert!(parse_has_image(listed, "computer-desktop:abc"));
+        assert!(parse_has_image(listed, "holm-desktop:abc"));
         assert!(
-            !parse_has_image(listed, "computer-desktop:def"),
+            !parse_has_image(listed, "holm-desktop:def"),
             "a different fingerprint is a different image"
         );
     }
