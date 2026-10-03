@@ -61,6 +61,23 @@ impl Drop for Lease {
     }
 }
 
+const IDLE: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn shown(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority = rest.split(['/', '?']).next().unwrap_or_default();
+    let Some((user, _)) = authority.rsplit_once('@') else {
+        return url.to_string();
+    };
+    let (Some((name, _)), Some(after)) = (user.split_once(':'), rest.strip_prefix(user)) else {
+        return url.to_string();
+    };
+
+    format!("{scheme}://{name}:***{after}")
+}
+
 fn token() -> String {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let turn = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -74,6 +91,10 @@ fn token() -> String {
 
 impl Sql {
     pub async fn open(url: &str) -> Result<Self> {
+        Self::open_sized(url, None).await
+    }
+
+    pub async fn open_sized(url: &str, connections: Option<u32>) -> Result<Self> {
         sqlx::any::install_default_drivers();
 
         let dialect = match url {
@@ -83,15 +104,20 @@ impl Sql {
             }
             _ => {
                 return Err(Error::Unavailable(format!(
-                    "{url} names no dialect this store has: use sqlite:// or postgres://"
+                    "{} names no dialect this store has: use sqlite:// or postgres://",
+                    shown(url)
                 )));
             }
         };
 
-        let pool = AnyPoolOptions::new()
+        let mut options = AnyPoolOptions::new().idle_timeout(IDLE);
+        if let Some(connections) = connections {
+            options = options.max_connections(connections.max(1));
+        }
+        let pool = options
             .connect(url)
             .await
-            .map_err(|error| Error::Unavailable(format!("{url}: {error}")))?;
+            .map_err(|error| Error::Unavailable(format!("{}: {error}", shown(url))))?;
 
         let store = Self {
             pool,
@@ -977,6 +1003,28 @@ mod tests {
         std::env::var("HOLM_STORAGE_POSTGRES_URL")
             .ok()
             .filter(|url| !url.is_empty())
+    }
+
+    #[test]
+    fn test_a_url_is_shown_without_its_password() {
+        assert_eq!(
+            shown("postgresql://holm.user:p@ss:w0rd@db.example.com:5432/postgres?options=x"),
+            "postgresql://holm.user:***@db.example.com:5432/postgres?options=x"
+        );
+        assert_eq!(
+            shown("postgres://holm@db.example.com/db"),
+            "postgres://holm@db.example.com/db"
+        );
+        assert_eq!(shown("sqlite:/tmp/holm.db"), "sqlite:/tmp/holm.db");
+    }
+
+    #[tokio::test]
+    async fn test_a_store_that_will_not_open_does_not_say_its_password() {
+        let Err(why) = Sql::open("mysql://holm:secret-word@db.example.com/db").await else {
+            panic!("this store speaks no MySQL");
+        };
+
+        assert!(!why.to_string().contains("secret-word"), "{why}");
     }
 
     #[tokio::test]
