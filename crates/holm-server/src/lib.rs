@@ -385,6 +385,15 @@ impl AppState {
         self.registry.get(id).await
     }
 
+    pub fn signs(&self, entry: &registry::Entry) -> bool {
+        entry.computer.viewer_auth() == holm::Auth::Signed
+            || (self.doors.holds_a_key()
+                && self
+                    .runtimes
+                    .get(&entry.runtime)
+                    .is_some_and(|runtime| runtime.tokens_the_viewer(&entry.spec)))
+    }
+
     pub async fn deleted(&self, id: &str) -> bool {
         matches!(
             self.store.get_box(id).await,
