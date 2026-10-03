@@ -30,7 +30,10 @@ pub async fn started(
         runtime,
         recorded.clone(),
         owner,
-        key.clone(),
+        Keys {
+            viewer: key.clone(),
+            devtools: state.doors.devtools_secret(id),
+        },
     )
     .await
     {
@@ -43,13 +46,30 @@ pub async fn started(
                 "the recorded image did not start a box; building it again"
             );
             forget(state, &runtime.name, &digest).await;
-            launch(spec, placement, id, runtime, None, owner, key).await?
+            launch(
+                spec,
+                placement,
+                id,
+                runtime,
+                None,
+                owner,
+                Keys {
+                    viewer: key,
+                    devtools: state.doors.devtools_secret(id),
+                },
+            )
+            .await?
         }
         Err(why) => return Err(why),
     };
 
     keep(state, &runtime.name, &digest, &started_from).await;
     Ok((computer, resolved))
+}
+
+struct Keys {
+    viewer: Option<holm::Secret>,
+    devtools: Option<holm::Secret>,
 }
 
 async fn launch(
@@ -59,10 +79,11 @@ async fn launch(
     runtime: &Runtime,
     image: Option<String>,
     owner: Option<&str>,
-    key: Option<holm::Secret>,
+    keys: Keys,
 ) -> Result<(Computer, Resolved, String), ApiError> {
-    let (mut builder, resolved) = crate::spec::plan(spec, placement, id, runtime, owner)?;
-    if let Some(key) = key {
+    let (mut builder, resolved) =
+        crate::spec::plan(spec, placement, id, runtime, owner, keys.devtools)?;
+    if let Some(key) = keys.viewer {
         builder = builder.viewer_key(key);
     }
     if let Some(image) = image {
@@ -78,7 +99,7 @@ async fn launch(
 
 pub async fn prepare(state: &AppState, runtime: &Runtime, spec: &Spec) -> Result<String, ApiError> {
     let config = runtime
-        .drive(holm::Builder::from_spec(spec)?, spec)
+        .drive(holm::Builder::from_spec(spec)?, spec, None)
         .config()?;
     let (machine, _) = runtime.pair(spec.desktop.server);
 

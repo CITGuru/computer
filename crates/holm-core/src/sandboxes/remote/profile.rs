@@ -53,6 +53,7 @@ pub struct RemoteProfile {
     inner: Arc<dyn Profile>,
     remote: Arc<Remote>,
     devtools_secret: Option<crate::Secret>,
+    devtools_given: bool,
 }
 
 impl RemoteProfile {
@@ -61,7 +62,14 @@ impl RemoteProfile {
             inner,
             remote,
             devtools_secret: crate::Secret::generate().ok(),
+            devtools_given: false,
         }
+    }
+
+    pub fn devtools_secret(mut self, secret: crate::Secret) -> Self {
+        self.devtools_secret = Some(secret);
+        self.devtools_given = true;
+        self
     }
 
     pub fn inner(&self) -> &Arc<dyn Profile> {
@@ -171,6 +179,9 @@ impl Profile for RemoteProfile {
     }
 
     fn rekey(&self) -> Option<(Vec<String>, BTreeMap<String, String>)> {
+        if self.devtools_given {
+            return None;
+        }
         let secret = self.devtools_secret.as_ref()?;
 
         Some((
@@ -224,6 +235,25 @@ impl Profile for RemoteProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_box_with_a_given_devtools_secret_is_not_given_a_new_one() {
+        let given = crate::Secret::new("given-secret-0123456789").expect("a secret");
+        let profile = RemoteProfile::new(Arc::new(crate::X11Profile), Arc::new(Remote::new()))
+            .devtools_secret(given);
+
+        assert_eq!(
+            profile
+                .launch_env(1280, 800)
+                .get(DEVTOOLS_SECRET_ENV)
+                .map(String::as_str),
+            Some("given-secret-0123456789")
+        );
+        assert!(
+            profile.rekey().is_none(),
+            "a server that takes the box back must not restart the bridge under a secret of its own"
+        );
+    }
     use crate::X11Profile;
 
     fn profile() -> (Arc<Remote>, RemoteProfile) {

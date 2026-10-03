@@ -4088,7 +4088,10 @@ async fn rebuilt(state: &AppState, runtime: &crate::runtimes::Runtime) -> usize 
             continue;
         }
 
-        let (machine, profile) = runtime.pair(entry.spec.desktop.server);
+        let (machine, profile) = runtime.pair_for(
+            entry.spec.desktop.server,
+            state.doors.devtools_secret(&entry.id),
+        );
         let taken = holm::Computer::attach_using(machine, &entry.id, profile, None).await;
 
         match taken {

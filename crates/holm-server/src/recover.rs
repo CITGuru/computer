@@ -205,7 +205,8 @@ async fn take(
     recorded: Option<&BoxRecord>,
     taking: Taking,
 ) -> Result<(), String> {
-    let (machine, profile) = runtime.pair(label.spec.desktop.server);
+    let (machine, profile) =
+        runtime.pair_for(label.spec.desktop.server, state.doors.devtools_secret(name));
 
     // A paused box reports no ports, so it is woken long enough to read them.
     let frozen = machine.paused(name).await.unwrap_or(false);

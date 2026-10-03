@@ -162,6 +162,12 @@ pub struct Doors {
 }
 
 impl Doors {
+    pub fn devtools_secret(&self, box_id: &str) -> Option<holm::Secret> {
+        let key = self.key.as_ref()?;
+        let tag = hmac::sign(key, format!("devtools/{box_id}").as_bytes());
+        holm::Secret::new(URL_SAFE_NO_PAD.encode(tag.as_ref())).ok()
+    }
+
     pub fn holds_a_key(&self) -> bool {
         self.key.is_some()
     }
@@ -431,6 +437,25 @@ mod tests {
             Duration::from_secs(crate::runtimes::LIFETIME_SECS / 2),
             "a box with no end is counted as one of the default lifetime"
         );
+    }
+
+    #[test]
+    fn test_a_devtools_secret_is_the_same_in_every_process_and_its_own_for_each_box() {
+        let (one, two) = (Doors::keyed(b"doors"), Doors::keyed(b"doors"));
+        let secret = |doors: &Doors, id: &str| {
+            doors
+                .devtools_secret(id)
+                .map(|held| held.expose().to_string())
+        };
+
+        assert_eq!(secret(&one, "box-1"), secret(&two, "box-1"));
+        assert_ne!(secret(&one, "box-1"), secret(&one, "box-2"));
+        assert_ne!(
+            secret(&one, "box-1"),
+            one.box_key("box-1").map(|held| held.expose().to_string()),
+            "the viewer key and the DevTools secret of one box differ"
+        );
+        assert!(Doors::default().devtools_secret("box-1").is_none());
     }
 
     #[test]

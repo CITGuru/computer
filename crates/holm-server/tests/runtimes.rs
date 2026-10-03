@@ -469,7 +469,7 @@ async fn test_a_box_on_a_vendor_is_gated_because_its_screen_is_on_the_internet()
 
     let runtime = state.runtimes.get("cloud").expect("the vendor");
     let built = runtime
-        .drive(holm::Builder::default(), &holm_types::Spec::default())
+        .drive(holm::Builder::default(), &holm_types::Spec::default(), None)
         .config()
         .expect("a config");
 
@@ -481,7 +481,7 @@ async fn test_a_box_on_a_vendor_is_gated_because_its_screen_is_on_the_internet()
 
     let engine = state.runtimes.get("docker").expect("the engine");
     let here = engine
-        .drive(holm::Builder::default(), &holm_types::Spec::default())
+        .drive(holm::Builder::default(), &holm_types::Spec::default(), None)
         .config()
         .expect("a config");
 

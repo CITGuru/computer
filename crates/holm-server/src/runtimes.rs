@@ -98,12 +98,20 @@ impl Runtime {
     }
 
     pub fn pair(&self, server: DisplayServer) -> (Arc<dyn Machine>, Arc<dyn Profile>) {
+        self.pair_for(server, None)
+    }
+
+    pub fn pair_for(
+        &self,
+        server: DisplayServer,
+        devtools: Option<holm::Secret>,
+    ) -> (Arc<dyn Machine>, Arc<dyn Profile>) {
         let image = profile_for(server);
 
         match &self.place {
             Place::Host { machine } => (Arc::clone(machine), image),
             Place::Remote { api, fields } => {
-                let (machine, profile) = remote::pair(Arc::clone(api), image);
+                let (machine, profile) = remote::pair_with(Arc::clone(api), image, devtools);
                 let machine = machine
                     .public_viewer(true)
                     .public_traffic(public_traffic(fields));
@@ -124,8 +132,13 @@ impl Runtime {
         self.can.reach == PortReach::VendorUrl && spec.policy.auth == holm_api::Auth::None
     }
 
-    pub fn drive(&self, builder: Builder, spec: &holm_api::Spec) -> Builder {
-        let (machine, profile) = self.pair(spec.desktop.server);
+    pub fn drive(
+        &self,
+        builder: Builder,
+        spec: &holm_api::Spec,
+        devtools: Option<holm::Secret>,
+    ) -> Builder {
+        let (machine, profile) = self.pair_for(spec.desktop.server, devtools);
         let mut builder = builder
             .machine(machine)
             .profile(profile)
