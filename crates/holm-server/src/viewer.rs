@@ -162,6 +162,10 @@ pub struct Doors {
 }
 
 impl Doors {
+    pub fn holds_a_key(&self) -> bool {
+        self.key.is_some()
+    }
+
     pub fn keyed(key: &[u8]) -> Self {
         Self {
             key: Some(hmac::Key::new(hmac::HMAC_SHA256, key)),
@@ -204,7 +208,7 @@ pub async fn ticket(
         false => state.tickets.mint_watching(&id, screen)?,
     };
 
-    let signed = entry.computer.viewer_auth() == holm::Auth::Signed;
+    let signed = state.signs(&entry);
     let direct = |control: bool| {
         let held = target
             .as_screen()
@@ -265,14 +269,14 @@ pub async fn socket(
         .as_screen()
         .ok_or_else(|| ApiError::internal("this screen has no viewer"))?;
     let control = matches!(query.mode, Mode::Control);
-    let inside = match entry.computer.viewer_auth() {
-        holm::Auth::Signed => state
+    let inside = match state.signs(&entry) {
+        true => state
             .doors
             .token(&id, held.door_port(control), DOOR_LIFE)
             .and_then(|token| holm::Secret::new(token).ok())
             .and_then(|token| held.signed_socket(control, &token)),
-        _ if control => held.control_socket(),
-        _ => held.viewer_socket(),
+        false if control => held.control_socket(),
+        false => held.viewer_socket(),
     }
     .ok_or_else(|| ApiError::not_found("this screen publishes no viewer port"))?;
 

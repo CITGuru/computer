@@ -1569,8 +1569,8 @@ async fn start_takeover(
         )
         .await;
 
-    let url = match entry.computer.viewer_auth() {
-        holm::Auth::Signed => state
+    let url = match state.signs(&entry) {
+        true => state
             .doors
             .token(
                 &id,
@@ -1579,7 +1579,7 @@ async fn start_takeover(
             )
             .and_then(|token| holm::Secret::new(token).ok())
             .and_then(|token| held.signed_page(true, &token)),
-        _ => takeover.url().map(str::to_string),
+        false => takeover.url().map(str::to_string),
     };
 
     Ok(Json(TakeoverView {
@@ -4133,7 +4133,7 @@ fn view_of(server: &AppState, entry: &Entry) -> BoxView {
 }
 
 fn watch_url(server: &AppState, entry: &Entry) -> Option<String> {
-    if entry.computer.viewer_auth() != holm::Auth::Signed {
+    if !server.signs(entry) {
         return entry.computer.viewer_url();
     }
 

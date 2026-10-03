@@ -726,3 +726,34 @@ async fn test_an_image_on_a_shared_runtime_is_the_operators_to_remove() {
     let (status, _) = world.send(OPERATOR, "DELETE", &image, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 }
+
+#[tokio::test]
+async fn test_a_server_that_took_a_box_back_still_knows_its_viewer_is_signed() {
+    let world = World::new().await;
+    let id = world.launch(OPERATOR).await;
+
+    let other = AppState::split(
+        Arc::clone(&world.state.store),
+        Arc::clone(&world.state.frames),
+    )
+    .serving(Arc::new(Scripted(Arc::clone(&world.remote))))
+    .keeping(Keeper::of(&[7u8; 32]).expect("a key"));
+    runtimes::from_store(
+        &other.runtimes,
+        other.store.as_ref(),
+        &other.secrets,
+        other.vendors.as_ref(),
+    )
+    .await;
+
+    let taken = other.entry(&id).await.expect("taken back");
+    assert_ne!(
+        taken.computer.viewer_auth(),
+        holm::Auth::Signed,
+        "a box taken back from its record has no environment in this server's memory"
+    );
+    assert!(
+        other.signs(&taken),
+        "the record and the server key say how its viewer is gated"
+    );
+}
