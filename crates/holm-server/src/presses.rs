@@ -137,6 +137,13 @@ pub async fn held_keys(store: &dyn Store, box_id: &str, screen: u32) -> Vec<Stri
         .collect()
 }
 
+pub async fn any_held(store: &dyn Store, box_id: &str) -> bool {
+    store
+        .list_notes(KIND, &format!("{box_id}/"))
+        .await
+        .is_ok_and(|held| !held.is_empty())
+}
+
 pub async fn take_screen(store: &dyn Store, box_id: &str, screen: u32) -> Vec<Pressed> {
     take(store, &format!("{box_id}/{screen}/"))
         .await

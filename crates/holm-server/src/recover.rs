@@ -218,7 +218,15 @@ async fn take(
     }
 
     // Stopped boxes too, or they stay on disk with nothing that can start them.
-    let running = machine.running(name).await.unwrap_or(false);
+    let running = match machine.running(name).await {
+        Ok(running) => running,
+        Err(error) => {
+            if frozen {
+                let _ = machine.pause(name).await;
+            }
+            return Err(format!("its runtime did not say whether it runs: {error}"));
+        }
+    };
     let taken = match running {
         true => Computer::attach_using(Arc::clone(&machine), name, profile, None).await,
         false => Computer::attach_stopped(Arc::clone(&machine), name, profile, None).await,
@@ -235,7 +243,11 @@ async fn take(
             .map(|at| UNIX_EPOCH + Duration::from_millis(at)),
     );
 
-    if running && !frozen && taking == Taking::AtStart {
+    if running
+        && !frozen
+        && taking == Taking::AtStart
+        && !crate::presses::any_held(state.store.as_ref(), name).await
+    {
         for button in [Button::Left, Button::Middle, Button::Right] {
             let _ = holm::Desktop::let_go(&computer, button).await;
         }
@@ -473,6 +485,79 @@ mod tests {
         assert!(
             entries.is_empty(),
             "a take-back for a request writes nothing to the trace: {entries:?}"
+        );
+    }
+
+    fn record() -> BoxRecord {
+        BoxRecord {
+            owner: None,
+            id: "desk-1".to_string(),
+            runtime: "cloud".to_string(),
+            spec: Spec::default(),
+            placement: Placement::default(),
+            width: 1280,
+            height: 800,
+            screens: 1,
+            created_at_ms: 1_700_000_000_000,
+            expires_at_ms: None,
+            deleted_at_ms: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_a_box_its_vendor_did_not_answer_for_is_not_kept_as_stopped() {
+        let api = Arc::new(
+            ScriptedRemote::new()
+                .holding("desk-1", "sbx-9")
+                .not_answering(),
+        );
+        let state = holding(api);
+        state.store.put_box(&record()).await.expect("recorded");
+
+        assert_eq!(adopt(&state).await, 0);
+        assert!(
+            state.registry.get("desk-1").await.is_err(),
+            "a box kept as stopped would have no DevTools address until something else looked it up"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_starting_server_lets_go_of_nothing_another_server_holds() {
+        let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
+        let state = holding(Arc::clone(&api));
+        state.store.put_box(&record()).await.expect("recorded");
+        crate::presses::open(
+            state.store.as_ref(),
+            "desk-1",
+            0,
+            &crate::presses::Pressed::Button(Button::Left),
+            crate::routes::ms_of(std::time::SystemTime::now()) + 60_000,
+        )
+        .await;
+
+        assert_eq!(adopt(&state).await, 1);
+        assert!(
+            !api.commands()
+                .iter()
+                .any(|command| command.join(" ").contains("mouseup")),
+            "{:?}",
+            api.commands()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_a_starting_server_lets_go_of_what_nothing_holds() {
+        let api = Arc::new(ScriptedRemote::new().holding("desk-1", "sbx-9"));
+        let state = holding(Arc::clone(&api));
+        state.store.put_box(&record()).await.expect("recorded");
+
+        assert_eq!(adopt(&state).await, 1);
+        assert!(
+            api.commands()
+                .iter()
+                .any(|command| command.join(" ").contains("mouseup")),
+            "{:?}",
+            api.commands()
         );
     }
 
