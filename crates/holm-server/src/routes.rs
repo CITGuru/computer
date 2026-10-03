@@ -385,6 +385,7 @@ async fn actions(
 
     let target = entry.desktop(screen).await?;
     let desktop = target.as_desktop();
+    desktop.assume_keys_down(&crate::presses::held_keys(state.store.as_ref(), &id, screen).await);
 
     // Resolved lazily: `open_url` raises a new tab, so an early handle is stale.
     let browser = entry.computer.browser();
